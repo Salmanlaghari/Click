@@ -5,39 +5,45 @@ on:
     tags:
       - 'v*'
 
-permissions:
-  contents: write
-
 jobs:
   build:
-    name: Build and Release APK
+    name: Build Release APK
     runs-on: ubuntu-latest
 
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
 
-      - name: Set up JDK 21
+      - name: Setup JDK 21
         uses: actions/setup-java@v4
         with:
-          distribution: 'zulu'
           java-version: '21'
-          cache: 'gradle'
+          distribution: 'temurin'
 
-      - name: Make Gradlew Executable
+      - name: Grant Gradle Permission
         run: chmod +x gradlew
 
       - name: Build Release APK
         run: ./gradlew assembleRelease
 
-      - name: Create or Update GitHub Release
-        id: create_release
-        uses: softprops/action-gh-release@v2
+      - name: Upload Release APK
+        uses: actions/upload-artifact@v4
         with:
-          tag_name: ${{ github.ref_name }}
-          name: Release ${{ github.ref_name }}
-          draft: false
-          prerelease: false
+          name: Click-Browser-Release
+          path: app/build/outputs/apk/release/app-release-unsigned.apk
+          retention-days: 90
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v1
+        if: startsWith(github.ref, 'refs/tags/')
+        with:
+          name: Click Browser ${{ github.ref_name }}
+          body: |
+            ## Click Browser ${{ github.ref_name }}
+            - ✅ Simple Mode
+            - ✅ Developer Mode (DevTools)
+            - ✅ Hack Mode (Anti-Detection + Video Downloader)
+            - ✅ Bookmarks, History, Downloads
+            - ✅ Night Mode & Themes
+            - ✅ Privacy & Security
           files: app/build/outputs/apk/release/app-release-unsigned.apk
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
