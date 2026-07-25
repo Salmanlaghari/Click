@@ -1,0 +1,65 @@
+name: Build and Package APKs
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: Build Debug and Release APKs
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Setup JDK 21
+        uses: actions/setup-java@v4
+        with:
+          java-version: '21'
+          distribution: 'temurin'
+
+      - name: Generate Debug Keystore (for build process)
+        run: |
+          mkdir -p ~/.android
+          keytool -genkey -v -keystore ~/.android/debug.keystore \
+            -alias androiddebugkey -keyalg RSA -keysize 2048 -validity 10000 \
+            -storepass android -keypass android \
+            -dname "CN=Android Debug,O=Android,C=US"
+
+      - name: Generate Release Keystore (on-the-fly)
+        run: |
+          keytool -genkey -v -keystore app/release-key.jks \
+            -alias click -keyalg RSA -keysize 2048 -validity 10000 \
+            -storepass click123 -keypass click123 \
+            -dname "CN=Click Browser,O=Click,C=US"
+          echo "storeFile=release-key.jks" > keystore.properties
+          echo "storePassword=click123" >> keystore.properties
+          echo "keyAlias=click" >> keystore.properties
+          echo "keyPassword=click123" >> keystore.properties
+
+      - name: Grant Gradle Permission
+        run: chmod +x gradlew
+
+      - name: Build Debug APK
+        run: ./gradlew assembleDebug
+
+      - name: Build Release APK
+        run: ./gradlew assembleRelease
+
+      - name: Upload Debug APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: Click-Browser-Debug
+          path: app/build/outputs/apk/debug/app-debug.apk
+          retention-days: 30
+
+      - name: Upload Release APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: Click-Browser-Release
+          path: app/build/outputs/apk/release/app-release.apk
+          retention-days: 90

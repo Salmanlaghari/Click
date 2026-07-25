@@ -1,0 +1,69 @@
+name: Build Release APK
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: Build Release APK
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Setup JDK 21
+        uses: actions/setup-java@v4
+        with:
+          java-version: '21'
+          distribution: 'temurin'
+
+      - name: Generate Debug Keystore (for build process)
+        run: |
+          mkdir -p ~/.android
+          keytool -genkey -v -keystore ~/.android/debug.keystore \
+            -alias androiddebugkey -keyalg RSA -keysize 2048 -validity 10000 \
+            -storepass android -keypass android \
+            -dname "CN=Android Debug,O=Android,C=US"
+
+      - name: Generate Release Keystore (on-the-fly)
+        run: |
+          keytool -genkey -v -keystore app/release-key.jks \
+            -alias click -keyalg RSA -keysize 2048 -validity 10000 \
+            -storepass click123 -keypass click123 \
+            -dname "CN=Click Browser,O=Click,C=US"
+          echo "storeFile=release-key.jks" > keystore.properties
+          echo "storePassword=click123" >> keystore.properties
+          echo "keyAlias=click" >> keystore.properties
+          echo "keyPassword=click123" >> keystore.properties
+
+      - name: Grant Gradle Permission
+        run: chmod +x gradlew
+
+      - name: Build Release APK
+        run: ./gradlew assembleRelease
+
+      - name: Upload Release APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: Click-Browser-Release
+          path: app/build/outputs/apk/release/app-release.apk
+          retention-days: 90
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v1
+        if: startsWith(github.ref, 'refs/tags/')
+        with:
+          name: Click Browser ${{ github.ref_name }}
+          body: |
+            ## Click Browser ${{ github.ref_name }}
+            - ✅ Simple Mode
+            - ✅ Developer Mode (DevTools)
+            - ✅ Hack Mode (Anti-Detection + Video Downloader)
+            - ✅ Bookmarks, History, Downloads
+            - ✅ Night Mode & Themes
+            - ✅ Privacy & Security
+          files: app/build/outputs/apk/release/app-release.apk
