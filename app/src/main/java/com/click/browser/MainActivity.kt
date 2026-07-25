@@ -23,6 +23,8 @@ import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.ArrowForward
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -315,7 +317,7 @@ class MainActivity : ComponentActivity() {
                                                     webViewInstance = this
                                                 }
                                             },
-                                            update = { webView ->
+                                            update = { _ ->
                                                 // General updates
                                             }
                                         )
@@ -573,7 +575,7 @@ fun TopBarComponent(
 fun AddressBarComponent(
     activeMode: BrowserMode,
     currentUrl: String,
-    pageTitle: String,
+    @Suppress("UNUSED_PARAMETER") pageTitle: String,
     canGoBack: Boolean,
     canGoForward: Boolean,
     onBack: () -> Unit,
@@ -606,10 +608,10 @@ fun AddressBarComponent(
             verticalAlignment = Alignment.CenterVertically
         ) {
             IconButton(onClick = onBack, enabled = canGoBack) {
-                Icon(Icons.Default.ArrowBack, contentDescription = "Back")
+                Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
             }
             IconButton(onClick = onForward, enabled = canGoForward) {
-                Icon(Icons.Default.ArrowForward, contentDescription = "Forward")
+                Icon(Icons.AutoMirrored.Filled.ArrowForward, contentDescription = "Forward")
             }
             IconButton(onClick = onRefresh) {
                 Icon(Icons.Default.Refresh, contentDescription = "Refresh")
@@ -678,10 +680,10 @@ fun HomeScreen(
     onBookmarksClick: () -> Unit,
     onHistoryClick: () -> Unit,
     onDownloadsClick: () -> Unit,
-    onSettingsClick: () -> Unit,
+    @Suppress("UNUSED_PARAMETER") onSettingsClick: () -> Unit,
     // Hack Mode extras
-    antiDetectionEnabled: Boolean,
-    onToggleAntiDetection: () -> Unit,
+    @Suppress("UNUSED_PARAMETER") antiDetectionEnabled: Boolean,
+    @Suppress("UNUSED_PARAMETER") onToggleAntiDetection: () -> Unit,
     forceDesktopMode: Boolean,
     onToggleForceDesktop: () -> Unit,
     spoofedUAIndex: Int,

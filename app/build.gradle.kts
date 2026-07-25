@@ -7,6 +7,15 @@ android {
     namespace = "com.click.browser"
     compileSdk = 34
 
+    signingConfigs {
+        create("release") {
+            storeFile = file("release-key.jks")
+            storePassword = "click123"
+            keyAlias = "click"
+            keyPassword = "click123"
+        }
+    }
+
     defaultConfig {
         applicationId = "com.click.browser"
         minSdk = 26
@@ -27,6 +36,7 @@ android {
         }
 
         release {
+            signingConfig = signingConfigs["release"]
             isMinifyEnabled = true
             isShrinkResources = true
             proguardFiles(

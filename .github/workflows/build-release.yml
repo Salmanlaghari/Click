@@ -4,6 +4,7 @@ on:
   push:
     tags:
       - 'v*'
+  workflow_dispatch:
 
 jobs:
   build:
@@ -20,6 +21,25 @@ jobs:
           java-version: '21'
           distribution: 'temurin'
 
+      - name: Generate Debug Keystore (for build process)
+        run: |
+          mkdir -p ~/.android
+          keytool -genkey -v -keystore ~/.android/debug.keystore \
+            -alias androiddebugkey -keyalg RSA -keysize 2048 -validity 10000 \
+            -storepass android -keypass android \
+            -dname "CN=Android Debug,O=Android,C=US"
+
+      - name: Generate Release Keystore (on-the-fly)
+        run: |
+          keytool -genkey -v -keystore app/release-key.jks \
+            -alias click -keyalg RSA -keysize 2048 -validity 10000 \
+            -storepass click123 -keypass click123 \
+            -dname "CN=Click Browser,O=Click,C=US"
+          echo "storeFile=release-key.jks" > keystore.properties
+          echo "storePassword=click123" >> keystore.properties
+          echo "keyAlias=click" >> keystore.properties
+          echo "keyPassword=click123" >> keystore.properties
+
       - name: Grant Gradle Permission
         run: chmod +x gradlew
 
@@ -30,7 +50,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: Click-Browser-Release
-          path: app/build/outputs/apk/release/app-release-unsigned.apk
+          path: app/build/outputs/apk/release/app-release.apk
           retention-days: 90
 
       - name: Create GitHub Release
@@ -46,4 +66,4 @@ jobs:
             - ✅ Bookmarks, History, Downloads
             - ✅ Night Mode & Themes
             - ✅ Privacy & Security
-          files: app/build/outputs/apk/release/app-release-unsigned.apk
+          files: app/build/outputs/apk/release/app-release.apk
