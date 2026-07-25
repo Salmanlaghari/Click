@@ -13,21 +13,46 @@ android {
     signingConfigs {
         create("release") {
             val keystorePropsFile = rootProject.file("keystore.properties")
+            var keystoreFile: File? = null
+            var storePass = "click123"
+            var aliasName = "click"
+            var keyPass = "click123"
+
             if (keystorePropsFile.exists()) {
                 val props = Properties()
                 keystorePropsFile.inputStream().use { props.load(it) }
-                val sf = props.getProperty("storeFile") ?: "release-key.jks"
-                // Resolve path relative to project root or absolute
-                storeFile = if (File(sf).isAbsolute) file(sf) else rootProject.file(sf)
-                storePassword = props.getProperty("storePassword") ?: "click123"
-                keyAlias = props.getProperty("keyAlias") ?: "click"
-                keyPassword = props.getProperty("keyPassword") ?: "click123"
-            } else {
-                storeFile = file("release-key.jks")
-                storePassword = System.getenv("KEYSTORE_PASSWORD") ?: "click123"
-                keyAlias = System.getenv("KEY_ALIAS") ?: "click"
-                keyPassword = System.getenv("KEY_PASSWORD") ?: "click123"
+                val sf = props.getProperty("storeFile")
+                if (sf != null) {
+                    val f = File(sf)
+                    keystoreFile = if (f.isAbsolute) f else {
+                        val f1 = rootProject.file(sf)
+                        if (f1.exists()) f1 else file(sf)
+                    }
+                }
+                storePass = props.getProperty("storePassword") ?: "click123"
+                aliasName = props.getProperty("keyAlias") ?: "click"
+                keyPass = props.getProperty("keyPassword") ?: "click123"
             }
+
+            if (keystoreFile == null || !keystoreFile.exists()) {
+                val f1 = file("release-key.jks")
+                val f2 = rootProject.file("release-key.jks")
+                val f3 = rootProject.file("app/release-key.jks")
+                keystoreFile = when {
+                    f1.exists() -> f1
+                    f2.exists() -> f2
+                    f3.exists() -> f3
+                    else -> f1
+                }
+                storePass = System.getenv("KEYSTORE_PASSWORD") ?: storePass
+                aliasName = System.getenv("KEY_ALIAS") ?: aliasName
+                keyPass = System.getenv("KEY_PASSWORD") ?: keyPass
+            }
+
+            storeFile = keystoreFile
+            storePassword = storePass
+            keyAlias = aliasName
+            keyPassword = keyPass
         }
     }
 
