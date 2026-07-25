@@ -48,7 +48,7 @@ fun MatrixGridAnimation(modifier: Modifier = Modifier) {
         }
 
         // Draw animated digital rain drops
-        drops.forEachIndexed { index, (xRatio, speed) ->
+        drops.forEachIndexed { _, (xRatio, speed) ->
             val x = xRatio * width
             val currentProgress = (progress + speed) % 1f
             val y = currentProgress * height

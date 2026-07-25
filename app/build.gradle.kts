@@ -8,14 +8,8 @@ android {
     compileSdk = 34
 
     signingConfigs {
-        getByName("debug") {
-            storeFile = file(System.getenv("HOME") + "/.android/debug.keystore")
-            storePassword = "android"
-            keyAlias = "androiddebugkey"
-            keyPassword = "android"
-        }
         create("release") {
-            storeFile = file("../release-key.jks")
+            storeFile = file("release-key.jks")
             storePassword = "click123"
             keyAlias = "click"
             keyPassword = "click123"
@@ -37,7 +31,6 @@ android {
 
     buildTypes {
         debug {
-            signingConfig = signingConfigs["debug"]
             isDebuggable = true
             applicationIdSuffix = ".debug"
         }
