@@ -37,8 +37,9 @@ android {
 
         release {
             signingConfig = signingConfigs["release"]
-            isMinifyEnabled = true
-            isShrinkResources = true
+            // Keep full premium features and libraries intact to match Debug APK size (~15MB+)
+            isMinifyEnabled = false
+            isShrinkResources = false
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
