@@ -1,0 +1,49 @@
+name: Build Release APK
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  build:
+    name: Build Release APK
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Setup JDK 21
+        uses: actions/setup-java@v4
+        with:
+          java-version: '21'
+          distribution: 'temurin'
+
+      - name: Grant Gradle Permission
+        run: chmod +x gradlew
+
+      - name: Build Release APK
+        run: ./gradlew assembleRelease
+
+      - name: Upload Release APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: Click-Browser-Release
+          path: app/build/outputs/apk/release/app-release-unsigned.apk
+          retention-days: 90
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v1
+        if: startsWith(github.ref, 'refs/tags/')
+        with:
+          name: Click Browser ${{ github.ref_name }}
+          body: |
+            ## Click Browser ${{ github.ref_name }}
+            - ✅ Simple Mode
+            - ✅ Developer Mode (DevTools)
+            - ✅ Hack Mode (Anti-Detection + Video Downloader)
+            - ✅ Bookmarks, History, Downloads
+            - ✅ Night Mode & Themes
+            - ✅ Privacy & Security
+          files: app/build/outputs/apk/release/app-release-unsigned.apk
