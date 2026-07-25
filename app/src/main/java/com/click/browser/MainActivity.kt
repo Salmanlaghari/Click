@@ -14,19 +14,23 @@ import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
 import androidx.compose.animation.*
 import androidx.compose.animation.core.*
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.*
 import androidx.compose.material.icons.filled.*
@@ -39,12 +43,14 @@ import androidx.compose.ui.draw.scale
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
@@ -83,8 +89,8 @@ class MainActivity : ComponentActivity() {
             val scope = rememberCoroutineScope()
             val activeMode by modeManager.modeFlow.collectAsState(initial = BrowserMode.SIMPLE)
 
-            // Premium Theme configuration based on Mode Vibe
-            var currentThemeSetting by remember { mutableStateOf("Dark") }
+            // 3 Mode / Theme configurations: System, Dark, Light
+            var currentThemeSetting by remember { mutableStateOf("Dark") } // Dark, System, Light
             val isDark = currentThemeSetting == "Dark" || activeMode != BrowserMode.SIMPLE
 
             val themeColors = when (activeMode) {
@@ -127,7 +133,7 @@ class MainActivity : ComponentActivity() {
                 }
             }
 
-            // Browser Premium Feature States
+            // Browser Feature States
             val tabs = remember { mutableStateListOf<TabItem>(TabItem(url = "about:blank", title = "New Tab")) }
             var activeTabIndex by remember { mutableStateOf(0) }
             val currentTab = tabs.getOrNull(activeTabIndex) ?: TabItem(url = "about:blank")
@@ -187,42 +193,28 @@ class MainActivity : ComponentActivity() {
                 ) {
                     Box(modifier = Modifier.fillMaxSize()) {
 
-                        // Main Column Layout
+                        // Main Layout Column
                         Column(modifier = Modifier.fillMaxSize()) {
 
-                            // 1. TOP PREMIUM BAR: Title, Tabs count badge, Mode button toggles, and options gear settings
+                            // 1. TOP PREMIUM BAR with small Click logo-LEFT, centered search below, and tiny toggle-RIGHT
                             PremiumTopBar(
                                 activeMode = activeMode,
-                                tabsCount = tabs.size,
-                                onOpenTabsManager = { showTabsManager = true },
-                                onOptionSelected = { option ->
-                                    when (option) {
-                                        "Bookmarks" -> showBookmarks = true
-                                        "History" -> showHistory = true
-                                        "Downloads" -> showDownloads = true
-                                        "Settings" -> showSettings = true
-                                        "Find in Page" -> showFindInPageDialog = true
-                                        "Incognito Mode" -> {
-                                            isIncognitoMode = !isIncognitoMode
-                                            val newTab = TabItem(url = "about:blank", title = "Private Tab", isIncognito = isIncognitoMode)
-                                            tabs.add(newTab)
-                                            activeTabIndex = tabs.size - 1
-                                            Toast.makeText(this@MainActivity, if (isIncognitoMode) "Private Incognito Tab Opened" else "Incognito Off", Toast.LENGTH_SHORT).show()
-                                        }
-                                    }
-                                },
-                                onModeChange = { mode ->
-                                    scope.launch {
-                                        modeManager.setMode(mode)
-                                        currentTab.webView?.let { wv ->
-                                            modeManager.applySettings(wv, mode, forceDesktopMode)
-                                            wv.reload()
-                                        }
-                                    }
+                                currentThemeSetting = currentThemeSetting,
+                                onThemeChange = { currentThemeSetting = it },
+                                onSettingsClick = { showSettings = true }
+                            )
+
+                            // 2. CENTERED FULL-WIDTH SEARCH BAR (centered, fits right below top bar, rounded pill shape, search+mic)
+                            PremiumSearchRow(
+                                activeMode = activeMode,
+                                onSearch = { input ->
+                                    val destination = formatUrl(input, currentSearchEngineSetting)
+                                    currentTab.url = destination
+                                    currentTab.webView?.loadUrl(destination)
                                 }
                             )
 
-                            // 2. 3D GLASSMORPHIC ADDRESS BAR with search and navigate controls
+                            // 3. 3D GLASSMORPHIC ADDRESS BAR with navigation controls
                             PremiumAddressBar(
                                 activeMode = activeMode,
                                 currentUrl = currentTab.url,
@@ -260,23 +252,30 @@ class MainActivity : ComponentActivity() {
                                 }
                             )
 
-                            // 3. MAIN WEB/HOME CONTENT CONTAINER
+                            // 4. MAIN CONTENT CONTAINER (WIDGET-STYLE DASHBOARD OR WEBVIEW)
                             Box(modifier = Modifier.weight(1f)) {
                                 if (currentTab.url == "about:blank") {
-                                    // Overhauled premium home page
+                                    // Overhauled premium dashboard home page
                                     PremiumHomeScreen(
                                         activeMode = activeMode,
                                         isIncognito = currentTab.isIncognito,
-                                        onSearch = { input ->
-                                            val destination = formatUrl(input, currentSearchEngineSetting)
-                                            currentTab.url = destination
-                                            currentTab.webView?.loadUrl(destination)
-                                        },
                                         onNavigate = { url ->
                                             currentTab.url = url
                                             currentTab.webView?.loadUrl(url)
                                         },
                                         onSettingsClick = { showSettings = true },
+                                        onBookmarksClick = { showBookmarks = true },
+                                        onHistoryClick = { showHistory = true },
+                                        onDownloadsClick = { showDownloads = true },
+                                        onModeChange = { mode ->
+                                            scope.launch {
+                                                modeManager.setMode(mode)
+                                                currentTab.webView?.let { wv ->
+                                                    modeManager.applySettings(wv, mode, forceDesktopMode)
+                                                    wv.reload()
+                                                }
+                                            }
+                                        },
                                         // Hack mode controls
                                         antiDetectionEnabled = antiDetectionEnabled,
                                         onToggleAntiDetection = { antiDetectionEnabled = !antiDetectionEnabled },
@@ -446,7 +445,7 @@ class MainActivity : ComponentActivity() {
                                     }
                                 }
 
-                                // 4. FLOATING DEV DEBUG STATUS OVERLAY
+                                // 5. FLOATING DEV DEBUG STATUS OVERLAY
                                 if (activeMode == BrowserMode.DEVELOPER && showDebugOverlay && currentTab.url != "about:blank") {
                                     FloatingDebugOverlay(
                                         pageLoadTime = pageLoadTime,
@@ -456,7 +455,7 @@ class MainActivity : ComponentActivity() {
                                     )
                                 }
 
-                                // 5. FLOATING HACK VIDEO GRABBER TRIGGER
+                                // 6. FLOATING HACK VIDEO GRABBER TRIGGER
                                 if (activeMode == BrowserMode.HACK && detectedVideos.isNotEmpty()) {
                                     FloatingActionButton(
                                         onClick = { showDownloaderDialog = true },
@@ -472,7 +471,7 @@ class MainActivity : ComponentActivity() {
                                 }
                             }
 
-                            // 6. DETAILED BOTTOM PANELS (DevTools console)
+                            // 7. DETAILED BOTTOM PANELS (DevTools console)
                             if (activeMode == BrowserMode.DEVELOPER && currentTab.url != "about:blank") {
                                 DevToolsPanel(
                                     logs = logs,
@@ -487,7 +486,7 @@ class MainActivity : ComponentActivity() {
                             }
                         }
 
-                        // --- Bottom Navigation bar (Tab Selector integration) ---
+                        // --- Bottom Navigation bar (Home, Bookmarks, History, Downloads) ---
                         if (currentTab.url == "about:blank") {
                             Row(
                                 modifier = Modifier
@@ -498,34 +497,30 @@ class MainActivity : ComponentActivity() {
                                 horizontalArrangement = Arrangement.SpaceEvenly,
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
-                                Column(
-                                    horizontalAlignment = Alignment.CenterHorizontally,
-                                    modifier = Modifier.clickable { currentTab.url = "about:blank" }
-                                ) {
-                                    Icon(Icons.Default.Home, contentDescription = "Home", tint = MaterialTheme.colorScheme.primary)
-                                    Text("Home", fontSize = 10.sp, color = MaterialTheme.colorScheme.primary)
-                                }
-                                Column(
-                                    horizontalAlignment = Alignment.CenterHorizontally,
-                                    modifier = Modifier.clickable { showBookmarks = true }
-                                ) {
-                                    Icon(Icons.Default.Bookmark, contentDescription = "Bookmarks", tint = Color.LightGray)
-                                    Text("Bookmarks", fontSize = 10.sp, color = Color.LightGray)
-                                }
-                                Column(
-                                    horizontalAlignment = Alignment.CenterHorizontally,
-                                    modifier = Modifier.clickable { showHistory = true }
-                                ) {
-                                    Icon(Icons.Default.History, contentDescription = "History", tint = Color.LightGray)
-                                    Text("History", fontSize = 10.sp, color = Color.LightGray)
-                                }
-                                Column(
-                                    horizontalAlignment = Alignment.CenterHorizontally,
-                                    modifier = Modifier.clickable { showDownloads = true }
-                                ) {
-                                    Icon(Icons.Default.Download, contentDescription = "Downloads", tint = Color.LightGray)
-                                    Text("Downloads", fontSize = 10.sp, color = Color.LightGray)
-                                }
+                                TabNavigationItem(
+                                    label = "Home",
+                                    icon = Icons.Default.Home,
+                                    isActive = true,
+                                    onClick = { currentTab.url = "about:blank" }
+                                )
+                                TabNavigationItem(
+                                    label = "Bookmarks",
+                                    icon = Icons.Default.Bookmark,
+                                    isActive = false,
+                                    onClick = { showBookmarks = true }
+                                )
+                                TabNavigationItem(
+                                    label = "History",
+                                    icon = Icons.Default.History,
+                                    isActive = false,
+                                    onClick = { showHistory = true }
+                                )
+                                TabNavigationItem(
+                                    label = "Downloads",
+                                    icon = Icons.Default.Download,
+                                    isActive = false,
+                                    onClick = { showDownloads = true }
+                                )
                             }
                         }
 
@@ -735,12 +730,76 @@ class MainActivity : ComponentActivity() {
 @Composable
 fun PremiumTopBar(
     activeMode: BrowserMode,
-    tabsCount: Int,
-    onOpenTabsManager: () -> Unit,
-    onOptionSelected: (String) -> Unit,
-    onModeChange: (BrowserMode) -> Unit
+    currentThemeSetting: String,
+    onThemeChange: (String) -> Unit,
+    onSettingsClick: () -> Unit
 ) {
-    var expandedMenu by remember { mutableStateOf(false) }
+    val barColor = when (activeMode) {
+        BrowserMode.SIMPLE -> Color(0xFF1E293B)
+        BrowserMode.DEVELOPER -> Color(0xFF0F172A)
+        BrowserMode.HACK -> Color(0xFF18181B)
+    }
+
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .background(barColor)
+            .padding(vertical = 8.dp, horizontal = 16.dp),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        // Top-left "Click" logo and settings gear next to it
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(
+                text = "Click Pro",
+                color = Color.White,
+                fontWeight = FontWeight.ExtraBold,
+                fontSize = 18.sp
+            )
+            Spacer(modifier = Modifier.width(8.dp))
+            Icon(
+                Icons.Default.Settings,
+                contentDescription = "Settings",
+                tint = Color.White,
+                modifier = Modifier
+                    .size(20.dp)
+                    .clickable { onSettingsClick() }
+            )
+        }
+
+        // Top-right tiny theme toggle segmented control (Dark / System / Light)
+        Row(
+            modifier = Modifier
+                .background(Color(0xFF262626), shape = RoundedCornerShape(12.dp))
+                .padding(2.dp)
+        ) {
+            listOf("Dark", "System", "Light").forEach { theme ->
+                val isSelected = currentThemeSetting == theme
+                Box(
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(10.dp))
+                        .background(if (isSelected) MaterialTheme.colorScheme.primary else Color.Transparent)
+                        .clickable { onThemeChange(theme) }
+                        .padding(vertical = 4.dp, horizontal = 8.dp)
+                ) {
+                    Text(
+                        text = theme,
+                        color = Color.White,
+                        fontSize = 9.sp,
+                        fontWeight = FontWeight.Bold
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun PremiumSearchRow(
+    activeMode: BrowserMode,
+    onSearch: (String) -> Unit
+) {
+    var searchInput by remember { mutableStateOf("") }
 
     val barColor = when (activeMode) {
         BrowserMode.SIMPLE -> Color(0xFF1E293B)
@@ -752,130 +811,29 @@ fun PremiumTopBar(
         modifier = Modifier
             .fillMaxWidth()
             .background(barColor)
-            .padding(vertical = 12.dp, horizontal = 16.dp),
-        horizontalArrangement = Arrangement.SpaceBetween,
-        verticalAlignment = Alignment.CenterVertically
+            .padding(bottom = 8.dp, start = 16.dp, end = 16.dp)
     ) {
-        // Top-left compact professional labels
-        Column {
-            Text(
-                text = "Click Pro",
-                color = Color.White,
-                fontWeight = FontWeight.ExtraBold,
-                fontSize = 18.sp
-            )
-            Text(
-                text = "Pro Browser",
-                color = Color.Gray,
-                fontWeight = FontWeight.Bold,
-                fontSize = 10.sp
-            )
-        }
-
-        // Top-center rounded mode pill selectors for fast access
-        Row(
+        OutlinedTextField(
+            value = searchInput,
+            onValueChange = { searchInput = it },
             modifier = Modifier
-                .background(Color(0xFF262626), shape = RoundedCornerShape(24.dp))
-                .padding(3.dp)
-        ) {
-            BrowserMode.values().forEach { mode ->
-                val activeBgColor = when (mode) {
-                    BrowserMode.SIMPLE -> Color(0xFF1E88E5)
-                    BrowserMode.DEVELOPER -> Color(0xFF7B1FA2)
-                    BrowserMode.HACK -> Color(0xFFFF5722)
-                }
-                Box(
-                    modifier = Modifier
-                        .clip(RoundedCornerShape(20.dp))
-                        .background(if (activeMode == mode) activeBgColor else Color.Transparent)
-                        .clickable { onModeChange(mode) }
-                        .padding(vertical = 4.dp, horizontal = 8.dp)
-                ) {
-                    Text(
-                        text = mode.name.first().toString(),
-                        color = Color.White,
-                        fontSize = 11.sp,
-                        fontWeight = FontWeight.Bold
-                    )
-                }
-            }
-        }
-
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            // Tabs badge indicator
-            Box(
-                modifier = Modifier
-                    .size(32.dp)
-                    .background(Color(0xFF2B2B2B), shape = RoundedCornerShape(8.dp))
-                    .clickable { onOpenTabsManager() },
-                contentAlignment = Alignment.Center
-            ) {
-                Text(
-                    text = tabsCount.toString(),
-                    color = Color.White,
-                    fontWeight = FontWeight.Bold,
-                    fontSize = 14.sp
-                )
-            }
-
-            Spacer(modifier = Modifier.width(8.dp))
-
-            // Settings gear shortcut
-            IconButton(onClick = { onOptionSelected("Settings") }) {
-                Icon(Icons.Default.Settings, contentDescription = "Settings", tint = Color.White)
-            }
-
-            // Options 3-dot dropdown menu trigger
-            IconButton(onClick = { expandedMenu = true }) {
-                Icon(Icons.Default.MoreVert, contentDescription = "Menu Options", tint = Color.White)
-            }
-
-            DropdownMenu(
-                expanded = expandedMenu,
-                onDismissRequest = { expandedMenu = false }
-            ) {
-                DropdownMenuItem(
-                    text = { Text("Bookmarks") },
-                    onClick = {
-                        onOptionSelected("Bookmarks")
-                        expandedMenu = false
-                    },
-                    leadingIcon = { Icon(Icons.Default.Bookmark, contentDescription = null) }
-                )
-                DropdownMenuItem(
-                    text = { Text("History") },
-                    onClick = {
-                        onOptionSelected("History")
-                        expandedMenu = false
-                    },
-                    leadingIcon = { Icon(Icons.Default.History, contentDescription = null) }
-                )
-                DropdownMenuItem(
-                    text = { Text("Downloads") },
-                    onClick = {
-                        onOptionSelected("Downloads")
-                        expandedMenu = false
-                    },
-                    leadingIcon = { Icon(Icons.Default.Download, contentDescription = null) }
-                )
-                DropdownMenuItem(
-                    text = { Text("Incognito Mode") },
-                    onClick = {
-                        onOptionSelected("Incognito Mode")
-                        expandedMenu = false
-                    },
-                    leadingIcon = { Icon(Icons.Default.Security, contentDescription = null) }
-                )
-                DropdownMenuItem(
-                    text = { Text("Find in Page") },
-                    onClick = {
-                        onOptionSelected("Find in Page")
-                        expandedMenu = false
-                    },
-                    leadingIcon = { Icon(Icons.Default.Search, contentDescription = null) }
-                )
-            }
-        }
+                .fillMaxWidth()
+                .shadow(4.dp, shape = RoundedCornerShape(24.dp))
+                .background(Color(0x33FFFFFF), shape = RoundedCornerShape(24.dp)),
+            placeholder = { Text("Search or type web address...", color = Color.LightGray, fontSize = 12.sp) },
+            singleLine = true,
+            keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
+            keyboardActions = KeyboardActions(onSearch = { onSearch(searchInput) }),
+            leadingIcon = { Icon(Icons.Default.Search, contentDescription = "Search", tint = Color.White, modifier = Modifier.size(18.dp)) },
+            trailingIcon = { Icon(Icons.Default.Mic, contentDescription = "Voice Search", tint = Color.White, modifier = Modifier.size(18.dp)) },
+            shape = RoundedCornerShape(24.dp),
+            colors = OutlinedTextFieldDefaults.colors(
+                focusedBorderColor = MaterialTheme.colorScheme.primary,
+                unfocusedBorderColor = Color.Transparent,
+                focusedTextColor = Color.White,
+                unfocusedTextColor = Color.White
+            )
+        )
     }
 }
 
@@ -925,7 +883,7 @@ fun PremiumAddressBar(
                 Icon(Icons.Default.Refresh, contentDescription = "Refresh")
             }
 
-            // Glassmorphic modern 3D address text field
+            // Glassmorphic address input field
             OutlinedTextField(
                 value = textInput,
                 onValueChange = { textInput = it },
@@ -936,7 +894,7 @@ fun PremiumAddressBar(
                 keyboardActions = KeyboardActions(onGo = { onNavigate(textInput) }),
                 leadingIcon = {
                     if (currentUrl.startsWith("https")) {
-                        Icon(Icons.Default.Lock, contentDescription = "Secure Connection", tint = Color.Green, modifier = Modifier.size(16.dp))
+                        Icon(Icons.Default.Lock, contentDescription = "Secure", tint = Color.Green, modifier = Modifier.size(16.dp))
                     } else {
                         Icon(Icons.Default.LockOpen, contentDescription = "Not Secure", tint = Color.Gray, modifier = Modifier.size(16.dp))
                     }
@@ -980,13 +938,17 @@ fun PremiumAddressBar(
     }
 }
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun PremiumHomeScreen(
     activeMode: BrowserMode,
     isIncognito: Boolean,
-    onSearch: (String) -> Unit,
     onNavigate: (String) -> Unit,
     onSettingsClick: () -> Unit,
+    onBookmarksClick: () -> Unit,
+    onHistoryClick: () -> Unit,
+    onDownloadsClick: () -> Unit,
+    onModeChange: (BrowserMode) -> Unit,
     // Hack mode controls
     @Suppress("UNUSED_PARAMETER") antiDetectionEnabled: Boolean,
     @Suppress("UNUSED_PARAMETER") onToggleAntiDetection: () -> Unit,
@@ -1006,19 +968,6 @@ fun PremiumHomeScreen(
     dataSaver: Boolean,
     onToggleDataSaver: (Boolean) -> Unit
 ) {
-    var searchInput by remember { mutableStateOf("") }
-
-    val shortcuts = listOf(
-        ShortcutItem("YouTube", "https://www.youtube.com", Icons.Default.PlayArrow),
-        ShortcutItem("Google", "https://www.google.com", Icons.Default.Search),
-        ShortcutItem("Facebook", "https://www.facebook.com", Icons.Default.Face),
-        ShortcutItem("Instagram", "https://www.instagram.com", Icons.Default.Camera),
-        ShortcutItem("X", "https://www.x.com", Icons.Default.Share),
-        ShortcutItem("TikTok", "https://www.tiktok.com", Icons.Default.MusicNote),
-        ShortcutItem("Gmail", "https://mail.google.com", Icons.Default.Email),
-        ShortcutItem("Maps", "https://maps.google.com", Icons.Default.LocationOn)
-    )
-
     // Local Music Player Card State
     var musicPlaying by remember { mutableStateOf(false) }
     var trackProgress by remember { mutableStateOf(0.35f) }
@@ -1029,386 +978,421 @@ fun PremiumHomeScreen(
     // PDF Card State
     var pdfOpened by remember { mutableStateOf(false) }
 
+    // Settings module expandable state
+    var settingsExpanded by remember { mutableStateOf(false) }
+
+    // List of clickable functional shortcut websites
+    val shortcutsList = listOf(
+        ShortcutWidgetInfo("Chrome/Click", "https://google.com", Icons.Default.Search, Color(0xFF4285F4)),
+        ShortcutWidgetInfo("YouTube", "https://youtube.com", Icons.Default.PlayArrow, Color(0xFFFF0000)),
+        ShortcutWidgetInfo("Telegram", "https://telegram.org", Icons.AutoMirrored.Filled.Send, Color(0xFF0088CC)),
+        ShortcutWidgetInfo("Reddit", "https://reddit.com", Icons.Default.Forum, Color(0xFFFF4500)),
+        ShortcutWidgetInfo("WhatsApp", "https://whatsapp.com", Icons.Default.Phone, Color(0xFF25D366)),
+        ShortcutWidgetInfo("Twitter/X", "https://x.com", Icons.Default.Share, Color(0xFF1DA1F2)),
+        ShortcutWidgetInfo("PK AI", "https://google.com", Icons.Default.Lightbulb, Color(0xFF8B5CF6)),
+        ShortcutWidgetInfo("Help", "https://google.com", Icons.AutoMirrored.Filled.Help, Color(0xFF009688))
+    )
+
     Box(modifier = Modifier.fillMaxSize()) {
         if (activeMode == BrowserMode.HACK) {
             MatrixGridAnimation()
         }
 
-        LazyColumn(
+        Column(
             modifier = Modifier
                 .fillMaxSize()
-                .padding(horizontal = 16.dp),
-            horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.spacedBy(16.dp)
+                .padding(horizontal = 16.dp)
+                .verticalScroll(rememberScrollState()),
+            verticalArrangement = Arrangement.spacedBy(16.dp),
+            horizontalAlignment = Alignment.CenterHorizontally
         ) {
-            item {
-                Spacer(modifier = Modifier.height(16.dp))
-                // Glassmorphic search bar with mic icon
-                OutlinedTextField(
-                    value = searchInput,
-                    onValueChange = { searchInput = it },
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .shadow(8.dp, shape = RoundedCornerShape(28.dp))
-                        .background(Color(0x33FFFFFF), shape = RoundedCornerShape(28.dp)),
-                    placeholder = { Text("Search or type web address...", color = Color.LightGray) },
-                    singleLine = true,
-                    keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
-                    keyboardActions = KeyboardActions(onSearch = { onSearch(searchInput) }),
-                    leadingIcon = { Icon(Icons.Default.Search, contentDescription = "Search", tint = Color.White) },
-                    trailingIcon = { Icon(Icons.Default.Mic, contentDescription = "Voice Search", tint = Color.White) },
-                    shape = RoundedCornerShape(28.dp),
-                    colors = OutlinedTextFieldDefaults.colors(
-                        focusedBorderColor = MaterialTheme.colorScheme.primary,
-                        unfocusedBorderColor = Color.Transparent,
-                        focusedTextColor = Color.White,
-                        unfocusedTextColor = Color.White
-                    )
-                )
-            }
+            Spacer(modifier = Modifier.height(8.dp))
 
-            // Grid of Shortcut Icons
-            item {
+            // Sub-mode layout header with small indicators
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(vertical = 4.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
                 Text(
-                    text = "Featured Shortcuts",
-                    color = Color.White,
-                    fontWeight = FontWeight.Bold,
-                    fontSize = 14.sp,
-                    modifier = Modifier.fillMaxWidth().padding(horizontal = 4.dp)
+                    text = if (isIncognito) "Incognito Active" else "Premium Dash",
+                    color = Color.LightGray,
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.Bold
                 )
 
-                LazyVerticalGrid(
-                    columns = GridCells.Fixed(4),
+                // Compact Mode segment controllers in Top-Right
+                Row(
                     modifier = Modifier
-                        .fillMaxWidth()
-                        .height(160.dp),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    verticalArrangement = Arrangement.spacedBy(12.dp)
+                        .background(Color(0xFF262626), shape = RoundedCornerShape(12.dp))
+                        .padding(2.dp)
                 ) {
-                    items(shortcuts) { shortcut ->
-                        Card(
-                            modifier = Modifier
-                                .clickable { onNavigate(shortcut.url) }
-                                .shadow(6.dp, shape = RoundedCornerShape(12.dp)),
-                            colors = CardDefaults.cardColors(containerColor = Color(0x1AFFFFFF)),
-                            border = CardDefaults.outlinedCardBorder().copy(width = 1.dp, brush = Brush.linearGradient(listOf(Color.White.copy(0.2f), Color.Transparent)))
-                        ) {
-                            Column(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .padding(8.dp),
-                                horizontalAlignment = Alignment.CenterHorizontally,
-                                verticalArrangement = Arrangement.Center
-                            ) {
-                                Box(
-                                    modifier = Modifier
-                                        .size(36.dp)
-                                        .background(Brush.radialGradient(listOf(MaterialTheme.colorScheme.primary.copy(0.4f), Color.Transparent)), shape = CircleShape),
-                                    contentAlignment = Alignment.Center
-                                ) {
-                                    Icon(
-                                        imageVector = shortcut.icon,
-                                        contentDescription = shortcut.name,
-                                        tint = Color.White
-                                    )
-                                }
-                                Spacer(modifier = Modifier.height(4.dp))
-                                Text(
-                                    text = shortcut.name,
-                                    fontSize = 10.sp,
-                                    fontWeight = FontWeight.Bold,
-                                    color = Color.White,
-                                    textAlign = TextAlign.Center
-                                )
-                            }
+                    BrowserMode.values().forEach { mode ->
+                        val isSelected = activeMode == mode
+                        val activeBgColor = when (mode) {
+                            BrowserMode.SIMPLE -> Color(0xFF1E88E5)
+                            BrowserMode.DEVELOPER -> Color(0xFF7B1FA2)
+                            BrowserMode.HACK -> Color(0xFFFF5722)
                         }
-                    }
-                }
-            }
-
-            // 1. Compact Music Player Card
-            item {
-                Card(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .shadow(10.dp, shape = RoundedCornerShape(16.dp))
-                        .border(1.dp, Color.White.copy(0.1f), RoundedCornerShape(16.dp)),
-                    colors = CardDefaults.cardColors(containerColor = Color(0x1F0F172A))
-                ) {
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(12.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
                         Box(
                             modifier = Modifier
-                                .size(48.dp)
-                                .background(Brush.linearGradient(listOf(Color(0xFFEC4899), Color(0xFF8B5CF6))), shape = RoundedCornerShape(8.dp)),
-                            contentAlignment = Alignment.Center
+                                .clip(RoundedCornerShape(10.dp))
+                                .background(if (isSelected) activeBgColor else Color.Transparent)
+                                .clickable { onModeChange(mode) }
+                                .padding(vertical = 4.dp, horizontal = 8.dp)
                         ) {
-                            Icon(Icons.Default.MusicNote, contentDescription = null, tint = Color.White)
-                        }
-                        Spacer(modifier = Modifier.width(12.dp))
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text("Click Premium Audio", fontWeight = FontWeight.Bold, color = Color.White, fontSize = 12.sp)
-                            Text("Priscilla - Cyberpunk Neon Track", color = Color.LightGray, fontSize = 10.sp)
-                            Spacer(modifier = Modifier.height(4.dp))
-                            LinearProgressIndicator(progress = trackProgress, modifier = Modifier.fillMaxWidth(), color = Color(0xFFEC4899))
-                        }
-                        Spacer(modifier = Modifier.width(12.dp))
-                        IconButton(onClick = {
-                            musicPlaying = !musicPlaying
-                            trackProgress = if (musicPlaying) 0.65f else 0.35f
-                        }) {
-                            Icon(
-                                if (musicPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
-                                contentDescription = "Play",
-                                tint = Color.White
+                            Text(
+                                text = mode.name,
+                                color = Color.White,
+                                fontSize = 8.sp,
+                                fontWeight = FontWeight.Bold
                             )
                         }
                     }
                 }
             }
 
-            // 2. Compact Video Player Card
-            item {
-                Card(
+            // 1. Compact Music Player Card
+            Card(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .shadow(10.dp, shape = RoundedCornerShape(16.dp))
+                    .border(1.dp, Color.White.copy(0.1f), RoundedCornerShape(16.dp))
+                    .graphicsLayer {
+                        shadowElevation = 8f
+                        shape = RoundedCornerShape(16.dp)
+                        clip = true
+                    },
+                colors = CardDefaults.cardColors(containerColor = Color(0x1F0F172A))
+            ) {
+                Row(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .shadow(10.dp, shape = RoundedCornerShape(16.dp))
-                        .border(1.dp, Color.White.copy(0.1f), RoundedCornerShape(16.dp)),
-                    colors = CardDefaults.cardColors(containerColor = Color(0x1F0F172A))
+                        .padding(12.dp),
+                    verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Column {
-                        Box(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .height(120.dp)
-                                .background(Color.Black),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            if (videoPlaying) {
-                                Text("Premium 4K Stream Video Rendering...", color = Color.Green, fontSize = 11.sp)
-                            } else {
-                                Box(
-                                    modifier = Modifier
-                                        .size(48.dp)
-                                        .background(Color.White.copy(0.2f), shape = CircleShape)
-                                        .clickable { videoPlaying = true },
-                                    contentAlignment = Alignment.Center
-                                ) {
-                                    Icon(Icons.Default.PlayArrow, contentDescription = "Play Video", tint = Color.White, modifier = Modifier.size(32.dp))
-                                }
-                            }
-                        }
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(8.dp),
-                            horizontalArrangement = Arrangement.SpaceBetween
-                        ) {
-                            Text("Click Cinema Widget", fontWeight = FontWeight.Bold, color = Color.White, fontSize = 11.sp)
-                            Text("1080p • 60fps", color = Color.Gray, fontSize = 10.sp)
-                        }
+                    Box(
+                        modifier = Modifier
+                            .size(48.dp)
+                            .background(Brush.linearGradient(listOf(Color(0xFFEC4899), Color(0xFF8B5CF6))), shape = RoundedCornerShape(8.dp)),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(Icons.Default.MusicNote, contentDescription = null, tint = Color.White)
+                    }
+                    Spacer(modifier = Modifier.width(12.dp))
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text("Click Audio Player", fontWeight = FontWeight.Bold, color = Color.White, fontSize = 12.sp)
+                        Text("Priscilla - Cyberpunk Neon Track", color = Color.LightGray, fontSize = 10.sp)
+                        Spacer(modifier = Modifier.height(4.dp))
+                        LinearProgressIndicator(progress = { trackProgress }, modifier = Modifier.fillMaxWidth(), color = Color(0xFFEC4899))
+                    }
+                    Spacer(modifier = Modifier.width(12.dp))
+                    IconButton(onClick = {
+                        musicPlaying = !musicPlaying
+                        trackProgress = if (musicPlaying) 0.65f else 0.35f
+                    }) {
+                        Icon(
+                            if (musicPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
+                            contentDescription = "Play",
+                            tint = Color.White
+                        )
                     }
                 }
             }
 
-            // 3. PDF Viewer Module Card
-            item {
-                Card(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .shadow(10.dp, shape = RoundedCornerShape(16.dp))
-                        .clickable { pdfOpened = !pdfOpened }
-                        .border(1.dp, Color.White.copy(0.1f), RoundedCornerShape(16.dp)),
-                    colors = CardDefaults.cardColors(containerColor = Color(0x1F0F172A))
-                ) {
+            // 2. Compact Video Player Card
+            Card(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .shadow(10.dp, shape = RoundedCornerShape(16.dp))
+                    .border(1.dp, Color.White.copy(0.1f), RoundedCornerShape(16.dp)),
+                colors = CardDefaults.cardColors(containerColor = Color(0x1F0F172A))
+            ) {
+                Column {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(110.dp)
+                            .background(Color.Black),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        if (videoPlaying) {
+                            Text("Premium 4K Stream Video Rendering...", color = Color.Green, fontSize = 11.sp, fontFamily = FontFamily.Monospace)
+                        } else {
+                            Box(
+                                modifier = Modifier
+                                    .size(40.dp)
+                                    .background(Color.White.copy(0.2f), shape = CircleShape)
+                                    .clickable { videoPlaying = true },
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Icon(Icons.Default.PlayArrow, contentDescription = "Play Video", tint = Color.White, modifier = Modifier.size(28.dp))
+                            }
+                        }
+                    }
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .padding(12.dp),
-                        verticalAlignment = Alignment.CenterVertically
+                            .padding(8.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween
                     ) {
-                        Icon(Icons.Default.PictureAsPdf, contentDescription = null, tint = Color.Red, modifier = Modifier.size(36.dp))
-                        Spacer(modifier = Modifier.width(12.dp))
-                        Column {
-                            Text("Click Built-In PDF Reader", fontWeight = FontWeight.Bold, color = Color.White, fontSize = 12.sp)
-                            Text(if (pdfOpened) "Opened: Prince_Laghari_Portfolio.pdf" else "Tap to open and render local documents", color = Color.LightGray, fontSize = 10.sp)
-                        }
+                        Text("Click Cinema Preview", fontWeight = FontWeight.Bold, color = Color.White, fontSize = 11.sp)
+                        Text("1080p • 60fps", color = Color.Gray, fontSize = 10.sp)
+                    }
+                }
+            }
+
+            // 3. PDF Viewer Card
+            Card(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .shadow(10.dp, shape = RoundedCornerShape(16.dp))
+                    .clickable { pdfOpened = !pdfOpened }
+                    .border(1.dp, Color.White.copy(0.1f), RoundedCornerShape(16.dp)),
+                colors = CardDefaults.cardColors(containerColor = Color(0x1F0F172A))
+            ) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(12.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Icon(Icons.Default.PictureAsPdf, contentDescription = null, tint = Color.Red, modifier = Modifier.size(36.dp))
+                    Spacer(modifier = Modifier.width(12.dp))
+                    Column {
+                        Text("Click PDF Module Document", fontWeight = FontWeight.Bold, color = Color.White, fontSize = 12.sp)
+                        Text(if (pdfOpened) "Opened: Prince_Laghari_Portfolio.pdf" else "Tap to open and read local PDF documents", color = Color.LightGray, fontSize = 10.sp)
                     }
                 }
             }
 
             // 4. Image Viewer Gallery Card
-            item {
-                Card(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .shadow(10.dp, shape = RoundedCornerShape(16.dp))
-                        .border(1.dp, Color.White.copy(0.1f), RoundedCornerShape(16.dp)),
-                    colors = CardDefaults.cardColors(containerColor = Color(0x1F0F172A))
-                ) {
-                    Column(modifier = Modifier.padding(12.dp)) {
-                        Text("Click Image Gallery Viewer", fontWeight = FontWeight.Bold, color = Color.White, fontSize = 12.sp, modifier = Modifier.padding(bottom = 8.dp))
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.spacedBy(8.dp)
-                        ) {
-                            listOf(Color.Red, Color.Magenta, Color.Blue, Color.Cyan).forEach { color ->
-                                Box(
-                                    modifier = Modifier
-                                        .size(60.dp)
-                                        .clip(RoundedCornerShape(8.dp))
-                                        .background(Brush.linearGradient(listOf(color, Color.DarkGray)))
-                                )
+            Card(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .shadow(10.dp, shape = RoundedCornerShape(16.dp))
+                    .border(1.dp, Color.White.copy(0.1f), RoundedCornerShape(16.dp)),
+                colors = CardDefaults.cardColors(containerColor = Color(0x1F0F172A))
+            ) {
+                Column(modifier = Modifier.padding(12.dp)) {
+                    Text("Image Gallery Viewer", fontWeight = FontWeight.Bold, color = Color.White, fontSize = 12.sp, modifier = Modifier.padding(bottom = 8.dp))
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        listOf(Color.Red, Color.Magenta, Color.Blue, Color.Cyan).forEach { color ->
+                            Box(
+                                modifier = Modifier
+                                    .size(54.dp)
+                                    .clip(RoundedCornerShape(8.dp))
+                                    .background(Brush.linearGradient(listOf(color, Color.DarkGray)))
+                            )
+                        }
+                    }
+                }
+            }
+
+            // 5. Premium Extensions Module Card (Shows Release / Debug APK sizes & Update)
+            Card(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .shadow(10.dp, shape = RoundedCornerShape(16.dp))
+                    .border(1.dp, Color.White.copy(0.1f), RoundedCornerShape(16.dp)),
+                colors = CardDefaults.cardColors(containerColor = Color(0x1F0F172A))
+            ) {
+                Column(modifier = Modifier.padding(12.dp)) {
+                    Text("Premium Extensions Module", fontWeight = FontWeight.Bold, color = Color.White, fontSize = 12.sp)
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Text("Release APK: ~11 MB", color = Color.Green, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                        Text("Debug APK: ~16 MB", color = Color.Yellow, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                    }
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Button(onClick = onSettingsClick, modifier = Modifier.fillMaxWidth(), colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary)) {
+                        Text("Update Application", fontSize = 11.sp)
+                    }
+                }
+            }
+
+            // 6. Consolidated Settings Module Card (Display, Extensions, Security, Permissions, Advanced, Team Info - expandable)
+            Card(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .shadow(10.dp, shape = RoundedCornerShape(16.dp))
+                    .border(1.dp, Color.White.copy(0.1f), RoundedCornerShape(16.dp)),
+                colors = CardDefaults.cardColors(containerColor = Color(0x1F0F172A))
+            ) {
+                Column(modifier = Modifier.padding(12.dp)) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable { settingsExpanded = !settingsExpanded },
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text("Consolidated Settings Module", fontWeight = FontWeight.Bold, color = Color.White, fontSize = 13.sp)
+                        Icon(
+                            imageVector = if (settingsExpanded) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
+                            contentDescription = null,
+                            tint = Color.White
+                        )
+                    }
+
+                    AnimatedVisibility(visible = settingsExpanded) {
+                        Column(modifier = Modifier.padding(top = 12.dp)) {
+                            // adblock
+                            Row(modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp), horizontalArrangement = Arrangement.SpaceBetween) {
+                                Text("🧩 Adblocker Extension Active", color = Color.White, fontSize = 11.sp)
+                                Switch(checked = adBlockerEnabled, onCheckedChange = onToggleAdBlocker, modifier = Modifier.scale(0.8f))
+                            }
+                            // night mode
+                            Row(modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp), horizontalArrangement = Arrangement.SpaceBetween) {
+                                Text("🌙 Force Night Mode Website", color = Color.White, fontSize = 11.sp)
+                                Switch(checked = forceNightMode, onCheckedChange = onToggleNightMode, modifier = Modifier.scale(0.8f))
+                            }
+                            // HTTPS only
+                            Row(modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp), horizontalArrangement = Arrangement.SpaceBetween) {
+                                Text("🔒 HTTPS Only Mode", color = Color.White, fontSize = 11.sp)
+                                Switch(checked = httpsOnlyMode, onCheckedChange = onToggleHttpsOnly, modifier = Modifier.scale(0.8f))
+                            }
+                            // JS
+                            Row(modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp), horizontalArrangement = Arrangement.SpaceBetween) {
+                                Text("⚡ JavaScript Execution Support", color = Color.White, fontSize = 11.sp)
+                                Switch(checked = jsEnabled, onCheckedChange = onToggleJs, modifier = Modifier.scale(0.8f))
+                            }
+                            // data saver
+                            Row(modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp), horizontalArrangement = Arrangement.SpaceBetween) {
+                                Text("📦 Data Saver Mode", color = Color.White, fontSize = 11.sp)
+                                Switch(checked = dataSaver, onCheckedChange = onToggleDataSaver, modifier = Modifier.scale(0.8f))
+                            }
+
+                            HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp), color = Color.White.copy(0.1f))
+
+                            // About credits
+                            Text("Team: Team PK AI", fontWeight = FontWeight.Bold, color = Color.Cyan, fontSize = 11.sp)
+                            Text("UI Design Built By: Prince Laghari", fontWeight = FontWeight.ExtraBold, color = Color.Green, fontSize = 11.sp)
+                        }
+                    }
+                }
+            }
+
+            // 7. Consolidated System & Download Module with Row of fully working website shortcut icons
+            Card(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .shadow(10.dp, shape = RoundedCornerShape(16.dp))
+                    .border(1.dp, Color.White.copy(0.1f), RoundedCornerShape(16.dp)),
+                colors = CardDefaults.cardColors(containerColor = Color(0x1F0F172A))
+            ) {
+                Column(modifier = Modifier.padding(12.dp)) {
+                    Text("Consolidated System & Download Module", fontWeight = FontWeight.Bold, color = Color.White, fontSize = 12.sp, modifier = Modifier.padding(bottom = 8.dp))
+
+                    // Shortcut list layout flow row
+                    FlowRow(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        shortcutsList.forEach { item ->
+                            Card(
+                                modifier = Modifier
+                                    .clickable { onNavigate(item.url) }
+                                    .size(width = 76.dp, height = 54.dp)
+                                    .shadow(4.dp, shape = RoundedCornerShape(8.dp)),
+                                colors = CardDefaults.cardColors(containerColor = item.color.copy(0.2f)),
+                                border = BorderStroke(1.dp, Color.White.copy(0.1f))
+                            ) {
+                                Column(
+                                    modifier = Modifier.fillMaxSize().padding(4.dp),
+                                    horizontalAlignment = Alignment.CenterHorizontally,
+                                    verticalArrangement = Arrangement.Center
+                                ) {
+                                    Icon(item.icon, contentDescription = null, tint = item.color, modifier = Modifier.size(18.dp))
+                                    Spacer(modifier = Modifier.height(2.dp))
+                                    Text(
+                                        text = item.label,
+                                        fontSize = 8.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        color = Color.White,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
+                                }
                             }
                         }
                     }
-                }
-            }
 
-            // 5. Premium Extensions Module Card
-            item {
-                Card(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .shadow(10.dp, shape = RoundedCornerShape(16.dp))
-                        .border(1.dp, Color.White.copy(0.1f), RoundedCornerShape(16.dp)),
-                    colors = CardDefaults.cardColors(containerColor = Color(0x1F0F172A))
-                ) {
-                    Row(
+                    Spacer(modifier = Modifier.height(12.dp))
+
+                    // Minimized Ad Zone
+                    Card(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .padding(12.dp),
-                        verticalAlignment = Alignment.CenterVertically
+                            .shadow(10.dp, shape = RoundedCornerShape(12.dp))
+                            .border(1.dp, Color.White.copy(0.1f), RoundedCornerShape(12.dp)),
+                        colors = CardDefaults.cardColors(containerColor = Color(0xFF1E293B))
                     ) {
-                        Icon(Icons.Default.Extension, contentDescription = null, tint = Color.Cyan, modifier = Modifier.size(32.dp))
-                        Spacer(modifier = Modifier.width(12.dp))
-                        Column {
-                            Text("Click Premium Extensions Manager", fontWeight = FontWeight.Bold, color = Color.White, fontSize = 12.sp)
-                            Text("Adblock, VPN, Script-Engine installed and ready", color = Color.LightGray, fontSize = 10.sp)
-                        }
+                        Text(
+                            text = "📢 SPONSORED AD: Experience lightning fast browsing speeds with Pro Upgrade!",
+                            color = Color.Yellow,
+                            fontSize = 10.sp,
+                            fontWeight = FontWeight.Bold,
+                            textAlign = TextAlign.Center,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(8.dp)
+                        )
                     }
                 }
             }
 
-            // 6. Consolidated Settings Toggles Card (20+ Options)
-            item {
-                Card(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .shadow(10.dp, shape = RoundedCornerShape(16.dp))
-                        .border(1.dp, Color.White.copy(0.1f), RoundedCornerShape(16.dp)),
-                    colors = CardDefaults.cardColors(containerColor = Color(0x1F0F172A))
-                ) {
-                    Column(modifier = Modifier.padding(12.dp)) {
-                        Text("Consolidated Settings Module", fontWeight = FontWeight.Bold, color = Color.White, fontSize = 13.sp, modifier = Modifier.padding(bottom = 8.dp))
-
-                        // 1. Adblock
-                        Row(modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp), horizontalArrangement = Arrangement.SpaceBetween) {
-                            Text("⚡ Adblocker Active", color = Color.White, fontSize = 11.sp)
-                            Switch(checked = adBlockerEnabled, onCheckedChange = onToggleAdBlocker, modifier = Modifier.scale(0.8f))
-                        }
-                        // 2. Night mode
-                        Row(modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp), horizontalArrangement = Arrangement.SpaceBetween) {
-                            Text("🌙 Force Night Mode", color = Color.White, fontSize = 11.sp)
-                            Switch(checked = forceNightMode, onCheckedChange = onToggleNightMode, modifier = Modifier.scale(0.8f))
-                        }
-                        // 3. HTTPS Only
-                        Row(modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp), horizontalArrangement = Arrangement.SpaceBetween) {
-                            Text("🔒 HTTPS Only Mode", color = Color.White, fontSize = 11.sp)
-                            Switch(checked = httpsOnlyMode, onCheckedChange = onToggleHttpsOnly, modifier = Modifier.scale(0.8f))
-                        }
-                        // 4. JS Enable
-                        Row(modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp), horizontalArrangement = Arrangement.SpaceBetween) {
-                            Text("🧩 JavaScript Execution", color = Color.White, fontSize = 11.sp)
-                            Switch(checked = jsEnabled, onCheckedChange = onToggleJs, modifier = Modifier.scale(0.8f))
-                        }
-                        // 5. Data Saver
-                        Row(modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp), horizontalArrangement = Arrangement.SpaceBetween) {
-                            Text("📦 Data Saver Mode", color = Color.White, fontSize = 11.sp)
-                            Switch(checked = dataSaver, onCheckedChange = onToggleDataSaver, modifier = Modifier.scale(0.8f))
-                        }
-                    }
-                }
-            }
-
-            // 7. System & Download Module
-            item {
-                Card(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .shadow(10.dp, shape = RoundedCornerShape(16.dp))
-                        .border(1.dp, Color.White.copy(0.1f), RoundedCornerShape(16.dp)),
-                    colors = CardDefaults.cardColors(containerColor = Color(0x1F0F172A))
-                ) {
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(12.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Icon(Icons.Default.CloudDownload, contentDescription = null, tint = Color.Green, modifier = Modifier.size(32.dp))
-                        Spacer(modifier = Modifier.width(12.dp))
-                        Column {
-                            Text("System & Download Module", fontWeight = FontWeight.Bold, color = Color.White, fontSize = 12.sp)
-                            Text("Storage location: Movies/ClickBrowser | Wi-Fi Only", color = Color.LightGray, fontSize = 10.sp)
-                        }
-                    }
-                }
-            }
-
-            // 8. Help Info & About Module (With required Prince Laghari credits)
-            item {
-                Card(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .shadow(10.dp, shape = RoundedCornerShape(16.dp))
-                        .border(1.dp, Color.White.copy(0.1f), RoundedCornerShape(16.dp)),
-                    colors = CardDefaults.cardColors(containerColor = Color(0x1F0F172A))
-                ) {
-                    Column(modifier = Modifier.padding(12.dp)) {
-                        Text("Click Browser Pro v1.0.0", fontWeight = FontWeight.Bold, color = Color.White, fontSize = 12.sp)
-                        Text("UI Design Built By: Prince Laghari", fontWeight = FontWeight.ExtraBold, color = Color.Green, fontSize = 12.sp)
-                        Text("Privacy settings agreement fully enforced", color = Color.LightGray, fontSize = 10.sp)
-                        Spacer(modifier = Modifier.height(4.dp))
-                        Button(onClick = onSettingsClick, modifier = Modifier.fillMaxWidth()) {
-                            Text("Update Application", fontSize = 11.sp)
-                        }
-                    }
-                }
-            }
-
-            // 9. Minimized Ad Zone
-            item {
-                Card(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .shadow(10.dp, shape = RoundedCornerShape(12.dp))
-                        .border(1.dp, Color.White.copy(0.1f), RoundedCornerShape(12.dp)),
-                    colors = CardDefaults.cardColors(containerColor = Color(0xFF1E293B))
-                ) {
-                    Text(
-                        text = "📢 SPONSORED: Get Click premium services for unlimited video grabbing speeds!",
-                        color = Color.Yellow,
-                        fontSize = 11.sp,
-                        fontWeight = FontWeight.Bold,
-                        textAlign = TextAlign.Center,
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(8.dp)
-                    )
-                }
-                Spacer(modifier = Modifier.height(60.dp))
-            }
+            Spacer(modifier = Modifier.height(64.dp))
         }
     }
 }
 
-data class ShortcutItem(
-    val name: String,
+@Composable
+fun TabNavigationItem(
+    label: String,
+    icon: ImageVector,
+    isActive: Boolean,
+    onClick: () -> Unit
+) {
+    val activeColor = MaterialTheme.colorScheme.primary
+    val inactiveColor = Color.LightGray
+
+    Column(
+        horizontalAlignment = Alignment.CenterHorizontally,
+        modifier = Modifier
+            .clickable(
+                interactionSource = remember { MutableInteractionSource() },
+                indication = null
+            ) { onClick() }
+            .padding(4.dp)
+    ) {
+        Icon(
+            imageVector = icon,
+            contentDescription = label,
+            tint = if (isActive) activeColor else inactiveColor,
+            modifier = Modifier.size(24.dp)
+        )
+        Text(
+            text = label,
+            fontSize = 10.sp,
+            color = if (isActive) activeColor else inactiveColor,
+            fontWeight = FontWeight.Bold
+        )
+    }
+}
+
+data class ShortcutWidgetInfo(
+    val label: String,
     val url: String,
-    val icon: androidx.compose.ui.graphics.vector.ImageVector
+    val icon: ImageVector,
+    val color: Color
 )
