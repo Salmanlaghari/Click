@@ -1,39 +1,47 @@
 package com.click.browser
 
+import android.graphics.Bitmap
 import android.os.Bundle
 import android.webkit.WebChromeClient
 import android.webkit.WebResourceRequest
+import android.webkit.WebResourceResponse
+import android.webkit.WebSettings
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import android.widget.Toast
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
-import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.*
+import androidx.compose.animation.core.*
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.*
 import androidx.compose.material.icons.filled.*
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material.icons.automirrored.filled.ArrowForward
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.scale
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextAlign
@@ -46,9 +54,17 @@ import com.click.browser.data.HistoryItem
 import com.click.browser.data.DownloadItem
 import com.click.browser.engine.*
 import com.click.browser.ui.screens.*
-import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import java.io.File
+import java.net.URLEncoder
+
+data class TabItem(
+    val id: String = java.util.UUID.randomUUID().toString(),
+    var url: String = "about:blank",
+    var title: String = "New Tab",
+    var isIncognito: Boolean = false,
+    var webView: WebView? = null
+)
 
 class MainActivity : ComponentActivity() {
 
@@ -66,53 +82,105 @@ class MainActivity : ComponentActivity() {
             val scope = rememberCoroutineScope()
             val activeMode by modeManager.modeFlow.collectAsState(initial = BrowserMode.SIMPLE)
 
-            // UI States
-            var webViewInstance by remember { mutableStateOf<WebView?>(null) }
-            var currentUrl by remember { mutableStateOf("about:blank") }
-            var pageTitle by remember { mutableStateOf("Click Browser") }
-            var canGoBack by remember { mutableStateOf(false) }
-            var canGoForward by remember { mutableStateOf(false) }
-            var showHome by remember { mutableStateOf(true) }
+            // Premium Theme configuration based on Mode Vibe
+            var currentThemeSetting by remember { mutableStateOf("Dark") }
+            val isDark = currentThemeSetting == "Dark" || activeMode != BrowserMode.SIMPLE
+
+            val themeColors = when (activeMode) {
+                BrowserMode.SIMPLE -> {
+                    // Soft light blue & clean white, rounded and very friendly Vibe
+                    if (isDark) {
+                        darkColorScheme(
+                            primary = Color(0xFF3B82F6),
+                            surface = Color(0xFF1E293B),
+                            background = Color(0xFF0F172A),
+                            secondary = Color(0xFF2563EB)
+                        )
+                    } else {
+                        lightColorScheme(
+                            primary = Color(0xFF2563EB),
+                            surface = Color(0xFFFFFFFF),
+                            background = Color(0xFFF8FAFC),
+                            secondary = Color(0xFF3B82F6)
+                        )
+                    }
+                }
+                BrowserMode.DEVELOPER -> {
+                    // Dark tech purple & deep black, sharp and neon Vibe
+                    darkColorScheme(
+                        primary = Color(0xFF7C3AED),
+                        surface = Color(0xFF0F172A),
+                        background = Color(0xFF020617),
+                        secondary = Color(0xFF9333EA),
+                        onBackground = Color(0xFFA78BFA),
+                        onSurface = Color(0xFFA78BFA)
+                    )
+                }
+                BrowserMode.HACK -> {
+                    // Cyberpunk red & black, grid matrices, matrix green & orange Vibe
+                    darkColorScheme(
+                        primary = Color(0xFFDC2626),
+                        surface = Color(0xFF18181B),
+                        background = Color(0xFF09090B),
+                        secondary = Color(0xFFEF4444),
+                        onBackground = Color(0xFF00FF00),
+                        onSurface = Color(0xFF00FF00)
+                    )
+                }
+            }
+
+            // Browser Premium Feature States
+            val tabs = remember { mutableStateListOf<TabItem>(TabItem(url = "about:blank", title = "New Tab")) }
+            var activeTabIndex by remember { mutableStateOf(0) }
+            val currentTab = tabs.getOrNull(activeTabIndex) ?: TabItem(url = "about:blank")
+
+            var showTabsManager by remember { mutableStateOf(false) }
+            var isIncognitoMode by remember { mutableStateOf(false) }
+            var adBlockerEnabled by remember { mutableStateOf(true) }
+            var forceNightModeWebsites by remember { mutableStateOf(false) }
+            var httpsOnlyMode by remember { mutableStateOf(true) }
+            var javaScriptEnabledGlobal by remember { mutableStateOf(true) }
+            var savePasswordsEnabled by remember { mutableStateOf(true) }
+            var dataSaverEnabled by remember { mutableStateOf(false) }
+
+            // Common overlays
             var showBookmarks by remember { mutableStateOf(false) }
             var showHistory by remember { mutableStateOf(false) }
             var showDownloads by remember { mutableStateOf(false) }
             var showSettings by remember { mutableStateOf(false) }
+            var showFindInPageDialog by remember { mutableStateOf(false) }
+            var findQuery by remember { mutableStateOf("") }
 
-            // Developer Mode State
+            // Dev tools states
             var elementInspectorEnabled by remember { mutableStateOf(false) }
             var deviceEmulatorMode by remember { mutableStateOf("Mobile") } // Mobile, Tablet, Desktop
             var pageLoadTime by remember { mutableStateOf(0L) }
             var lastPageStart by remember { mutableStateOf(0L) }
             var showDebugOverlay by remember { mutableStateOf(true) }
-
             val logs = remember { mutableStateListOf<LogEntry>() }
             val networkRequests = remember { mutableStateListOf<NetworkRequest>() }
             var domHtml by remember { mutableStateOf("") }
             val sourcesList = remember { mutableStateListOf<String>() }
 
-            // Hack Mode State
+            // Hack tools states
             var antiDetectionEnabled by remember { mutableStateOf(true) }
             var forceDesktopMode by remember { mutableStateOf(true) }
             var spoofedUAIndex by remember { mutableStateOf(0) }
             val detectedVideos = remember { mutableStateListOf<String>() }
             var showDownloaderDialog by remember { mutableStateOf(false) }
 
-            // Theme Setting
-            var currentThemeSetting by remember { mutableStateOf("Light") }
+            // Settings Configurations
             var currentSearchEngineSetting by remember { mutableStateOf("Google") }
             var currentHomepageSetting by remember { mutableStateOf("https://www.google.com") }
 
-            // Colors depending on active browser mode
-            val themeColors = when (activeMode) {
-                BrowserMode.SIMPLE -> if (currentThemeSetting == "Dark") darkColorScheme(primary = Color(0xFF1E88E5)) else lightColorScheme(primary = Color(0xFF1E88E5))
-                BrowserMode.DEVELOPER -> if (currentThemeSetting == "Dark") darkColorScheme(primary = Color(0xFF7B1FA2)) else lightColorScheme(primary = Color(0xFF7B1FA2))
-                BrowserMode.HACK -> darkColorScheme(
-                    primary = Color(0xFFFF5722),
-                    background = Color(0xFF0D0D0D),
-                    surface = Color(0xFF121212),
-                    onBackground = Color(0xFF00FF00),
-                    onSurface = Color(0xFF00FF00)
-                )
+            // Handle back presses
+            BackHandler(enabled = currentTab.url != "about:blank") {
+                val wv = currentTab.webView
+                if (wv != null && wv.canGoBack()) {
+                    wv.goBack()
+                } else {
+                    currentTab.url = "about:blank"
+                }
             }
 
             MaterialTheme(colorScheme = themeColors) {
@@ -122,45 +190,52 @@ class MainActivity : ComponentActivity() {
                 ) {
                     Box(modifier = Modifier.fillMaxSize()) {
 
-                        // Main Layout Column
+                        // Main Column Layout
                         Column(modifier = Modifier.fillMaxSize()) {
 
-                            // 1. TOP BAR: Mode Selector & Mode Indicators
-                            TopBarComponent(
+                            // 1. TOP PREMIUM BAR: Title, Tabs count badge, and App options 3-dot dropdown menu
+                            PremiumTopBar(
                                 activeMode = activeMode,
-                                onModeSelected = { mode ->
-                                    scope.launch {
-                                        modeManager.setMode(mode)
-                                        webViewInstance?.let { webView ->
-                                            modeManager.applySettings(webView, mode, forceDesktopMode)
-                                            if (!showHome) {
-                                                webView.reload()
-                                            }
+                                tabsCount = tabs.size,
+                                onOpenTabsManager = { showTabsManager = true },
+                                onOptionSelected = { option ->
+                                    when (option) {
+                                        "Bookmarks" -> showBookmarks = true
+                                        "History" -> showHistory = true
+                                        "Downloads" -> showDownloads = true
+                                        "Settings" -> showSettings = true
+                                        "Find in Page" -> showFindInPageDialog = true
+                                        "Incognito Mode" -> {
+                                            isIncognitoMode = !isIncognitoMode
+                                            val newTab = TabItem(url = "about:blank", title = "Private Tab", isIncognito = isIncognitoMode)
+                                            tabs.add(newTab)
+                                            activeTabIndex = tabs.size - 1
+                                            Toast.makeText(this@MainActivity, if (isIncognitoMode) "Private Incognito Tab Opened" else "Incognito Off", Toast.LENGTH_SHORT).show()
                                         }
                                     }
                                 }
                             )
 
-                            // 2. ADDRESS BAR with navigation and state info
-                            AddressBarComponent(
+                            // 2. 3D GLASSMORPHIC ADDRESS BAR with standard controls
+                            PremiumAddressBar(
                                 activeMode = activeMode,
-                                currentUrl = currentUrl,
-                                pageTitle = pageTitle,
-                                canGoBack = canGoBack,
-                                canGoForward = canGoForward,
-                                onBack = { webViewInstance?.goBack() },
-                                onForward = { webViewInstance?.goForward() },
-                                onRefresh = { webViewInstance?.reload() },
+                                currentUrl = currentTab.url,
+                                pageTitle = currentTab.title,
+                                canGoBack = currentTab.webView?.canGoBack() == true,
+                                canGoForward = currentTab.webView?.canGoForward() == true,
+                                onBack = { currentTab.webView?.goBack() },
+                                onForward = { currentTab.webView?.goForward() },
+                                onRefresh = { currentTab.webView?.reload() },
                                 onNavigate = { input ->
                                     val destination = formatUrl(input, currentSearchEngineSetting)
-                                    showHome = false
-                                    webViewInstance?.loadUrl(destination)
+                                    currentTab.url = destination
+                                    currentTab.webView?.loadUrl(destination)
                                 },
-                                // Dev additions
+                                // Dev elements
                                 elementInspectorEnabled = elementInspectorEnabled,
                                 onToggleInspector = {
                                     elementInspectorEnabled = !elementInspectorEnabled
-                                    webViewInstance?.evaluateJavascript(
+                                    currentTab.webView?.evaluateJavascript(
                                         if (elementInspectorEnabled) DevToolsInjections.ELEMENT_INSPECTOR_ENABLE else DevToolsInjections.ELEMENT_INSPECTOR_DISABLE,
                                         null
                                     )
@@ -172,39 +247,40 @@ class MainActivity : ComponentActivity() {
                                         "Tablet" -> "Desktop"
                                         else -> "Mobile"
                                     }
-                                    webViewInstance?.let { webView ->
+                                    currentTab.webView?.let { webView ->
                                         modeManager.applySettings(webView, activeMode, deviceEmulatorMode == "Desktop" || forceDesktopMode)
                                         webView.reload()
                                     }
                                 }
                             )
 
-                            // 3. CONTENT AREA
+                            // 3. MAIN WEB/HOME CONTENT CONTAINER
                             Box(modifier = Modifier.weight(1f)) {
-                                if (showHome) {
-                                    // Welcome / Landing Screen depending on mode
-                                    HomeScreen(
+                                if (currentTab.url == "about:blank") {
+                                    // Overhauled premium home page
+                                    PremiumHomeScreen(
                                         activeMode = activeMode,
+                                        isIncognito = currentTab.isIncognito,
                                         onSearch = { input ->
                                             val destination = formatUrl(input, currentSearchEngineSetting)
-                                            showHome = false
-                                            webViewInstance?.loadUrl(destination)
+                                            currentTab.url = destination
+                                            currentTab.webView?.loadUrl(destination)
                                         },
                                         onNavigate = { url ->
-                                            showHome = false
-                                            webViewInstance?.loadUrl(url)
+                                            currentTab.url = url
+                                            currentTab.webView?.loadUrl(url)
                                         },
+                                        // Quick links triggers
                                         onBookmarksClick = { showBookmarks = true },
                                         onHistoryClick = { showHistory = true },
                                         onDownloadsClick = { showDownloads = true },
-                                        onSettingsClick = { showSettings = true },
-                                        // Hack mode actions
+                                        // Mode switch options inside home settings / triggers
                                         antiDetectionEnabled = antiDetectionEnabled,
                                         onToggleAntiDetection = { antiDetectionEnabled = !antiDetectionEnabled },
                                         forceDesktopMode = forceDesktopMode,
                                         onToggleForceDesktop = {
                                             forceDesktopMode = !forceDesktopMode
-                                            webViewInstance?.let { webView ->
+                                            currentTab.webView?.let { webView ->
                                                 modeManager.applySettings(webView, activeMode, forceDesktopMode)
                                             }
                                         },
@@ -212,16 +288,16 @@ class MainActivity : ComponentActivity() {
                                         onCycleUA = {
                                             spoofedUAIndex = (spoofedUAIndex + 1) % 4
                                             val uaStr = when (spoofedUAIndex) {
-                                                0 -> ModeManager.UA_HACK // Win11 Chrome
-                                                1 -> "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Safari/605.1.15" // Mac Safari
-                                                2 -> "Mozilla/5.0 (X11; Linux x86_64; rv:109.0) Gecko/20100101 Firefox/125.0" // Linux Firefox
-                                                else -> ModeManager.UA_SIMPLE // Android Chrome
+                                                0 -> ModeManager.UA_HACK
+                                                1 -> "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Safari/605.1.15"
+                                                2 -> "Mozilla/5.0 (X11; Linux x86_64; rv:109.0) Gecko/20100101 Firefox/125.0"
+                                                else -> ModeManager.UA_SIMPLE
                                             }
-                                            webViewInstance?.settings?.userAgentString = uaStr
+                                            currentTab.webView?.settings?.userAgentString = uaStr
                                         }
                                     )
                                 } else {
-                                    // Android WebView Wrapper with custom dimensions for Desktop / Emulator spoofing
+                                    // Adaptive Layout Frame to mimic Laptop / Tablet viewports cleanly
                                     val emulatorWidthModifier = when (deviceEmulatorMode) {
                                         "Tablet" -> Modifier.fillMaxHeight().width(768.dp)
                                         "Desktop" -> Modifier.fillMaxHeight().width(1024.dp)
@@ -237,14 +313,12 @@ class MainActivity : ComponentActivity() {
                                             factory = { ctx ->
                                                 WebView(ctx).apply {
                                                     webViewClient = object : WebViewClient() {
-                                                        override fun onPageStarted(view: WebView?, url: String?, favicon: android.graphics.Bitmap?) {
+                                                        override fun onPageStarted(view: WebView?, url: String?, favicon: Bitmap?) {
                                                             super.onPageStarted(view, url, favicon)
-                                                            currentUrl = url ?: ""
+                                                            currentTab.url = url ?: ""
                                                             lastPageStart = System.currentTimeMillis()
-                                                            canGoBack = canGo()
-                                                            canGoForward = canGoF()
 
-                                                            // Clear page data on reload/navigation
+                                                            // Clear stats
                                                             networkRequests.clear()
                                                             sourcesList.clear()
                                                             detectedVideos.clear()
@@ -252,19 +326,17 @@ class MainActivity : ComponentActivity() {
 
                                                         override fun onPageFinished(view: WebView?, url: String?) {
                                                             super.onPageFinished(view, url)
-                                                            pageTitle = view?.title ?: ""
+                                                            currentTab.title = view?.title ?: "Page"
                                                             pageLoadTime = System.currentTimeMillis() - lastPageStart
-                                                            canGoBack = canGo()
-                                                            canGoForward = canGoF()
 
-                                                            // Add to history
-                                                            if (url != null && url != "about:blank") {
+                                                            // History tracking (skip if Incognito Tab)
+                                                            if (!currentTab.isIncognito && url != null && url != "about:blank") {
                                                                 scope.launch {
-                                                                    repository.addHistoryItem(HistoryItem(pageTitle, url, System.currentTimeMillis()))
+                                                                    repository.addHistoryItem(HistoryItem(currentTab.title, url, System.currentTimeMillis()))
                                                                 }
                                                             }
 
-                                                            // Injections based on mode
+                                                            // JS tools injections based on active browser Mode
                                                             if (activeMode == BrowserMode.DEVELOPER) {
                                                                 view?.evaluateJavascript(DevToolsInjections.CONSOLE_HIJACK, null)
                                                                 view?.evaluateJavascript(DevToolsInjections.NETWORK_INTERCEPT, null)
@@ -278,14 +350,43 @@ class MainActivity : ComponentActivity() {
                                                             }
                                                         }
 
-                                                        private fun canGo() = this@apply.canGoBack()
-                                                        private fun canGoF() = this@apply.canGoForward()
+                                                        override fun shouldInterceptRequest(view: WebView?, request: WebResourceRequest?): WebResourceResponse? {
+                                                            // Basic Ad Blocker check
+                                                            if (adBlockerEnabled && AdBlocker.shouldBlock(request?.url?.toString())) {
+                                                                return WebResourceResponse("text/plain", "UTF-8", null)
+                                                            }
+                                                            return super.shouldInterceptRequest(view, request)
+                                                        }
+
+                                                        @Suppress("Deprecated")
+                                                        override fun onReceivedError(view: WebView?, errorCode: Int, description: String?, failingUrl: String?) {
+                                                            // Premium custom error display instead of blank white screen
+                                                            val customHtml = """
+                                                                <html>
+                                                                <head>
+                                                                    <style>
+                                                                        body { background-color: #0f172a; color: #f8fafc; font-family: sans-serif; text-align: center; padding: 50px; }
+                                                                        h1 { color: #ef4444; font-size: 24px; }
+                                                                        p { color: #94a3b8; font-size: 16px; }
+                                                                        .btn { background-color: #3b82f6; border: none; color: white; padding: 12px 24px; border-radius: 8px; font-weight: bold; cursor: pointer; margin-top: 20px; }
+                                                                    </style>
+                                                                </head>
+                                                                <body>
+                                                                    <h1>⚠️ Unable to load page</h1>
+                                                                    <p>Click Browser could not reach the server or network is offline.</p>
+                                                                    <p><i>Details: $description</i></p>
+                                                                    <button class="btn" onclick="location.reload()">Retry Connection</button>
+                                                                </body>
+                                                                </html>
+                                                            """.trimIndent()
+                                                            view?.loadDataWithBaseURL(null, customHtml, "text/html", "UTF-8", null)
+                                                        }
                                                     }
 
                                                     webChromeClient = object : WebChromeClient() {
                                                         override fun onReceivedTitle(view: WebView?, title: String?) {
                                                             super.onReceivedTitle(view, title)
-                                                            pageTitle = title ?: ""
+                                                            currentTab.title = title ?: "Page"
                                                         }
                                                     }
 
@@ -313,19 +414,28 @@ class MainActivity : ComponentActivity() {
                                                         "VideoGrabberBridge"
                                                     )
 
+                                                    // Config settings
+                                                    settings.javaScriptEnabled = javaScriptEnabledGlobal
+                                                    settings.domStorageEnabled = true
+                                                    settings.mixedContentMode = WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
+                                                    settings.supportZoom()
+                                                    settings.builtInZoomControls = true
+                                                    settings.displayZoomControls = false
+
                                                     modeManager.applySettings(this, activeMode, forceDesktopMode)
-                                                    webViewInstance = this
+                                                    currentTab.webView = this
                                                 }
                                             },
-                                            update = { _ ->
-                                                // General updates
+                                            update = { webView ->
+                                                // Dynamic configs
+                                                webView.settings.javaScriptEnabled = javaScriptEnabledGlobal
                                             }
                                         )
                                     }
                                 }
 
-                                // 4. FLOATING DEV DEBUG OVERLAY
-                                if (activeMode == BrowserMode.DEVELOPER && showDebugOverlay && !showHome) {
+                                // 4. FLOATING DEV DEBUG STATUS OVERLAY
+                                if (activeMode == BrowserMode.DEVELOPER && showDebugOverlay && currentTab.url != "about:blank") {
                                     FloatingDebugOverlay(
                                         pageLoadTime = pageLoadTime,
                                         modifier = Modifier
@@ -334,7 +444,7 @@ class MainActivity : ComponentActivity() {
                                     )
                                 }
 
-                                // 5. FLOATING HACK DOWNLOAD TRIGGER
+                                // 5. FLOATING HACK VIDEO GRABBER TRIGGER
                                 if (activeMode == BrowserMode.HACK && detectedVideos.isNotEmpty()) {
                                     FloatingActionButton(
                                         onClick = { showDownloaderDialog = true },
@@ -343,14 +453,15 @@ class MainActivity : ComponentActivity() {
                                         modifier = Modifier
                                             .align(Alignment.BottomEnd)
                                             .padding(16.dp)
+                                            .scale(1.1f)
                                     ) {
                                         Icon(Icons.Default.Download, contentDescription = "Grab Video")
                                     }
                                 }
                             }
 
-                            // 6. BOTTOM PANELS (DevTools / Mode controls)
-                            if (activeMode == BrowserMode.DEVELOPER && !showHome) {
+                            // 6. DETAILED BOTTOM PANELS (DevTools console)
+                            if (activeMode == BrowserMode.DEVELOPER && currentTab.url != "about:blank") {
                                 DevToolsPanel(
                                     logs = logs,
                                     networkRequests = networkRequests,
@@ -358,14 +469,14 @@ class MainActivity : ComponentActivity() {
                                     sourcesList = sourcesList,
                                     onClearLogs = { logs.clear() },
                                     onEvalJs = { code ->
-                                        webViewInstance?.evaluateJavascript(code, null)
+                                        currentTab.webView?.evaluateJavascript(code, null)
                                     }
                                 )
                             }
                         }
 
-                        // Bottom Navigation Shortcuts trigger overlays
-                        if (showHome) {
+                        // --- Bottom Options Menu triggers ---
+                        if (currentTab.url == "about:blank") {
                             Row(
                                 modifier = Modifier
                                     .align(Alignment.BottomCenter)
@@ -373,21 +484,20 @@ class MainActivity : ComponentActivity() {
                                     .padding(bottom = 24.dp),
                                 horizontalArrangement = Arrangement.SpaceEvenly
                             ) {
-                                IconButton(onClick = { showHome = true }) {
+                                IconButton(onClick = { currentTab.url = "about:blank" }) {
                                     Icon(Icons.Default.Home, contentDescription = "Home", tint = MaterialTheme.colorScheme.primary)
                                 }
                                 IconButton(onClick = {
-                                    // Save current to bookmarks
-                                    if (currentUrl.isNotEmpty() && currentUrl != "about:blank") {
+                                    if (currentTab.url != "about:blank") {
                                         scope.launch {
-                                            repository.addBookmark(Bookmark(pageTitle, currentUrl))
+                                            repository.addBookmark(Bookmark(currentTab.title, currentTab.url))
                                             Toast.makeText(this@MainActivity, "Bookmark Saved", Toast.LENGTH_SHORT).show()
                                         }
                                     } else {
                                         showBookmarks = true
                                     }
                                 }) {
-                                    Icon(Icons.Default.Bookmark, contentDescription = "Add Bookmark")
+                                    Icon(Icons.Default.Bookmark, contentDescription = "Bookmarks")
                                 }
                                 IconButton(onClick = { showHistory = true }) {
                                     Icon(Icons.Default.History, contentDescription = "History")
@@ -398,13 +508,42 @@ class MainActivity : ComponentActivity() {
                             }
                         }
 
-                        // Floating Overlays for Screens
+                        // --- Multi-Tab Management overlay sheets ---
+                        if (showTabsManager) {
+                            PremiumTabsManager(
+                                tabs = tabs,
+                                activeTabIndex = activeTabIndex,
+                                onSelectTab = { idx ->
+                                    activeTabIndex = idx
+                                    showTabsManager = false
+                                },
+                                onCloseTab = { idx ->
+                                    if (tabs.size > 1) {
+                                        tabs.removeAt(idx)
+                                        if (activeTabIndex >= tabs.size) {
+                                            activeTabIndex = tabs.size - 1
+                                        }
+                                    } else {
+                                        tabs[0] = TabItem(url = "about:blank", title = "New Tab")
+                                        activeTabIndex = 0
+                                    }
+                                },
+                                onAddTab = { isPrivate ->
+                                    tabs.add(TabItem(url = "about:blank", title = if (isPrivate) "Private Tab" else "New Tab", isIncognito = isPrivate))
+                                    activeTabIndex = tabs.size - 1
+                                    showTabsManager = false
+                                },
+                                onClose = { showTabsManager = false }
+                            )
+                        }
+
+                        // Overlays screens
                         if (showBookmarks) {
                             BookmarksScreen(
                                 repository = repository,
                                 onNavigate = { url ->
-                                    showHome = false
-                                    webViewInstance?.loadUrl(url)
+                                    currentTab.url = url
+                                    currentTab.webView?.loadUrl(url)
                                 },
                                 onClose = { showBookmarks = false }
                             )
@@ -414,8 +553,8 @@ class MainActivity : ComponentActivity() {
                             HistoryScreen(
                                 repository = repository,
                                 onNavigate = { url ->
-                                    showHome = false
-                                    webViewInstance?.loadUrl(url)
+                                    currentTab.url = url
+                                    currentTab.webView?.loadUrl(url)
                                 },
                                 onClose = { showHistory = false }
                             )
@@ -429,24 +568,76 @@ class MainActivity : ComponentActivity() {
                         }
 
                         if (showSettings) {
-                            SettingsScreen(
-                                currentTheme = currentThemeSetting,
+                            PremiumSettingsScreen(
+                                currentThemeSetting = currentThemeSetting,
                                 onThemeChange = { currentThemeSetting = it },
-                                currentSearchEngine = currentSearchEngineSetting,
+                                activeMode = activeMode,
+                                onModeChange = { mode ->
+                                    scope.launch {
+                                        modeManager.setMode(mode)
+                                        currentTab.webView?.let { wv ->
+                                            modeManager.applySettings(wv, mode, forceDesktopMode)
+                                            wv.reload()
+                                        }
+                                    }
+                                },
+                                currentSearchEngineSetting = currentSearchEngineSetting,
                                 onSearchEngineChange = { currentSearchEngineSetting = it },
-                                currentHomepage = currentHomepageSetting,
-                                onHomepageChange = { currentHomepageSetting = it },
+                                adBlockerEnabled = adBlockerEnabled,
+                                onToggleAdBlocker = { adBlockerEnabled = it },
+                                forceNightMode = forceNightModeWebsites,
+                                onToggleNightMode = { forceNightModeWebsites = it },
+                                httpsOnlyMode = httpsOnlyMode,
+                                onToggleHttpsOnly = { httpsOnlyMode = it },
+                                jsEnabled = javaScriptEnabledGlobal,
+                                onToggleJs = { javaScriptEnabledGlobal = it },
+                                dataSaver = dataSaverEnabled,
+                                onToggleDataSaver = { dataSaverEnabled = it },
                                 onClearData = {
                                     scope.launch {
                                         repository.clearHistory()
-                                        Toast.makeText(this@MainActivity, "Browser Data Cleared", Toast.LENGTH_SHORT).show()
+                                        Toast.makeText(this@MainActivity, "Data Cleared Successfully", Toast.LENGTH_SHORT).show()
                                     }
                                 },
                                 onClose = { showSettings = false }
                             )
                         }
 
-                        // Universal Video Downloader Dialog
+                        // Find in Page overlay
+                        if (showFindInPageDialog) {
+                            AlertDialog(
+                                onDismissRequest = { showFindInPageDialog = false },
+                                title = { Text("Find in Page") },
+                                text = {
+                                    OutlinedTextField(
+                                        value = findQuery,
+                                        onValueChange = { query ->
+                                            findQuery = query
+                                            currentTab.webView?.findAllAsync(query)
+                                        },
+                                        modifier = Modifier.fillMaxWidth(),
+                                        label = { Text("Find text...") }
+                                    )
+                                },
+                                confirmButton = {
+                                    TextButton(onClick = {
+                                        currentTab.webView?.findNext(true)
+                                    }) {
+                                        Text("Next")
+                                    }
+                                },
+                                dismissButton = {
+                                    TextButton(onClick = {
+                                        currentTab.webView?.clearMatches()
+                                        showFindInPageDialog = false
+                                    }) {
+                                        Text("Close")
+                                    }
+                                }
+                            )
+                        }
+
+                        // Downloader selection overlay
                         if (showDownloaderDialog) {
                             AlertDialog(
                                 onDismissRequest = { showDownloaderDialog = false },
@@ -454,20 +645,16 @@ class MainActivity : ComponentActivity() {
                                 text = {
                                     Column {
                                         Text("Detected Videos on page:")
-                                        Spacer(modifier = Modifier.height(8.dp))
+                                        Spacer(modifier = Modifier.height(12.dp))
                                         detectedVideos.forEachIndexed { idx, url ->
-                                            Text(
-                                                text = "Video Source ${idx + 1}: ${url.take(60)}...",
-                                                fontSize = 12.sp,
-                                                color = Color.Green,
+                                            Card(
                                                 modifier = Modifier
                                                     .fillMaxWidth()
                                                     .clickable {
-                                                        // Fake download and save as requested
                                                         val targetFolder = File(this@MainActivity.getExternalFilesDir(null), "Movies/ClickBrowser")
                                                         targetFolder.mkdirs()
                                                         val targetFile = File(targetFolder, "video_${System.currentTimeMillis()}.mp4")
-                                                        targetFile.writeText("Fake video downloader payload from url: $url")
+                                                        targetFile.writeText("Fake payload: $url")
 
                                                         scope.launch {
                                                             repository.addDownloadItem(
@@ -482,16 +669,20 @@ class MainActivity : ComponentActivity() {
                                                         Toast.makeText(this@MainActivity, "Downloading to Movies/ClickBrowser...", Toast.LENGTH_SHORT).show()
                                                         showDownloaderDialog = false
                                                     }
-                                                    .border(1.dp, Color.Gray, RoundedCornerShape(4.dp))
-                                                    .padding(6.dp)
-                                            )
-                                            Spacer(modifier = Modifier.height(4.dp))
+                                                    .padding(vertical = 4.dp),
+                                                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
+                                            ) {
+                                                Column(modifier = Modifier.padding(12.dp)) {
+                                                    Text("Resolution: 1080p | Format: MP4", fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                                                    Text(url.take(60) + "...", fontSize = 11.sp, color = Color.Gray)
+                                                }
+                                            }
                                         }
                                     }
                                 },
                                 confirmButton = {
                                     TextButton(onClick = { showDownloaderDialog = false }) {
-                                        Text("Cancel")
+                                        Text("Close")
                                     }
                                 }
                             )
@@ -510,7 +701,7 @@ class MainActivity : ComponentActivity() {
         if (trimmed.contains(".") && !trimmed.contains(" ")) {
             return "https://$trimmed"
         }
-        val query = java.net.URLEncoder.encode(trimmed, "UTF-8")
+        val query = URLEncoder.encode(trimmed, "UTF-8")
         return when (searchEngine) {
             "Bing" -> "https://www.bing.com/search?q=$query"
             "DuckDuckGo" -> "https://duckduckgo.com/?q=$query"
@@ -519,15 +710,32 @@ class MainActivity : ComponentActivity() {
     }
 }
 
+data class ShortcutItem(
+    val name: String,
+    val url: String,
+    val icon: androidx.compose.ui.graphics.vector.ImageVector
+)
+
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun TopBarComponent(
+fun PremiumTopBar(
     activeMode: BrowserMode,
-    onModeSelected: (BrowserMode) -> Unit
+    tabsCount: Int,
+    onOpenTabsManager: () -> Unit,
+    onOptionSelected: (String) -> Unit
 ) {
+    var expandedMenu by remember { mutableStateOf(false) }
+
+    val barColor = when (activeMode) {
+        BrowserMode.SIMPLE -> Color(0xFF1E293B)
+        BrowserMode.DEVELOPER -> Color(0xFF0F172A)
+        BrowserMode.HACK -> Color(0xFF18181B)
+    }
+
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .background(Color(0xFF121212))
+            .background(barColor)
             .padding(vertical = 12.dp, horizontal = 16.dp),
         horizontalArrangement = Arrangement.SpaceBetween,
         verticalAlignment = Alignment.CenterVertically
@@ -536,43 +744,92 @@ fun TopBarComponent(
             text = "Click Browser",
             color = Color.White,
             fontWeight = FontWeight.Bold,
-            fontSize = 16.sp
+            fontSize = 18.sp
         )
 
-        // Pill Switchers
-        Row(
-            modifier = Modifier
-                .background(Color(0xFF262626), shape = RoundedCornerShape(24.dp))
-                .padding(4.dp)
-        ) {
-            BrowserMode.values().forEach { mode ->
-                val activeBgColor = when (mode) {
-                    BrowserMode.SIMPLE -> Color(0xFF1E88E5)
-                    BrowserMode.DEVELOPER -> Color(0xFF7B1FA2)
-                    BrowserMode.HACK -> Color(0xFFFF5722)
-                }
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            // Tabs badge indicator
+            Box(
+                modifier = Modifier
+                    .size(32.dp)
+                    .background(Color(0xFF2B2B2B), shape = RoundedCornerShape(8.dp))
+                    .clickable { onOpenTabsManager() },
+                contentAlignment = Alignment.Center
+            ) {
+                Text(
+                    text = tabsCount.toString(),
+                    color = Color.White,
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 14.sp
+                )
+            }
 
-                Box(
-                    modifier = Modifier
-                        .clip(RoundedCornerShape(20.dp))
-                        .background(if (activeMode == mode) activeBgColor else Color.Transparent)
-                        .clickable { onModeSelected(mode) }
-                        .padding(vertical = 6.dp, horizontal = 12.dp)
-                ) {
-                    Text(
-                        text = mode.name.first() + mode.name.substring(1).lowercase(),
-                        color = Color.White,
-                        fontSize = 11.sp,
-                        fontWeight = FontWeight.Bold
-                    )
-                }
+            Spacer(modifier = Modifier.width(12.dp))
+
+            // Options 3-dot dropdown menu trigger
+            IconButton(onClick = { expandedMenu = true }) {
+                Icon(Icons.Default.MoreVert, contentDescription = "Menu Options", tint = Color.White)
+            }
+
+            DropdownMenu(
+                expanded = expandedMenu,
+                onDismissRequest = { expandedMenu = false }
+            ) {
+                DropdownMenuItem(
+                    text = { Text("Bookmarks") },
+                    onClick = {
+                        onOptionSelected("Bookmarks")
+                        expandedMenu = false
+                    },
+                    leadingIcon = { Icon(Icons.Default.Bookmark, contentDescription = null) }
+                )
+                DropdownMenuItem(
+                    text = { Text("History") },
+                    onClick = {
+                        onOptionSelected("History")
+                        expandedMenu = false
+                    },
+                    leadingIcon = { Icon(Icons.Default.History, contentDescription = null) }
+                )
+                DropdownMenuItem(
+                    text = { Text("Downloads") },
+                    onClick = {
+                        onOptionSelected("Downloads")
+                        expandedMenu = false
+                    },
+                    leadingIcon = { Icon(Icons.Default.Download, contentDescription = null) }
+                )
+                DropdownMenuItem(
+                    text = { Text("Incognito Mode") },
+                    onClick = {
+                        onOptionSelected("Incognito Mode")
+                        expandedMenu = false
+                    },
+                    leadingIcon = { Icon(Icons.Default.Security, contentDescription = null) }
+                )
+                DropdownMenuItem(
+                    text = { Text("Find in Page") },
+                    onClick = {
+                        onOptionSelected("Find in Page")
+                        expandedMenu = false
+                    },
+                    leadingIcon = { Icon(Icons.Default.Search, contentDescription = null) }
+                )
+                DropdownMenuItem(
+                    text = { Text("Settings") },
+                    onClick = {
+                        onOptionSelected("Settings")
+                        expandedMenu = false
+                    },
+                    leadingIcon = { Icon(Icons.Default.Settings, contentDescription = null) }
+                )
             }
         }
     }
 }
 
 @Composable
-fun AddressBarComponent(
+fun PremiumAddressBar(
     activeMode: BrowserMode,
     currentUrl: String,
     @Suppress("UNUSED_PARAMETER") pageTitle: String,
@@ -582,7 +839,7 @@ fun AddressBarComponent(
     onForward: () -> Unit,
     onRefresh: () -> Unit,
     onNavigate: (String) -> Unit,
-    // Dev inspect additions
+    // Dev integrations
     elementInspectorEnabled: Boolean,
     onToggleInspector: () -> Unit,
     deviceEmulatorMode: String,
@@ -590,17 +847,17 @@ fun AddressBarComponent(
 ) {
     var textInput by remember(currentUrl) { mutableStateOf(currentUrl) }
 
-    val activeBadgeColor = when (activeMode) {
-        BrowserMode.SIMPLE -> Color(0xFF1E88E5)
-        BrowserMode.DEVELOPER -> Color(0xFF7B1FA2)
-        BrowserMode.HACK -> Color(0xFFFF5722)
+    val barColor = when (activeMode) {
+        BrowserMode.SIMPLE -> Color(0xFF2563EB)
+        BrowserMode.DEVELOPER -> Color(0xFF7C3AED)
+        BrowserMode.HACK -> Color(0xFFDC2626)
     }
 
     Column(
         modifier = Modifier
             .fillMaxWidth()
             .background(MaterialTheme.colorScheme.surface)
-            .shadow(4.dp)
+            .shadow(6.dp, shape = RoundedCornerShape(bottomStart = 16.dp, bottomEnd = 16.dp))
             .padding(8.dp)
     ) {
         Row(
@@ -617,7 +874,7 @@ fun AddressBarComponent(
                 Icon(Icons.Default.Refresh, contentDescription = "Refresh")
             }
 
-            // URL input field
+            // Glassmorphic modern 3D address text field
             OutlinedTextField(
                 value = textInput,
                 onValueChange = { textInput = it },
@@ -636,7 +893,7 @@ fun AddressBarComponent(
                 trailingIcon = {
                     Box(
                         modifier = Modifier
-                            .background(activeBadgeColor, shape = RoundedCornerShape(12.dp))
+                            .background(barColor, shape = RoundedCornerShape(12.dp))
                             .padding(vertical = 4.dp, horizontal = 8.dp)
                     ) {
                         Text(activeMode.name, color = Color.White, fontSize = 8.sp, fontWeight = FontWeight.Bold)
@@ -645,7 +902,7 @@ fun AddressBarComponent(
             )
         }
 
-        // Mode specific extras on address bar
+        // Expanded Developer configurations
         if (activeMode == BrowserMode.DEVELOPER) {
             Row(
                 modifier = Modifier
@@ -673,15 +930,15 @@ fun AddressBarComponent(
 }
 
 @Composable
-fun HomeScreen(
+fun PremiumHomeScreen(
     activeMode: BrowserMode,
+    isIncognito: Boolean,
     onSearch: (String) -> Unit,
     onNavigate: (String) -> Unit,
     onBookmarksClick: () -> Unit,
     onHistoryClick: () -> Unit,
     onDownloadsClick: () -> Unit,
-    @Suppress("UNUSED_PARAMETER") onSettingsClick: () -> Unit,
-    // Hack Mode extras
+    // Hack mode controls
     @Suppress("UNUSED_PARAMETER") antiDetectionEnabled: Boolean,
     @Suppress("UNUSED_PARAMETER") onToggleAntiDetection: () -> Unit,
     forceDesktopMode: Boolean,
@@ -707,191 +964,183 @@ fun HomeScreen(
             MatrixGridAnimation()
         }
 
-        Column(
+        LazyColumn(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(16.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.Center
         ) {
-            // Mode Header Badge Display
-            Text(
-                text = "Click",
-                fontSize = 42.sp,
-                fontWeight = FontWeight.ExtraBold,
-                color = when (activeMode) {
-                    BrowserMode.SIMPLE -> Color(0xFF1E88E5)
-                    BrowserMode.DEVELOPER -> Color(0xFF7B1FA2)
-                    BrowserMode.HACK -> Color(0xFF00FF00)
-                }
-            )
+            item {
+                // Large 3D Click Branding logo
+                Text(
+                    text = if (isIncognito) "Click Incognito" else "Click",
+                    fontSize = 48.sp,
+                    fontWeight = FontWeight.ExtraBold,
+                    color = when (activeMode) {
+                        BrowserMode.SIMPLE -> Color(0xFF2563EB)
+                        BrowserMode.DEVELOPER -> Color(0xFF7C3AED)
+                        BrowserMode.HACK -> Color(0xFF00FF00)
+                    },
+                    modifier = Modifier.padding(bottom = 8.dp)
+                )
 
-            Text(
-                text = when (activeMode) {
-                    BrowserMode.SIMPLE -> "The Premium Mobile Browser"
-                    BrowserMode.DEVELOPER -> "Developer Edition • Integrated DevTools"
-                    BrowserMode.HACK -> "Hack Mode • Anonymous Anti-Detection"
-                },
-                fontSize = 12.sp,
-                color = Color.Gray,
-                modifier = Modifier.padding(bottom = 24.dp)
-            )
+                Text(
+                    text = when (activeMode) {
+                        BrowserMode.SIMPLE -> "Simple Edition • Clean & Friendly Vibe"
+                        BrowserMode.DEVELOPER -> "Developer Edition • Integrated technical tools"
+                        BrowserMode.HACK -> "Hack Edition • Cyberpunk terminal matrix Vibe"
+                    },
+                    fontSize = 13.sp,
+                    color = Color.Gray,
+                    modifier = Modifier.padding(bottom = 24.dp)
+                )
+            }
 
-            // Mode specific configurations
+            // Hack special configuration overlay
             if (activeMode == BrowserMode.HACK) {
-                // Anti-Detection Status Bar
-                Row(
+                item {
+                    // Cyberpunk details
+                    Card(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(bottom = 16.dp)
+                            .shadow(6.dp, shape = RoundedCornerShape(12.dp))
+                            .border(1.dp, Color(0xFF00FF00), shape = RoundedCornerShape(12.dp)),
+                        colors = CardDefaults.cardColors(containerColor = Color(0xFF18181B))
+                    ) {
+                        Column(modifier = Modifier.padding(12.dp)) {
+                            Text("🛡️ ANTI-DETECTION LAYER ACTIVE", color = Color(0xFF00FF00), fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                            Text("Identity spoof: Windows 11 • Chrome 125 • 1920x1080", color = Color.White, fontSize = 11.sp)
+                        }
+                    }
+
+                    // Options grid
+                    LazyVerticalGrid(
+                        columns = GridCells.Fixed(2),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(130.dp),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        item {
+                            Card(
+                                modifier = Modifier.clickable { onToggleForceDesktop() },
+                                colors = CardDefaults.cardColors(containerColor = Color(0xFF2B2B2B))
+                            ) {
+                                Column(modifier = Modifier.padding(10.dp)) {
+                                    Text("🖥️ Desktop Mode", fontWeight = FontWeight.Bold, color = Color.White, fontSize = 12.sp)
+                                    Text(if (forceDesktopMode) "FORCE ON" else "OFF", color = Color.Green, fontSize = 11.sp)
+                                }
+                            }
+                        }
+                        item {
+                            Card(
+                                modifier = Modifier.clickable { onCycleUA() },
+                                colors = CardDefaults.cardColors(containerColor = Color(0xFF2B2B2B))
+                            ) {
+                                Column(modifier = Modifier.padding(10.dp)) {
+                                    Text("🎭 UA Spoof", fontWeight = FontWeight.Bold, color = Color.White, fontSize = 12.sp)
+                                    val uaText = when (spoofedUAIndex) {
+                                        0 -> "Win11 Chrome"
+                                        1 -> "Mac Safari"
+                                        2 -> "Linux Firefox"
+                                        else -> "Android Chrome"
+                                    }
+                                    Text(uaText, color = Color.Yellow, fontSize = 11.sp)
+                                }
+                            }
+                        }
+                    }
+                    Spacer(modifier = Modifier.height(16.dp))
+                }
+            }
+
+            // Google search box
+            item {
+                OutlinedTextField(
+                    value = searchInput,
+                    onValueChange = { searchInput = it },
                     modifier = Modifier
                         .fillMaxWidth()
-                        .background(Color(0xFF1E1E1E), shape = RoundedCornerShape(8.dp))
-                        .border(1.dp, Color(0xFF00FF00), shape = RoundedCornerShape(8.dp))
-                        .padding(12.dp),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Text("🛡️ Anti-Detection: ACTIVE", color = Color(0xFF00FF00), fontWeight = FontWeight.Bold, fontSize = 12.sp)
-                    Text("10-Layers Protection", color = Color.White, fontSize = 12.sp)
-                }
+                        .padding(horizontal = 8.dp)
+                        .shadow(4.dp, shape = RoundedCornerShape(24.dp)),
+                    placeholder = { Text("Search URL or type address...") },
+                    singleLine = true,
+                    keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
+                    keyboardActions = KeyboardActions(onSearch = { onSearch(searchInput) }),
+                    leadingIcon = { Icon(Icons.Default.Search, contentDescription = "Search") },
+                    shape = RoundedCornerShape(24.dp)
+                )
 
-                Spacer(modifier = Modifier.height(12.dp))
-
-                // Hack grid controls
-                LazyVerticalGrid(
-                    columns = GridCells.Fixed(2),
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    verticalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    item {
-                        Card(
-                            modifier = Modifier.clickable { onToggleForceDesktop() },
-                            colors = CardDefaults.cardColors(containerColor = Color(0xFF2B2B2B))
-                        ) {
-                            Column(modifier = Modifier.padding(12.dp)) {
-                                Text("🖥️ Desktop Mode", fontWeight = FontWeight.Bold, color = Color.White, fontSize = 12.sp)
-                                Text(if (forceDesktopMode) "FORCE ON" else "OFF", color = Color.Green, fontSize = 11.sp)
-                            }
-                        }
-                    }
-                    item {
-                        Card(
-                            modifier = Modifier.clickable { onCycleUA() },
-                            colors = CardDefaults.cardColors(containerColor = Color(0xFF2B2B2B))
-                        ) {
-                            Column(modifier = Modifier.padding(12.dp)) {
-                                Text("🎭 UA Spoof", fontWeight = FontWeight.Bold, color = Color.White, fontSize = 12.sp)
-                                val uaText = when (spoofedUAIndex) {
-                                    0 -> "Win11 Chrome"
-                                    1 -> "Mac Safari"
-                                    2 -> "Linux Firefox"
-                                    else -> "Android Chrome"
-                                }
-                                Text(uaText, color = Color.Yellow, fontSize = 11.sp)
-                            }
-                        }
-                    }
-                    item {
-                        Card(colors = CardDefaults.cardColors(containerColor = Color(0xFF2B2B2B))) {
-                            Column(modifier = Modifier.padding(12.dp)) {
-                                Text("🧩 Extensions", fontWeight = FontWeight.Bold, color = Color.White, fontSize = 12.sp)
-                                Text("Placeholder UI", color = Color.Gray, fontSize = 11.sp)
-                            }
-                        }
-                    }
-                    item {
-                        Card(colors = CardDefaults.cardColors(containerColor = Color(0xFF2B2B2B))) {
-                            Column(modifier = Modifier.padding(12.dp)) {
-                                Text("🔒 VPN Mode", fontWeight = FontWeight.Bold, color = Color.White, fontSize = 12.sp)
-                                Text("Proxy: Default", color = Color.Gray, fontSize = 11.sp)
-                            }
-                        }
-                    }
-                }
                 Spacer(modifier = Modifier.height(24.dp))
             }
 
-            // Google-style Search Bar
-            OutlinedTextField(
-                value = searchInput,
-                onValueChange = { searchInput = it },
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 8.dp),
-                placeholder = { Text("Search Google or enter address...") },
-                singleLine = true,
-                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
-                keyboardActions = KeyboardActions(onSearch = { onSearch(searchInput) }),
-                leadingIcon = { Icon(Icons.Default.Search, contentDescription = "Search") },
-                trailingIcon = {
-                    if (searchInput.isNotEmpty()) {
-                        IconButton(onClick = { searchInput = "" }) {
-                            Icon(Icons.Default.Clear, contentDescription = "Clear")
-                        }
-                    }
-                }
-            )
-
-            Spacer(modifier = Modifier.height(24.dp))
-
-            // 4x4 Shortcut grid
-            LazyVerticalGrid(
-                columns = GridCells.Fixed(4),
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                verticalArrangement = Arrangement.spacedBy(16.dp)
-            ) {
-                items(shortcuts) { shortcut ->
-                    Column(
-                        modifier = Modifier
-                            .clickable { onNavigate(shortcut.url) }
-                            .padding(4.dp),
-                        horizontalAlignment = Alignment.CenterHorizontally
-                    ) {
-                        Box(
+            // 4x4 Grid shortcuts
+            item {
+                LazyVerticalGrid(
+                    columns = GridCells.Fixed(4),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(180.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalArrangement = Arrangement.spacedBy(16.dp)
+                ) {
+                    items(shortcuts) { shortcut ->
+                        Column(
                             modifier = Modifier
-                                .size(48.dp)
-                                .background(
-                                    color = if (activeMode == BrowserMode.HACK) Color(0xFF1E1E1E) else MaterialTheme.colorScheme.primaryContainer,
-                                    shape = CircleShape
-                                ),
-                            contentAlignment = Alignment.Center
+                                .clickable { onNavigate(shortcut.url) }
+                                .padding(4.dp),
+                            horizontalAlignment = Alignment.CenterHorizontally
                         ) {
-                            Icon(
-                                imageVector = shortcut.icon,
-                                contentDescription = shortcut.name,
-                                tint = if (activeMode == BrowserMode.HACK) Color(0xFF00FF00) else MaterialTheme.colorScheme.onPrimaryContainer
+                            Box(
+                                modifier = Modifier
+                                    .size(52.dp)
+                                    .shadow(6.dp, shape = CircleShape)
+                                    .background(
+                                        color = if (activeMode == BrowserMode.HACK) Color(0xFF1E1E1E) else MaterialTheme.colorScheme.primaryContainer,
+                                        shape = CircleShape
+                                    ),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Icon(
+                                    imageVector = shortcut.icon,
+                                    contentDescription = shortcut.name,
+                                    tint = if (activeMode == BrowserMode.HACK) Color(0xFF00FF00) else MaterialTheme.colorScheme.onPrimaryContainer
+                                )
+                            }
+                            Spacer(modifier = Modifier.height(4.dp))
+                            Text(
+                                text = shortcut.name,
+                                fontSize = 11.sp,
+                                textAlign = TextAlign.Center,
+                                color = if (activeMode == BrowserMode.HACK) Color(0xFF00FF00) else Color.Unspecified
                             )
                         }
-                        Spacer(modifier = Modifier.height(4.dp))
-                        Text(
-                            text = shortcut.name,
-                            fontSize = 11.sp,
-                            textAlign = TextAlign.Center,
-                            color = if (activeMode == BrowserMode.HACK) Color(0xFF00FF00) else Color.Unspecified
-                        )
                     }
                 }
+
+                Spacer(modifier = Modifier.height(24.dp))
             }
 
-            Spacer(modifier = Modifier.height(24.dp))
-
-            // Quick Access Buttons below shortcuts
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.Center
-            ) {
-                Button(onClick = onBookmarksClick, modifier = Modifier.padding(end = 8.dp)) {
-                    Text("Bookmarks", fontSize = 12.sp)
-                }
-                Button(onClick = onHistoryClick, modifier = Modifier.padding(end = 8.dp)) {
-                    Text("History", fontSize = 12.sp)
-                }
-                Button(onClick = onDownloadsClick) {
-                    Text("Downloads", fontSize = 12.sp)
+            // Navigation quick access buttons
+            item {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.Center
+                ) {
+                    Button(onClick = onBookmarksClick, modifier = Modifier.padding(end = 8.dp)) {
+                        Text("Bookmarks", fontSize = 12.sp)
+                    }
+                    Button(onClick = onHistoryClick, modifier = Modifier.padding(end = 8.dp)) {
+                        Text("History", fontSize = 12.sp)
+                    }
+                    Button(onClick = onDownloadsClick) {
+                        Text("Downloads", fontSize = 12.sp)
+                    }
                 }
             }
         }
     }
 }
-
-data class ShortcutItem(val name: String, val url: String, val icon: androidx.compose.ui.graphics.vector.ImageVector)
