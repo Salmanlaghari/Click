@@ -76,7 +76,14 @@ android {
         }
 
         release {
-            signingConfig = signingConfigs["release"]
+            // Check if the release keystore actually exists. If not, fallback to the debug signing configuration
+            // to avoid build failure on clean environments or CI pipelines without the keystore.
+            val releaseStoreFile = signingConfigs["release"].storeFile
+            if (releaseStoreFile != null && releaseStoreFile.exists()) {
+                signingConfig = signingConfigs["release"]
+            } else {
+                signingConfig = signingConfigs["debug"]
+            }
             // Keep full premium features and libraries intact to match Debug APK size (~15MB+)
             isMinifyEnabled = false
             isShrinkResources = false
