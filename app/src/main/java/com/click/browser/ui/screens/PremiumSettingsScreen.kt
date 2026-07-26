@@ -122,7 +122,6 @@ fun PremiumSettingsScreen(
                     }
 
                     engines.forEach { engine ->
-                    listOf("Google", "Bing", "DuckDuckGo").forEach { engine ->
                         Row(
                             modifier = Modifier
                                 .fillMaxWidth()
