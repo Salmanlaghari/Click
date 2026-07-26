@@ -109,7 +109,19 @@ fun PremiumSettingsScreen(
             item {
                 Text("Default Search Engine", style = MaterialTheme.typography.titleSmall)
                 Column {
-                    listOf("Google", "Bing", "DuckDuckGo").forEach { engine ->
+                    val engines = when (activeMode) {
+                        BrowserMode.SIMPLE -> listOf("Google", "Yahoo", "Bing")
+                        BrowserMode.DEVELOPER -> listOf("Yandex", "DuckDuckGo", "Baidu")
+                        BrowserMode.HACK -> listOf("Onion/Dark Web search", "Deep Search", "integrated AI search")
+                    }
+
+                    LaunchedEffect(activeMode) {
+                        if (currentSearchEngineSetting !in engines) {
+                            onSearchEngineChange(engines.first())
+                        }
+                    }
+
+                    engines.forEach { engine ->
                         Row(
                             modifier = Modifier
                                 .fillMaxWidth()
