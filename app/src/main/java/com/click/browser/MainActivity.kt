@@ -65,13 +65,16 @@ import kotlinx.coroutines.launch
 import java.io.File
 import java.net.URLEncoder
 
-data class TabItem(
+class TabItem(
     val id: String = java.util.UUID.randomUUID().toString(),
-    var url: String = "about:blank",
-    var title: String = "New Tab",
-    var isIncognito: Boolean = false,
+    url: String = "about:blank",
+    title: String = "New Tab",
+    val isIncognito: Boolean = false,
     var webView: WebView? = null
-)
+) {
+    var url by mutableStateOf(url)
+    var title by mutableStateOf(title)
+}
 
 class MainActivity : ComponentActivity() {
 
@@ -357,8 +360,15 @@ class MainActivity : ComponentActivity() {
                                     // 1. TOP PREMIUM BAR with small Click logo-LEFT, centered search below, and menu toggle-RIGHT
                                     PremiumTopBar(
                                         activeMode = activeMode,
-                                        currentThemeSetting = currentThemeSetting,
-                                        onThemeChange = { currentThemeSetting = it },
+                                        onModeChange = { mode ->
+                                            scope.launch {
+                                                modeManager.setMode(mode)
+                                                currentTab.webView?.let { wv ->
+                                                    modeManager.applySettings(wv, mode, forceDesktopMode)
+                                                    wv.reload()
+                                                }
+                                            }
+                                        },
                                         onSettingsClick = { showSettings = true },
                                         onMenuClick = {
                                             scope.launch { drawerState.open() }
@@ -369,7 +379,7 @@ class MainActivity : ComponentActivity() {
                                     PremiumSearchRow(
                                         activeMode = activeMode,
                                         onSearch = { input ->
-                                            val destination = formatUrl(input, currentSearchEngineSetting)
+                                            val destination = formatUrl(input, currentSearchEngineSetting, activeMode)
                                             currentTab.url = destination
                                             currentTab.webView?.loadUrl(destination)
                                         }
@@ -388,7 +398,7 @@ class MainActivity : ComponentActivity() {
                                         onForward = { currentTab.webView?.goForward() },
                                         onRefresh = { currentTab.webView?.reload() },
                                         onNavigate = { input ->
-                                            val destination = formatUrl(input, currentSearchEngineSetting)
+                                            val destination = formatUrl(input, currentSearchEngineSetting, activeMode)
                                             currentTab.url = destination
                                             currentTab.webView?.loadUrl(destination)
                                         },
@@ -440,6 +450,12 @@ class MainActivity : ComponentActivity() {
                                                     }
                                                 }
                                             },
+                                            // Dialog button clicks
+                                            onAiClick = { showAiDetails = true },
+                                            onMusicClick = { showMusicDetails = true },
+                                            onVideoClick = { showVideoDetails = true },
+                                            onPdfClick = { showPdfDetails = true },
+                                            onImagesClick = { showImageDetails = true },
                                             // Hack mode controls
                                             antiDetectionEnabled = antiDetectionEnabled,
                                             onToggleAntiDetection = { antiDetectionEnabled = !antiDetectionEnabled },
@@ -484,12 +500,18 @@ class MainActivity : ComponentActivity() {
                                             modifier = Modifier.fillMaxSize(),
                                             contentAlignment = Alignment.Center
                                         ) {
-                                            AndroidView(
-                                                modifier = emulatorWidthModifier,
-                                                factory = { ctx ->
-                                                    WebView(ctx).apply {
-                                                        webViewClient = object : WebViewClient() {
-                                                            override fun onPageStarted(view: WebView?, url: String?, favicon: Bitmap?) {
+                                            key(currentTab.id) {
+                                                AndroidView(
+                                                    modifier = emulatorWidthModifier,
+                                                    factory = { ctx ->
+                                                        val existingWebView = currentTab.webView
+                                                        if (existingWebView != null) {
+                                                            (existingWebView.parent as? android.view.ViewGroup)?.removeView(existingWebView)
+                                                            existingWebView
+                                                        } else {
+                                                            WebView(ctx).apply {
+                                                                webViewClient = object : WebViewClient() {
+                                                                    override fun onPageStarted(view: WebView?, url: String?, favicon: Bitmap?) {
                                                                 super.onPageStarted(view, url, favicon)
                                                                 currentTab.url = url ?: ""
                                                                 lastPageStart = System.currentTimeMillis()
@@ -598,14 +620,16 @@ class MainActivity : ComponentActivity() {
                                                         settings.builtInZoomControls = true
                                                         settings.displayZoomControls = false
 
-                                                        modeManager.applySettings(this, activeMode, forceDesktopMode)
-                                                        currentTab.webView = this
+                                                                modeManager.applySettings(this, activeMode, forceDesktopMode)
+                                                                currentTab.webView = this
+                                                            }
+                                                        }
+                                                    },
+                                                    update = { webView ->
+                                                        webView.settings.javaScriptEnabled = javaScriptEnabledGlobal
                                                     }
-                                                },
-                                                update = { webView ->
-                                                    webView.settings.javaScriptEnabled = javaScriptEnabledGlobal
-                                                }
-                                            )
+                                                )
+                                            }
                                         }
                                     }
 
@@ -932,7 +956,7 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    private fun formatUrl(input: String, searchEngine: String): String {
+    private fun formatUrl(input: String, searchEngine: String, mode: BrowserMode): String {
         val trimmed = input.trim()
         if (trimmed.startsWith("http://") || trimmed.startsWith("https://")) {
             return trimmed
@@ -941,10 +965,29 @@ class MainActivity : ComponentActivity() {
             return "https://$trimmed"
         }
         val query = URLEncoder.encode(trimmed, "UTF-8")
-        return when (searchEngine) {
-            "Bing" -> "https://www.bing.com/search?q=$query"
-            "DuckDuckGo" -> "https://duckduckgo.com/?q=$query"
-            else -> "https://www.google.com/search?q=$query"
+
+        return when (mode) {
+            BrowserMode.SIMPLE -> {
+                when (searchEngine) {
+                    "Bing" -> "https://www.bing.com/search?q=$query"
+                    "DuckDuckGo" -> "https://search.yahoo.com/search?p=$query" // Map to Yahoo for Simple Mode
+                    else -> "https://www.google.com/search?q=$query"
+                }
+            }
+            BrowserMode.DEVELOPER -> {
+                when (searchEngine) {
+                    "Bing" -> "https://www.baidu.com/s?wd=$query" // Map to Baidu
+                    "DuckDuckGo" -> "https://duckduckgo.com/?q=$query"
+                    else -> "https://yandex.com/search/?text=$query" // Map to Yandex
+                }
+            }
+            BrowserMode.HACK -> {
+                when (searchEngine) {
+                    "Bing" -> "https://perplexity.ai/search?q=$query" // Map to Perplexity AI
+                    "DuckDuckGo" -> "https://www.startpage.com/sp/search?query=$query" // Map to Startpage/Deep Search
+                    else -> "https://ahmia.fi/search/?q=$query" // Map to Ahmia Onion Search
+                }
+            }
         }
     }
 }
@@ -956,17 +999,50 @@ fun DrawerItem(
     color: Color,
     onClick: () -> Unit = {}
 ) {
-    Row(
+    var pressed by remember { mutableStateOf(false) }
+    val scale by animateFloatAsState(if (pressed) 0.95f else 1f, label = "drawer_item_scale")
+
+    Card(
         modifier = Modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(8.dp))
-            .clickable { onClick() }
-            .padding(12.dp),
-        verticalAlignment = Alignment.CenterVertically
+            .padding(vertical = 4.dp, horizontal = 2.dp)
+            .graphicsLayer {
+                scaleX = scale
+                scaleY = scale
+            }
+            .clickable {
+                pressed = true
+                onClick()
+            }
+            .shadow(4.dp, shape = RoundedCornerShape(10.dp))
+            .border(BorderStroke(1.dp, Color.White.copy(0.12f)), shape = RoundedCornerShape(10.dp)),
+        colors = CardDefaults.cardColors(containerColor = Color(0x26FFFFFF)) // 3D Glass feel background
     ) {
-        Icon(icon, contentDescription = null, tint = color, modifier = Modifier.size(20.dp))
-        Spacer(modifier = Modifier.width(16.dp))
-        Text(label, color = Color.White, fontSize = 13.sp, fontWeight = FontWeight.Medium)
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(vertical = 8.dp, horizontal = 12.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Box(
+                modifier = Modifier
+                    .size(30.dp)
+                    .background(color.copy(0.15f), shape = RoundedCornerShape(8.dp))
+                    .border(BorderStroke(1.dp, color.copy(0.3f)), shape = RoundedCornerShape(8.dp)),
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(icon, contentDescription = null, tint = color, modifier = Modifier.size(16.dp))
+            }
+            Spacer(modifier = Modifier.width(12.dp))
+            Text(
+                text = label,
+                color = Color.White,
+                fontSize = 11.sp,
+                fontWeight = FontWeight.Bold,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+        }
     }
 }
 
@@ -974,8 +1050,7 @@ fun DrawerItem(
 @Composable
 fun PremiumTopBar(
     activeMode: BrowserMode,
-    currentThemeSetting: String,
-    onThemeChange: (String) -> Unit,
+    onModeChange: (BrowserMode) -> Unit,
     onSettingsClick: () -> Unit,
     onMenuClick: () -> Unit
 ) {
@@ -1015,23 +1090,28 @@ fun PremiumTopBar(
             )
         }
 
-        // Top-right tiny theme toggle segmented control (Dark / System / Light)
+        // Top-right tiny mode segmented control switcher (Simple / Developer / Hack) replacing old theme segmented control
         Row(
             modifier = Modifier
                 .background(Color(0xFF262626), shape = RoundedCornerShape(12.dp))
                 .padding(2.dp)
         ) {
-            listOf("Dark", "System", "Light").forEach { theme ->
-                val isSelected = currentThemeSetting == theme
+            BrowserMode.values().forEach { mode ->
+                val isSelected = activeMode == mode
+                val activeBgColor = when (mode) {
+                    BrowserMode.SIMPLE -> Color(0xFF3B82F6)
+                    BrowserMode.DEVELOPER -> Color(0xFF7C3AED)
+                    BrowserMode.HACK -> Color(0xFFDC2626)
+                }
                 Box(
                     modifier = Modifier
                         .clip(RoundedCornerShape(10.dp))
-                        .background(if (isSelected) MaterialTheme.colorScheme.primary else Color.Transparent)
-                        .clickable { onThemeChange(theme) }
+                        .background(if (isSelected) activeBgColor else Color.Transparent)
+                        .clickable { onModeChange(mode) }
                         .padding(vertical = 4.dp, horizontal = 8.dp)
                 ) {
                     Text(
-                        text = theme,
+                        text = mode.name.first() + mode.name.substring(1).lowercase(),
                         color = Color.White,
                         fontSize = 9.sp,
                         fontWeight = FontWeight.Bold
@@ -1197,6 +1277,12 @@ fun PremiumHomeScreen(
     onHistoryClick: () -> Unit,
     onDownloadsClick: () -> Unit,
     onModeChange: (BrowserMode) -> Unit,
+    // Dialog callback clicks
+    onAiClick: () -> Unit,
+    onMusicClick: () -> Unit,
+    onVideoClick: () -> Unit,
+    onPdfClick: () -> Unit,
+    onImagesClick: () -> Unit,
     // Hack mode controls
     @Suppress("UNUSED_PARAMETER") antiDetectionEnabled: Boolean,
     @Suppress("UNUSED_PARAMETER") onToggleAntiDetection: () -> Unit,
@@ -1216,16 +1302,6 @@ fun PremiumHomeScreen(
     dataSaver: Boolean,
     onToggleDataSaver: (Boolean) -> Unit
 ) {
-    // Local Music Player Card State
-    var musicPlaying by remember { mutableStateOf(false) }
-    var trackProgress by remember { mutableStateOf(0.35f) }
-
-    // Video Player Card State
-    var videoPlaying by remember { mutableStateOf(false) }
-
-    // PDF Card State
-    var pdfOpened by remember { mutableStateOf(false) }
-
     // Settings module expandable state
     var settingsExpanded by remember { mutableStateOf(false) }
 
@@ -1313,20 +1389,22 @@ fun PremiumHomeScreen(
             // Since grid scroll is nested inside Column verticalScroll, we can build custom layout flow or Row layouts
             // Let's lay them out in clean modular Rows.
             Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                // Widget 1: AI
+                // Widget 1: AI (Fully functional chatbot launcher)
                 WidgetCard(
                     title = "AI ASSISTANT",
                     value = "PK Chatbot",
                     sub = "Ask anything",
                     icon = Icons.Default.AutoAwesome,
                     color = Color(0xFF4FC3FF),
-                    modifier = Modifier.weight(1f)
+                    modifier = Modifier.weight(1f),
+                    onClick = onAiClick
                 )
-                // Widget 2: Music (with animated EQ)
+                // Widget 2: Music player (with animated EQ bars and direct launcher)
                 Card(
                     modifier = Modifier
                         .weight(1f)
                         .height(130.dp)
+                        .clickable { onMusicClick() }
                         .shadow(4.dp, shape = RoundedCornerShape(16.dp))
                         .border(1.dp, Color.White.copy(0.1f), RoundedCornerShape(16.dp)),
                     colors = CardDefaults.cardColors(containerColor = Color(0x22FFFFFF))
@@ -1365,7 +1443,8 @@ fun PremiumHomeScreen(
                     sub = "Premium streams",
                     icon = Icons.Default.PlayCircle,
                     color = Color(0xFF3EE7B0),
-                    modifier = Modifier.weight(1f)
+                    modifier = Modifier.weight(1f),
+                    onClick = onVideoClick
                 )
                 // Widget 4: Download
                 WidgetCard(
@@ -1374,7 +1453,8 @@ fun PremiumHomeScreen(
                     sub = "High-speed",
                     icon = Icons.Default.CloudDownload,
                     color = Color(0xFFFFA726),
-                    modifier = Modifier.weight(1f)
+                    modifier = Modifier.weight(1f),
+                    onClick = onDownloadsClick
                 )
             }
 
@@ -1386,7 +1466,8 @@ fun PremiumHomeScreen(
                     sub = "4D preview",
                     icon = Icons.Default.Image,
                     color = Color(0xFFEC4899),
-                    modifier = Modifier.weight(1f)
+                    modifier = Modifier.weight(1f),
+                    onClick = onImagesClick
                 )
                 // Widget 6: PDF
                 WidgetCard(
@@ -1395,7 +1476,8 @@ fun PremiumHomeScreen(
                     sub = "Scroll & Zoom",
                     icon = Icons.Default.PictureAsPdf,
                     color = Color(0xFFEF5350),
-                    modifier = Modifier.weight(1f)
+                    modifier = Modifier.weight(1f),
+                    onClick = onPdfClick
                 )
             }
 
@@ -1404,6 +1486,7 @@ fun PremiumHomeScreen(
                 modifier = Modifier
                     .fillMaxWidth()
                     .height(96.dp)
+                    .clickable { onNavigate("https://google.com") }
                     .shadow(4.dp, shape = RoundedCornerShape(16.dp))
                     .border(1.dp, Color.White.copy(0.1f), RoundedCornerShape(16.dp)),
                 colors = CardDefaults.cardColors(containerColor = Color(0x22FFFFFF))
@@ -1661,11 +1744,13 @@ fun WidgetCard(
     sub: String,
     icon: ImageVector,
     color: Color,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    onClick: () -> Unit = {}
 ) {
     Card(
         modifier = modifier
             .height(130.dp)
+            .clickable { onClick() }
             .shadow(4.dp, shape = RoundedCornerShape(16.dp))
             .border(1.dp, Color.White.copy(0.1f), RoundedCornerShape(16.dp)),
         colors = CardDefaults.cardColors(containerColor = Color(0x22FFFFFF))
