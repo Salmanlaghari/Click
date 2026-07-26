@@ -1004,6 +1004,8 @@ class MainActivity : ComponentActivity() {
                 when (searchEngine) {
                     "Yahoo" -> "https://search.yahoo.com/search?p=$query"
                     "Bing" -> "https://www.bing.com/search?q=$query"
+                    "Bing" -> "https://www.bing.com/search?q=$query"
+                    "DuckDuckGo" -> "https://search.yahoo.com/search?p=$query" // Map to Yahoo for Simple Mode
                     else -> "https://www.google.com/search?q=$query"
                 }
             }
@@ -1012,6 +1014,9 @@ class MainActivity : ComponentActivity() {
                     "DuckDuckGo" -> "https://duckduckgo.com/?q=$query"
                     "Baidu" -> "https://www.baidu.com/s?wd=$query"
                     else -> "https://yandex.com/search/?text=$query"
+                    "Bing" -> "https://www.baidu.com/s?wd=$query" // Map to Baidu
+                    "DuckDuckGo" -> "https://duckduckgo.com/?q=$query"
+                    else -> "https://yandex.com/search/?text=$query" // Map to Yandex
                 }
             }
             BrowserMode.HACK -> {
@@ -1019,6 +1024,9 @@ class MainActivity : ComponentActivity() {
                     "Deep Search" -> "https://www.startpage.com/sp/search?query=$query"
                     "integrated AI search", "AI Search" -> "https://perplexity.ai/search?q=$query"
                     else -> "https://ahmia.fi/search/?q=$query"
+                    "Bing" -> "https://perplexity.ai/search?q=$query" // Map to Perplexity AI
+                    "DuckDuckGo" -> "https://www.startpage.com/sp/search?query=$query" // Map to Startpage/Deep Search
+                    else -> "https://ahmia.fi/search/?q=$query" // Map to Ahmia Onion Search
                 }
             }
         }
