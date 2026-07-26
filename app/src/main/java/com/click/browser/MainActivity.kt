@@ -189,17 +189,6 @@ class MainActivity : ComponentActivity() {
             // Settings Configurations
             var currentSearchEngineSetting by remember { mutableStateOf("Google") }
 
-            LaunchedEffect(activeMode) {
-                val engines = when (activeMode) {
-                    BrowserMode.SIMPLE -> listOf("Google", "Yahoo", "Bing")
-                    BrowserMode.DEVELOPER -> listOf("Yandex", "DuckDuckGo", "Baidu")
-                    BrowserMode.HACK -> listOf("Onion/Dark Web search", "Deep Search", "integrated AI search")
-                }
-                if (currentSearchEngineSetting !in engines) {
-                    currentSearchEngineSetting = engines.first()
-                }
-            }
-
             // Back Press Handling
             BackHandler(enabled = currentTab.url != "about:blank") {
                 val wv = currentTab.webView
@@ -522,25 +511,6 @@ class MainActivity : ComponentActivity() {
                                                         } else {
                                                             WebView(ctx).apply {
                                                                 webViewClient = object : WebViewClient() {
-                                                                    override fun shouldOverrideUrlLoading(view: WebView?, request: WebResourceRequest?): Boolean {
-                                                                        val urlStr = request?.url?.toString() ?: ""
-                                                                        if (urlStr.startsWith("http://") || urlStr.startsWith("https://")) {
-                                                                            view?.loadUrl(urlStr)
-                                                                            return true
-                                                                        }
-                                                                        return false
-                                                                    }
-
-                                                                    @Suppress("Deprecated")
-                                                                    override fun shouldOverrideUrlLoading(view: WebView?, url: String?): Boolean {
-                                                                        val urlStr = url ?: ""
-                                                                        if (urlStr.startsWith("http://") || urlStr.startsWith("https://")) {
-                                                                            view?.loadUrl(urlStr)
-                                                                            return true
-                                                                        }
-                                                                        return false
-                                                                    }
-
                                                                     override fun onPageStarted(view: WebView?, url: String?, favicon: Bitmap?) {
                                                                 super.onPageStarted(view, url, favicon)
                                                                 currentTab.url = url ?: ""
@@ -652,9 +622,6 @@ class MainActivity : ComponentActivity() {
 
                                                                 modeManager.applySettings(this, activeMode, forceDesktopMode)
                                                                 currentTab.webView = this
-                                                                if (currentTab.url != "about:blank") {
-                                                                    loadUrl(currentTab.url)
-                                                                }
                                                             }
                                                         }
                                                     },
@@ -1002,23 +969,23 @@ class MainActivity : ComponentActivity() {
         return when (mode) {
             BrowserMode.SIMPLE -> {
                 when (searchEngine) {
-                    "Yahoo" -> "https://search.yahoo.com/search?p=$query"
                     "Bing" -> "https://www.bing.com/search?q=$query"
+                    "DuckDuckGo" -> "https://search.yahoo.com/search?p=$query" // Map to Yahoo for Simple Mode
                     else -> "https://www.google.com/search?q=$query"
                 }
             }
             BrowserMode.DEVELOPER -> {
                 when (searchEngine) {
+                    "Bing" -> "https://www.baidu.com/s?wd=$query" // Map to Baidu
                     "DuckDuckGo" -> "https://duckduckgo.com/?q=$query"
-                    "Baidu" -> "https://www.baidu.com/s?wd=$query"
-                    else -> "https://yandex.com/search/?text=$query"
+                    else -> "https://yandex.com/search/?text=$query" // Map to Yandex
                 }
             }
             BrowserMode.HACK -> {
                 when (searchEngine) {
-                    "Deep Search" -> "https://www.startpage.com/sp/search?query=$query"
-                    "integrated AI search", "AI Search" -> "https://perplexity.ai/search?q=$query"
-                    else -> "https://ahmia.fi/search/?q=$query"
+                    "Bing" -> "https://perplexity.ai/search?q=$query" // Map to Perplexity AI
+                    "DuckDuckGo" -> "https://www.startpage.com/sp/search?query=$query" // Map to Startpage/Deep Search
+                    else -> "https://ahmia.fi/search/?q=$query" // Map to Ahmia Onion Search
                 }
             }
         }
