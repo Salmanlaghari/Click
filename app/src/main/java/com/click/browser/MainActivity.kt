@@ -1445,48 +1445,57 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun importFromPowerCut() {
-        try {
-            // Try to open PowerCut Editor's exported video directory
-            val powerCutDirs = listOf(
-                java.io.File(android.os.Environment.getExternalStorageDirectory(), "PowerCut/Exported"),
-                java.io.File(android.os.Environment.getExternalStorageDirectory(), "Movies/PowerCut"),
-                java.io.File(android.os.Environment.getExternalStorageDirectory(), "DCIM/PowerCut"),
-                java.io.File(getExternalFilesDir(null), "PowerCut/Exported")
-            )
-            val videoExtensions = setOf("mp4", "mkv", "webm", "avi", "mov", "3gp")
-            val foundVideos = mutableListOf<java.io.File>()
-            for (dir in powerCutDirs) {
-                if (dir.exists() && dir.isDirectory) {
-                    dir.listFiles()?.filter {
-                        it.isFile && videoExtensions.contains(it.extension.lowercase())
-                    }?.let { foundVideos.addAll(it) }
+        val scope = kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.IO)
+        scope.launch {
+            try {
+                // Try to open PowerCut Editor's exported video directory
+                val powerCutDirs = listOf(
+                    java.io.File(android.os.Environment.getExternalStorageDirectory(), "PowerCut/Exported"),
+                    java.io.File(android.os.Environment.getExternalStorageDirectory(), "Movies/PowerCut"),
+                    java.io.File(android.os.Environment.getExternalStorageDirectory(), "DCIM/PowerCut"),
+                    java.io.File(getExternalFilesDir(null), "PowerCut/Exported")
+                )
+                val videoExtensions = setOf("mp4", "mkv", "webm", "avi", "mov", "3gp")
+                val foundVideos = mutableListOf<java.io.File>()
+                for (dir in powerCutDirs) {
+                    if (dir.exists() && dir.isDirectory) {
+                        dir.listFiles()?.filter {
+                            it.isFile && videoExtensions.contains(it.extension.lowercase())
+                        }?.let { foundVideos.addAll(it) }
+                    }
                 }
-            }
-            if (foundVideos.isNotEmpty()) {
-                val targetDir = java.io.File(getExternalFilesDir(null), "Movies/ClickBrowser/Imported")
-                targetDir.mkdirs()
-                var imported = 0
-                for (video in foundVideos) {
-                    try {
-                        val target = java.io.File(targetDir, video.name)
-                        video.copyTo(target, overwrite = true)
-                        repository.addDownloadItem(
-                            DownloadItem(
-                                fileName = video.name,
-                                url = "file://${target.absolutePath}",
-                                path = target.absolutePath,
-                                timestamp = System.currentTimeMillis()
+                if (foundVideos.isNotEmpty()) {
+                    val targetDir = java.io.File(getExternalFilesDir(null), "Movies/ClickBrowser/Imported")
+                    targetDir.mkdirs()
+                    var imported = 0
+                    for (video in foundVideos) {
+                        try {
+                            val target = java.io.File(targetDir, video.name)
+                            video.copyTo(target, overwrite = true)
+                            repository.addDownloadItem(
+                                DownloadItem(
+                                    fileName = video.name,
+                                    url = "file://${target.absolutePath}",
+                                    path = target.absolutePath,
+                                    timestamp = System.currentTimeMillis()
+                                )
                             )
-                        )
-                        imported++
-                    } catch (_: Exception) {}
+                            imported++
+                        } catch (_: Exception) {}
+                    }
+                    kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) {
+                        Toast.makeText(this@MainActivity, "Imported $imported video(s) from PowerCut Editor!", Toast.LENGTH_LONG).show()
+                    }
+                } else {
+                    kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) {
+                        Toast.makeText(this@MainActivity, "No PowerCut videos found. Export videos from PowerCut Editor first.", Toast.LENGTH_LONG).show()
+                    }
                 }
-                Toast.makeText(this, "Imported $imported video(s) from PowerCut Editor!", Toast.LENGTH_LONG).show()
-            } else {
-                Toast.makeText(this, "No PowerCut videos found. Export videos from PowerCut Editor first.", Toast.LENGTH_LONG).show()
+            } catch (e: Exception) {
+                kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) {
+                    Toast.makeText(this@MainActivity, "Import failed: ${e.message}", Toast.LENGTH_LONG).show()
+                }
             }
-        } catch (e: Exception) {
-            Toast.makeText(this, "Import failed: ${e.message}", Toast.LENGTH_LONG).show()
         }
     }
 }
