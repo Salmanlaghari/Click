@@ -93,9 +93,6 @@ class MainActivity : ComponentActivity() {
         modeManager = ModeManager(this)
         repository = BrowserRepository(this)
 
-        // Auto-request storage permissions on startup for PowerCut import & downloads
-        requestStoragePermissions()
-
         setContent {
             val scope = rememberCoroutineScope()
             val activeMode by modeManager.modeFlow.collectAsState(initial = BrowserMode.SIMPLE)
@@ -319,7 +316,11 @@ class MainActivity : ComponentActivity() {
                                 }
                                 item {
                                     DrawerItem(label = "Downloads Center", icon = Icons.Default.Download, color = Color.LightGray) {
-                                        scope.launch { drawerState.close(); showDownloads = true }
+                                        scope.launch {
+                                            drawerState.close()
+                                            requestStoragePermissions()
+                                            showDownloads = true
+                                        }
                                     }
                                 }
                                 item {
@@ -419,6 +420,7 @@ class MainActivity : ComponentActivity() {
                                     DrawerItem(label = "Import from PowerCut Editor", icon = Icons.Default.VideoFile, color = Color(0xFFFF5722)) {
                                         scope.launch {
                                             drawerState.close()
+                                            requestStoragePermissions()
                                             importFromPowerCut()
                                         }
                                     }
