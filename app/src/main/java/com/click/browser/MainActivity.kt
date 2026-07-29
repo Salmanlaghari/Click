@@ -14,6 +14,8 @@ import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
+import androidx.core.app.ActivityCompat
+import androidx.core.content.ContextCompat
 import androidx.compose.animation.*
 import androidx.compose.animation.core.*
 import androidx.compose.foundation.BorderStroke
@@ -90,6 +92,9 @@ class MainActivity : ComponentActivity() {
 
         modeManager = ModeManager(this)
         repository = BrowserRepository(this)
+
+        // Auto-request storage permissions on startup for PowerCut import & downloads
+        requestStoragePermissions()
 
         setContent {
             val scope = rememberCoroutineScope()
@@ -407,6 +412,14 @@ class MainActivity : ComponentActivity() {
                                         scope.launch {
                                             drawerState.close()
                                             Toast.makeText(this@MainActivity, "Exploring Local Sandboxed Directory: app/src/main/assets", Toast.LENGTH_SHORT).show()
+                                        }
+                                    }
+                                }
+                                item {
+                                    DrawerItem(label = "Import from PowerCut Editor", icon = Icons.Default.VideoFile, color = Color(0xFFFF5722)) {
+                                        scope.launch {
+                                            drawerState.close()
+                                            importFromPowerCut()
                                         }
                                     }
                                 }
@@ -1388,6 +1401,92 @@ class MainActivity : ComponentActivity() {
                     else -> "https://ahmia.fi/search/?q=$query"
                 }
             }
+        }
+    }
+
+    private fun requestStoragePermissions() {
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU) {
+            // Android 13+: request granular media permissions
+            val perms = arrayOf(
+                android.Manifest.permission.READ_MEDIA_VIDEO,
+                android.Manifest.permission.READ_MEDIA_IMAGES,
+                android.Manifest.permission.READ_MEDIA_AUDIO
+            )
+            val needed = perms.filter {
+                androidx.core.content.ContextCompat.checkSelfPermission(this, it) != android.content.pm.PackageManager.PERMISSION_GRANTED
+            }
+            if (needed.isNotEmpty()) {
+                androidx.core.app.ActivityCompat.requestPermissions(this, needed.toTypedArray(), 1001)
+            }
+        } else if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.M) {
+            // Android 6-12: request READ/WRITE_EXTERNAL_STORAGE
+            val perms = arrayOf(
+                android.Manifest.permission.READ_EXTERNAL_STORAGE,
+                android.Manifest.permission.WRITE_EXTERNAL_STORAGE
+            )
+            val needed = perms.filter {
+                androidx.core.content.ContextCompat.checkSelfPermission(this, it) != android.content.pm.PackageManager.PERMISSION_GRANTED
+            }
+            if (needed.isNotEmpty()) {
+                androidx.core.app.ActivityCompat.requestPermissions(this, needed.toTypedArray(), 1001)
+            }
+        }
+        // Android 10-11: MANAGE_EXTERNAL_STORAGE for full access (PowerCut import)
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.R && !android.os.Environment.isExternalStorageManager()) {
+            try {
+                val intent = android.content.Intent(android.provider.Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION)
+                intent.data = android.net.Uri.parse("package:$packageName")
+                startActivity(intent)
+            } catch (e: Exception) {
+                val intent = android.content.Intent(android.provider.Settings.ACTION_MANAGE_ALL_FILES_ACCESS_PERMISSION)
+                startActivity(intent)
+            }
+        }
+    }
+
+    private fun importFromPowerCut() {
+        try {
+            // Try to open PowerCut Editor's exported video directory
+            val powerCutDirs = listOf(
+                java.io.File(android.os.Environment.getExternalStorageDirectory(), "PowerCut/Exported"),
+                java.io.File(android.os.Environment.getExternalStorageDirectory(), "Movies/PowerCut"),
+                java.io.File(android.os.Environment.getExternalStorageDirectory(), "DCIM/PowerCut"),
+                java.io.File(getExternalFilesDir(null), "PowerCut/Exported")
+            )
+            val videoExtensions = setOf("mp4", "mkv", "webm", "avi", "mov", "3gp")
+            val foundVideos = mutableListOf<java.io.File>()
+            for (dir in powerCutDirs) {
+                if (dir.exists() && dir.isDirectory) {
+                    dir.listFiles()?.filter {
+                        it.isFile && videoExtensions.contains(it.extension.lowercase())
+                    }?.let { foundVideos.addAll(it) }
+                }
+            }
+            if (foundVideos.isNotEmpty()) {
+                val targetDir = java.io.File(getExternalFilesDir(null), "Movies/ClickBrowser/Imported")
+                targetDir.mkdirs()
+                var imported = 0
+                for (video in foundVideos) {
+                    try {
+                        val target = java.io.File(targetDir, video.name)
+                        video.copyTo(target, overwrite = true)
+                        repository.addDownloadItem(
+                            DownloadItem(
+                                fileName = video.name,
+                                url = "file://${target.absolutePath}",
+                                path = target.absolutePath,
+                                timestamp = System.currentTimeMillis()
+                            )
+                        )
+                        imported++
+                    } catch (_: Exception) {}
+                }
+                Toast.makeText(this, "Imported $imported video(s) from PowerCut Editor!", Toast.LENGTH_LONG).show()
+            } else {
+                Toast.makeText(this, "No PowerCut videos found. Export videos from PowerCut Editor first.", Toast.LENGTH_LONG).show()
+            }
+        } catch (e: Exception) {
+            Toast.makeText(this, "Import failed: ${e.message}", Toast.LENGTH_LONG).show()
         }
     }
 }
