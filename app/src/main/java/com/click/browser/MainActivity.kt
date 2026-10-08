@@ -33,10 +33,12 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -399,7 +401,11 @@ class MainActivity : ComponentActivity() {
 
             // Hack tools states
             var antiDetectionEnabled by remember { mutableStateOf(true) }
-            var forceDesktopMode by remember { mutableStateOf(true) }
+            // UA consistency: HACK mode is desktop UA by mode design, SIMPLE/DEVELOPER
+            // are mobile UA. The global force-desktop defaults OFF — desktop UA
+            // comes from the mode or the per-site Desktop toggle only, and the
+            // UA is never switched mid-page-load (see onToggleForceDesktop reload).
+            var forceDesktopMode by remember { mutableStateOf(false) }
             var spoofedUAIndex by remember { mutableStateOf(0) }
             val detectedVideos = remember { mutableStateListOf<String>() }
             var showDownloaderDialog by remember { mutableStateOf(false) }
@@ -407,10 +413,9 @@ class MainActivity : ComponentActivity() {
             // DevTools panel tab (0=Elements, 1=Console, 2=Network, 3=Sources)
             var devToolsTab by remember { mutableStateOf(0) }
 
-            // Full-view / immersive browsing: manual fullscreen toggle + auto-hide
-            // of the browser chrome (top bars) when scrolling down a page.
+            // Full-view / immersive browsing: MANUAL fullscreen toggle only.
+            // (Prince: no auto-hide on scroll — user control via the drawer toggle.)
             var immersiveMode by remember { mutableStateOf(false) }
-            var chromeVisible by remember { mutableStateOf(true) }
             // Pull-to-refresh state for web pages.
             var isRefreshing by remember { mutableStateOf(false) }
             // Per-site desktop preference (persisted per host).
@@ -511,6 +516,10 @@ class MainActivity : ComponentActivity() {
                     currentThemeSetting = if (prefs[AppSettings.UI_DARK_MODE] == false) "Light" else "Dark"
                     wallpaperUri = prefs[AppSettings.WALLPAPER_URI]
                 }
+                // First run: install the bundled pre-installed userscript
+                // extensions (enabled by default; user can disable/delete
+                // any of them, or add their own, in the Extensions screen).
+                userscriptManager.seedBundledScripts()
                 refreshUserscripts()
             }
 
@@ -565,10 +574,15 @@ class MainActivity : ComponentActivity() {
             MaterialTheme(colorScheme = themeColors) {
                 ModalNavigationDrawer(
                     drawerState = drawerState,
+                    // Gestures OFF: the drawer opens ONLY via the hamburger icon.
+                    // (Edge-swipe was misfiring on vertical page scrolls and
+                    // opening the drawer by itself — Prince's bug report.)
+                    gesturesEnabled = false,
                     drawerContent = {
                         ModalDrawerSheet(
                             modifier = Modifier.width(300.dp),
-                            drawerContainerColor = Color(0xFF0A0D14)
+                            drawerContainerColor = theme.surface,
+                            drawerContentColor = theme.onSurface
                         ) {
                             LazyColumn(
                                 modifier = Modifier
@@ -577,25 +591,48 @@ class MainActivity : ComponentActivity() {
                                 verticalArrangement = Arrangement.spacedBy(8.dp)
                             ) {
                                 item {
+                                    // Clean drawer header — logo + name only
+                                    // (Prince: no "Click Pro / Luxury 5D Edition").
                                     Row(
                                         verticalAlignment = Alignment.CenterVertically,
                                         modifier = Modifier.padding(bottom = 16.dp)
                                     ) {
                                         Box(
                                             modifier = Modifier
-                                                .size(36.dp)
-                                                .background(Brush.linearGradient(listOf(Color(0xFF4FC3FF), Color(0xFFB070FF))), RoundedCornerShape(8.dp)),
+                                                .size(40.dp)
+                                                .background(
+                                                    Brush.linearGradient(
+                                                        listOf(theme.primary, theme.secondary)
+                                                    ),
+                                                    RoundedCornerShape(12.dp)
+                                                ),
                                             contentAlignment = Alignment.Center
                                         ) {
-                                            Icon(Icons.Default.FlashOn, contentDescription = null, tint = Color.White)
+                                            Icon(
+                                                Icons.Default.FlashOn,
+                                                contentDescription = null,
+                                                tint = Color.White,
+                                                modifier = Modifier.size(24.dp)
+                                            )
                                         }
                                         Spacer(modifier = Modifier.width(12.dp))
                                         Column {
-                                            Text("Click Pro", fontWeight = FontWeight.Bold, color = Color.White, fontSize = 16.sp)
-                                            Text("Luxury 5D Edition", color = Color.Gray, fontSize = 10.sp)
+                                            Text(
+                                                "Click Browser",
+                                                fontWeight = FontWeight.Bold,
+                                                color = theme.onSurface,
+                                                fontSize = 17.sp
+                                            )
+                                            Text(
+                                                theme.modePillText.lowercase()
+                                                    .replaceFirstChar { it.uppercase() },
+                                                color = theme.primary,
+                                                fontSize = 11.sp,
+                                                fontWeight = FontWeight.Medium
+                                            )
                                         }
                                     }
-                                    HorizontalDivider(color = Color.White.copy(0.1f))
+                                    HorizontalDivider(color = theme.onSurface.copy(0.1f))
                                     Spacer(modifier = Modifier.height(8.dp))
                                 }
 
@@ -870,7 +907,6 @@ class MainActivity : ComponentActivity() {
                                         scope.launch {
                                             drawerState.close()
                                             immersiveMode = !immersiveMode
-                                            if (!immersiveMode) chromeVisible = true
                                         }
                                     }
                                 }
@@ -1064,8 +1100,8 @@ class MainActivity : ComponentActivity() {
                                         }
                                     }
                                 }
-                                // Userscript extensions live here only — HACK mode only.
-                                if (activeMode == BrowserMode.HACK) {
+                                // Userscript extensions — HACK and DEVELOPER modes.
+                                if (activeMode == BrowserMode.HACK || activeMode == BrowserMode.DEVELOPER) {
                                     item {
                                         DrawerItem(label = "Userscript Extensions", icon = Icons.Default.Extension, color = Color(0xFF39FF14)) {
                                             scope.launch { drawerState.close(); showUserscripts = true }
@@ -1161,55 +1197,29 @@ class MainActivity : ComponentActivity() {
 
                             Column(modifier = Modifier.fillMaxSize()) {
 
-                                if (showOverlays) {
-                                    // 1. TOP PREMIUM BAR with small Click logo-LEFT, centered search below, and menu toggle-RIGHT
-                                    PremiumTopBar(
-                                        activeMode = activeMode,
-                                        theme = theme,
-                                        onModeChange = { mode ->
-                                            scope.launch {
-                                                modeManager.setMode(mode)
-                                                currentTab.webView?.let { wv ->
-                                                    modeManager.applySettings(wv, mode, forceDesktopMode)
-                                                    wv.reload()
-                                                }
-                                            }
-                                        },
-                                        onSettingsClick = { showSettings = true },
-                                        onMenuClick = {
-                                            scope.launch { drawerState.open() }
-                                        }
-                                    )
-
-                                    // 2. CENTERED FULL-WIDTH SEARCH BAR (centered, fits right below top bar, rounded pill shape, search+mic)
-                                    PremiumSearchRow(
-                                        activeMode = activeMode,
-                                        theme = theme,
-                                        searchEngine = currentSearchEngineSetting,
-                                        onSearch = { input ->
-                                            val destination = formatUrl(input, currentSearchEngineSetting, activeMode)
-                                            currentTab.url = destination
-                                            currentTab.webView?.loadUrl(destination)
-                                        }
-                                    )
-                                }
-
-                                // 3. ADDRESS BAR — always FIXED AT TOP (never bottom) in every mode.
-                                // Full-view: auto-hides on scroll down, reveals on scroll up;
-                                // manual Immersive mode hides it completely.
+                                // UNIFIED TOP BAR — fixed at the very top in every mode
+                                // (Prince: full-width search/address bar at top, small stylish
+                                // mode pill, no big mode button). Manual Immersive mode
+                                // (drawer toggle) hides it completely.
                                 AnimatedVisibility(
-                                    visible = currentTab.url != "about:blank" && !immersiveMode && chromeVisible,
+                                    visible = !immersiveMode,
                                     enter = expandVertically() + fadeIn(),
                                     exit = shrinkVertically() + fadeOut()
                                 ) {
-                                    PremiumAddressBar(
+                                    BrowserTopBar(
                                         activeMode = activeMode,
                                         theme = theme,
                                         currentUrl = currentTab.url,
-                                        pageTitle = currentTab.title,
                                         canGoBack = currentTab.webView?.canGoBack() == true,
                                         canGoForward = currentTab.webView?.canGoForward() == true,
                                         isBookmarked = bookmarks.any { it.url == currentTab.url },
+                                        onMenuClick = {
+                                            scope.launch { drawerState.open() }
+                                        },
+                                        onSettingsClick = { showSettings = true },
+                                        onBack = { currentTab.webView?.goBack() },
+                                        onForward = { currentTab.webView?.goForward() },
+                                        onRefresh = { currentTab.webView?.reload() },
                                         onToggleBookmark = {
                                             val url = currentTab.url
                                             if (url == "about:blank") {
@@ -1226,15 +1236,11 @@ class MainActivity : ComponentActivity() {
                                                 }
                                             }
                                         },
-                                        onBack = { currentTab.webView?.goBack() },
-                                        onForward = { currentTab.webView?.goForward() },
-                                        onRefresh = { currentTab.webView?.reload() },
                                         onNavigate = { input ->
                                             val destination = formatUrl(input, currentSearchEngineSetting, activeMode)
                                             currentTab.url = destination
                                             currentTab.webView?.loadUrl(destination)
                                         },
-                                        // Dev elements
                                         elementInspectorEnabled = elementInspectorEnabled,
                                         onToggleInspector = {
                                             elementInspectorEnabled = !elementInspectorEnabled
@@ -1251,9 +1257,33 @@ class MainActivity : ComponentActivity() {
                                                 else -> "Mobile"
                                             }
                                             currentTab.webView?.let { webView ->
-                                                modeManager.applySettings(webView, activeMode, deviceEmulatorMode == "Desktop" || forceDesktopMode)
+                                                modeManager.applySettings(webView, activeMode, deviceEmulatorMode == "Desktop")
                                                 webView.reload()
                                             }
+                                        }
+                                    )
+                                    // Desktop-style top tab strip: quick switcher below the
+                                    // search bar (follows the mode theme). The full Tabs
+                                    // Manager screen remains available via the drawer.
+                                    TabStrip(
+                                        tabs = tabs,
+                                        activeTabIndex = activeTabIndex,
+                                        theme = theme,
+                                        onSelectTab = { idx -> activeTabIndex = idx },
+                                        onCloseTab = { idx ->
+                                            if (tabs.size > 1) {
+                                                tabs.removeAt(idx)
+                                                if (activeTabIndex >= tabs.size) {
+                                                    activeTabIndex = tabs.size - 1
+                                                }
+                                            } else {
+                                                tabs[0] = TabItem(url = "about:blank", title = "New Tab")
+                                                activeTabIndex = 0
+                                            }
+                                        },
+                                        onNewTab = {
+                                            tabs.add(TabItem(url = "about:blank", title = "New Tab"))
+                                            activeTabIndex = tabs.size - 1
                                         }
                                     )
                                 }
@@ -1298,7 +1328,10 @@ class MainActivity : ComponentActivity() {
                                             onToggleForceDesktop = {
                                                 forceDesktopMode = !forceDesktopMode
                                                 currentTab.webView?.let { webView ->
+                                                    // UA is applied once per (re)load — never mid-load:
+                                                    // reload so the new UA takes effect consistently.
                                                     modeManager.applySettings(webView, activeMode, forceDesktopMode)
+                                                    webView.reload()
                                                 }
                                             },
                                             spoofedUAIndex = spoofedUAIndex,
@@ -1403,6 +1436,19 @@ class MainActivity : ComponentActivity() {
                                                                 networkRequests.clear()
                                                                 sourcesList.clear()
                                                                 detectedVideos.clear()
+
+                                                                // EARLY desktop-environment spoof (Hack mode + Anti-Detection
+                                                                // Guard): applied at page START, not page finish, so sites
+                                                                // like YouTube see a consistent desktop UA / 1920x1080
+                                                                // screen / no-touch environment from the first script
+                                                                // they run — no desktop→mobile mid-load flip.
+                                                                // (The onPageFinished injection below stays as a safety net.)
+                                                                if (liveMode == BrowserMode.HACK && liveAntiDetection) {
+                                                                    view?.evaluateJavascript(
+                                                                        AntiDetectionInjections.INJECT_SPOOF_LAYERS,
+                                                                        null
+                                                                    )
+                                                                }
                                                             }
 
                                                             override fun onPageFinished(view: WebView?, url: String?) {
@@ -1411,8 +1457,6 @@ class MainActivity : ComponentActivity() {
                                                                 pageLoadTime = System.currentTimeMillis() - lastPageStart
                                                                 // Pull-to-refresh completes when the page finishes loading.
                                                                 if (isRefreshing) isRefreshing = false
-                                                                // Reveal the browser chrome when a new page finishes.
-                                                                if (!chromeVisible) chromeVisible = true
 
                                                                 // History tracking (skip if Incognito Tab)
                                                                 if (!currentTab.isIncognito && url != null && url != "about:blank") {
@@ -1442,13 +1486,13 @@ class MainActivity : ComponentActivity() {
                                                                     view?.evaluateJavascript(this@MainActivity.fingerprintScript, null)
                                                                 }
 
-                                                                // Userscript extensions (HACK mode only): inject every
+                                                                // Userscript extensions (HACK + DEVELOPER modes): inject every
                                                                 // enabled script whose @match/@include fits this URL.
                                                                 // NOTE: WebView has no true document-start hook, so
                                                                 // @run-at document-start scripts also run here at
                                                                 // page finish — the earliest reliable point. The UI
                                                                 // states this plainly.
-                                                                if (liveMode == BrowserMode.HACK) {
+                                                                if (liveMode == BrowserMode.HACK || liveMode == BrowserMode.DEVELOPER) {
                                                                     val pageUrl = url.orEmpty()
                                                                     liveUserscripts.forEach { script ->
                                                                         if (script.enabled && UserscriptEngine.matchesUrl(script.meta, pageUrl)) {
@@ -1562,20 +1606,6 @@ class MainActivity : ComponentActivity() {
                                                                 // Per-site desktop override for the initial URL.
                                                                 this@MainActivity.applyPerSiteDesktop(this, currentTab.url)
                                                                 currentTab.webView = this
-
-                                                                // Full-view: auto-hide browser chrome on scroll down,
-                                                                // reveal on scroll up (real scroll tracking).
-                                                                var lastScrollY = scrollY
-                                                                viewTreeObserver.addOnScrollChangedListener {
-                                                                    val y = scrollY
-                                                                    val dy = y - lastScrollY
-                                                                    lastScrollY = y
-                                                                    if (dy > 12 && y > 200) {
-                                                                        if (chromeVisible) chromeVisible = false
-                                                                    } else if (dy < -12) {
-                                                                        if (!chromeVisible) chromeVisible = true
-                                                                    }
-                                                                }
 
                                                                 if (currentTab.url != "about:blank") {
                                                                     loadUrl(currentTab.url)
@@ -1736,6 +1766,7 @@ class MainActivity : ComponentActivity() {
                             if (showHistory) {
                                 HistoryScreen(
                                     repository = repository,
+                                    theme = theme,
                                     onNavigate = { url ->
                                         currentTab.url = url
                                         currentTab.webView?.loadUrl(url)
@@ -2014,8 +2045,13 @@ class MainActivity : ComponentActivity() {
                                 )
                             }
 
-                            // Downloader selection overlay — REAL downloads via Android DownloadManager
+                            // Downloader selection overlay — REAL downloads via Android DownloadManager.
+                            // Live (blob:) streams are listed separately and NEVER auto-toast:
+                            // the "can't be downloaded" notice appears ONLY when the user
+                            // explicitly taps a live-stream row (Prince's bug report).
                             if (showDownloaderDialog) {
+                                val downloadable = detectedVideos.filter { !it.startsWith("blob:") }
+                                val liveStreams = detectedVideos.filter { it.startsWith("blob:") }
                                 AlertDialog(
                                     onDismissRequest = { showDownloaderDialog = false },
                                     title = { Text("Video Downloader", color = Color(0xFFFF5722)) },
@@ -2024,24 +2060,15 @@ class MainActivity : ComponentActivity() {
                                             if (detectedVideos.isEmpty()) {
                                                 Text("No videos detected on this page yet. Videos are detected automatically in Hack mode.")
                                             } else {
-                                                Text("Detected Videos on page:")
+                                                if (downloadable.isNotEmpty()) Text("Detected Videos on page:")
                                             }
                                             Spacer(modifier = Modifier.height(12.dp))
-                                            detectedVideos.forEachIndexed { idx, url ->
+                                            downloadable.forEachIndexed { idx, url ->
                                                 Card(
                                                     modifier = Modifier
                                                         .fillMaxWidth()
                                                         .clickable {
                                                             try {
-                                                                if (url.startsWith("blob:")) {
-                                                                    Toast.makeText(
-                                                                        this@MainActivity,
-                                                                        "This video is a live stream (blob) and can't be downloaded directly.",
-                                                                        Toast.LENGTH_LONG
-                                                                    ).show()
-                                                                    showDownloaderDialog = false
-                                                                    return@clickable
-                                                                }
                                                                 val dm = this@MainActivity.getSystemService(Context.DOWNLOAD_SERVICE) as android.app.DownloadManager
                                                                 val fileName = "click_video_${System.currentTimeMillis()}.mp4"
                                                                 val request = android.app.DownloadManager.Request(android.net.Uri.parse(url))
@@ -2081,6 +2108,45 @@ class MainActivity : ComponentActivity() {
                                                     Column(modifier = Modifier.padding(12.dp)) {
                                                         Text("Video ${idx + 1} — tap to download", fontWeight = FontWeight.Bold, fontSize = 12.sp)
                                                         Text(url.take(60) + "...", fontSize = 11.sp, color = Color.Gray)
+                                                    }
+                                                }
+                                            }
+                                            // Live streams: shown, never auto-downloaded, never auto-toast.
+                                            // Tapping one is the ONLY way the notice appears.
+                                            if (liveStreams.isNotEmpty()) {
+                                                Spacer(modifier = Modifier.height(8.dp))
+                                                Text(
+                                                    "Live streams (${liveStreams.size}) — can't be downloaded:",
+                                                    fontWeight = FontWeight.Bold,
+                                                    fontSize = 12.sp,
+                                                    color = Color.Gray
+                                                )
+                                                Spacer(modifier = Modifier.height(4.dp))
+                                                liveStreams.forEachIndexed { idx, url ->
+                                                    Card(
+                                                        modifier = Modifier
+                                                            .fillMaxWidth()
+                                                            .clickable {
+                                                                Toast.makeText(
+                                                                    this@MainActivity,
+                                                                    "This video is a live stream (blob) and can't be downloaded directly.",
+                                                                    Toast.LENGTH_LONG
+                                                                ).show()
+                                                            }
+                                                            .padding(vertical = 4.dp),
+                                                        colors = CardDefaults.cardColors(
+                                                            containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
+                                                        )
+                                                    ) {
+                                                        Column(modifier = Modifier.padding(12.dp)) {
+                                                            Text(
+                                                                "Live stream ${idx + 1} — tap for info",
+                                                                fontWeight = FontWeight.Bold,
+                                                                fontSize = 12.sp,
+                                                                color = Color.Gray
+                                                            )
+                                                            Text(url.take(48) + "...", fontSize = 11.sp, color = Color.Gray)
+                                                        }
                                                     }
                                                 }
                                             }
@@ -2274,8 +2340,10 @@ fun DrawerItem(
                 onClick()
             }
             .shadow(4.dp, shape = RoundedCornerShape(10.dp))
-            .border(BorderStroke(1.dp, Color.White.copy(0.12f)), shape = RoundedCornerShape(10.dp)),
-        colors = CardDefaults.cardColors(containerColor = Color(0x26FFFFFF)) // 3D Glass feel background
+            .border(BorderStroke(1.dp, MaterialTheme.colorScheme.onSurface.copy(0.12f)), shape = RoundedCornerShape(10.dp)),
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f)
+        )
     ) {
         Row(
             modifier = Modifier
@@ -2295,7 +2363,7 @@ fun DrawerItem(
             Spacer(modifier = Modifier.width(12.dp))
             Text(
                 text = label,
-                color = Color.White,
+                color = MaterialTheme.colorScheme.onSurface,
                 fontSize = 11.sp,
                 fontWeight = FontWeight.Bold,
                 maxLines = 1,
@@ -2305,430 +2373,273 @@ fun DrawerItem(
     }
 }
 
+/**
+ * Unified top bar — fixed at the very top in every mode (Prince's requirement).
+ * Styled per the three approved mode designs:
+ *   Row 1: [hamburger] "Click" wordmark + SMALL stylish mode pill ..... [settings]
+ *   Row 2: [back][forward] [ full-width rounded address/search field ] [refresh][bookmark]
+ *   Row 3 (Developer mode only): element inspector + device emulator toggles.
+ * The big HACK pill button is gone — the mode shows only as the small pill,
+ * like the "SIMPLE MODE" pill in the approved Simple design.
+ */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun PremiumTopBar(
-    activeMode: BrowserMode,
-    theme: ModeTheme,
-    onModeChange: (BrowserMode) -> Unit,
-    onSettingsClick: () -> Unit,
-    onMenuClick: () -> Unit
-) {
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .background(theme.topBarBg)
-            .padding(vertical = 8.dp, horizontal = 16.dp),
-        horizontalArrangement = Arrangement.SpaceBetween,
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        // Top-left "Click" logo and settings gear next to it
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            IconButton(onClick = onMenuClick) {
-                Icon(Icons.Default.Menu, contentDescription = "Drawer Menu", tint = theme.onTopBar)
-            }
-            Text(
-                text = "Click Pro",
-                color = theme.onTopBar,
-                fontWeight = FontWeight.ExtraBold,
-                fontSize = 18.sp
-            )
-            Spacer(modifier = Modifier.width(8.dp))
-            // Mode pill badge (SIMPLE MODE / DEVELOPER MODE / HACK MODE • ACTIVE)
-            Box(
-                modifier = Modifier
-                    .background(theme.primary.copy(alpha = 0.15f), shape = RoundedCornerShape(12.dp))
-                    .border(1.dp, theme.primary.copy(alpha = 0.5f), RoundedCornerShape(12.dp))
-                    .padding(vertical = 3.dp, horizontal = 8.dp)
-            ) {
-                Text(
-                    text = theme.modePillText,
-                    color = theme.primary,
-                    fontSize = 8.sp,
-                    fontWeight = FontWeight.ExtraBold
-                )
-            }
-            Spacer(modifier = Modifier.width(4.dp))
-            Icon(
-                Icons.Default.Settings,
-                contentDescription = "Settings",
-                tint = theme.onTopBar,
-                modifier = Modifier
-                    .size(16.dp)
-                    .clickable { onSettingsClick() }
-            )
-        }
-
-        // Top-right tiny mode segmented control switcher (Simple / Developer / Hack) replacing old theme segmented control
-        Row(
-            modifier = Modifier
-                .background(theme.surfaceVariant, shape = RoundedCornerShape(12.dp))
-                .padding(2.dp)
-        ) {
-            BrowserMode.values().forEach { mode ->
-                val isSelected = activeMode == mode
-                val activeBgColor = when (mode) {
-                    BrowserMode.SIMPLE -> Color(0xFF3B82F6)
-                    BrowserMode.DEVELOPER -> Color(0xFF7C3AED)
-                    BrowserMode.HACK -> Color(0xFFDC2626)
-                }
-                Box(
-                    modifier = Modifier
-                        .clip(RoundedCornerShape(10.dp))
-                        .background(if (isSelected) activeBgColor else Color.Transparent)
-                        .clickable { onModeChange(mode) }
-                        .padding(vertical = 4.dp, horizontal = 8.dp)
-                ) {
-                    Text(
-                        text = mode.name.first() + mode.name.substring(1).lowercase(),
-                        color = if (isSelected) Color.White else theme.onSurface,
-                        fontSize = 9.sp,
-                        fontWeight = FontWeight.Bold
-                    )
-                }
-            }
-        }
-    }
-}
-
-@Composable
-fun PremiumSearchRow(
-    activeMode: BrowserMode,
-    theme: ModeTheme,
-    searchEngine: String,
-    onSearch: (String) -> Unit
-) {
-    var searchInput by remember { mutableStateOf("") }
-
-    val barColor = theme.surface
-    val glowColor = theme.glow
-
-    val infiniteTransition = rememberInfiniteTransition(label = "SearchPulse")
-    val pulseGlow by infiniteTransition.animateFloat(
-        initialValue = 4.dp.value,
-        targetValue = 12.dp.value,
-        animationSpec = infiniteRepeatable(
-            animation = tween(1500, easing = FastOutSlowInEasing),
-            repeatMode = RepeatMode.Reverse
-        ),
-        label = "glowWidth"
-    )
-
-    val progressOffset by infiniteTransition.animateFloat(
-        initialValue = 0f,
-        targetValue = 1f,
-        animationSpec = infiniteRepeatable(
-            animation = tween(2000, easing = LinearEasing),
-            repeatMode = RepeatMode.Restart
-        ),
-        label = "progressFlow"
-    )
-
-    // Synchronous assistant hints based on typing and mode
-    val assistantHint = remember(searchInput, activeMode, searchEngine) {
-        if (searchInput.isEmpty()) {
-            when (activeMode) {
-                BrowserMode.SIMPLE -> "💡 Tip: Type a URL or search anything."
-                BrowserMode.DEVELOPER -> "🛠️ DevTip: Use Console or Inspect HTML to test DOM elements!"
-                BrowserMode.HACK -> "🛡️ HackGuard: Anti-detection spoofing runs on page load."
-            }
-        } else {
-            val query = searchInput.trim().lowercase()
-            when {
-                query.startsWith("http") || query.contains(".") -> {
-                    "🌐 Go to address: $searchInput"
-                }
-                activeMode == BrowserMode.DEVELOPER -> {
-                    when {
-                        query.contains("js") || query.contains("script") -> "💻 Dev: Run JavaScript benchmark or inspect active scope logs."
-                        query.contains("html") || query.contains("css") -> "🎨 Dev: Inspect CSS DOM trees and elements."
-                        else -> "🔍 Developer Search: Query DuckDuckGo/Yandex for developer docs."
-                    }
-                }
-                activeMode == BrowserMode.HACK -> {
-                    when {
-                        query.contains("onion") -> "🕵️ Ahmia: clearnet onion-index search (no Tor in this build)."
-                        query.contains("leak") || query.contains("ip") -> "🔒 Guard: Canvas + audio fingerprint spoofing active."
-                        else -> "⚡ Hack Search: Ahmia / Startpage private search."
-                    }
-                }
-                else -> {
-                    "🔍 Smart Suggestion: Search '$searchInput' on $searchEngine..."
-                }
-            }
-        }
-    }
-
-    Column(
-        modifier = Modifier
-            .fillMaxWidth()
-            .background(barColor)
-            .padding(bottom = 12.dp, start = 16.dp, end = 16.dp)
-    ) {
-        // Glowing 3D Glassmorphic Outer Card with pulsing glow
-        Box(
-            modifier = Modifier
-                .fillMaxWidth()
-                .shadow(
-                    elevation = pulseGlow.dp,
-                    shape = RoundedCornerShape(28.dp),
-                    ambientColor = glowColor.copy(alpha = 0.5f),
-                    spotColor = glowColor
-                )
-                .background(
-                    brush = Brush.linearGradient(
-                        listOf(
-                            Color.White.copy(0.08f),
-                            Color.White.copy(0.02f)
-                        )
-                    ),
-                    shape = RoundedCornerShape(28.dp)
-                )
-                .border(
-                    BorderStroke(
-                        1.dp,
-                        Brush.linearGradient(
-                            listOf(
-                                Color.White.copy(0.15f),
-                                glowColor.copy(alpha = 0.3f),
-                                Color.White.copy(0.05f)
-                            )
-                        )
-                    ),
-                    shape = RoundedCornerShape(28.dp)
-                )
-                .padding(2.dp)
-        ) {
-            Column {
-                OutlinedTextField(
-                    value = searchInput,
-                    onValueChange = { searchInput = it },
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .background(Color.Transparent),
-                    placeholder = {
-                        Text(
-                            "Type URL or search premium query...",
-                            color = Color.LightGray.copy(0.8f),
-                            fontSize = 13.sp
-                        )
-                    },
-                    singleLine = true,
-                    keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
-                    keyboardActions = KeyboardActions(onSearch = { onSearch(searchInput) }),
-                    leadingIcon = {
-                        Icon(
-                            Icons.Default.Search,
-                            contentDescription = "Search",
-                            tint = glowColor,
-                            modifier = Modifier.size(20.dp)
-                        )
-                    },
-                    trailingIcon = {
-                        if (searchInput.isNotEmpty()) {
-                            IconButton(onClick = { searchInput = "" }) {
-                                Icon(
-                                    Icons.Default.Close,
-                                    contentDescription = "Clear",
-                                    tint = Color.LightGray,
-                                    modifier = Modifier.size(18.dp)
-                                )
-                            }
-                        } else {
-                            Icon(
-                                Icons.Default.Mic,
-                                contentDescription = "Voice",
-                                tint = Color.LightGray,
-                                modifier = Modifier.size(20.dp)
-                            )
-                        }
-                    },
-                    shape = RoundedCornerShape(28.dp),
-                    colors = OutlinedTextFieldDefaults.colors(
-                        focusedBorderColor = Color.Transparent,
-                        unfocusedBorderColor = Color.Transparent,
-                        focusedTextColor = Color.White,
-                        unfocusedTextColor = Color.White
-                    )
-                )
-
-                // Flowing progress/energy line at the bottom of search field inside the card
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(2.dp)
-                        .padding(horizontal = 24.dp)
-                        .background(Color.White.copy(0.05f))
-                ) {
-                    Box(
-                        modifier = Modifier
-                            .fillMaxWidth(0.3f)
-                            .fillMaxHeight()
-                            .align(Alignment.CenterStart)
-                            .graphicsLayer {
-                                translationX = (progressOffset * 250).dp.toPx()
-                            }
-                            .background(
-                                Brush.horizontalGradient(
-                                    listOf(
-                                        Color.Transparent,
-                                        glowColor,
-                                        Color.Transparent
-                                    )
-                                )
-                            )
-                    )
-                }
-            }
-        }
-
-        Spacer(modifier = Modifier.height(6.dp))
-
-        // Contextual AI assistant synchronous hint badge
-        AnimatedVisibility(
-            visible = true,
-            enter = fadeIn() + expandVertically(),
-            exit = fadeOut() + shrinkVertically()
-        ) {
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .clip(RoundedCornerShape(8.dp))
-                    .background(Color.White.copy(0.04f))
-                    .clickable {
-                        if (searchInput.isNotEmpty()) {
-                            onSearch(searchInput)
-                        }
-                    }
-                    .padding(horizontal = 12.dp, vertical = 6.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Box(
-                    modifier = Modifier
-                        .size(6.dp)
-                        .clip(CircleShape)
-                        .background(glowColor)
-                )
-                Spacer(modifier = Modifier.width(8.dp))
-                Text(
-                    text = assistantHint,
-                    color = Color.LightGray,
-                    fontSize = 11.sp,
-                    fontWeight = FontWeight.Medium,
-                    maxLines = 1
-                )
-            }
-        }
-    }
-}
-
-@Composable
-fun PremiumAddressBar(
+fun BrowserTopBar(
     activeMode: BrowserMode,
     theme: ModeTheme,
     currentUrl: String,
-    @Suppress("UNUSED_PARAMETER") pageTitle: String,
     canGoBack: Boolean,
     canGoForward: Boolean,
     isBookmarked: Boolean,
-    onToggleBookmark: () -> Unit,
+    onMenuClick: () -> Unit,
+    onSettingsClick: () -> Unit,
     onBack: () -> Unit,
     onForward: () -> Unit,
     onRefresh: () -> Unit,
+    onToggleBookmark: () -> Unit,
     onNavigate: (String) -> Unit,
-    // Dev integrations
     elementInspectorEnabled: Boolean,
     onToggleInspector: () -> Unit,
     deviceEmulatorMode: String,
     onToggleEmulator: () -> Unit
 ) {
     var textInput by remember(currentUrl) { mutableStateOf(currentUrl) }
-
-    // Accent pill uses the per-mode theme primary (royal blue / purple / neon red).
-    val barColor = theme.primary
+    val accent = theme.primary
 
     Column(
         modifier = Modifier
             .fillMaxWidth()
-            .background(theme.surface)
-            .shadow(6.dp, shape = RoundedCornerShape(bottomStart = 16.dp, bottomEnd = 16.dp))
-            .padding(8.dp)
+            .background(theme.topBarBg)
+            .padding(top = 4.dp, bottom = 6.dp)
     ) {
+        // Row 1: hamburger + wordmark + small mode pill + settings
         Row(
-            modifier = Modifier.fillMaxWidth(),
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 8.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            IconButton(onClick = onBack, enabled = canGoBack) {
-                Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
+            IconButton(onClick = onMenuClick, modifier = Modifier.size(40.dp)) {
+                Icon(Icons.Default.Menu, contentDescription = "Menu", tint = theme.onTopBar)
             }
-            IconButton(onClick = onForward, enabled = canGoForward) {
-                Icon(Icons.AutoMirrored.Filled.ArrowForward, contentDescription = "Forward")
-            }
-            IconButton(onClick = onRefresh) {
-                Icon(Icons.Default.Refresh, contentDescription = "Refresh")
-            }
-            IconButton(onClick = onToggleBookmark) {
-                Icon(
-                    imageVector = if (isBookmarked) Icons.Default.Bookmark else Icons.Default.BookmarkBorder,
-                    contentDescription = if (isBookmarked) "Remove bookmark" else "Add bookmark",
-                    tint = if (isBookmarked) Color(0xFFFBBF24) else MaterialTheme.colorScheme.onSurface
+            Text(
+                text = "Click",
+                color = theme.onTopBar,
+                fontWeight = FontWeight.ExtraBold,
+                fontSize = 19.sp,
+                letterSpacing = 0.5.sp
+            )
+            Spacer(modifier = Modifier.width(8.dp))
+            Box(
+                modifier = Modifier
+                    .background(accent.copy(alpha = 0.12f), RoundedCornerShape(10.dp))
+                    .border(1.dp, accent.copy(alpha = 0.45f), RoundedCornerShape(10.dp))
+                    .padding(horizontal = 7.dp, vertical = 3.dp)
+            ) {
+                Text(
+                    text = theme.modePillText,
+                    color = accent,
+                    fontSize = 8.sp,
+                    fontWeight = FontWeight.ExtraBold,
+                    letterSpacing = 0.8.sp,
+                    maxLines = 1
                 )
             }
+            Spacer(modifier = Modifier.weight(1f))
+            IconButton(onClick = onSettingsClick, modifier = Modifier.size(40.dp)) {
+                Icon(Icons.Default.Settings, contentDescription = "Settings", tint = theme.onTopBar)
+            }
+        }
 
-            // Glassmorphic address input field
+        // Row 2: nav buttons + full-width rounded address/search field
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 8.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            IconButton(onClick = onBack, enabled = canGoBack, modifier = Modifier.size(38.dp)) {
+                Icon(
+                    Icons.AutoMirrored.Filled.ArrowBack,
+                    contentDescription = "Back",
+                    tint = theme.onTopBar.copy(alpha = if (canGoBack) 1f else 0.3f)
+                )
+            }
+            IconButton(onClick = onForward, enabled = canGoForward, modifier = Modifier.size(38.dp)) {
+                Icon(
+                    Icons.AutoMirrored.Filled.ArrowForward,
+                    contentDescription = "Forward",
+                    tint = theme.onTopBar.copy(alpha = if (canGoForward) 1f else 0.3f)
+                )
+            }
             OutlinedTextField(
                 value = textInput,
                 onValueChange = { textInput = it },
                 modifier = Modifier.weight(1f),
-                textStyle = TextStyle(fontSize = 12.sp),
+                textStyle = TextStyle(fontSize = 13.sp, color = theme.onSurface),
                 singleLine = true,
+                placeholder = {
+                    Text(
+                        "Search or enter address",
+                        fontSize = 13.sp,
+                        color = theme.onSurface.copy(alpha = 0.45f)
+                    )
+                },
+                shape = RoundedCornerShape(24.dp),
+                colors = OutlinedTextFieldDefaults.colors(
+                    focusedBorderColor = accent.copy(alpha = 0.7f),
+                    unfocusedBorderColor = accent.copy(alpha = 0.35f),
+                    focusedContainerColor = theme.surfaceVariant.copy(alpha = 0.5f),
+                    unfocusedContainerColor = theme.surfaceVariant.copy(alpha = 0.5f),
+                    cursorColor = accent
+                ),
                 keyboardOptions = KeyboardOptions(imeAction = ImeAction.Go),
                 keyboardActions = KeyboardActions(onGo = { onNavigate(textInput) }),
                 leadingIcon = {
                     if (currentUrl.startsWith("https")) {
-                        Icon(Icons.Default.Lock, contentDescription = "Secure", tint = Color.Green, modifier = Modifier.size(16.dp))
+                        Icon(
+                            Icons.Default.Lock,
+                            contentDescription = "Secure",
+                            tint = Color(0xFF22C55E),
+                            modifier = Modifier.size(16.dp)
+                        )
                     } else {
-                        Icon(Icons.Default.LockOpen, contentDescription = "Not Secure", tint = Color.Gray, modifier = Modifier.size(16.dp))
-                    }
-                },
-                trailingIcon = {
-                    Box(
-                        modifier = Modifier
-                            .background(barColor, shape = RoundedCornerShape(12.dp))
-                            .padding(vertical = 4.dp, horizontal = 8.dp)
-                    ) {
-                        Text(activeMode.name, color = Color.White, fontSize = 8.sp, fontWeight = FontWeight.Bold)
+                        Icon(
+                            Icons.Default.Search,
+                            contentDescription = "Search",
+                            tint = theme.onSurface.copy(alpha = 0.5f),
+                            modifier = Modifier.size(16.dp)
+                        )
                     }
                 }
             )
+            IconButton(onClick = onRefresh, modifier = Modifier.size(38.dp)) {
+                Icon(Icons.Default.Refresh, contentDescription = "Refresh", tint = theme.onTopBar)
+            }
+            IconButton(onClick = onToggleBookmark, modifier = Modifier.size(38.dp)) {
+                Icon(
+                    imageVector = if (isBookmarked) Icons.Default.Bookmark else Icons.Default.BookmarkBorder,
+                    contentDescription = "Bookmark",
+                    tint = if (isBookmarked) Color(0xFFFBBF24) else theme.onTopBar
+                )
+            }
         }
 
-        // Expanded Developer configurations
+        // Row 3: developer tools (Developer mode only)
         if (activeMode == BrowserMode.DEVELOPER) {
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(top = 4.dp),
-                horizontalArrangement = Arrangement.End
+                    .padding(horizontal = 12.dp, vertical = 2.dp),
+                horizontalArrangement = Arrangement.End,
+                verticalAlignment = Alignment.CenterVertically
             ) {
-                Button(
-                    onClick = onToggleInspector,
-                    colors = ButtonDefaults.buttonColors(containerColor = if (elementInspectorEnabled) Color.Magenta else Color.DarkGray),
-                    modifier = Modifier.padding(end = 8.dp)
-                ) {
-                    Text(if (elementInspectorEnabled) "Inspect ON" else "Inspect OFF", fontSize = 10.sp)
+                TextButton(onClick = onToggleInspector) {
+                    Text(
+                        if (elementInspectorEnabled) "Inspect ON" else "Inspect OFF",
+                        fontSize = 10.sp,
+                        color = if (elementInspectorEnabled) Color.Magenta else theme.onTopBar.copy(alpha = 0.7f)
+                    )
                 }
-
-                Button(
-                    onClick = onToggleEmulator,
-                    colors = ButtonDefaults.buttonColors(containerColor = Color.DarkGray)
-                ) {
-                    Text("Emulator: $deviceEmulatorMode", fontSize = 10.sp)
+                TextButton(onClick = onToggleEmulator) {
+                    Text(
+                        "Emulator: $deviceEmulatorMode",
+                        fontSize = 10.sp,
+                        color = theme.onTopBar.copy(alpha = 0.7f)
+                    )
                 }
             }
         }
     }
 }
+
+/**
+ * Desktop-style top tab strip: a horizontal row of chips for every open tab.
+ * Tap a chip to switch (no data loss), X closes that tab, + opens a new
+ * blank tab and switches to it. Scrolls horizontally when many tabs are
+ * open. Follows the per-mode theme. The full Tabs Manager screen stays
+ * available too — this strip is the quick switcher.
+ */
+@Composable
+fun TabStrip(
+    tabs: List<TabItem>,
+    activeTabIndex: Int,
+    theme: ModeTheme,
+    onSelectTab: (Int) -> Unit,
+    onCloseTab: (Int) -> Unit,
+    onNewTab: () -> Unit
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .background(theme.topBarBg)
+            .padding(horizontal = 8.dp, vertical = 4.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        LazyRow(
+            modifier = Modifier.weight(1f),
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            itemsIndexed(tabs) { idx, tab ->
+                val selected = idx == activeTabIndex
+                Surface(
+                    modifier = Modifier.clickable { onSelectTab(idx) },
+                    shape = RoundedCornerShape(16.dp),
+                    color = if (selected) theme.primary.copy(alpha = 0.18f)
+                    else theme.surfaceVariant.copy(alpha = 0.5f),
+                    border = BorderStroke(
+                        1.dp,
+                        if (selected) theme.primary.copy(alpha = 0.6f)
+                        else theme.onSurface.copy(alpha = 0.12f)
+                    )
+                ) {
+                    Row(
+                        modifier = Modifier.padding(start = 10.dp, end = 4.dp, top = 5.dp, bottom = 5.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            text = tab.title.ifBlank { "New Tab" }.take(18),
+                            fontSize = 11.sp,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            color = if (selected) theme.primary
+                            else theme.onSurface.copy(alpha = 0.75f),
+                            fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal,
+                            modifier = Modifier.widthIn(max = 110.dp)
+                        )
+                        IconButton(
+                            onClick = { onCloseTab(idx) },
+                            modifier = Modifier.size(22.dp)
+                        ) {
+                            Icon(
+                                Icons.Default.Close,
+                                contentDescription = "Close tab",
+                                tint = theme.onSurface.copy(alpha = 0.5f),
+                                modifier = Modifier.size(13.dp)
+                            )
+                        }
+                    }
+                }
+            }
+        }
+        Spacer(modifier = Modifier.width(6.dp))
+        IconButton(
+            onClick = onNewTab,
+            modifier = Modifier
+                .size(30.dp)
+                .background(theme.primary.copy(alpha = 0.15f), CircleShape)
+        ) {
+            Icon(
+                Icons.Default.Add,
+                contentDescription = "New tab",
+                tint = theme.primary,
+                modifier = Modifier.size(16.dp)
+            )
+        }
+    }
+}
+
 
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
@@ -3298,11 +3209,11 @@ data class ShortcutWidgetInfo(
 @Composable
 fun DrawerCategoryHeader(title: String) {
     Column(modifier = Modifier.padding(top = 16.dp, bottom = 4.dp)) {
-        HorizontalDivider(color = Color.White.copy(0.08f))
+        HorizontalDivider(color = MaterialTheme.colorScheme.onSurface.copy(0.08f))
         Spacer(modifier = Modifier.height(6.dp))
         Text(
             text = title.uppercase(),
-            color = Color(0xFF60A5FA),
+            color = MaterialTheme.colorScheme.primary,
             fontSize = 9.sp,
             fontWeight = FontWeight.ExtraBold,
             letterSpacing = 1.sp,

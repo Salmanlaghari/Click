@@ -38,6 +38,17 @@ class ModeManager(private val context: Context) {
         }
     }
 
+    /**
+     * UA POLICY (Prince's requirement — no mid-load flip):
+     * - HACK mode  → DESKTOP (PC) UA, always. Hack mode is the power-user
+     *   desktop-class mode; sites (e.g. YouTube) render the desktop layout
+     *   steadily, from the very first request.
+     * - SIMPLE / DEVELOPER → MOBILE UA, always.
+     * - Desktop UA for other modes comes ONLY from the per-site "Desktop
+     *   site" toggle ([applyDesktopOverride]).
+     * The UA is chosen once per mode (or per-site override) and applied
+     * consistently from the first request — it is never switched mid-load.
+     */
     fun applySettings(webView: WebView, mode: BrowserMode, forceDesktop: Boolean = false) {
         val settings = webView.settings
 
