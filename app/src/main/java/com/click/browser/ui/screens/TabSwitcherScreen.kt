@@ -1,6 +1,12 @@
 package com.click.browser.ui.screens
 
 import android.graphics.Bitmap
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.MutableTransitionState
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.scaleOut
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -18,7 +24,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
-import androidx.compose.foundation.lazy.grid.items
+import androidx.compose.foundation.lazy.grid.itemsIndexed
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -39,6 +45,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -51,6 +58,8 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.click.browser.TabItem
 import com.click.browser.engine.ModeTheme
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 
 /**
  * Visual tab switcher — Mises/Chrome-style card grid.
@@ -81,6 +90,9 @@ fun TabSwitcherScreen(
             it.title.contains(query, ignoreCase = true) || it.url.contains(query, ignoreCase = true)
         }
     }
+    // Premium UI v2: staggered card entry + animated close.
+    val animScope = rememberCoroutineScope()
+    var closingTabId by remember { mutableStateOf<String?>(null) }
 
     Scaffold(
         containerColor = theme.background,
@@ -183,10 +195,24 @@ fun TabSwitcherScreen(
                     .weight(1f)
                     .padding(bottom = 8.dp)
             ) {
-                items(filtered, key = { it.id }) { tab ->
+                itemsIndexed(filtered, key = { _, tab -> tab.id }) { index, tab ->
                     val idx = tabs.indexOfFirst { it.id == tab.id }
                     val isActive = idx == activeTabIndex
                     val thumb = thumbnails[tab.id]
+                    // Entry is driven by the staggered enter spec alone: each
+                    // card's transition starts hidden and targets visible, so it
+                    // plays on first composition (no LaunchedEffect needed).
+                    val cardVisibility = remember {
+                        MutableTransitionState(false).apply { targetState = true }
+                    }
+                    // Premium UI v2: staggered fade+slide entry (~70ms), and
+                    // animated close (scale-down + slide-out, ~300ms).
+                    val stagger = (index % 10) * 70
+                    AnimatedVisibility(
+                        visibleState = cardVisibility,
+                        enter = fadeIn(tween(380, delayMillis = stagger)),
+                        exit = fadeOut(tween(180)) + scaleOut(tween(300), 0.7f),
+                    ) {
                     Card(
                         modifier = Modifier
                             .fillMaxWidth()
@@ -231,9 +257,26 @@ fun TabSwitcherScreen(
                                         )
                                     }
                                 }
-                                // Close X (top-right, like Mises)
+                                // Close X (top-right, like Mises) — Premium UI v2:
+                                // plays the slide/scale-out animation, then removes.
                                 IconButton(
-                                    onClick = { if (idx >= 0) onCloseTab(idx) },
+                                    onClick = {
+                                        if (idx >= 0 && closingTabId == null) {
+                                            closingTabId = tab.id
+                                            // Play the exit animation, then remove the tab.
+                                            // try/finally: the lock is always released, even
+                                            // if onCloseTab throws or the coroutine is cancelled.
+                                            cardVisibility.targetState = false
+                                            animScope.launch {
+                                                try {
+                                                    delay(300)
+                                                    onCloseTab(idx)
+                                                } finally {
+                                                    closingTabId = null
+                                                }
+                                            }
+                                        }
+                                    },
                                     modifier = Modifier
                                         .align(Alignment.TopEnd)
                                         .padding(4.dp)
@@ -288,6 +331,7 @@ fun TabSwitcherScreen(
                                 )
                             }
                         }
+                    }
                     }
                 }
             }
