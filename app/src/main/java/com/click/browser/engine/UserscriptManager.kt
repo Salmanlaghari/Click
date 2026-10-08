@@ -108,9 +108,10 @@ class UserscriptManager(private val context: Context) {
 
     /**
      * First-run seeding: installs the bundled pre-installed userscripts from
-     * assets/userscripts/*.user.js, enabled by default. Runs exactly once
-     * (guarded by a DataStore flag). The user can disable, delete, or add
-     * scripts afterwards from the Userscript Extensions screen.
+     * the app assets folder ("userscripts", files ending with .user.js),
+     * enabled by default. Runs exactly once (guarded by a DataStore flag).
+     * The user can disable, delete, or add scripts afterwards from the
+     * Userscript Extensions screen.
      *
      * @return how many bundled scripts were newly installed.
      */
