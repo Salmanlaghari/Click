@@ -623,11 +623,13 @@ class MainActivity : ComponentActivity() {
                                 verticalArrangement = Arrangement.spacedBy(8.dp)
                             ) {
                                 item {
-                                    // Clean drawer header — logo + name only
+                                    // Drawer header — logo + name + visible close button
                                     // (Prince: no "Click Pro / Luxury 5D Edition").
                                     Row(
                                         verticalAlignment = Alignment.CenterVertically,
-                                        modifier = Modifier.padding(bottom = 16.dp)
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .padding(bottom = 16.dp)
                                     ) {
                                         Box(
                                             modifier = Modifier
@@ -648,7 +650,7 @@ class MainActivity : ComponentActivity() {
                                             )
                                         }
                                         Spacer(modifier = Modifier.width(12.dp))
-                                        Column {
+                                        Column(modifier = Modifier.weight(1f)) {
                                             Text(
                                                 "Click Browser",
                                                 fontWeight = FontWeight.Bold,
@@ -661,6 +663,19 @@ class MainActivity : ComponentActivity() {
                                                 color = theme.primary,
                                                 fontSize = 11.sp,
                                                 fontWeight = FontWeight.Medium
+                                            )
+                                        }
+                                        // Visible close affordance (Prince: drawer had no
+                                        // close button — previously only outside-tap worked).
+                                        IconButton(
+                                            onClick = { scope.launch { drawerState.close() } },
+                                            modifier = Modifier.size(40.dp)
+                                        ) {
+                                            Icon(
+                                                Icons.AutoMirrored.Filled.ArrowBack,
+                                                contentDescription = "Close menu",
+                                                tint = theme.onSurface.copy(alpha = 0.7f),
+                                                modifier = Modifier.size(22.dp)
                                             )
                                         }
                                     }
