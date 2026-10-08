@@ -40,7 +40,7 @@ android {
 
         // Built-in Groq key for AI chat, injected at build time from the
         // GROQ_API_KEY env var (GitHub Actions secret in CI). The key is
-        // XOR-obfuscated with a pad and base64-encoded so the RAW key never
+        // XOR-obfuscated with a pad and hex-encoded so the RAW key never
         // appears in BuildConfig / the APK as a plain string.
         // Honest note: this defeats casual `strings` extraction, NOT a
         // determined reverser. Empty when the env var is missing — the build
@@ -48,6 +48,8 @@ android {
         // At runtime the user's own Settings key always takes precedence.
         // See KeyObfuscator.kt for the runtime decode. The pad itself is also
         // passed via BuildConfig (single source of truth — Kilo review).
+        // (Hex — not base64 — because the Gradle script classpath reliably
+        // supports String.format; no extra imports needed.)
         val groqObfPad = "ClickBrowserObfPad2026"
         val groqKeyRaw = System.getenv("GROQ_API_KEY") ?: ""
         val groqKeyObf = if (groqKeyRaw.isBlank()) "" else {
@@ -56,7 +58,7 @@ android {
             val xored = ByteArray(rawBytes.size) { i ->
                 (rawBytes[i].toInt() xor padBytes[i % padBytes.size].toInt()).toByte()
             }
-            kotlin.io.encoding.Base64.Default.encode(xored)
+            xored.joinToString("") { "%02x".format(it) }
         }
         buildConfigField("String", "GROQ_API_KEY_OBF", "\"$groqKeyObf\"")
         buildConfigField("String", "GROQ_OBF_PAD", "\"$groqObfPad\"")

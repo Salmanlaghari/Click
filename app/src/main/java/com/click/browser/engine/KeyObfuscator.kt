@@ -1,11 +1,12 @@
 package com.click.browser.engine
 
-import android.util.Base64
+package com.click.browser.engine
+
 import com.click.browser.BuildConfig
 
 /**
  * Runtime side of the build-time key obfuscation (see app/build.gradle.kts:
- * the GROQ_API_KEY env var is XOR-ed with the pad and base64-encoded into
+ * the GROQ_API_KEY env var is XOR-ed with the pad and hex-encoded into
  * BuildConfig.GROQ_API_KEY_OBF; the pad itself comes from
  * BuildConfig.GROQ_OBF_PAD — single source of truth, set at build time).
  *
@@ -18,12 +19,11 @@ object KeyObfuscator {
 
     /** Returns the de-obfuscated key, or "" if the field is empty/invalid. */
     fun decode(obfuscated: String): String {
-        if (obfuscated.isBlank()) return ""
+        if (obfuscated.isBlank() || obfuscated.length % 2 != 0) return ""
         return try {
-            // Build-time encoding is standard padded base64
-            // (kotlin.io.encoding.Base64.Default); Android's Base64.DEFAULT
-            // (flag 0) decodes padded standard base64 correctly.
-            val bytes = Base64.decode(obfuscated, Base64.DEFAULT)
+            val bytes = ByteArray(obfuscated.length / 2) { i ->
+                obfuscated.substring(i * 2, i * 2 + 2).toInt(16).toByte()
+            }
             val pad = BuildConfig.GROQ_OBF_PAD.toByteArray(Charsets.UTF_8)
             if (pad.isEmpty()) return ""
             val plain = ByteArray(bytes.size) { i ->
