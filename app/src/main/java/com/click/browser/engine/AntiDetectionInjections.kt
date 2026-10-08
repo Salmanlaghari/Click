@@ -2,7 +2,10 @@ package com.click.browser.engine
 
 object AntiDetectionInjections {
 
-    const val INJECT_10_LAYERS = """
+    // Spoofs navigator/screen/WebGL values AND poisons canvas + AudioContext
+    // fingerprinting surfaces with tiny per-read noise. Injected on page finish
+    // in HACK mode when the Anti-Detection Guard is enabled.
+    const val INJECT_SPOOF_LAYERS = """
         (function() {
             if (window.antiDetectionInjected) return;
             window.antiDetectionInjected = true;
@@ -67,6 +70,59 @@ object AntiDetectionInjections {
             // 10. Language Spoofing
             Object.defineProperty(navigator, 'language', { get: () => 'en-US' });
             Object.defineProperty(navigator, 'languages', { get: () => ['en-US', 'en'] });
+
+            // 11. Canvas fingerprint noise: poison getImageData / toDataURL reads
+            // with imperceptible per-pixel noise so canvas hashes are unstable.
+            (function() {
+                function addNoise(imageData) {
+                    var d = imageData.data;
+                    for (var i = 0; i < d.length; i += 4) {
+                        var n = (Math.random() - 0.5) * 2;
+                        d[i] = Math.max(0, Math.min(255, d[i] + n));
+                        d[i + 1] = Math.max(0, Math.min(255, d[i + 1] + n));
+                        d[i + 2] = Math.max(0, Math.min(255, d[i + 2] + n));
+                    }
+                    return imageData;
+                }
+                var origGetImageData = CanvasRenderingContext2D.prototype.getImageData;
+                CanvasRenderingContext2D.prototype.getImageData = function() {
+                    return addNoise(origGetImageData.apply(this, arguments));
+                };
+                var origToDataURL = HTMLCanvasElement.prototype.toDataURL;
+                HTMLCanvasElement.prototype.toDataURL = function() {
+                    try {
+                        var ctx = this.getContext('2d');
+                        if (ctx) {
+                            var img = origGetImageData.call(ctx, 0, 0, this.width, this.height);
+                            ctx.putImageData(addNoise(img), 0, 0);
+                        }
+                    } catch (e) {}
+                    return origToDataURL.apply(this, arguments);
+                };
+            })();
+
+            // 12. AudioContext fingerprint noise: jitter analyser frequency data
+            // so audio-stack hashes differ on every read.
+            (function() {
+                function hookAudioContext(AC) {
+                    if (!AC || AC.prototype.__clickSpoofed) return;
+                    var origCreateAnalyser = AC.prototype.createAnalyser;
+                    AC.prototype.createAnalyser = function() {
+                        var analyser = origCreateAnalyser.apply(this, arguments);
+                        var origGetFloat = analyser.getFloatFrequencyData;
+                        analyser.getFloatFrequencyData = function(array) {
+                            origGetFloat.apply(this, arguments);
+                            for (var i = 0; i < array.length; i++) {
+                                array[i] += (Math.random() - 0.5) * 0.5;
+                            }
+                        };
+                        return analyser;
+                    };
+                    AC.prototype.__clickSpoofed = true;
+                }
+                hookAudioContext(window.AudioContext);
+                hookAudioContext(window.webkitAudioContext);
+            })();
         })();
     """
 

@@ -29,10 +29,11 @@ fun DevToolsPanel(
     networkRequests: List<NetworkRequest>,
     domHtml: String,
     sourcesList: List<String>,
+    selectedTab: Int,
+    onTabSelected: (Int) -> Unit,
     onClearLogs: () -> Unit,
     onEvalJs: (String) -> Unit
 ) {
-    var selectedTab by remember { mutableStateOf(0) }
     val tabs = listOf("Elements", "Console", "Network", "Sources")
 
     Column(
@@ -46,7 +47,7 @@ fun DevToolsPanel(
             tabs.forEachIndexed { index, title ->
                 Tab(
                     selected = selectedTab == index,
-                    onClick = { selectedTab = index },
+                    onClick = { onTabSelected(index) },
                     text = { Text(title, style = MaterialTheme.typography.labelMedium) }
                 )
             }
