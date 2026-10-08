@@ -27,7 +27,10 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.ErrorOutline
+import androidx.compose.material.icons.filled.Flag
 import androidx.compose.material.icons.filled.Key
+import androidx.compose.material.icons.filled.Shield
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
@@ -38,6 +41,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -56,6 +60,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.click.browser.engine.AiChatClient
 import com.click.browser.engine.AiProviders
+import com.click.browser.engine.AiSafetyFilter
 import com.click.browser.engine.ChatMessage
 import com.click.browser.engine.PrivacyGuards
 import kotlinx.coroutines.launch
@@ -63,10 +68,14 @@ import okhttp3.Dns
 
 /**
  * Real AI chat screen. Talks to Groq or OpenRouter (OpenAI-compatible
- * /chat/completions) using the API key the user pasted in Settings.
+ * /chat/completions) using the user's own key from Settings, or the
+ * built-in Groq key (BuildConfig) when the user hasn't pasted one.
  *
- * If no key is configured, an honest setup guide is shown instead —
- * there are NO demo or canned responses anywhere in this screen.
+ * Safety (Google Play AI-Generated Content policy):
+ * - Every prompt passes [AiSafetyFilter] BEFORE any network call.
+ * - Every assistant message has a flag button for in-app reporting.
+ *
+ * There are NO demo or canned responses anywhere in this screen.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -75,6 +84,8 @@ fun AiChatScreen(
     providerId: String,
     model: String,
     secureDns: Boolean,
+    usingBuiltInKey: Boolean = false,
+    onReportMessage: (String) -> Unit = {},
     onOpenSettings: () -> Unit,
     onClose: () -> Unit
 ) {
@@ -83,6 +94,8 @@ fun AiChatScreen(
     val messages = remember { mutableStateListOf<ChatMessage>() }
     var input by remember { mutableStateOf("") }
     var typing by remember { mutableStateOf(false) }
+    // Single screen-level report dialog (Kilo review: per-bubble dialogs could stack).
+    var reportTarget by remember { mutableStateOf<String?>(null) }
     val listState = rememberLazyListState()
 
     val client = remember(secureDns) {
@@ -98,6 +111,11 @@ fun AiChatScreen(
         if (text.isEmpty() || typing) return
         input = ""
         messages.add(ChatMessage("user", text))
+        // Pre-call content moderation — blocked prompts never reach the API.
+        if (AiSafetyFilter.isBlocked(text)) {
+            messages.add(ChatMessage("system", "This prompt was blocked by content safety."))
+            return
+        }
         typing = true
         scope.launch {
             val result = client.send(apiKey, provider, model, messages.toList())
@@ -122,7 +140,8 @@ fun AiChatScreen(
                     Column {
                         Text("AI Chat", fontWeight = FontWeight.Bold, fontSize = 18.sp)
                         Text(
-                            "${provider.displayName} • ${model.ifBlank { provider.defaultModel }}",
+                            if (usingBuiltInKey) "${provider.displayName} • built-in key active"
+                            else "${provider.displayName} • ${model.ifBlank { provider.defaultModel }}",
                             fontSize = 11.sp,
                             color = Color.Gray
                         )
@@ -216,14 +235,15 @@ fun AiChatScreen(
                                     fontSize = 18.sp
                                 )
                                 Text(
-                                    "Powered by ${provider.displayName} — your key, your account.",
+                                    if (usingBuiltInKey) "Powered by ${provider.displayName} — built-in key active."
+                                    else "Powered by ${provider.displayName} — your key, your account.",
                                     fontSize = 12.sp,
                                     color = Color.Gray
                                 )
                             }
                         }
                     }
-                    items(messages) { msg -> ChatBubble(msg) }
+                    items(messages) { msg -> ChatBubble(msg, onFlagClick = { reportTarget = it }) }
                     if (typing) {
                         item { TypingIndicator() }
                     }
@@ -261,16 +281,39 @@ fun AiChatScreen(
                 }
             }
         }
+
+        // Single screen-level report dialog for flagged AI responses
+        // (Play AI-Generated Content policy — in-app reporting).
+        reportTarget?.let { target ->
+            AlertDialog(
+                onDismissRequest = { reportTarget = null },
+                title = { Text("Report this response?") },
+                text = { Text("Flag this AI response as inappropriate? It will be recorded on this device for review.") },
+                confirmButton = {
+                    TextButton(onClick = {
+                        reportTarget = null
+                        onReportMessage(target)
+                    }) { Text("Report") }
+                },
+                dismissButton = {
+                    TextButton(onClick = { reportTarget = null }) { Text("Cancel") }
+                }
+            )
+        }
     }
 }
 
 @Composable
-private fun ChatBubble(msg: ChatMessage) {
+private fun ChatBubble(msg: ChatMessage, onFlagClick: (String) -> Unit) {
     val isUser = msg.role == "user"
     val isError = msg.role == "error"
+    val isSystem = msg.role == "system"
+    val isAssistant = !isUser && !isError && !isSystem
+
     Row(
         modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = if (isUser) Arrangement.End else Arrangement.Start
+        horizontalArrangement = if (isUser) Arrangement.End else Arrangement.Start,
+        verticalAlignment = Alignment.Top
     ) {
         Card(
             shape = RoundedCornerShape(16.dp),
@@ -278,10 +321,11 @@ private fun ChatBubble(msg: ChatMessage) {
                 containerColor = when {
                     isError -> Color(0xFF7F1D1D)
                     isUser -> MaterialTheme.colorScheme.primary
+                    isSystem -> Color(0xFF3B2F1A)
                     else -> MaterialTheme.colorScheme.surfaceVariant
                 }
             ),
-            modifier = Modifier.fillMaxWidth(0.85f)
+            modifier = Modifier.fillMaxWidth(if (isAssistant) 0.78f else 0.85f)
         ) {
             Row(modifier = Modifier.padding(12.dp)) {
                 if (isError) {
@@ -294,10 +338,35 @@ private fun ChatBubble(msg: ChatMessage) {
                             .padding(end = 4.dp)
                     )
                 }
+                if (isSystem) {
+                    Icon(
+                        Icons.Default.Shield,
+                        contentDescription = null,
+                        tint = Color(0xFFFFD54F),
+                        modifier = Modifier
+                            .size(18.dp)
+                            .padding(end = 4.dp)
+                    )
+                }
                 Text(
                     msg.content,
                     fontSize = 14.sp,
-                    color = if (isUser || isError) Color.White else MaterialTheme.colorScheme.onSurfaceVariant
+                    color = if (isUser || isError || isSystem) Color.White else MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+        }
+        // In-app reporting (Play AI-Generated Content policy) on every assistant message.
+        // The dialog itself lives at screen level (single dialog) — see reportTarget below.
+        if (isAssistant) {
+            IconButton(
+                onClick = { onFlagClick(msg.content) },
+                modifier = Modifier.size(36.dp)
+            ) {
+                Icon(
+                    Icons.Default.Flag,
+                    contentDescription = "Report this response",
+                    tint = Color.Gray,
+                    modifier = Modifier.size(18.dp)
                 )
             }
         }

@@ -1,7 +1,7 @@
 package com.click.browser.engine
 
 /**
- * Tampermonkey-style userscript engine for HACK mode.
+ * Tampermonkey-style userscript engine for HACK and DEVELOPER modes.
  *
  * HONESTY NOTE: this is NOT Chrome-extension (.crx) support — Android
  * WebView technically cannot run .crx extensions (that needs a full

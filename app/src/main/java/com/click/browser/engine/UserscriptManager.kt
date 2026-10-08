@@ -105,4 +105,37 @@ class UserscriptManager(private val context: Context) {
         if (arr == null) return emptyList()
         return (0 until arr.length()).mapNotNull { arr.optString(it)?.takeIf { s -> s.isNotEmpty() } }
     }
+
+    /**
+     * First-run seeding: installs the bundled pre-installed userscripts from
+     * the app assets folder ("userscripts", files ending with .user.js),
+     * enabled by default. Runs exactly once (guarded by a DataStore flag).
+     * The user can disable, delete, or add scripts afterwards from the
+     * Userscript Extensions screen.
+     *
+     * @return how many bundled scripts were newly installed.
+     */
+    suspend fun seedBundledScripts(): Int = withContext(Dispatchers.IO) {
+        val seededKey = stringPreferencesKey("userscripts_bundled_seeded_v1")
+        if (context.dataStore.data.first()[seededKey] == "1") return@withContext 0
+        var count = 0
+        try {
+            val names = context.assets.list("userscripts").orEmpty()
+                .filter { it.endsWith(".user.js") }
+                .sorted()
+            for (name in names) {
+                try {
+                    val source = context.assets.open("userscripts/$name")
+                        .bufferedReader().use { it.readText() }
+                    if (install(source).isSuccess) count++
+                } catch (_: Exception) {
+                    // One bad asset must not block the rest.
+                }
+            }
+        } catch (_: Exception) {
+            // Missing assets folder — nothing to seed.
+        }
+        context.dataStore.edit { it[seededKey] = "1" }
+        count
+    }
 }

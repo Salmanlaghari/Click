@@ -1,8 +1,10 @@
 package com.click.browser.engine
 
+import android.util.Log
 import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import org.json.JSONArray
+import org.json.JSONException
 import org.json.JSONObject
 
 /**
@@ -15,6 +17,7 @@ object AppSettings {
     val AI_API_KEY = stringPreferencesKey("ai_api_key")
     val AI_PROVIDER = stringPreferencesKey("ai_provider") // "groq" | "openrouter"
     val AI_MODEL = stringPreferencesKey("ai_model")
+    val AI_REPORTS_JSON = stringPreferencesKey("ai_reports_json") // flagged AI responses (Play policy)
 
     val CUSTOM_HEADERS_JSON = stringPreferencesKey("custom_headers_json")
     val HEADER_SPOOF_ENABLED = booleanPreferencesKey("header_spoof_enabled")
@@ -52,6 +55,29 @@ object AppSettings {
         headers.forEach { h ->
             arr.put(JSONObject().put("name", h.name).put("value", h.value))
         }
+        return arr.toString()
+    }
+
+    /**
+     * Appends a user-flagged AI response to the on-device report log
+     * (Google Play AI-Generated Content policy: in-app reporting).
+     * Keeps the last 100 entries.
+     */
+    fun appendReport(existingJson: String?, text: String): String {
+        val arr = try {
+            JSONArray(existingJson.orEmpty())
+        } catch (e: JSONException) {
+            // Malformed stored JSON: log and start fresh rather than silently
+            // dropping history without a trace (Kilo review).
+            Log.w("AppSettings", "AI reports JSON corrupted, resetting", e)
+            JSONArray()
+        }
+        arr.put(
+            JSONObject()
+                .put("text", text.take(2000))
+                .put("ts", System.currentTimeMillis())
+        )
+        while (arr.length() > 100) arr.remove(0)
         return arr.toString()
     }
 }
