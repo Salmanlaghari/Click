@@ -16,7 +16,10 @@ import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
+import androidx.activity.enableEdgeToEdge
 import androidx.core.app.ActivityCompat
+import androidx.core.view.WindowInsetsCompat
+import androidx.core.view.WindowInsetsControllerCompat
 import androidx.core.content.ContextCompat
 import androidx.webkit.WebSettingsCompat
 import androidx.webkit.WebViewFeature
@@ -44,6 +47,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.*
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
+import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -113,6 +117,8 @@ class MainActivity : ComponentActivity() {
     private var liveFingerprintProtection = true
     private var liveSecureDns = false
     private var liveCustomHeaders: Map<String, String> = emptyMap()
+    // Live copy of per-site desktop hosts (persisted per host via BrowserRepository).
+    private var liveDesktopHosts: Set<String> = emptySet()
 
     // Session salt for per-session fingerprint-noise randomization.
     // Generated once per app launch: noise is stable within a session but
@@ -218,6 +224,22 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    /**
+     * Applies the per-site desktop/mobile override for the given URL.
+     * If the URL's host is in the persisted desktop-hosts set, the WebView gets
+     * a desktop UA + wide viewport; otherwise the current mode's settings apply.
+     */
+    private fun applyPerSiteDesktop(webView: WebView, url: String?) {
+        val host = try {
+            android.net.Uri.parse(url ?: "").host?.lowercase().orEmpty()
+        } catch (e: Exception) {
+            ""
+        }
+        val desktop = host.isNotEmpty() && (host in liveDesktopHosts
+            || liveDesktopHosts.any { h -> host == h || host.endsWith(".$h") })
+        modeManager.applyDesktopOverride(webView, liveMode, desktop)
+    }
+
     /** Shared pretty error page used by both onReceivedError variants. */
     private fun showBrowserErrorPage(view: WebView?, description: String?) {
         val safeDesc = description?.take(200) ?: "Unknown error"
@@ -267,6 +289,9 @@ class MainActivity : ComponentActivity() {
     @OptIn(ExperimentalMaterial3Api::class)
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        // API 35+ enforces edge-to-edge for targetSdk 35+ — opt in and handle
+        // WindowInsets in Compose so no chrome is hidden behind system bars.
+        enableEdgeToEdge()
 
         modeManager = ModeManager(this)
         repository = BrowserRepository(this)
@@ -374,6 +399,15 @@ class MainActivity : ComponentActivity() {
             // DevTools panel tab (0=Elements, 1=Console, 2=Network, 3=Sources)
             var devToolsTab by remember { mutableStateOf(0) }
 
+            // Full-view / immersive browsing: manual fullscreen toggle + auto-hide
+            // of the browser chrome (top bars) when scrolling down a page.
+            var immersiveMode by remember { mutableStateOf(false) }
+            var chromeVisible by remember { mutableStateOf(true) }
+            // Pull-to-refresh state for web pages.
+            var isRefreshing by remember { mutableStateOf(false) }
+            // Per-site desktop preference (persisted per host).
+            val desktopHosts by repository.desktopHostsFlow.collectAsState(initial = emptySet())
+
             // Bookmarks (for the address-bar bookmark star)
             val bookmarks by repository.bookmarksFlow.collectAsState(initial = emptyList())
 
@@ -387,6 +421,7 @@ class MainActivity : ComponentActivity() {
             LaunchedEffect(fingerprintProtection) { liveFingerprintProtection = fingerprintProtection }
             LaunchedEffect(secureDnsEnabled) { liveSecureDns = secureDnsEnabled }
             LaunchedEffect(customHeaders) { liveCustomHeaders = customHeaders.associate { it.name to it.value } }
+            LaunchedEffect(desktopHosts) { liveDesktopHosts = desktopHosts }
 
             // Reloads the userscript list + code cache (DataStore + files).
             fun refreshUserscripts() {
@@ -754,6 +789,84 @@ class MainActivity : ComponentActivity() {
                                     }
                                 }
                                 item {
+                                    // Per-site desktop/mobile toggle (persisted per host).
+                                    val pageHost = try {
+                                        android.net.Uri.parse(currentTab.url).host?.lowercase().orEmpty()
+                                    } catch (e: Exception) { "" }
+                                    val isDesktopForSite = pageHost.isNotEmpty() && (pageHost in desktopHosts
+                                        || desktopHosts.any { h -> pageHost == h || pageHost.endsWith(".$h") })
+                                    DrawerItem(
+                                        label = if (isDesktopForSite) "Desktop site: ON (this site)" else "Desktop site (this site)",
+                                        icon = Icons.Default.DesktopWindows,
+                                        color = Color(0xFF60A5FA)
+                                    ) {
+                                        scope.launch {
+                                            drawerState.close()
+                                            if (pageHost.isEmpty() || currentTab.url == "about:blank") {
+                                                Toast.makeText(this@MainActivity, "Open a page first.", Toast.LENGTH_SHORT).show()
+                                            } else {
+                                                repository.setDesktopHost(pageHost, !isDesktopForSite)
+                                                currentTab.webView?.let { wv ->
+                                                    modeManager.applyDesktopOverride(wv, activeMode, !isDesktopForSite)
+                                                    wv.reload()
+                                                }
+                                                Toast.makeText(
+                                                    this@MainActivity,
+                                                    if (!isDesktopForSite) "Desktop site enabled for $pageHost"
+                                                    else "Mobile site restored for $pageHost",
+                                                    Toast.LENGTH_SHORT
+                                                ).show()
+                                            }
+                                        }
+                                    }
+                                }
+                                item {
+                                    DrawerItem(label = "Share This Page", icon = Icons.Default.Share, color = Color(0xFF34D399)) {
+                                        scope.launch {
+                                            drawerState.close()
+                                            val url = currentTab.url
+                                            if (url == "about:blank") {
+                                                Toast.makeText(this@MainActivity, "Nothing to share yet.", Toast.LENGTH_SHORT).show()
+                                            } else {
+                                                val share = Intent(Intent.ACTION_SEND).apply {
+                                                    type = "text/plain"
+                                                    putExtra(Intent.EXTRA_SUBJECT, currentTab.title)
+                                                    putExtra(Intent.EXTRA_TEXT, "${currentTab.title}\n$url")
+                                                }
+                                                startActivity(Intent.createChooser(share, "Share page via"))
+                                            }
+                                        }
+                                    }
+                                }
+                                item {
+                                    DrawerItem(label = "Copy Page Link", icon = Icons.Default.ContentCopy, color = Color(0xFFFBBF24)) {
+                                        scope.launch {
+                                            drawerState.close()
+                                            val url = currentTab.url
+                                            if (url == "about:blank") {
+                                                Toast.makeText(this@MainActivity, "Nothing to copy yet.", Toast.LENGTH_SHORT).show()
+                                            } else {
+                                                val cm = getSystemService(Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
+                                                cm.setPrimaryClip(android.content.ClipData.newPlainText("Click Browser link", url))
+                                                Toast.makeText(this@MainActivity, "Link copied", Toast.LENGTH_SHORT).show()
+                                            }
+                                        }
+                                    }
+                                }
+                                item {
+                                    DrawerItem(
+                                        label = if (immersiveMode) "Exit Fullscreen View" else "Fullscreen View",
+                                        icon = Icons.Default.Fullscreen,
+                                        color = Color(0xFFA78BFA)
+                                    ) {
+                                        scope.launch {
+                                            drawerState.close()
+                                            immersiveMode = !immersiveMode
+                                            if (!immersiveMode) chromeVisible = true
+                                        }
+                                    }
+                                }
+                                item {
                                     DrawerItem(label = "Translate Web Page", icon = Icons.Default.Translate, color = Color(0xFF3B82F6)) {
                                         scope.launch {
                                             drawerState.close()
@@ -1011,10 +1124,28 @@ class MainActivity : ComponentActivity() {
                         modifier = Modifier.fillMaxSize(),
                         color = MaterialTheme.colorScheme.background
                     ) {
-                        Box(modifier = Modifier.fillMaxSize()) {
+                        // Edge-to-edge (API 35+ enforced): respect system bars so no
+                        // chrome is hidden behind the status/navigation bars.
+                        Box(
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .windowInsetsPadding(WindowInsets.safeDrawing)
+                        ) {
 
                             // Immersive Fullscreen WebView setup: if loaded, hide overlays for full screen coverage!
                             val showOverlays = currentTab.url == "about:blank"
+
+                            // Manual immersive mode also hides the Android system bars.
+                            LaunchedEffect(immersiveMode) {
+                                val controller = WindowInsetsControllerCompat(window, window.decorView)
+                                if (immersiveMode) {
+                                    controller.hide(WindowInsetsCompat.Type.systemBars())
+                                    controller.systemBarsBehavior =
+                                        WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+                                } else {
+                                    controller.show(WindowInsetsCompat.Type.systemBars())
+                                }
+                            }
 
                             Column(modifier = Modifier.fillMaxSize()) {
 
@@ -1051,8 +1182,14 @@ class MainActivity : ComponentActivity() {
                                     )
                                 }
 
-                                // 3. 3D GLASSMORPHIC ADDRESS BAR with navigation controls (Only shown if url is loaded or if overlays allowed)
-                                if (currentTab.url != "about:blank") {
+                                // 3. ADDRESS BAR — always FIXED AT TOP (never bottom) in every mode.
+                                // Full-view: auto-hides on scroll down, reveals on scroll up;
+                                // manual Immersive mode hides it completely.
+                                AnimatedVisibility(
+                                    visible = currentTab.url != "about:blank" && !immersiveMode && chromeVisible,
+                                    enter = expandVertically() + fadeIn(),
+                                    exit = shrinkVertically() + fadeOut()
+                                ) {
                                     PremiumAddressBar(
                                         activeMode = activeMode,
                                         theme = theme,
@@ -1175,6 +1312,16 @@ class MainActivity : ComponentActivity() {
                                             onToggleDataSaver = { dataSaverEnabled = it }
                                         )
                                     } else {
+                                        // Pull-to-refresh on web pages (real WebView.reload()).
+                                        // Nested-scroll aware: only triggers at the top of the page.
+                                        PullToRefreshBox(
+                                            isRefreshing = isRefreshing,
+                                            onRefresh = {
+                                                isRefreshing = true
+                                                currentTab.webView?.reload()
+                                            },
+                                            modifier = Modifier.fillMaxSize()
+                                        ) {
                                         // Adaptive Layout Frame to mimic Laptop / Tablet viewports cleanly
                                         val emulatorWidthModifier = when (deviceEmulatorMode) {
                                             "Tablet" -> Modifier.fillMaxHeight().width(768.dp)
@@ -1204,6 +1351,8 @@ class MainActivity : ComponentActivity() {
                                                                             urlStr = "https://" + urlStr.removePrefix("http://")
                                                                         }
                                                                         if (urlStr.startsWith("http://") || urlStr.startsWith("https://")) {
+                                                                            // Per-site desktop override BEFORE loading (UA must be set first).
+                                                                            if (view != null) this@MainActivity.applyPerSiteDesktop(view, urlStr)
                                                                             // Header spoofing: navigations carry the custom headers.
                                                                             if (liveHeaderSpoof && liveCustomHeaders.isNotEmpty()) {
                                                                                 view?.loadUrl(urlStr, liveCustomHeaders)
@@ -1222,6 +1371,7 @@ class MainActivity : ComponentActivity() {
                                                                             urlStr = "https://" + urlStr.removePrefix("http://")
                                                                         }
                                                                         if (urlStr.startsWith("http://") || urlStr.startsWith("https://")) {
+                                                                            if (view != null) this@MainActivity.applyPerSiteDesktop(view, urlStr)
                                                                             if (liveHeaderSpoof && liveCustomHeaders.isNotEmpty()) {
                                                                                 view?.loadUrl(urlStr, liveCustomHeaders)
                                                                             } else {
@@ -1247,6 +1397,10 @@ class MainActivity : ComponentActivity() {
                                                                 super.onPageFinished(view, url)
                                                                 currentTab.title = view?.title ?: "Page"
                                                                 pageLoadTime = System.currentTimeMillis() - lastPageStart
+                                                                // Pull-to-refresh completes when the page finishes loading.
+                                                                if (isRefreshing) isRefreshing = false
+                                                                // Reveal the browser chrome when a new page finishes.
+                                                                if (!chromeVisible) chromeVisible = true
 
                                                                 // History tracking (skip if Incognito Tab)
                                                                 if (!currentTab.isIncognito && url != null && url != "about:blank") {
@@ -1393,7 +1547,24 @@ class MainActivity : ComponentActivity() {
                                                         settings.displayZoomControls = false
 
                                                                 modeManager.applySettings(this, activeMode, forceDesktopMode)
+                                                                // Per-site desktop override for the initial URL.
+                                                                this@MainActivity.applyPerSiteDesktop(this, currentTab.url)
                                                                 currentTab.webView = this
+
+                                                                // Full-view: auto-hide browser chrome on scroll down,
+                                                                // reveal on scroll up (real scroll tracking).
+                                                                var lastScrollY = scrollY
+                                                                viewTreeObserver.addOnScrollChangedListener {
+                                                                    val y = scrollY
+                                                                    val dy = y - lastScrollY
+                                                                    lastScrollY = y
+                                                                    if (dy > 12 && y > 200) {
+                                                                        if (chromeVisible) chromeVisible = false
+                                                                    } else if (dy < -12) {
+                                                                        if (!chromeVisible) chromeVisible = true
+                                                                    }
+                                                                }
+
                                                                 if (currentTab.url != "about:blank") {
                                                                     loadUrl(currentTab.url)
                                                                 }
@@ -1456,6 +1627,7 @@ class MainActivity : ComponentActivity() {
                                         }
                                     )
                                 }
+                            }
                             }
 
                             // --- Bottom Navigation bar (Home, Downloads, Profile) ---

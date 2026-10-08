@@ -19,6 +19,7 @@ class BrowserRepository(private val context: Context) {
         private val BOOKMARKS_KEY = stringPreferencesKey("bookmarks")
         private val HISTORY_KEY = stringPreferencesKey("history")
         private val DOWNLOADS_KEY = stringPreferencesKey("downloads")
+        private val DESKTOP_HOSTS_KEY = stringPreferencesKey("desktop_hosts")
     }
 
     // --- Bookmarks ---
@@ -143,6 +144,28 @@ class BrowserRepository(private val context: Context) {
             }
             array.put(newObj)
             preferences[DOWNLOADS_KEY] = array.toString()
+        }
+    }
+
+    // --- Per-site Desktop/Mobile preference (host -> true = always desktop) ---
+    val desktopHostsFlow: Flow<Set<String>> = context.dataStore.data.map { preferences ->
+        val jsonStr = preferences[DESKTOP_HOSTS_KEY] ?: "{}"
+        val obj = JSONObject(jsonStr)
+        val set = mutableSetOf<String>()
+        val keys = obj.keys()
+        while (keys.hasNext()) {
+            val host = keys.next()
+            if (obj.optBoolean(host, false)) set.add(host)
+        }
+        set
+    }
+
+    suspend fun setDesktopHost(host: String, desktop: Boolean) {
+        context.dataStore.edit { preferences ->
+            val jsonStr = preferences[DESKTOP_HOSTS_KEY] ?: "{}"
+            val obj = JSONObject(jsonStr)
+            if (desktop) obj.put(host, true) else obj.remove(host)
+            preferences[DESKTOP_HOSTS_KEY] = obj.toString()
         }
     }
 }

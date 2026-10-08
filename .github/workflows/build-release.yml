@@ -1,4 +1,4 @@
-name: Build Release APK
+name: Build Release APK and AAB
 
 on:
   push:
@@ -8,7 +8,7 @@ on:
 
 jobs:
   build:
-    name: Build Release APK
+    name: Build Release APK and AAB
     runs-on: ubuntu-latest
 
     steps:
@@ -21,24 +21,54 @@ jobs:
           java-version: '21'
           distribution: 'temurin'
 
-      - name: Generate Debug Keystore (for build process)
+      - name: Install Android 36 SDK packages
         run: |
-          mkdir -p ~/.android
-          keytool -genkey -v -keystore ~/.android/debug.keystore \
-            -alias androiddebugkey -keyalg RSA -keysize 2048 -validity 10000 \
-            -storepass android -keypass android \
-            -dname "CN=Android Debug,O=Android,C=US"
+          yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "platforms;android-36" "build-tools;36.0.0" > /dev/null
 
-      - name: Generate Release Keystore (on-the-fly)
+      # NOTE: AGP generates the debug keystore automatically — no manual step needed.
+
+      - name: Setup release signing (Play closed testing)
+        env:
+          KEYSTORE_B64: ${{ secrets.CLICK_KEYSTORE_BASE64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.CLICK_KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.CLICK_KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.CLICK_KEY_PASSWORD }}
         run: |
-          keytool -genkey -v -keystore app/release-key.jks \
-            -alias click -keyalg RSA -keysize 2048 -validity 10000 \
-            -storepass click123 -keypass click123 \
-            -dname "CN=Click Browser,O=Click,C=US"
-          echo "storeFile=release-key.jks" > keystore.properties
-          echo "storePassword=click123" >> keystore.properties
-          echo "keyAlias=click" >> keystore.properties
-          echo "keyPassword=click123" >> keystore.properties
+          SIGNED_LABEL="debug-signed"
+          if [ -n "$KEYSTORE_B64" ]; then
+            echo "$KEYSTORE_B64" | base64 -d > app/click-release.p12
+            # Validate the FULL signing chain (store password + alias + key password)
+            # with a real trial signature. Anything invalid -> debug-signed fallback,
+            # never a failed build.
+            APKSIGNER_BIN=$(echo "$ANDROID_HOME"/build-tools/*/apksigner | tr ' ' '\n' | sort -V | tail -1)
+            echo "trial" > /tmp/dummy.txt && (cd /tmp && zip -q dummy.zip dummy.txt)
+            if "$APKSIGNER_BIN" sign \
+                --ks app/click-release.p12 \
+                --ks-pass "pass:$KEYSTORE_PASSWORD" \
+                --ks-key-alias "$KEY_ALIAS" \
+                --key-pass "pass:$KEY_PASSWORD" \
+                --min-sdk-version 26 \
+                --out /tmp/dummy-signed.apk /tmp/dummy.zip 2>/tmp/sign-err.log; then
+              {
+                echo "CLICK_KEYSTORE_FILE=$GITHUB_WORKSPACE/app/click-release.p12"
+                echo "CLICK_KEYSTORE_PASSWORD=$KEYSTORE_PASSWORD"
+                echo "CLICK_KEY_ALIAS=$KEY_ALIAS"
+                echo "CLICK_KEY_PASSWORD=$KEY_PASSWORD"
+              } >> "$GITHUB_ENV"
+              SIGNED_LABEL="signed"
+              echo "Release signing configured from secrets (trial signature OK)."
+            else
+              echo "WARNING: release keystore secrets failed validation — building debug-signed APK/AAB."
+              head -5 /tmp/sign-err.log
+              echo "Prince: check the 4 CLICK_KEYSTORE_* secrets — the .p12 must be a valid PKCS12,"
+              echo "the alias must exist in it, and both passwords must match."
+              rm -f app/click-release.p12
+            fi
+          else
+            echo "WARNING: CLICK_KEYSTORE_BASE64 secret is missing — building debug-signed APK/AAB."
+            echo "Add the 4 CLICK_KEYSTORE_* secrets to get Play-ready signed artifacts."
+          fi
+          echo "SIGNED_LABEL=$SIGNED_LABEL" >> "$GITHUB_ENV"
 
       - name: Grant Gradle Permission
         run: chmod +x gradlew
@@ -46,11 +76,27 @@ jobs:
       - name: Build Release APK
         run: ./gradlew assembleRelease
 
+      - name: Build Release AAB
+        run: ./gradlew bundleRelease
+
+      - name: Verify APK signature
+        run: |
+          APKSIGNER=$(echo "$ANDROID_HOME"/build-tools/*/apksigner | tr ' ' '\n' | sort -V | tail -1)
+          echo "Using: $APKSIGNER"
+          "$APKSIGNER" verify --print-certs app/build/outputs/apk/release/app-release.apk | grep -E "Signer #1|SHA-256"
+
       - name: Upload Release APK
         uses: actions/upload-artifact@v4
         with:
-          name: Click-Browser-Release
+          name: Click-Browser-Release-APK-${{ env.SIGNED_LABEL }}
           path: app/build/outputs/apk/release/app-release.apk
+          retention-days: 90
+
+      - name: Upload Release AAB
+        uses: actions/upload-artifact@v4
+        with:
+          name: Click-Browser-Release-AAB-${{ env.SIGNED_LABEL }}
+          path: app/build/outputs/bundle/release/app-release.aab
           retention-days: 90
 
       - name: Create GitHub Release
@@ -60,10 +106,11 @@ jobs:
           name: Click Browser ${{ github.ref_name }}
           body: |
             ## Click Browser ${{ github.ref_name }}
-            - ✅ Simple Mode
-            - ✅ Developer Mode (DevTools)
-            - ✅ Hack Mode (Anti-Detection + Video Downloader)
-            - ✅ Bookmarks, History, Downloads
-            - ✅ Night Mode & Themes
-            - ✅ Privacy & Security
-          files: app/build/outputs/apk/release/app-release.apk
+            - API 36 (Android 16), edge-to-edge, predictive back
+            - Simple / Developer / Hack modes with per-mode premium themes
+            - Real AI chat (Groq/OpenRouter, user-provided key)
+            - Privacy guards, userscript extensions (.user.js)
+            - Pull-to-refresh, fullscreen view, per-site desktop toggle
+          files: |
+            app/build/outputs/apk/release/app-release.apk
+            app/build/outputs/bundle/release/app-release.aab

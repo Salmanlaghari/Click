@@ -78,4 +78,19 @@ class ModeManager(private val context: Context) {
             }
         }
     }
+
+    /**
+     * Applies or clears a per-site desktop override on top of the current mode settings.
+     * Desktop = desktop UA + wide viewport; Mobile = the mode's own settings.
+     */
+    fun applyDesktopOverride(webView: WebView, mode: BrowserMode, desktop: Boolean) {
+        val settings = webView.settings
+        if (desktop) {
+            settings.userAgentString = UA_HACK
+            settings.useWideViewPort = true
+            settings.loadWithOverviewMode = true
+        } else {
+            applySettings(webView, mode, forceDesktop = false)
+        }
+    }
 }

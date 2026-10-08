@@ -1,5 +1,4 @@
 import java.io.File
-import java.util.Properties
 
 plugins {
     alias(libs.plugins.android.application)
@@ -8,58 +7,34 @@ plugins {
 
 android {
     namespace = "com.click.browser"
-    compileSdk = 34
+    compileSdk = 36
 
+    // Release signing for Play closed testing.
+    // Reads GitHub Secrets-provided env vars (CLICK_KEYSTORE_FILE must point at a .p12 file).
+    // NEVER commit a keystore, password, or keystore.properties with real values.
     signingConfigs {
         create("release") {
-            val keystorePropsFile = rootProject.file("keystore.properties")
-            var keystoreFile: File? = null
-            var storePass = "click123"
-            var aliasName = "click"
-            var keyPass = "click123"
-
-            if (keystorePropsFile.exists()) {
-                val props = Properties()
-                keystorePropsFile.inputStream().use { props.load(it) }
-                val sf = props.getProperty("storeFile")
-                if (sf != null) {
-                    val f = File(sf)
-                    keystoreFile = if (f.isAbsolute) f else {
-                        val f1 = rootProject.file(sf)
-                        if (f1.exists()) f1 else file(sf)
-                    }
-                }
-                storePass = props.getProperty("storePassword") ?: "click123"
-                aliasName = props.getProperty("keyAlias") ?: "click"
-                keyPass = props.getProperty("keyPassword") ?: "click123"
+            val ksFile = System.getenv("CLICK_KEYSTORE_FILE")
+            val ksPass = System.getenv("CLICK_KEYSTORE_PASSWORD")
+            val aliasName = System.getenv("CLICK_KEY_ALIAS")
+            val keyPass = System.getenv("CLICK_KEY_PASSWORD")
+            if (!ksFile.isNullOrBlank() && !ksPass.isNullOrBlank()
+                && !aliasName.isNullOrBlank() && !keyPass.isNullOrBlank()
+                && File(ksFile).exists()
+            ) {
+                storeFile = File(ksFile)
+                storePassword = ksPass
+                keyAlias = aliasName
+                keyPassword = keyPass
+                storeType = "pkcs12"
             }
-
-            if (keystoreFile == null || !keystoreFile.exists()) {
-                val f1 = file("release-key.jks")
-                val f2 = rootProject.file("release-key.jks")
-                val f3 = rootProject.file("app/release-key.jks")
-                keystoreFile = when {
-                    f1.exists() -> f1
-                    f2.exists() -> f2
-                    f3.exists() -> f3
-                    else -> f1
-                }
-                storePass = System.getenv("KEYSTORE_PASSWORD") ?: storePass
-                aliasName = System.getenv("KEY_ALIAS") ?: aliasName
-                keyPass = System.getenv("KEY_PASSWORD") ?: keyPass
-            }
-
-            storeFile = keystoreFile
-            storePassword = storePass
-            keyAlias = aliasName
-            keyPassword = keyPass
         }
     }
 
     defaultConfig {
         applicationId = "com.click.browser"
         minSdk = 26
-        targetSdk = 34
+        targetSdk = 36
         versionCode = 1
         versionName = "1.0.0"
 
@@ -76,13 +51,21 @@ android {
         }
 
         release {
-            // Check if the release keystore actually exists. If not, fallback to the debug signing configuration
-            // to avoid build failure on clean environments or CI pipelines without the keystore.
-            val releaseStoreFile = signingConfigs["release"].storeFile
-            if (releaseStoreFile != null && releaseStoreFile.exists()) {
-                signingConfig = signingConfigs["release"]
+            // Use the release signing config only when all CLICK_* env vars are present
+            // (set by CI from GitHub Secrets). Otherwise fall back to debug signing so
+            // local/CI builds stay green before Prince adds the secrets.
+            val ksFile = System.getenv("CLICK_KEYSTORE_FILE")
+            val hasReleaseKeys = !ksFile.isNullOrBlank()
+                && !System.getenv("CLICK_KEYSTORE_PASSWORD").isNullOrBlank()
+                && !System.getenv("CLICK_KEY_ALIAS").isNullOrBlank()
+                && !System.getenv("CLICK_KEY_PASSWORD").isNullOrBlank()
+                && File(ksFile).exists()
+            if (hasReleaseKeys) {
+                signingConfig = signingConfigs.getByName("release")
             } else {
-                signingConfig = signingConfigs["debug"]
+                signingConfig = signingConfigs.getByName("debug")
+                println("WARNING: Release signing secrets missing — building debug-signed APK/AAB. " +
+                    "Set CLICK_KEYSTORE_FILE/CLICK_KEYSTORE_PASSWORD/CLICK_KEY_ALIAS/CLICK_KEY_PASSWORD for Play-ready signing.")
             }
             // Keep full premium features and libraries intact to match Debug APK size (~15MB+)
             isMinifyEnabled = false
