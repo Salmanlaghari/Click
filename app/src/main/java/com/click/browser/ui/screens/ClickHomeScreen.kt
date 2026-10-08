@@ -37,6 +37,10 @@ import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.ArrowForward
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.Bookmark
@@ -911,5 +915,313 @@ fun homeGreeting(): String {
         in 12..16 -> "Good afternoon"
         in 17..21 -> "Good evening"
         else -> "Good night"
+    }
+}
+
+/* ---------------------------------------------------------------------------
+ * SURFACE 2 — Browsing (webpage open). Distinct from Home:
+ *  compact URL bar · privacy strip · WebView focus · floating AI button ·
+ *  bottom nav = Back/Forward/Home/Tabs/Menu (no center AI tab).
+ * --------------------------------------------------------------------------- */
+
+/**
+ * Compact address bar for the browsing surface: [🔒 URL field] [↻] [⋮].
+ * The URL field is directly editable (tap, type, Go).
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun CompactBrowseBar(
+    theme: ModeTheme,
+    currentUrl: String,
+    onNavigate: (String) -> Unit,
+    onReload: () -> Unit,
+    onMenuClick: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    var textInput by remember(currentUrl) { mutableStateOf(currentUrl) }
+    val isHttps = currentUrl.startsWith("https://")
+    Row(
+        modifier = modifier
+            .fillMaxWidth()
+            .background(theme.topBarBg)
+            .padding(horizontal = 8.dp, vertical = 6.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Surface(
+            shape = RoundedCornerShape(22.dp),
+            color = theme.surfaceVariant.copy(alpha = 0.55f),
+            border = androidx.compose.foundation.BorderStroke(
+                1.dp, theme.primary.copy(alpha = 0.25f)
+            ),
+            modifier = Modifier.weight(1f)
+        ) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(
+                    Icons.Default.Lock,
+                    contentDescription = if (isHttps) "Secure connection" else "Connection",
+                    tint = if (isHttps) Color(0xFF22C55E) else theme.onSurface.copy(alpha = 0.5f),
+                    modifier = Modifier.padding(start = 12.dp).size(15.dp)
+                )
+                androidx.compose.foundation.text.BasicTextField(
+                    value = textInput,
+                    onValueChange = { textInput = it },
+                    singleLine = true,
+                    textStyle = androidx.compose.ui.text.TextStyle(
+                        fontSize = 13.sp,
+                        color = theme.onSurface
+                    ),
+                    keyboardOptions = KeyboardOptions(imeAction = ImeAction.Go),
+                    keyboardActions = KeyboardActions(onGo = { onNavigate(textInput) }),
+                    cursorBrush = androidx.compose.ui.graphics.SolidColor(theme.primary),
+                    modifier = Modifier
+                        .weight(1f)
+                        .padding(horizontal = 8.dp, vertical = 10.dp)
+                )
+            }
+        }
+        IconButton(onClick = {
+            textInput = currentUrl
+            onReload()
+        }, modifier = Modifier.size(38.dp)) {
+            Icon(Icons.Default.Refresh, contentDescription = "Reload", tint = theme.onTopBar)
+        }
+        IconButton(onClick = onMenuClick, modifier = Modifier.size(38.dp)) {
+            Icon(Icons.Default.MoreVert, contentDescription = "Browser menu", tint = theme.onTopBar)
+        }
+    }
+}
+
+/** Slim privacy strip under the compact bar: 🛡 Protected · N trackers blocked. */
+@Composable
+fun PrivacyStrip(
+    theme: ModeTheme,
+    adBlockerEnabled: Boolean,
+    blockedCount: Int,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    Surface(
+        color = theme.topBarBg,
+        modifier = modifier
+            .fillMaxWidth()
+            .clickable(
+                interactionSource = remember { MutableInteractionSource() },
+                indication = null
+            ) { onClick() }
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp, vertical = 5.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.Center
+        ) {
+            Icon(
+                Icons.Default.Shield,
+                contentDescription = null,
+                tint = Color(0xFF22C55E),
+                modifier = Modifier.size(13.dp)
+            )
+            Spacer(modifier = Modifier.width(5.dp))
+            Text(
+                if (adBlockerEnabled) "Protected · $blockedCount trackers blocked"
+                else "AdBlock off",
+                color = theme.onSurface.copy(alpha = 0.65f),
+                fontSize = 11.sp,
+                fontWeight = FontWeight.Medium
+            )
+        }
+    }
+}
+
+/**
+ * Floating glowing AI button (bottom-right) for the browsing surface.
+ * Tap → popup: Ask Click AI · Summarize · Translate.
+ */
+@Composable
+fun AiQuickFab(
+    theme: ModeTheme,
+    onAskAi: () -> Unit,
+    onSummarize: () -> Unit,
+    onTranslate: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    var expanded by remember { mutableStateOf(false) }
+    val neon = theme.mode == BrowserMode.HACK
+    Column(
+        horizontalAlignment = Alignment.End,
+        modifier = modifier
+    ) {
+        androidx.compose.animation.AnimatedVisibility(
+            visible = expanded,
+            enter = androidx.compose.animation.expandVertically() + androidx.compose.animation.fadeIn(),
+            exit = androidx.compose.animation.shrinkVertically() + androidx.compose.animation.fadeOut()
+        ) {
+            Card(
+                shape = RoundedCornerShape(14.dp),
+                colors = CardDefaults.cardColors(containerColor = theme.surface),
+                border = androidx.compose.foundation.BorderStroke(1.dp, theme.primary.copy(alpha = 0.4f)),
+                modifier = Modifier.padding(bottom = 8.dp)
+            ) {
+                Column(modifier = Modifier.padding(vertical = 4.dp)) {
+                    AiPopupItem(icon = Icons.Default.AutoAwesome, label = "Ask Click AI", theme = theme) {
+                        expanded = false; onAskAi()
+                    }
+                    AiPopupItem(icon = Icons.Default.Description, label = "Summarize", theme = theme) {
+                        expanded = false; onSummarize()
+                    }
+                    AiPopupItem(icon = Icons.Default.Translate, label = "Translate", theme = theme) {
+                        expanded = false; onTranslate()
+                    }
+                }
+            }
+        }
+        Box(
+            modifier = Modifier
+                .size(56.dp)
+                .then(
+                    if (neon) Modifier.shadow(16.dp, CircleShape, spotColor = theme.glow)
+                    else Modifier.shadow(10.dp, CircleShape, spotColor = theme.primary)
+                )
+                .clip(CircleShape)
+                .background(Brush.linearGradient(listOf(Color(0xFF3B82F6), Color(0xFF8B5CF6))))
+                .border(1.5.dp, Color.White.copy(alpha = 0.35f), CircleShape)
+                .clickable(
+                    interactionSource = remember { MutableInteractionSource() },
+                    indication = null
+                ) { expanded = !expanded },
+            contentAlignment = Alignment.Center
+        ) {
+            Icon(
+                if (expanded) Icons.Default.Close else Icons.Default.AutoAwesome,
+                contentDescription = "AI quick actions",
+                tint = Color.White,
+                modifier = Modifier.size(26.dp)
+            )
+        }
+    }
+}
+
+@Composable
+private fun AiPopupItem(
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    label: String,
+    theme: ModeTheme,
+    onClick: () -> Unit
+) {
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        modifier = Modifier
+            .clickable(
+                interactionSource = remember { MutableInteractionSource() },
+                indication = null
+            ) { onClick() }
+            .padding(horizontal = 14.dp, vertical = 10.dp)
+    ) {
+        Icon(icon, contentDescription = null, tint = theme.primary, modifier = Modifier.size(18.dp))
+        Spacer(modifier = Modifier.width(10.dp))
+        Text(label, color = theme.onSurface, fontSize = 13.sp, fontWeight = FontWeight.Medium)
+    }
+}
+
+/**
+ * Bottom nav for the browsing surface: Back · Forward · Home · Tabs (badge) · Menu.
+ * (No center AI tab here — AI lives in the floating button.)
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun BrowseBottomNav(
+    theme: ModeTheme,
+    tabCount: Int,
+    canGoBack: Boolean,
+    canGoForward: Boolean,
+    onBack: () -> Unit,
+    onForward: () -> Unit,
+    onHome: () -> Unit,
+    onTabs: () -> Unit,
+    onMenu: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val neon = theme.mode == BrowserMode.HACK
+    Surface(
+        color = if (neon) Color(0xFF000000) else theme.topBarBg,
+        border = androidx.compose.foundation.BorderStroke(
+            1.dp,
+            if (neon) theme.glow.copy(alpha = 0.3f) else theme.onSurface.copy(alpha = 0.08f)
+        ),
+        modifier = modifier.fillMaxWidth()
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 4.dp, vertical = 6.dp),
+            horizontalArrangement = Arrangement.SpaceEvenly,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            BrowseNavButton(
+                icon = Icons.AutoMirrored.Filled.ArrowBack, label = "Back",
+                enabled = canGoBack, theme = theme, onClick = onBack
+            )
+            BrowseNavButton(
+                icon = Icons.AutoMirrored.Filled.ArrowForward, label = "Forward",
+                enabled = canGoForward, theme = theme, onClick = onForward
+            )
+            BrowseNavButton(
+                icon = Icons.Default.Home, label = "Home",
+                enabled = true, theme = theme, onClick = onHome
+            )
+            BadgedBox(
+                badge = {
+                    Badge(containerColor = theme.primary, contentColor = Color.White) {
+                        Text(tabCount.toString(), fontSize = 9.sp)
+                    }
+                },
+                modifier = Modifier.clickable(
+                    interactionSource = remember { MutableInteractionSource() },
+                    indication = null
+                ) { onTabs() }
+            ) {
+                BrowseNavContent(icon = Icons.Default.Tab, label = "Tabs", enabled = true, theme = theme)
+            }
+            BrowseNavButton(
+                icon = Icons.Default.Menu, label = "Menu",
+                enabled = true, theme = theme, onClick = onMenu
+            )
+        }
+    }
+}
+
+@Composable
+private fun BrowseNavButton(
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    label: String,
+    enabled: Boolean,
+    theme: ModeTheme,
+    onClick: () -> Unit
+) {
+    Column(
+        horizontalAlignment = Alignment.CenterHorizontally,
+        modifier = Modifier
+            .clickable(
+                interactionSource = remember { MutableInteractionSource() },
+                indication = null
+            ) { if (enabled) onClick() }
+            .padding(4.dp)
+    ) {
+        BrowseNavContent(icon = icon, label = label, enabled = enabled, theme = theme)
+    }
+}
+
+@Composable
+private fun BrowseNavContent(
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    label: String,
+    enabled: Boolean,
+    theme: ModeTheme
+) {
+    val tint = if (enabled) theme.onSurface.copy(alpha = 0.85f) else theme.onSurface.copy(alpha = 0.3f)
+    Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.padding(4.dp)) {
+        Icon(icon, contentDescription = label, tint = tint, modifier = Modifier.size(23.dp))
+        Text(label, fontSize = 9.5.sp, color = tint, fontWeight = FontWeight.Bold)
     }
 }

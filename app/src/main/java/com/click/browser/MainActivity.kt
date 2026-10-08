@@ -1439,27 +1439,33 @@ class MainActivity : ComponentActivity() {
                                 // ⋮ browser menu. The old 2-row bar + separate tab strip are
                                 // gone; the counter opens the visual tab switcher, and the
                                 // bottom-left FAB menu replaces the top hamburger.
+                                // SURFACE 2 — Browsing: compact address bar + privacy strip.
+                                // (Home surface has no browser top bar — it has its own
+                                // big search bar; tab switching lives in the bottom nav.)
                                 AnimatedVisibility(
-                                    visible = !immersiveMode,
+                                    visible = !immersiveMode && !showOverlays,
                                     enter = expandVertically() + fadeIn(),
                                     exit = shrinkVertically() + fadeOut()
                                 ) {
-                                    ChromeTopBar(
-                                        theme = theme,
-                                        currentUrl = currentTab.url,
-                                        canGoBack = currentTab.webView?.canGoBack() == true,
-                                        canGoForward = currentTab.webView?.canGoForward() == true,
-                                        tabCount = tabs.size,
-                                        onBack = { currentTab.webView?.goBack() },
-                                        onForward = { currentTab.webView?.goForward() },
-                                        onNavigate = { input ->
-                                            val destination = formatUrl(input, currentSearchEngineSetting, activeMode)
-                                            currentTab.url = destination
-                                            currentTab.webView?.loadUrl(destination)
-                                        },
-                                        onTabCounterClick = { showTabsManager = true },
-                                        onMenuClick = { showBrowserMenu = true },
-                                    )
+                                    Column {
+                                        CompactBrowseBar(
+                                            theme = theme,
+                                            currentUrl = currentTab.url,
+                                            onNavigate = { input ->
+                                                val destination = formatUrl(input, currentSearchEngineSetting, activeMode)
+                                                currentTab.url = destination
+                                                currentTab.webView?.loadUrl(destination)
+                                            },
+                                            onReload = { currentTab.webView?.reload() },
+                                            onMenuClick = { showBrowserMenu = true }
+                                        )
+                                        PrivacyStrip(
+                                            theme = theme,
+                                            adBlockerEnabled = adBlockerEnabled,
+                                            blockedCount = blockedCount,
+                                            onClick = { showPrivacyGuards = true }
+                                        )
+                                    }
                                 }
 
                                 // 4. MAIN CONTENT CONTAINER (WIDGET-STYLE DASHBOARD OR WEBVIEW)
@@ -1791,7 +1797,23 @@ class MainActivity : ComponentActivity() {
                                         )
                                     }
 
+                                    // Browsing surface: floating glowing AI button (bottom-right)
+                                    // with quick popup (Ask Click AI · Summarize · Translate).
+                                    // Hidden in immersive fullscreen and on the home surface.
+                                    if (!immersiveMode && !showOverlays) {
+                                        AiQuickFab(
+                                            theme = theme,
+                                            onAskAi = { if (tamperBlocked) showTamperDialog = true else showAiChat = true },
+                                            onSummarize = { if (tamperBlocked) showTamperDialog = true else showAiChat = true },
+                                            onTranslate = { handleFeature(FeatureId.TRANSLATE) },
+                                            modifier = Modifier
+                                                .align(Alignment.BottomEnd)
+                                                .padding(end = 16.dp, bottom = 16.dp)
+                                        )
+                                    }
+
                                     // 6. FLOATING HACK VIDEO GRABBER TRIGGER
+                                    // (stacked above the AI button when both are visible)
                                     if (activeMode == BrowserMode.HACK && detectedVideos.isNotEmpty()) {
                                         FloatingActionButton(
                                             onClick = { showDownloaderDialog = true },
@@ -1799,7 +1821,7 @@ class MainActivity : ComponentActivity() {
                                             contentColor = Color.White,
                                             modifier = Modifier
                                                 .align(Alignment.BottomEnd)
-                                                .padding(16.dp)
+                                                .padding(end = 16.dp, bottom = 88.dp)
                                                 .scale(1.1f)
                                         ) {
                                             Icon(Icons.Default.Download, contentDescription = "Grab Video")
@@ -1836,6 +1858,24 @@ class MainActivity : ComponentActivity() {
                                     onTabs = { showTabsManager = true },
                                     onAi = { if (tamperBlocked) showTamperDialog = true else showAiChat = true },
                                     onBookmarks = { showBookmarks = true },
+                                    onMenu = { showBrowserMenu = true },
+                                    modifier = Modifier.align(Alignment.BottomCenter)
+                                )
+                            }
+
+                            // SURFACE 2 — Browsing bottom nav: Back · Forward · Home ·
+                            // Tabs (count badge) · Menu. (No center AI tab here — AI
+                            // lives in the floating button.)
+                            if (!showOverlays && !immersiveMode) {
+                                BrowseBottomNav(
+                                    theme = ModeThemes.forMode(activeMode, dark = activeMode != BrowserMode.SIMPLE),
+                                    tabCount = tabs.size,
+                                    canGoBack = currentTab.webView?.canGoBack() == true,
+                                    canGoForward = currentTab.webView?.canGoForward() == true,
+                                    onBack = { currentTab.webView?.goBack() },
+                                    onForward = { currentTab.webView?.goForward() },
+                                    onHome = { currentTab.url = "about:blank" },
+                                    onTabs = { showTabsManager = true },
                                     onMenu = { showBrowserMenu = true },
                                     modifier = Modifier.align(Alignment.BottomCenter)
                                 )
