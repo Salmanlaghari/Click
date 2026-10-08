@@ -46,16 +46,20 @@ android {
         // determined reverser. Empty when the env var is missing — the build
         // still passes and the app falls back to asking for the user's key.
         // At runtime the user's own Settings key always takes precedence.
-        // See KeyObfuscator.kt for the runtime decode.
+        // See KeyObfuscator.kt for the runtime decode. The pad itself is also
+        // passed via BuildConfig (single source of truth — Kilo review).
         val groqObfPad = "ClickBrowserObfPad2026"
         val groqKeyRaw = System.getenv("GROQ_API_KEY") ?: ""
         val groqKeyObf = if (groqKeyRaw.isBlank()) "" else {
-            val pad = groqObfPad.toByteArray(Charsets.UTF_8)
-            val raw = groqKeyRaw.toByteArray(Charsets.UTF_8)
-            val xored = ByteArray(raw.size) { i -> (raw[i] xor pad[i % pad.size]).toByte() }
-            java.util.Base64.getEncoder().encodeToString(xored)
+            val padBytes = groqObfPad.toByteArray(Charsets.UTF_8)
+            val rawBytes = groqKeyRaw.toByteArray(Charsets.UTF_8)
+            val xored = ByteArray(rawBytes.size) { i ->
+                (rawBytes[i].toInt() xor padBytes[i % padBytes.size].toInt()).toByte()
+            }
+            kotlin.io.encoding.Base64.Default.encode(xored)
         }
         buildConfigField("String", "GROQ_API_KEY_OBF", "\"$groqKeyObf\"")
+        buildConfigField("String", "GROQ_OBF_PAD", "\"$groqObfPad\"")
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables {

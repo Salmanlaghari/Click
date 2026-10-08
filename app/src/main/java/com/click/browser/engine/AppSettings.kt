@@ -1,8 +1,10 @@
 package com.click.browser.engine
 
+import android.util.Log
 import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import org.json.JSONArray
+import org.json.JSONException
 import org.json.JSONObject
 
 /**
@@ -64,7 +66,10 @@ object AppSettings {
     fun appendReport(existingJson: String?, text: String): String {
         val arr = try {
             JSONArray(existingJson.orEmpty())
-        } catch (_: Exception) {
+        } catch (e: JSONException) {
+            // Malformed stored JSON: log and start fresh rather than silently
+            // dropping history without a trace (Kilo review).
+            Log.w("AppSettings", "AI reports JSON corrupted, resetting", e)
             JSONArray()
         }
         arr.put(

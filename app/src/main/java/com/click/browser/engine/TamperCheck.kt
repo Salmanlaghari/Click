@@ -21,21 +21,30 @@ import java.security.MessageDigest
  * - Debug builds always pass (BuildConfig.DEBUG) — developers are not "tamperers".
  * - IMPORTANT — Play App Signing: Google Play re-signs the AAB on upload, so
  *   the runtime certificate of a Play-installed copy is PLAY'S key, not the
- *   upload keystore's. Add your Play App Signing SHA-256 below
- *   (Play Console → Setup → App signing) or Play installs will false-positive
- *   and AI chat will stay disabled for real users.
+ *   upload keystore's. [PLAY_SIGNING_SHA256] MUST be filled with your Play
+ *   App Signing SHA-256 (Play Console → Setup → App integrity → "App signing
+ *   key certificate") right after the first upload — otherwise Play installs
+ *   will false-positive and AI chat will stay disabled for real users.
+ *   Until then, blank entries are simply skipped.
  */
 object TamperCheck {
+
+    /** Prince's release upload keystore (click-browser.p12, alias "click"). */
+    private const val UPLOAD_SHA256 =
+        "c8c42cd7f04e0b38719f2a0276c124cdce41349ed70a53c8f9307b736c4dda2c"
+
+    /**
+     * Play App Signing certificate SHA-256 (hex, colons optional).
+     * TODO(Prince): paste from Play Console → Setup → App integrity after
+     * the first AAB upload. Leave "" until then.
+     */
+    private const val PLAY_SIGNING_SHA256 = ""
 
     /**
      * Accepted signing-certificate SHA-256 fingerprints (hex, colons optional).
      */
-    private val ACCEPTED_SHA256 = setOf(
-        // Prince's release upload keystore (click-browser.p12, alias "click").
-        "c8c42cd7f04e0b38719f2a0276c124cdce41349ed70a53c8f9307b736c4dda2c"
-        // TODO(Prince): add your Play App Signing SHA-256 here once the app
-        // is enrolled, otherwise Play-installed copies will trip the warning.
-    )
+    private val ACCEPTED_SHA256: Set<String> =
+        setOf(UPLOAD_SHA256, PLAY_SIGNING_SHA256).filter { it.isNotBlank() }.toSet()
 
     /**
      * True when the running APK's signature matches a known-good certificate

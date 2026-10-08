@@ -1856,11 +1856,11 @@ class MainActivity : ComponentActivity() {
                                 AboutAppDialog(onClose = { showAboutApp = false })
                             }
                             if (showTamperDialog) {
-                                // Blocking warning for repackaged/modified copies.
-                                // onDismissRequest is intentionally a no-op: the user
-                                // must tap "Understood". AI chat stays disabled.
+                                // Warning for repackaged/modified copies.
+                                // Dismissible (back press / outside tap / Dismiss), but AI chat
+                                // stays disabled while tamperBlocked is true (Kilo review).
                                 AlertDialog(
-                                    onDismissRequest = { },
+                                    onDismissRequest = { showTamperDialog = false },
                                     title = { Text("Warning") },
                                     text = {
                                         Text("Warning: this copy of Click Browser appears modified or repackaged. AI features are disabled for your safety.")
@@ -1868,6 +1868,11 @@ class MainActivity : ComponentActivity() {
                                     confirmButton = {
                                         TextButton(onClick = { showTamperDialog = false }) {
                                             Text("Understood")
+                                        }
+                                    },
+                                    dismissButton = {
+                                        TextButton(onClick = { showTamperDialog = false }) {
+                                            Text("Dismiss")
                                         }
                                     }
                                 )

@@ -94,6 +94,8 @@ fun AiChatScreen(
     val messages = remember { mutableStateListOf<ChatMessage>() }
     var input by remember { mutableStateOf("") }
     var typing by remember { mutableStateOf(false) }
+    // Single screen-level report dialog (Kilo review: per-bubble dialogs could stack).
+    var reportTarget by remember { mutableStateOf<String?>(null) }
     val listState = rememberLazyListState()
 
     val client = remember(secureDns) {
@@ -241,7 +243,7 @@ fun AiChatScreen(
                             }
                         }
                     }
-                    items(messages) { msg -> ChatBubble(msg, onReportMessage) }
+                    items(messages) { msg -> ChatBubble(msg, onFlagClick = { reportTarget = it }) }
                     if (typing) {
                         item { TypingIndicator() }
                     }
@@ -279,16 +281,34 @@ fun AiChatScreen(
                 }
             }
         }
+
+        // Single screen-level report dialog for flagged AI responses
+        // (Play AI-Generated Content policy — in-app reporting).
+        reportTarget?.let { target ->
+            AlertDialog(
+                onDismissRequest = { reportTarget = null },
+                title = { Text("Report this response?") },
+                text = { Text("Flag this AI response as inappropriate? It will be recorded on this device for review.") },
+                confirmButton = {
+                    TextButton(onClick = {
+                        reportTarget = null
+                        onReportMessage(target)
+                    }) { Text("Report") }
+                },
+                dismissButton = {
+                    TextButton(onClick = { reportTarget = null }) { Text("Cancel") }
+                }
+            )
+        }
     }
 }
 
 @Composable
-private fun ChatBubble(msg: ChatMessage, onReport: (String) -> Unit) {
+private fun ChatBubble(msg: ChatMessage, onFlagClick: (String) -> Unit) {
     val isUser = msg.role == "user"
     val isError = msg.role == "error"
     val isSystem = msg.role == "system"
     val isAssistant = !isUser && !isError && !isSystem
-    var showReportDialog by remember { mutableStateOf(false) }
 
     Row(
         modifier = Modifier.fillMaxWidth(),
@@ -336,9 +356,10 @@ private fun ChatBubble(msg: ChatMessage, onReport: (String) -> Unit) {
             }
         }
         // In-app reporting (Play AI-Generated Content policy) on every assistant message.
+        // The dialog itself lives at screen level (single dialog) — see reportTarget below.
         if (isAssistant) {
             IconButton(
-                onClick = { showReportDialog = true },
+                onClick = { onFlagClick(msg.content) },
                 modifier = Modifier.size(36.dp)
             ) {
                 Icon(
@@ -349,23 +370,6 @@ private fun ChatBubble(msg: ChatMessage, onReport: (String) -> Unit) {
                 )
             }
         }
-    }
-
-    if (showReportDialog) {
-        AlertDialog(
-            onDismissRequest = { showReportDialog = false },
-            title = { Text("Report this response?") },
-            text = { Text("Flag this AI response as inappropriate? It will be recorded on this device for review.") },
-            confirmButton = {
-                TextButton(onClick = {
-                    showReportDialog = false
-                    onReport(msg.content)
-                }) { Text("Report") }
-            },
-            dismissButton = {
-                TextButton(onClick = { showReportDialog = false }) { Text("Cancel") }
-            }
-        )
     }
 }
 

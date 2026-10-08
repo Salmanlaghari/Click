@@ -6,8 +6,9 @@ package com.click.browser.engine
  *
  * [isBlocked] runs BEFORE any network request: if it returns true the prompt
  * is never sent to Groq/OpenRouter and the user sees a system message instead.
- * Matching is case-insensitive with word boundaries, so "classic" does not
- * trigger on "class", etc. No network needed — the list is bundled.
+ * Matching is case-insensitive with alphanumeric lookarounds, so "classic"
+ * does not trigger on "class", while multi-word terms like "nude pics" still
+ * match. No network needed — the list is bundled.
  */
 object AiSafetyFilter {
 
@@ -58,10 +59,17 @@ object AiSafetyFilter {
         "grow op", "drug lab"
     )
 
-    private val patterns: List<Regex> by lazy {
-        BLOCKED_TERMS.map { term ->
-            Regex("\\b" + Regex.escape(term) + "\\b", RegexOption.IGNORE_CASE)
+    /**
+     * Single alternation regex over all terms (one pass, not 130+ scans).
+     * Multi-word terms are split and re-joined with \s+ AFTER escaping, and
+     * lookarounds (not \b) guard the edges so terms like "nude pics" or
+     * "how to make a bomb" match reliably.
+     */
+    private val pattern: Regex by lazy {
+        val alternation = BLOCKED_TERMS.joinToString("|") { term ->
+            term.split(" ").joinToString("\\s+") { Regex.escape(it) }
         }
+        Regex("(?i)(?<![a-z0-9])($alternation)(?![a-z0-9])")
     }
 
     /**
@@ -70,6 +78,6 @@ object AiSafetyFilter {
      */
     fun isBlocked(prompt: String): Boolean {
         if (prompt.isBlank()) return false
-        return patterns.any { it.containsMatchIn(prompt) }
+        return pattern.containsMatchIn(prompt)
     }
 }
