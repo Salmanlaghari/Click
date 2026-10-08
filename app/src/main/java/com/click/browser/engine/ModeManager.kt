@@ -38,8 +38,7 @@ class ModeManager(private val context: Context) {
         }
     }
 
-    fun applySettings(webView: WebView, mode: BrowserMode, forceDesktop: Boolean = false) {
-        val settings = webView.settings
+    fun applySettings(webView: WebView, mode: BrowserMode, forceDesktop: Boolean = false) {        val settings = webView.settings
 
         // General always-on configs as requested
         settings.javaScriptEnabled = true
@@ -76,6 +75,21 @@ class ModeManager(private val context: Context) {
                 settings.loadWithOverviewMode = true
                 // Hack mode viewport specs (1920x1080) can also be controlled on layout / JS injection side
             }
+        }
+    }
+
+    /**
+     * Applies or clears a per-site desktop override on top of the current mode settings.
+     * Desktop = desktop UA + wide viewport; Mobile = the mode's own settings.
+     */
+    fun applyDesktopOverride(webView: WebView, mode: BrowserMode, desktop: Boolean) {
+        val settings = webView.settings
+        if (desktop) {
+            settings.userAgentString = UA_HACK
+            settings.useWideViewPort = true
+            settings.loadWithOverviewMode = true
+        } else {
+            applySettings(webView, mode, forceDesktop = false)
         }
     }
 }
