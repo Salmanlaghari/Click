@@ -400,6 +400,86 @@ class MainActivity : ComponentActivity() {
                 }
             }
 
+            var isIncognitoMode by remember { mutableStateOf(false) }
+            var adBlockerEnabled by remember { mutableStateOf(true) }
+            var forceNightModeWebsites by remember { mutableStateOf(false) }
+            var httpsOnlyMode by remember { mutableStateOf(true) }
+            var javaScriptEnabledGlobal by remember { mutableStateOf(true) }
+            var dataSaverEnabled by remember { mutableStateOf(false) }
+
+            // Common overlays
+            var showBookmarks by remember { mutableStateOf(false) }
+            var showHistory by remember { mutableStateOf(false) }
+            var showDownloads by remember { mutableStateOf(false) }
+            var showSettings by remember { mutableStateOf(false) }
+            var showFindInPageDialog by remember { mutableStateOf(false) }
+            var findQuery by remember { mutableStateOf("") }
+
+            // Tool modal sheets
+            var showMusicDetails by remember { mutableStateOf(false) }
+            var showVideoDetails by remember { mutableStateOf(false) }
+            var showPdfDetails by remember { mutableStateOf(false) }
+            var showImageDetails by remember { mutableStateOf(false) }
+            var showExtensionsManager by remember { mutableStateOf(false) }
+            var showPrivacyPolicy by remember { mutableStateOf(false) }
+            var showAboutApp by remember { mutableStateOf(false) }
+
+            // AI chat + privacy guards
+            var showAiChat by remember { mutableStateOf(false) }
+            var showPrivacyGuards by remember { mutableStateOf(false) }
+            // Tamper detection (decompile guard): release builds verify the
+            // signing certificate on start; mismatch disables AI chat.
+            var tamperBlocked by remember { mutableStateOf(false) }
+            var showTamperDialog by remember { mutableStateOf(false) }
+            LaunchedEffect(Unit) {
+                tamperBlocked = !TamperCheck.isReleaseSignatureValid(this@MainActivity)
+                if (tamperBlocked) showTamperDialog = true
+            }
+            var aiApiKey by remember { mutableStateOf("") }
+            var aiProvider by remember { mutableStateOf("groq") }
+            var aiModel by remember { mutableStateOf("") }
+            var headerSpoofEnabled by remember { mutableStateOf(false) }
+            var fingerprintProtection by remember { mutableStateOf(true) }
+            var secureDnsEnabled by remember { mutableStateOf(false) }
+            var customHeaders by remember { mutableStateOf(listOf<AppSettings.CustomHeader>()) }
+            var webrtcTestRunning by remember { mutableStateOf(false) }
+            var webrtcTested by remember { mutableStateOf(false) }
+            var webrtcIps by remember { mutableStateOf<List<String>?>(null) }
+
+            // Userscript extensions (HACK mode)
+            var showUserscripts by remember { mutableStateOf(false) }
+            var userscripts by remember { mutableStateOf(listOf<UserscriptInfo>()) }
+            var userscriptNotice by remember { mutableStateOf<String?>(null) }
+
+            // Dev tools states
+            var elementInspectorEnabled by remember { mutableStateOf(false) }
+            var deviceEmulatorMode by remember { mutableStateOf("Desktop") } // Mobile, Tablet, Desktop
+            var pageLoadTime by remember { mutableStateOf(0L) }
+            var lastPageStart by remember { mutableStateOf(0L) }
+            var showDebugOverlay by remember { mutableStateOf(true) }
+            val logs = remember { mutableStateListOf<LogEntry>() }
+            val networkRequests = remember { mutableStateListOf<NetworkRequest>() }
+            var domHtml by remember { mutableStateOf("") }
+            val sourcesList = remember { mutableStateListOf<String>() }
+
+            // Hack tools states
+            var antiDetectionEnabled by remember { mutableStateOf(true) }
+            // UA consistency: HACK mode is desktop UA by mode design, SIMPLE/DEVELOPER
+            // are mobile UA. The global force-desktop defaults OFF — desktop UA
+            // comes from the mode or the per-site Desktop toggle only, and the
+            // UA is never switched mid-page-load (see onToggleForceDesktop reload).
+            var forceDesktopMode by remember { mutableStateOf(false) }
+            var spoofedUAIndex by remember { mutableStateOf(0) }
+            val detectedVideos = remember { mutableStateListOf<String>() }
+            var showDownloaderDialog by remember { mutableStateOf(false) }
+
+            // DevTools panel tab (0=Elements, 1=Console, 2=Network, 3=Sources)
+            var devToolsTab by remember { mutableStateOf(0) }
+
+            // Full-view / immersive browsing: MANUAL fullscreen toggle only.
+            // (Prince: no auto-hide on scroll — user control via the drawer toggle.)
+            var immersiveMode by remember { mutableStateOf(false) }
+
             /**
              * Premium UI v2: wires the 32 bottom-left FAB menu features to the
              * existing screens/actions. Reuses current handlers — no feature is
@@ -555,85 +635,6 @@ class MainActivity : ComponentActivity() {
                     FeatureId.ABOUT -> showAboutApp = true
                 }
             }
-            var isIncognitoMode by remember { mutableStateOf(false) }
-            var adBlockerEnabled by remember { mutableStateOf(true) }
-            var forceNightModeWebsites by remember { mutableStateOf(false) }
-            var httpsOnlyMode by remember { mutableStateOf(true) }
-            var javaScriptEnabledGlobal by remember { mutableStateOf(true) }
-            var dataSaverEnabled by remember { mutableStateOf(false) }
-
-            // Common overlays
-            var showBookmarks by remember { mutableStateOf(false) }
-            var showHistory by remember { mutableStateOf(false) }
-            var showDownloads by remember { mutableStateOf(false) }
-            var showSettings by remember { mutableStateOf(false) }
-            var showFindInPageDialog by remember { mutableStateOf(false) }
-            var findQuery by remember { mutableStateOf("") }
-
-            // Tool modal sheets
-            var showMusicDetails by remember { mutableStateOf(false) }
-            var showVideoDetails by remember { mutableStateOf(false) }
-            var showPdfDetails by remember { mutableStateOf(false) }
-            var showImageDetails by remember { mutableStateOf(false) }
-            var showExtensionsManager by remember { mutableStateOf(false) }
-            var showPrivacyPolicy by remember { mutableStateOf(false) }
-            var showAboutApp by remember { mutableStateOf(false) }
-
-            // AI chat + privacy guards
-            var showAiChat by remember { mutableStateOf(false) }
-            var showPrivacyGuards by remember { mutableStateOf(false) }
-            // Tamper detection (decompile guard): release builds verify the
-            // signing certificate on start; mismatch disables AI chat.
-            var tamperBlocked by remember { mutableStateOf(false) }
-            var showTamperDialog by remember { mutableStateOf(false) }
-            LaunchedEffect(Unit) {
-                tamperBlocked = !TamperCheck.isReleaseSignatureValid(this@MainActivity)
-                if (tamperBlocked) showTamperDialog = true
-            }
-            var aiApiKey by remember { mutableStateOf("") }
-            var aiProvider by remember { mutableStateOf("groq") }
-            var aiModel by remember { mutableStateOf("") }
-            var headerSpoofEnabled by remember { mutableStateOf(false) }
-            var fingerprintProtection by remember { mutableStateOf(true) }
-            var secureDnsEnabled by remember { mutableStateOf(false) }
-            var customHeaders by remember { mutableStateOf(listOf<AppSettings.CustomHeader>()) }
-            var webrtcTestRunning by remember { mutableStateOf(false) }
-            var webrtcTested by remember { mutableStateOf(false) }
-            var webrtcIps by remember { mutableStateOf<List<String>?>(null) }
-
-            // Userscript extensions (HACK mode)
-            var showUserscripts by remember { mutableStateOf(false) }
-            var userscripts by remember { mutableStateOf(listOf<UserscriptInfo>()) }
-            var userscriptNotice by remember { mutableStateOf<String?>(null) }
-
-            // Dev tools states
-            var elementInspectorEnabled by remember { mutableStateOf(false) }
-            var deviceEmulatorMode by remember { mutableStateOf("Desktop") } // Mobile, Tablet, Desktop
-            var pageLoadTime by remember { mutableStateOf(0L) }
-            var lastPageStart by remember { mutableStateOf(0L) }
-            var showDebugOverlay by remember { mutableStateOf(true) }
-            val logs = remember { mutableStateListOf<LogEntry>() }
-            val networkRequests = remember { mutableStateListOf<NetworkRequest>() }
-            var domHtml by remember { mutableStateOf("") }
-            val sourcesList = remember { mutableStateListOf<String>() }
-
-            // Hack tools states
-            var antiDetectionEnabled by remember { mutableStateOf(true) }
-            // UA consistency: HACK mode is desktop UA by mode design, SIMPLE/DEVELOPER
-            // are mobile UA. The global force-desktop defaults OFF — desktop UA
-            // comes from the mode or the per-site Desktop toggle only, and the
-            // UA is never switched mid-page-load (see onToggleForceDesktop reload).
-            var forceDesktopMode by remember { mutableStateOf(false) }
-            var spoofedUAIndex by remember { mutableStateOf(0) }
-            val detectedVideos = remember { mutableStateListOf<String>() }
-            var showDownloaderDialog by remember { mutableStateOf(false) }
-
-            // DevTools panel tab (0=Elements, 1=Console, 2=Network, 3=Sources)
-            var devToolsTab by remember { mutableStateOf(0) }
-
-            // Full-view / immersive browsing: MANUAL fullscreen toggle only.
-            // (Prince: no auto-hide on scroll — user control via the drawer toggle.)
-            var immersiveMode by remember { mutableStateOf(false) }
             // Pull-to-refresh state for web pages.
             var isRefreshing by remember { mutableStateOf(false) }
             // Per-site desktop preference (persisted per host).
