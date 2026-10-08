@@ -337,6 +337,35 @@ class MainActivity : ComponentActivity() {
             val currentTab = tabs.getOrNull(activeTabIndex) ?: TabItem(url = "about:blank")
 
             var showTabsManager by remember { mutableStateOf(false) }
+            // Chrome/Mises-style browser menu (bottom sheet) + recent tabs +
+            // delete-browsing-data confirmation.
+            var showBrowserMenu by remember { mutableStateOf(false) }
+            var showRecentTabs by remember { mutableStateOf(false) }
+            var showDeleteBrowsingConfirm by remember { mutableStateOf(false) }
+            // Bumps every time a tab thumbnail is captured → recomposes the
+            // visual tab switcher if it happens to be open.
+            var thumbnailVersion by remember { mutableStateOf(0) }
+
+            /**
+             * Single close-tab path used by the top tab strip AND the visual
+             * switcher: remembers the tab for "Recent tabs" (never private
+             * ones), drops its thumbnail, and keeps one blank tab minimum.
+             */
+            fun closeTabAt(idx: Int) {
+                if (idx !in tabs.indices) return
+                val closed = tabs[idx]
+                RecentlyClosedTabs.push(closed.title, closed.url, closed.isIncognito)
+                TabThumbnailStore.remove(closed.id)
+                if (tabs.size > 1) {
+                    tabs.removeAt(idx)
+                    if (activeTabIndex >= tabs.size) {
+                        activeTabIndex = tabs.size - 1
+                    }
+                } else {
+                    tabs[0] = TabItem(url = "about:blank", title = "New Tab")
+                    activeTabIndex = 0
+                }
+            }
             var isIncognitoMode by remember { mutableStateOf(false) }
             var adBlockerEnabled by remember { mutableStateOf(true) }
             var forceNightModeWebsites by remember { mutableStateOf(false) }
@@ -681,7 +710,7 @@ class MainActivity : ComponentActivity() {
                                     }
                                 }
                                 item {
-                                    DrawerItem(label = "Tabs Manager", icon = Icons.Default.Menu, color = Color(0xFF3B82F6)) {
+                                    DrawerItem(label = "Tabs", icon = Icons.Default.FilterNone, color = Color(0xFF3B82F6)) {
                                         scope.launch { drawerState.close(); showTabsManager = true }
                                     }
                                 }
@@ -1217,6 +1246,7 @@ class MainActivity : ComponentActivity() {
                                             scope.launch { drawerState.open() }
                                         },
                                         onSettingsClick = { showSettings = true },
+                                        onBrowserMenuClick = { showBrowserMenu = true },
                                         onBack = { currentTab.webView?.goBack() },
                                         onForward = { currentTab.webView?.goForward() },
                                         onRefresh = { currentTab.webView?.reload() },
@@ -1270,21 +1300,12 @@ class MainActivity : ComponentActivity() {
                                         activeTabIndex = activeTabIndex,
                                         theme = theme,
                                         onSelectTab = { idx -> activeTabIndex = idx },
-                                        onCloseTab = { idx ->
-                                            if (tabs.size > 1) {
-                                                tabs.removeAt(idx)
-                                                if (activeTabIndex >= tabs.size) {
-                                                    activeTabIndex = tabs.size - 1
-                                                }
-                                            } else {
-                                                tabs[0] = TabItem(url = "about:blank", title = "New Tab")
-                                                activeTabIndex = 0
-                                            }
-                                        },
+                                        onCloseTab = { idx -> closeTabAt(idx) },
                                         onNewTab = {
                                             tabs.add(TabItem(url = "about:blank", title = "New Tab"))
                                             activeTabIndex = tabs.size - 1
-                                        }
+                                        },
+                                        onOpenTabSwitcher = { showTabsManager = true }
                                     )
                                 }
 
@@ -1462,6 +1483,29 @@ class MainActivity : ComponentActivity() {
                                                                 if (!currentTab.isIncognito && url != null && url != "about:blank") {
                                                                     scope.launch {
                                                                         repository.addHistoryItem(HistoryItem(currentTab.title, url, System.currentTimeMillis()))
+                                                                    }
+                                                                }
+
+                                                                // Visual tab switcher thumbnails: capture the visible
+                                                                // viewport ONCE per page finish, scaled down (360px).
+                                                                // Never continuous, never for incognito tabs (privacy).
+                                                                view?.let { wv ->
+                                                                    val finishedTab = tabs.firstOrNull { it.webView === wv }
+                                                                    if (finishedTab != null && !finishedTab.isIncognito
+                                                                        && (url == null || !url.startsWith("about:"))
+                                                                    ) {
+                                                                        wv.post {
+                                                                            TabThumbnailStore.capture(wv)?.let { bmp ->
+                                                                                // Keep only if this WebView still
+                                                                                // belongs to the same tab.
+                                                                                if (finishedTab.webView === wv) {
+                                                                                    TabThumbnailStore.put(finishedTab.id, bmp)
+                                                                                    thumbnailVersion++
+                                                                                } else {
+                                                                                    bmp.recycle()
+                                                                                }
+                                                                            }
+                                                                        }
                                                                     }
                                                                 }
 
@@ -1722,33 +1766,30 @@ class MainActivity : ComponentActivity() {
                                 }
                             }
 
-                            // --- Multi-Tab Management overlay sheets ---
+                            // --- Visual tab switcher (Mises/Chrome-style card grid) ---
+                            // Replaces the old PremiumTabsManager: thumbnails,
+                            // search, per-card close, + button. The top TabStrip
+                            // stays as the quick switcher.
                             if (showTabsManager) {
-                                PremiumTabsManager(
-                                    tabs = tabs,
-                                    activeTabIndex = activeTabIndex,
-                                    onSelectTab = { idx ->
-                                        activeTabIndex = idx
-                                        showTabsManager = false
-                                    },
-                                    onCloseTab = { idx ->
-                                        if (tabs.size > 1) {
-                                            tabs.removeAt(idx)
-                                            if (activeTabIndex >= tabs.size) {
-                                                activeTabIndex = tabs.size - 1
-                                            }
-                                        } else {
-                                            tabs[0] = TabItem(url = "about:blank", title = "New Tab")
-                                            activeTabIndex = 0
-                                        }
-                                    },
-                                    onAddTab = { isPrivate ->
-                                        tabs.add(TabItem(url = "about:blank", title = if (isPrivate) "Private Tab" else "New Tab", isIncognito = isPrivate))
-                                        activeTabIndex = tabs.size - 1
-                                        showTabsManager = false
-                                    },
-                                    onClose = { showTabsManager = false }
-                                )
+                                key(thumbnailVersion) {
+                                    TabSwitcherScreen(
+                                        tabs = tabs,
+                                        activeTabIndex = activeTabIndex,
+                                        theme = theme,
+                                        thumbnails = TabThumbnailStore.snapshot(),
+                                        onSelectTab = { idx ->
+                                            activeTabIndex = idx
+                                            showTabsManager = false
+                                        },
+                                        onCloseTab = { idx -> closeTabAt(idx) },
+                                        onNewTab = {
+                                            tabs.add(TabItem(url = "about:blank", title = "New Tab"))
+                                            activeTabIndex = tabs.size - 1
+                                            showTabsManager = false
+                                        },
+                                        onClose = { showTabsManager = false }
+                                    )
+                                }
                             }
 
                             // Overlays screens
@@ -2029,18 +2070,169 @@ class MainActivity : ComponentActivity() {
                                     },
                                     confirmButton = {
                                         TextButton(onClick = {
-                                            currentTab.webView?.findNext(true)
+                                            currentTab.webView?.findNext(false)
                                         }) {
-                                            Text("Next")
+                                            Text("Prev")
                                         }
                                     },
                                     dismissButton = {
-                                        TextButton(onClick = {
-                                            currentTab.webView?.clearMatches()
-                                            showFindInPageDialog = false
-                                        }) {
-                                            Text("Close")
+                                        Row {
+                                            TextButton(onClick = {
+                                                currentTab.webView?.findNext(true)
+                                            }) {
+                                                Text("Next")
+                                            }
+                                            TextButton(onClick = {
+                                                currentTab.webView?.clearMatches()
+                                                showFindInPageDialog = false
+                                            }) {
+                                                Text("Close")
+                                            }
                                         }
+                                    }
+                                )
+                            }
+
+                            // Chrome/Mises-style browser menu (bottom sheet). Every item
+                            // works — New tab, New private tab, Tabs switcher,
+                            // History, Delete browsing data, Downloads, Bookmarks,
+                            // Recent tabs, Extensions (userscripts), Share,
+                            // Find in page, Translate, Desktop site, Settings.
+                            if (showBrowserMenu) {
+                                val menuPageHost = try {
+                                    android.net.Uri.parse(currentTab.url).host?.lowercase().orEmpty()
+                                } catch (_: Exception) { "" }
+                                val menuDesktopForSite = menuPageHost.isNotEmpty() && (menuPageHost in desktopHosts
+                                    || desktopHosts.any { h -> menuPageHost == h || menuPageHost.endsWith(".$h") })
+                                BrowserMenuSheet(
+                                    theme = theme,
+                                    isDesktopForSite = menuDesktopForSite,
+                                    onNewTab = {
+                                        showBrowserMenu = false
+                                        tabs.add(TabItem(url = "about:blank", title = "New Tab"))
+                                        activeTabIndex = tabs.size - 1
+                                    },
+                                    onNewPrivateTab = {
+                                        showBrowserMenu = false
+                                        tabs.add(TabItem(url = "about:blank", title = "Private Tab", isIncognito = true))
+                                        activeTabIndex = tabs.size - 1
+                                        Toast.makeText(this@MainActivity, "Private tab opened — history is not recorded.", Toast.LENGTH_SHORT).show()
+                                    },
+                                    onOpenTabSwitcher = {
+                                        showBrowserMenu = false
+                                        showTabsManager = true
+                                    },
+                                    onHistory = { showBrowserMenu = false; showHistory = true },
+                                    onDeleteBrowsingData = {
+                                        showBrowserMenu = false
+                                        showDeleteBrowsingConfirm = true
+                                    },
+                                    onDownloads = {
+                                        showBrowserMenu = false
+                                        this@MainActivity.requestStoragePermissions()
+                                        showDownloads = true
+                                    },
+                                    onBookmarks = { showBrowserMenu = false; showBookmarks = true },
+                                    onRecentTabs = { showBrowserMenu = false; showRecentTabs = true },
+                                    onExtensions = { showBrowserMenu = false; showUserscripts = true },
+                                    onShare = {
+                                        showBrowserMenu = false
+                                        val url = currentTab.url
+                                        if (url == "about:blank") {
+                                            Toast.makeText(this@MainActivity, "Nothing to share yet.", Toast.LENGTH_SHORT).show()
+                                        } else {
+                                            val share = Intent(Intent.ACTION_SEND).apply {
+                                                type = "text/plain"
+                                                putExtra(Intent.EXTRA_SUBJECT, currentTab.title)
+                                                putExtra(Intent.EXTRA_TEXT, "${currentTab.title}\n$url")
+                                            }
+                                            startActivity(Intent.createChooser(share, "Share page via"))
+                                        }
+                                    },
+                                    onFindInPage = {
+                                        showBrowserMenu = false
+                                        findQuery = ""
+                                        showFindInPageDialog = true
+                                    },
+                                    onTranslate = {
+                                        showBrowserMenu = false
+                                        val url = currentTab.url
+                                        if (url == "about:blank" || !url.startsWith("http")) {
+                                            Toast.makeText(this@MainActivity, "Open a page first to translate it.", Toast.LENGTH_SHORT).show()
+                                        } else {
+                                            // Honest page translation via Google Translate's
+                                            // translate proxy, opened in a new tab.
+                                            val lang = java.util.Locale.getDefault().language.ifBlank { "en" }
+                                            val tUrl = "https://translate.google.com/translate?sl=auto&tl=$lang&u=" +
+                                                java.net.URLEncoder.encode(url, "UTF-8")
+                                            tabs.add(TabItem(url = tUrl, title = "Translate"))
+                                            activeTabIndex = tabs.size - 1
+                                        }
+                                    },
+                                    onToggleDesktopSite = {
+                                        showBrowserMenu = false
+                                        scope.launch {
+                                            if (menuPageHost.isEmpty() || currentTab.url == "about:blank") {
+                                                Toast.makeText(this@MainActivity, "Open a page first.", Toast.LENGTH_SHORT).show()
+                                            } else {
+                                                repository.setDesktopHost(menuPageHost, !menuDesktopForSite)
+                                                currentTab.webView?.let { wv ->
+                                                    modeManager.applyDesktopOverride(wv, activeMode, !menuDesktopForSite)
+                                                    wv.reload()
+                                                }
+                                                Toast.makeText(
+                                                    this@MainActivity,
+                                                    if (!menuDesktopForSite) "Desktop site enabled for $menuPageHost"
+                                                    else "Mobile site restored for $menuPageHost",
+                                                    Toast.LENGTH_SHORT
+                                                ).show()
+                                            }
+                                        }
+                                    },
+                                    onSettings = { showBrowserMenu = false; showSettings = true },
+                                    onDismiss = { showBrowserMenu = false }
+                                )
+                            }
+
+                            // Recent tabs (recently closed, re-openable)
+                            if (showRecentTabs) {
+                                RecentTabsScreen(
+                                    closedTabs = RecentlyClosedTabs.list(),
+                                    theme = theme,
+                                    onReopen = { ct ->
+                                        tabs.add(TabItem(url = ct.url, title = ct.title))
+                                        activeTabIndex = tabs.size - 1
+                                        RecentlyClosedTabs.remove(ct)
+                                        showRecentTabs = false
+                                    },
+                                    onRemove = { ct -> RecentlyClosedTabs.remove(ct) },
+                                    onClearAll = { RecentlyClosedTabs.clear() },
+                                    onClose = { showRecentTabs = false }
+                                )
+                            }
+
+                            // Delete browsing data — confirmation first.
+                            if (showDeleteBrowsingConfirm) {
+                                AlertDialog(
+                                    onDismissRequest = { showDeleteBrowsingConfirm = false },
+                                    title = { Text("Delete browsing data?") },
+                                    text = { Text("This clears history, cache, cookies and site data for all tabs.") },
+                                    confirmButton = {
+                                        TextButton(onClick = {
+                                            scope.launch {
+                                                repository.clearHistory()
+                                                currentTab.webView?.clearHistory()
+                                                currentTab.webView?.clearCache(true)
+                                                android.webkit.CookieManager.getInstance().removeAllCookies(null)
+                                                android.webkit.CookieManager.getInstance().flush()
+                                                android.webkit.WebStorage.getInstance().deleteAllData()
+                                                showDeleteBrowsingConfirm = false
+                                                Toast.makeText(this@MainActivity, "Browsing data deleted.", Toast.LENGTH_SHORT).show()
+                                            }
+                                        }) { Text("Delete") }
+                                    },
+                                    dismissButton = {
+                                        TextButton(onClick = { showDeleteBrowsingConfirm = false }) { Text("Cancel") }
                                     }
                                 )
                             }
@@ -2393,6 +2585,7 @@ fun BrowserTopBar(
     isBookmarked: Boolean,
     onMenuClick: () -> Unit,
     onSettingsClick: () -> Unit,
+    onBrowserMenuClick: () -> Unit,
     onBack: () -> Unit,
     onForward: () -> Unit,
     onRefresh: () -> Unit,
@@ -2446,6 +2639,10 @@ fun BrowserTopBar(
                 )
             }
             Spacer(modifier = Modifier.weight(1f))
+            // Chrome-style browser menu (⋮) — hamburger stays the drawer.
+            IconButton(onClick = onBrowserMenuClick, modifier = Modifier.size(40.dp)) {
+                Icon(Icons.Default.MoreVert, contentDescription = "Browser menu", tint = theme.onTopBar)
+            }
             IconButton(onClick = onSettingsClick, modifier = Modifier.size(40.dp)) {
                 Icon(Icons.Default.Settings, contentDescription = "Settings", tint = theme.onTopBar)
             }
@@ -2567,7 +2764,8 @@ fun TabStrip(
     theme: ModeTheme,
     onSelectTab: (Int) -> Unit,
     onCloseTab: (Int) -> Unit,
-    onNewTab: () -> Unit
+    onNewTab: () -> Unit,
+    onOpenTabSwitcher: () -> Unit
 ) {
     Row(
         modifier = Modifier
@@ -2576,6 +2774,22 @@ fun TabStrip(
             .padding(horizontal = 8.dp, vertical = 4.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
+        // Tab count badge (Mises-style) — tap opens the visual tab switcher.
+        Surface(
+            modifier = Modifier.clickable(onClick = onOpenTabSwitcher),
+            shape = RoundedCornerShape(7.dp),
+            color = theme.primary.copy(alpha = 0.15f),
+            border = BorderStroke(1.dp, theme.primary.copy(alpha = 0.4f))
+        ) {
+            Text(
+                text = tabs.size.toString(),
+                fontSize = 12.sp,
+                fontWeight = FontWeight.ExtraBold,
+                color = theme.primary,
+                modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+            )
+        }
+        Spacer(modifier = Modifier.width(6.dp))
         LazyRow(
             modifier = Modifier.weight(1f),
             horizontalArrangement = Arrangement.spacedBy(6.dp),
