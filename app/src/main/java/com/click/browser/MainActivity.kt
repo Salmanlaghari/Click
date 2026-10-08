@@ -402,6 +402,8 @@ class MainActivity : ComponentActivity() {
 
             var isIncognitoMode by remember { mutableStateOf(false) }
             var adBlockerEnabled by remember { mutableStateOf(true) }
+            // Real session count of blocked tracker/ad requests (home privacy pill).
+            val blockedCount by AdBlocker.blockedCountFlow.collectAsState()
             var forceNightModeWebsites by remember { mutableStateOf(false) }
             var httpsOnlyMode by remember { mutableStateOf(true) }
             var javaScriptEnabledGlobal by remember { mutableStateOf(true) }
@@ -1464,69 +1466,25 @@ class MainActivity : ComponentActivity() {
                                 Box(modifier = Modifier.weight(1f)) {
                                     if (currentTab.url == "about:blank") {
                                         // Overhauled premium dashboard home page
-                                        PremiumHomeScreen(
+                                        ClickHomeScreen(
+                                            theme = ModeThemes.forMode(activeMode, dark = activeMode != BrowserMode.SIMPLE),
                                             activeMode = activeMode,
-                                            theme = theme,
-                                            wallpaperUri = wallpaperUri,
-                                            isIncognito = currentTab.isIncognito,
-                                            onNavigate = { url ->
-                                                currentTab.url = url
-                                                currentTab.webView?.loadUrl(url)
-                                            },
-                                            onSettingsClick = { showSettings = true },
-                                            onBookmarksClick = { showBookmarks = true },
-                                            onHistoryClick = { showHistory = true },
-                                            onDownloadsClick = { showDownloads = true },
-                                            onModeChange = { mode ->
-                                                scope.launch {
-                                                    modeManager.setMode(mode)
-                                                    currentTab.webView?.let { wv ->
-                                                        modeManager.applySettings(wv, mode, forceDesktopMode)
-                                                        wv.reload()
-                                                    }
-                                                }
-                                            },
-                                            tabs = tabs,
-                                            onSelectTab = { idx -> activeTabIndex = idx },
-                                            // Dialog button clicks
-                                            onMusicClick = { showMusicDetails = true },
-                                            onVideoClick = { showVideoDetails = true },
-                                            onPdfClick = { showPdfDetails = true },
-                                            onImagesClick = { showImageDetails = true },
-                                            // Hack mode controls
-                                            antiDetectionEnabled = antiDetectionEnabled,
-                                            onToggleAntiDetection = { antiDetectionEnabled = !antiDetectionEnabled },
-                                            forceDesktopMode = forceDesktopMode,
-                                            onToggleForceDesktop = {
-                                                forceDesktopMode = !forceDesktopMode
-                                                currentTab.webView?.let { webView ->
-                                                    // UA is applied once per (re)load — never mid-load:
-                                                    // reload so the new UA takes effect consistently.
-                                                    modeManager.applySettings(webView, activeMode, forceDesktopMode)
-                                                    webView.reload()
-                                                }
-                                            },
-                                            spoofedUAIndex = spoofedUAIndex,
-                                            onCycleUA = {
-                                                spoofedUAIndex = (spoofedUAIndex + 1) % 4
-                                                val uaStr = when (spoofedUAIndex) {
-                                                    0 -> ModeManager.UA_HACK
-                                                    1 -> "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Safari/605.1.15"
-                                                    2 -> "Mozilla/5.0 (X11; Linux x86_64; rv:109.0) Gecko/20100101 Firefox/125.0"
-                                                    else -> ModeManager.UA_SIMPLE
-                                                }
-                                                currentTab.webView?.settings?.userAgentString = uaStr
-                                            },
                                             adBlockerEnabled = adBlockerEnabled,
-                                            onToggleAdBlocker = { adBlockerEnabled = it },
-                                            forceNightMode = forceNightModeWebsites,
-                                            onToggleNightMode = { forceNightModeWebsites = it },
-                                            httpsOnlyMode = httpsOnlyMode,
-                                            onToggleHttpsOnly = { httpsOnlyMode = it },
-                                            jsEnabled = javaScriptEnabledGlobal,
-                                            onToggleJs = { javaScriptEnabledGlobal = it },
-                                            dataSaver = dataSaverEnabled,
-                                            onToggleDataSaver = { dataSaverEnabled = it }
+                                            blockedCount = blockedCount,
+                                            onNavigate = { input ->
+                                                val destination = formatUrl(input, currentSearchEngineSetting, activeMode)
+                                                currentTab.url = destination
+                                                currentTab.webView?.loadUrl(destination)
+                                            },
+                                            onOpenAiChat = {
+                                                if (tamperBlocked) showTamperDialog = true else showAiChat = true
+                                            },
+                                            onTranslate = { handleFeature(FeatureId.TRANSLATE) },
+                                            onReaderMode = { handleFeature(FeatureId.READER) },
+                                            onQrClick = {
+                                                Toast.makeText(this@MainActivity, "QR scanner coming soon.", Toast.LENGTH_SHORT).show()
+                                            },
+                                            onProfileClick = { showSettings = true }
                                         )
                                     } else {
                                         // Pull-to-refresh on web pages (real WebView.reload()).
@@ -1867,36 +1825,20 @@ class MainActivity : ComponentActivity() {
                             }
                             }
 
-                            // --- Bottom Navigation bar (Home, Downloads, Profile) ---
-                            if (showOverlays) {
-                                Row(
-                                    modifier = Modifier
-                                        .align(Alignment.BottomCenter)
-                                        .fillMaxWidth()
-                                        .background(theme.topBarBg)
-                                        .padding(vertical = 12.dp),
-                                    horizontalArrangement = Arrangement.SpaceEvenly,
-                                    verticalAlignment = Alignment.CenterVertically
-                                ) {
-                                    TabNavigationItem(
-                                        label = "Home",
-                                        icon = Icons.Default.Home,
-                                        isActive = true,
-                                        onClick = { currentTab.url = "about:blank" }
-                                    )
-                                    TabNavigationItem(
-                                        label = "Downloads",
-                                        icon = Icons.Default.Download,
-                                        isActive = false,
-                                        onClick = { showDownloads = true }
-                                    )
-                                    TabNavigationItem(
-                                        label = "Profile",
-                                        icon = Icons.Default.Person,
-                                        isActive = false,
-                                        onClick = { showAboutApp = true }
-                                    )
-                                }
+                            // Premium bottom nav (Phase 1): Home · Tabs (count badge) · big glowing
+                            // AI center · Bookmarks · Menu. Mode-wired theme: Simple=light,
+                            // Developer=dark glass, Hack=OLED black neon.
+                            if (showOverlays && !immersiveMode) {
+                                ClickBottomNav(
+                                    theme = ModeThemes.forMode(activeMode, dark = activeMode != BrowserMode.SIMPLE),
+                                    tabCount = tabs.size,
+                                    onHome = { currentTab.url = "about:blank" },
+                                    onTabs = { showTabsManager = true },
+                                    onAi = { if (tamperBlocked) showTamperDialog = true else showAiChat = true },
+                                    onBookmarks = { showBookmarks = true },
+                                    onMenu = { showBrowserMenu = true },
+                                    modifier = Modifier.align(Alignment.BottomCenter)
+                                )
                             }
 
                             // Premium UI v2: always-visible bottom-left feature menu FAB

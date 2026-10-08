@@ -67,16 +67,16 @@ object ModeThemes {
 
     private fun developerDark() = ModeTheme(
         mode = BrowserMode.DEVELOPER, dark = true,
-        background = Color(0xFF0B0B12),
-        surface = Color(0xFF14141F),
-        surfaceVariant = Color(0xFF1C1C2A),
-        primary = Color(0xFF8B5CF6),
-        secondary = Color(0xFF7C3AED),
-        onBackground = Color(0xFFF1EDFF),
-        onSurface = Color(0xFFE2D9FF),
-        topBarBg = Color(0xFF0B0B12),
+        background = Color(0xFF070B18),
+        surface = Color(0xFF0E1526),
+        surfaceVariant = Color(0xFF16203A),
+        primary = Color(0xFF5B8CFF),
+        secondary = Color(0xFF8B5CF6),
+        onBackground = Color(0xFFEAF1FF),
+        onSurface = Color(0xFFDCE7FF),
+        topBarBg = Color(0xFF070B18),
         onTopBar = Color(0xFFFFFFFF),
-        glow = Color(0xFF8B5CF6),
+        glow = Color(0xFF5B8CFF),
         modePillText = "DEVELOPER MODE"
     )
 
@@ -97,16 +97,16 @@ object ModeThemes {
 
     private fun hackDark() = ModeTheme(
         mode = BrowserMode.HACK, dark = true,
-        background = Color(0xFF050505),
-        surface = Color(0xFF0D0F0D),
-        surfaceVariant = Color(0xFF141714),
-        primary = Color(0xFFFF2D2D),
-        secondary = Color(0xFF39FF14),
-        onBackground = Color(0xFFF2FFF2),
-        onSurface = Color(0xFFD6FFD6),
-        topBarBg = Color(0xFF050505),
-        onTopBar = Color(0xFFFF2D2D),
-        glow = Color(0xFF39FF14),
+        background = Color(0xFF000000),
+        surface = Color(0xFF0A0A12),
+        surfaceVariant = Color(0xFF12121E),
+        primary = Color(0xFF3B82F6),
+        secondary = Color(0xFF8B5CF6),
+        onBackground = Color(0xFFEAF1FF),
+        onSurface = Color(0xFFDCE7FF),
+        topBarBg = Color(0xFF000000),
+        onTopBar = Color(0xFF5B8CFF),
+        glow = Color(0xFF7C6CFF),
         modePillText = "HACK MODE • ACTIVE"
     )
 
