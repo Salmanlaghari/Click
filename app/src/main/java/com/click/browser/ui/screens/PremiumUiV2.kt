@@ -9,7 +9,9 @@ import androidx.compose.animation.scaleIn
 import androidx.compose.animation.scaleOut
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.gestures.waitForUpOrCancellation
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -52,6 +54,7 @@ import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
@@ -189,7 +192,11 @@ fun ChromeTopBar(
             keyboardOptions = KeyboardOptions(imeAction = ImeAction.Go),
             keyboardActions = KeyboardActions(onGo = { onNavigate(textInput) }),
             leadingIcon = {
-                if (currentUrl.startsWith("https")) {
+                // Lock for real web pages (http/https); search icon for
+                // anything else (about:blank, file://, typed queries…).
+                val isWebPage = currentUrl.startsWith("http://") ||
+                    currentUrl.startsWith("https://")
+                if (isWebPage) {
                     Icon(
                         Icons.Default.Lock,
                         contentDescription = "Secure",
@@ -244,16 +251,24 @@ fun FeatureMenuFabOverlay(
     onFeature: (FeatureId) -> Unit,
 ) {
     val accent = theme.primary
-    // Tap-outside-to-dismiss scrim (transparent, only when open)
+    // Tap-outside-to-dismiss scrim (transparent, only when open). Consumes ALL
+    // pointer input so taps can never leak through to the WebView, top bar or
+    // bottom nav underneath; a tap dismisses the menu.
     if (expanded) {
         Box(
             modifier = Modifier
                 .fillMaxSize()
-                .clickable(
-                    indication = null,
-                    interactionSource = remember { MutableInteractionSource() },
-                    onClick = onDismiss
-                )
+                .pointerInput(onDismiss) {
+                    awaitEachGesture {
+                        val down = awaitFirstDown()
+                        down.consume()
+                        val up = waitForUpOrCancellation()
+                        if (up != null) {
+                            up.consume()
+                            onDismiss()
+                        }
+                    }
+                }
         )
     }
     // Expanding feature panel

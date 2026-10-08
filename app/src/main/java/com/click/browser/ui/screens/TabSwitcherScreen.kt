@@ -2,6 +2,7 @@ package com.click.browser.ui.screens
 
 import android.graphics.Bitmap
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.MutableTransitionState
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -41,7 +42,6 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -92,9 +92,7 @@ fun TabSwitcherScreen(
     }
     // Premium UI v2: staggered card entry + animated close.
     val animScope = rememberCoroutineScope()
-    var cardsVisible by remember { mutableStateOf(false) }
     var closingTabId by remember { mutableStateOf<String?>(null) }
-    LaunchedEffect(Unit) { cardsVisible = true }
 
     Scaffold(
         containerColor = theme.background,
@@ -197,16 +195,21 @@ fun TabSwitcherScreen(
                     .weight(1f)
                     .padding(bottom = 8.dp)
             ) {
-                items(filtered, key = { it.id }) { tab ->
-                    val index = filtered.indexOf(tab)
+                items(filtered, key = { it.id }) { index, tab ->
                     val idx = tabs.indexOfFirst { it.id == tab.id }
                     val isActive = idx == activeTabIndex
                     val thumb = thumbnails[tab.id]
+                    // Entry is driven by the staggered enter spec alone: each
+                    // card's transition starts hidden and targets visible, so it
+                    // plays on first composition (no LaunchedEffect needed).
+                    val cardVisibility = remember {
+                        MutableTransitionState(false).apply { targetState = true }
+                    }
                     // Premium UI v2: staggered fade+slide entry (~70ms), and
                     // animated close (scale-down + slide-out, ~300ms).
                     val stagger = (index % 10) * 70
                     AnimatedVisibility(
-                        visible = cardsVisible && closingTabId != tab.id,
+                        visibleState = cardVisibility,
                         enter = fadeIn(tween(380, delayMillis = stagger)),
                         exit = fadeOut(tween(180)) + scaleOut(tween(300), 0.7f),
                     ) {
@@ -260,10 +263,17 @@ fun TabSwitcherScreen(
                                     onClick = {
                                         if (idx >= 0 && closingTabId == null) {
                                             closingTabId = tab.id
+                                            // Play the exit animation, then remove the tab.
+                                            // try/finally: the lock is always released, even
+                                            // if onCloseTab throws or the coroutine is cancelled.
+                                            cardVisibility.targetState = false
                                             animScope.launch {
-                                                delay(300)
-                                                onCloseTab(idx)
-                                                closingTabId = null
+                                                try {
+                                                    delay(300)
+                                                    onCloseTab(idx)
+                                                } finally {
+                                                    closingTabId = null
+                                                }
                                             }
                                         }
                                     },
