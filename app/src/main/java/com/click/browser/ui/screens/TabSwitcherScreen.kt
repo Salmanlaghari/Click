@@ -23,7 +23,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
-import androidx.compose.foundation.lazy.grid.itemsIndexed
+import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -197,7 +197,8 @@ fun TabSwitcherScreen(
                     .weight(1f)
                     .padding(bottom = 8.dp)
             ) {
-                itemsIndexed(filtered, key = { _, tab -> tab.id }) { index, tab ->
+                items(filtered, key = { it.id }) { tab ->
+                    val index = filtered.indexOf(tab)
                     val idx = tabs.indexOfFirst { it.id == tab.id }
                     val isActive = idx == activeTabIndex
                     val thumb = thumbnails[tab.id]
