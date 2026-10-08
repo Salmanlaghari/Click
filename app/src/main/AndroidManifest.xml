@@ -9,6 +9,9 @@
     <uses-permission android:name="android.permission.READ_MEDIA_IMAGES" />
     <uses-permission android:name="android.permission.READ_MEDIA_AUDIO" />
 
+    <!-- AI chat voice input: requested at runtime with a rationale dialog. -->
+    <uses-permission android:name="android.permission.RECORD_AUDIO" />
+
     <application
         android:allowBackup="true"
         android:enableOnBackInvokedCallback="true"

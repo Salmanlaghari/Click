@@ -20,3 +20,8 @@
 # BuildConfig fields are read reflectively by nothing, but keep the class
 # itself to avoid any AGP/R8 edge cases with generated code.
 -keep class com.click.browser.BuildConfig { *; }
+
+# AI-chat voice input: the SpeechRecognizer callback listener must survive
+# minification — the framework invokes these methods on the registered
+# listener instance.
+-keep class com.click.browser.ui.screens.VoiceInputListener { *; }
