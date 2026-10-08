@@ -46,6 +46,28 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 // ---------------------------------------------------------------------------
+// Runtime media-permission helpers: MediaStore reads need a runtime grant —
+// READ_MEDIA_IMAGES / READ_MEDIA_AUDIO on API 33+, READ_EXTERNAL_STORAGE below.
+// Without the grant the query silently returns nothing, so every dialog that
+// reads shared media must gate on this first (never query blindly).
+// ---------------------------------------------------------------------------
+
+private fun imageReadPermission(): String =
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU)
+        android.Manifest.permission.READ_MEDIA_IMAGES
+    else
+        android.Manifest.permission.READ_EXTERNAL_STORAGE
+
+private fun audioReadPermission(): String =
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU)
+        android.Manifest.permission.READ_MEDIA_AUDIO
+    else
+        android.Manifest.permission.READ_EXTERNAL_STORAGE
+
+private fun Context.hasMediaPermission(permission: String): Boolean =
+    checkSelfPermission(permission) == android.content.pm.PackageManager.PERMISSION_GRANTED
+
+// ---------------------------------------------------------------------------
 // Real on-device audio player: lists the device's music library (MediaStore)
 // and plays it with MediaPlayer. Empty library => honest empty state.
 // ---------------------------------------------------------------------------
@@ -117,9 +139,22 @@ fun InteractiveMusicPlayerDialog(onClose: () -> Unit) {
         }
     }
 
-    LaunchedEffect(Unit) {
-        tracks = withContext(Dispatchers.IO) { queryDeviceAudio(context) }
+    // Runtime permission gate: MediaStore.Audio is invisible without the grant.
+    var audioPermissionGranted by remember { mutableStateOf(context.hasMediaPermission(audioReadPermission())) }
+    val audioPermissionLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { granted -> audioPermissionGranted = granted }
+
+    LaunchedEffect(audioPermissionGranted) {
+        if (audioPermissionGranted) {
+            tracks = withContext(Dispatchers.IO) { queryDeviceAudio(context) }
+        }
         loading = false
+    }
+
+    // Ask once when the dialog opens without the grant.
+    LaunchedEffect(Unit) {
+        if (!audioPermissionGranted) audioPermissionLauncher.launch(audioReadPermission())
     }
 
     // Poll the real playback position while playing
@@ -175,6 +210,22 @@ fun InteractiveMusicPlayerDialog(onClose: () -> Unit) {
                     loading -> {
                         Box(modifier = Modifier.fillMaxWidth().height(120.dp), contentAlignment = Alignment.Center) {
                             CircularProgressIndicator()
+                        }
+                    }
+                    tracks.isEmpty() && !audioPermissionGranted -> {
+                        Column(
+                            modifier = Modifier.fillMaxWidth().padding(16.dp),
+                            horizontalAlignment = Alignment.CenterHorizontally
+                        ) {
+                            Text(
+                                "Music access denied. Grant audio access to play your on-device music.",
+                                fontSize = 12.sp,
+                                textAlign = TextAlign.Center
+                            )
+                            Spacer(modifier = Modifier.height(8.dp))
+                            Button(onClick = { audioPermissionLauncher.launch(audioReadPermission()) }) {
+                                Text("Grant access")
+                            }
                         }
                     }
                     tracks.isEmpty() -> {
@@ -529,9 +580,22 @@ fun InteractiveImageGalleryDialog(onClose: () -> Unit) {
     var rotation by remember { mutableStateOf(0f) }
     var zoomScale by remember { mutableStateOf(1f) }
 
-    LaunchedEffect(Unit) {
-        images = withContext(Dispatchers.IO) { queryDeviceImages(context) }
+    // Runtime permission gate: MediaStore.Images is invisible without the grant.
+    var imagePermissionGranted by remember { mutableStateOf(context.hasMediaPermission(imageReadPermission())) }
+    val imagePermissionLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { granted -> imagePermissionGranted = granted }
+
+    LaunchedEffect(imagePermissionGranted) {
+        if (imagePermissionGranted) {
+            images = withContext(Dispatchers.IO) { queryDeviceImages(context) }
+        }
         loading = false
+    }
+
+    // Ask once when the dialog opens without the grant.
+    LaunchedEffect(Unit) {
+        if (!imagePermissionGranted) imagePermissionLauncher.launch(imageReadPermission())
     }
 
     // Load the full image when one is selected
@@ -561,6 +625,22 @@ fun InteractiveImageGalleryDialog(onClose: () -> Unit) {
                     loading -> {
                         Box(modifier = Modifier.fillMaxWidth().height(120.dp), contentAlignment = Alignment.Center) {
                             CircularProgressIndicator()
+                        }
+                    }
+                    images.isEmpty() && !imagePermissionGranted -> {
+                        Column(
+                            modifier = Modifier.fillMaxWidth().padding(16.dp),
+                            horizontalAlignment = Alignment.CenterHorizontally
+                        ) {
+                            Text(
+                                "Gallery access denied. Grant photo access to browse your on-device photos.",
+                                fontSize = 12.sp,
+                                textAlign = TextAlign.Center
+                            )
+                            Spacer(modifier = Modifier.height(8.dp))
+                            Button(onClick = { imagePermissionLauncher.launch(imageReadPermission()) }) {
+                                Text("Grant access")
+                            }
                         }
                     }
                     images.isEmpty() -> {

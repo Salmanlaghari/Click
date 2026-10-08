@@ -691,6 +691,7 @@ class MainActivity : ComponentActivity() {
                                     DrawerItem(label = "Import from PowerCut Editor", icon = Icons.Default.VideoFile, color = Color(0xFFFF5722)) {
                                         scope.launch {
                                             drawerState.close()
+                                            requestStoragePermissions()
                                             importFromPowerCut()
                                         }
                                     }
@@ -1933,36 +1934,67 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun importFromPowerCut() {
+        // Permission gate: shared-media reads need a runtime grant. Bail out with
+        // guidance if it isn't granted yet (the drawer item also requests it first).
+        val videoPermission = if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU)
+            android.Manifest.permission.READ_MEDIA_VIDEO
+        else
+            android.Manifest.permission.READ_EXTERNAL_STORAGE
+        val granted = androidx.core.content.ContextCompat.checkSelfPermission(this, videoPermission) ==
+                android.content.pm.PackageManager.PERMISSION_GRANTED
+        if (!granted) {
+            requestStoragePermissions()
+            Toast.makeText(this, "Grant media access, then tap Import again.", Toast.LENGTH_LONG).show()
+            return
+        }
         val scope = kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.IO)
         scope.launch {
             try {
-                // Try to open PowerCut Editor's exported video directory
-                val powerCutDirs = listOf(
-                    java.io.File(android.os.Environment.getExternalStorageDirectory(), "PowerCut/Exported"),
-                    java.io.File(android.os.Environment.getExternalStorageDirectory(), "Movies/PowerCut"),
-                    java.io.File(android.os.Environment.getExternalStorageDirectory(), "DCIM/PowerCut"),
-                    java.io.File(getExternalFilesDir(null), "PowerCut/Exported")
+                // Scoped-storage-friendly scan: find PowerCut exports via MediaStore.
+                // Raw File access to shared-storage dirs is blocked on API 30+ without
+                // MANAGE_EXTERNAL_STORAGE (deliberately removed), so query by path.
+                val foundUris = mutableListOf<Pair<android.net.Uri, String>>()
+                val projection = arrayOf(
+                    android.provider.MediaStore.Video.Media._ID,
+                    android.provider.MediaStore.Video.Media.DISPLAY_NAME
                 )
-                val videoExtensions = setOf("mp4", "mkv", "webm", "avi", "mov", "3gp")
-                val foundVideos = mutableListOf<java.io.File>()
-                for (dir in powerCutDirs) {
-                    if (dir.exists() && dir.isDirectory) {
-                        dir.listFiles()?.filter {
-                            it.isFile && videoExtensions.contains(it.extension.lowercase())
-                        }?.let { foundVideos.addAll(it) }
+                // RELATIVE_PATH exists on API 29+; DATA is the legacy column below that.
+                val pathColumn = if (android.os.Build.VERSION.SDK_INT >= 29)
+                    android.provider.MediaStore.Video.Media.RELATIVE_PATH
+                else
+                    android.provider.MediaStore.Video.Media.DATA
+                try {
+                    contentResolver.query(
+                        android.provider.MediaStore.Video.Media.EXTERNAL_CONTENT_URI,
+                        projection,
+                        "$pathColumn LIKE ?",
+                        arrayOf("%PowerCut%"),
+                        null
+                    )?.use { c ->
+                        val idCol = c.getColumnIndexOrThrow(android.provider.MediaStore.Video.Media._ID)
+                        val nameCol = c.getColumnIndexOrThrow(android.provider.MediaStore.Video.Media.DISPLAY_NAME)
+                        while (c.moveToNext()) {
+                            val id = c.getLong(idCol)
+                            val uri = android.content.ContentUris.withAppendedId(
+                                android.provider.MediaStore.Video.Media.EXTERNAL_CONTENT_URI, id
+                            )
+                            foundUris.add(uri to (c.getString(nameCol) ?: "powercut_$id.mp4"))
+                        }
                     }
-                }
-                if (foundVideos.isNotEmpty()) {
+                } catch (_: Exception) { }
+                if (foundUris.isNotEmpty()) {
                     val targetDir = java.io.File(getExternalFilesDir(null), "Movies/ClickBrowser/Imported")
                     targetDir.mkdirs()
                     var imported = 0
-                    for (video in foundVideos) {
+                    for ((uri, name) in foundUris) {
                         try {
-                            val target = java.io.File(targetDir, video.name)
-                            video.copyTo(target, overwrite = true)
+                            val target = java.io.File(targetDir, name)
+                            contentResolver.openInputStream(uri)?.use { input ->
+                                target.outputStream().use { output -> input.copyTo(output) }
+                            }
                             repository.addDownloadItem(
                                 DownloadItem(
-                                    fileName = video.name,
+                                    fileName = name,
                                     url = "file://${target.absolutePath}",
                                     path = target.absolutePath,
                                     timestamp = System.currentTimeMillis()
