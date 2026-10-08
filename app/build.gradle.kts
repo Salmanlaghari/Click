@@ -38,6 +38,13 @@ android {
         versionCode = 1
         versionName = "1.0.0"
 
+        // Built-in Groq key for AI chat, injected at build time from the
+        // GROQ_API_KEY env var (GitHub Actions secret in CI). Empty when not
+        // provided — the build still passes and the app falls back to asking
+        // the user for their own key. NEVER hardcode a key here.
+        // At runtime the user's own Settings key always takes precedence.
+        buildConfigField("String", "DEFAULT_GROQ_API_KEY", "\"${System.getenv("GROQ_API_KEY") ?: ""}\"")
+
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables {
             useSupportLibrary = true

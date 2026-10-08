@@ -74,9 +74,13 @@ jobs:
         run: chmod +x gradlew
 
       - name: Build Release APK
+        env:
+          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
         run: ./gradlew assembleRelease
 
       - name: Build Release AAB
+        env:
+          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
         run: ./gradlew bundleRelease
 
       - name: Verify APK signature

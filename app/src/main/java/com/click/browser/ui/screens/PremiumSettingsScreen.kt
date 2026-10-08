@@ -46,6 +46,7 @@ fun PremiumSettingsScreen(
     onToggleDataSaver: (Boolean) -> Unit,
     aiApiKey: String,
     onAiApiKeyChange: (String) -> Unit,
+    builtInKeyActive: Boolean = false,
     aiProvider: String,
     onAiProviderChange: (String) -> Unit,
     aiModel: String,
@@ -309,7 +310,8 @@ fun PremiumSettingsScreen(
                 Text("AI Assistant", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary)
                 Spacer(modifier = Modifier.height(4.dp))
                 Text(
-                    "Chat with a real AI using your own key. Keys starting with gsk_ auto-select Groq, sk-or- auto-selects OpenRouter.",
+                    "Chat with a real AI using your own key, or leave it empty to use the built-in key. " +
+                        "Keys starting with gsk_ auto-select Groq, sk-or- auto-selects OpenRouter.",
                     fontSize = 11.sp,
                     color = Color.Gray
                 )
@@ -321,7 +323,7 @@ fun PremiumSettingsScreen(
                     value = aiApiKey,
                     onValueChange = onAiApiKeyChange,
                     label = { Text("AI API Key") },
-                    placeholder = { Text("Paste your key here") },
+                    placeholder = { Text(if (builtInKeyActive) "optional — built-in key active" else "Paste your key here") },
                     modifier = Modifier.fillMaxWidth(),
                     singleLine = true,
                     visualTransformation = if (showAiKey) VisualTransformation.None else PasswordVisualTransformation(),

@@ -1783,6 +1783,7 @@ class MainActivity : ComponentActivity() {
                                     dataSaver = dataSaverEnabled,
                                     onToggleDataSaver = { dataSaverEnabled = it },
                                     aiApiKey = aiApiKey,
+                                    builtInKeyActive = BuildConfig.DEFAULT_GROQ_API_KEY.isNotBlank(),
                                     onAiApiKeyChange = { v ->
                                         aiApiKey = v
                                         // Auto-detect provider from the key prefix.
@@ -1843,11 +1844,31 @@ class MainActivity : ComponentActivity() {
                                 AboutAppDialog(onClose = { showAboutApp = false })
                             }
                             if (showAiChat) {
+                                // Key resolution: the user's own Settings key wins; otherwise fall
+                                // back to the built-in Groq key baked via BuildConfig (CI secret).
+                                val effectiveAiKey = aiApiKey.ifBlank { BuildConfig.DEFAULT_GROQ_API_KEY }
+                                val usingBuiltInKey = aiApiKey.isBlank() && BuildConfig.DEFAULT_GROQ_API_KEY.isNotBlank()
                                 AiChatScreen(
-                                    apiKey = aiApiKey,
+                                    apiKey = effectiveAiKey,
                                     providerId = aiProvider,
                                     model = aiModel,
                                     secureDns = secureDnsEnabled,
+                                    usingBuiltInKey = usingBuiltInKey,
+                                    onReportMessage = { text ->
+                                        // In-app reporting (Play AI-Generated Content policy):
+                                        // persist the flagged response on-device, then confirm.
+                                        scope.launch {
+                                            dataStore.edit { prefs ->
+                                                prefs[AppSettings.AI_REPORTS_JSON] =
+                                                    AppSettings.appendReport(prefs[AppSettings.AI_REPORTS_JSON], text)
+                                            }
+                                        }
+                                        Toast.makeText(
+                                            this@MainActivity,
+                                            "Thanks — report recorded.",
+                                            Toast.LENGTH_SHORT
+                                        ).show()
+                                    },
                                     onOpenSettings = { showAiChat = false; showSettings = true },
                                     onClose = { showAiChat = false }
                                 )
