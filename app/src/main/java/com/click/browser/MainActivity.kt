@@ -362,6 +362,14 @@ class MainActivity : ComponentActivity() {
             // AI chat + privacy guards
             var showAiChat by remember { mutableStateOf(false) }
             var showPrivacyGuards by remember { mutableStateOf(false) }
+            // Tamper detection (decompile guard): release builds verify the
+            // signing certificate on start; mismatch disables AI chat.
+            var tamperBlocked by remember { mutableStateOf(false) }
+            var showTamperDialog by remember { mutableStateOf(false) }
+            LaunchedEffect(Unit) {
+                tamperBlocked = !TamperCheck.isReleaseSignatureValid(this@MainActivity)
+                if (tamperBlocked) showTamperDialog = true
+            }
             var aiApiKey by remember { mutableStateOf("") }
             var aiProvider by remember { mutableStateOf("groq") }
             var aiModel by remember { mutableStateOf("") }
@@ -1067,7 +1075,11 @@ class MainActivity : ComponentActivity() {
                                 item { DrawerCategoryHeader(title = "8. AI & Privacy Guards") }
                                 item {
                                     DrawerItem(label = "AI Chat Assistant", icon = Icons.Default.AutoAwesome, color = Color(0xFF4FC3FF)) {
-                                        scope.launch { drawerState.close(); showAiChat = true }
+                                        scope.launch {
+                                            drawerState.close()
+                                            // Tampered/repackaged copy: warn instead of opening AI chat.
+                                            if (tamperBlocked) showTamperDialog = true else showAiChat = true
+                                        }
                                     }
                                 }
                                 item {
@@ -1783,7 +1795,7 @@ class MainActivity : ComponentActivity() {
                                     dataSaver = dataSaverEnabled,
                                     onToggleDataSaver = { dataSaverEnabled = it },
                                     aiApiKey = aiApiKey,
-                                    builtInKeyActive = BuildConfig.DEFAULT_GROQ_API_KEY.isNotBlank(),
+                                    builtInKeyActive = BuildConfig.GROQ_API_KEY_OBF.isNotBlank(),
                                     onAiApiKeyChange = { v ->
                                         aiApiKey = v
                                         // Auto-detect provider from the key prefix.
@@ -1843,11 +1855,32 @@ class MainActivity : ComponentActivity() {
                             if (showAboutApp) {
                                 AboutAppDialog(onClose = { showAboutApp = false })
                             }
-                            if (showAiChat) {
+                            if (showTamperDialog) {
+                                // Blocking warning for repackaged/modified copies.
+                                // onDismissRequest is intentionally a no-op: the user
+                                // must tap "Understood". AI chat stays disabled.
+                                AlertDialog(
+                                    onDismissRequest = { },
+                                    title = { Text("Warning") },
+                                    text = {
+                                        Text("Warning: this copy of Click Browser appears modified or repackaged. AI features are disabled for your safety.")
+                                    },
+                                    confirmButton = {
+                                        TextButton(onClick = { showTamperDialog = false }) {
+                                            Text("Understood")
+                                        }
+                                    }
+                                )
+                            }
+                            if (showAiChat && !tamperBlocked) {
                                 // Key resolution: the user's own Settings key wins; otherwise fall
-                                // back to the built-in Groq key baked via BuildConfig (CI secret).
-                                val effectiveAiKey = aiApiKey.ifBlank { BuildConfig.DEFAULT_GROQ_API_KEY }
-                                val usingBuiltInKey = aiApiKey.isBlank() && BuildConfig.DEFAULT_GROQ_API_KEY.isNotBlank()
+                                // back to the built-in Groq key (XOR-obfuscated in BuildConfig,
+                                // decoded at runtime — see KeyObfuscator).
+                                val effectiveAiKey = aiApiKey.ifBlank {
+                                    KeyObfuscator.decode(BuildConfig.GROQ_API_KEY_OBF)
+                                }
+                                val usingBuiltInKey = aiApiKey.isBlank() &&
+                                    BuildConfig.GROQ_API_KEY_OBF.isNotBlank()
                                 AiChatScreen(
                                     apiKey = effectiveAiKey,
                                     providerId = aiProvider,

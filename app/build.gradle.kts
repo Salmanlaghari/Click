@@ -39,11 +39,23 @@ android {
         versionName = "1.0.0"
 
         // Built-in Groq key for AI chat, injected at build time from the
-        // GROQ_API_KEY env var (GitHub Actions secret in CI). Empty when not
-        // provided — the build still passes and the app falls back to asking
-        // the user for their own key. NEVER hardcode a key here.
+        // GROQ_API_KEY env var (GitHub Actions secret in CI). The key is
+        // XOR-obfuscated with a pad and base64-encoded so the RAW key never
+        // appears in BuildConfig / the APK as a plain string.
+        // Honest note: this defeats casual `strings` extraction, NOT a
+        // determined reverser. Empty when the env var is missing — the build
+        // still passes and the app falls back to asking for the user's key.
         // At runtime the user's own Settings key always takes precedence.
-        buildConfigField("String", "DEFAULT_GROQ_API_KEY", "\"${System.getenv("GROQ_API_KEY") ?: ""}\"")
+        // See KeyObfuscator.kt for the runtime decode.
+        val groqObfPad = "ClickBrowserObfPad2026"
+        val groqKeyRaw = System.getenv("GROQ_API_KEY") ?: ""
+        val groqKeyObf = if (groqKeyRaw.isBlank()) "" else {
+            val pad = groqObfPad.toByteArray(Charsets.UTF_8)
+            val raw = groqKeyRaw.toByteArray(Charsets.UTF_8)
+            val xored = ByteArray(raw.size) { i -> (raw[i] xor pad[i % pad.size]).toByte() }
+            java.util.Base64.getEncoder().encodeToString(xored)
+        }
+        buildConfigField("String", "GROQ_API_KEY_OBF", "\"$groqKeyObf\"")
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables {
@@ -74,9 +86,13 @@ android {
                 println("WARNING: Release signing secrets missing — building debug-signed APK/AAB. " +
                     "Set CLICK_KEYSTORE_FILE/CLICK_KEYSTORE_PASSWORD/CLICK_KEY_ALIAS/CLICK_KEY_PASSWORD for Play-ready signing.")
             }
-            // Keep full premium features and libraries intact to match Debug APK size (~15MB+)
-            isMinifyEnabled = false
-            isShrinkResources = false
+            // R8 full obfuscation + resource shrinking for release builds
+            // (decompile guard). Keep rules live in app/proguard-rules.pro —
+            // notably the WebView @JavascriptInterface bridges, which JS calls
+            // by method name. CI must stay green: fix the rules if R8 breaks
+            // the release build, don't disable minify.
+            isMinifyEnabled = true
+            isShrinkResources = true
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
