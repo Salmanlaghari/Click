@@ -1,5 +1,6 @@
 package com.click.browser.ui.screens
 
+import android.view.Choreographer
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -11,24 +12,36 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import kotlinx.coroutines.delay
 
 @Composable
 fun FloatingDebugOverlay(
     pageLoadTime: Long,
     modifier: Modifier = Modifier
 ) {
-    // Basic reactive simulated FPS counter
-    var fps by remember { mutableStateOf(60) }
+    // Real FPS measured with Choreographer frame callbacks (frames per last second)
+    var fps by remember { mutableStateOf(0) }
 
-    LaunchedEffect(Unit) {
-        while (true) {
-            fps = (55..60).random()
-            delay(500)
+    DisposableEffect(Unit) {
+        val choreographer = Choreographer.getInstance()
+        var frames = 0
+        var windowStartNanos = System.nanoTime()
+        val callback = object : Choreographer.FrameCallback {
+            override fun doFrame(frameTimeNanos: Long) {
+                frames++
+                val elapsedSec = (frameTimeNanos - windowStartNanos) / 1_000_000_000.0
+                if (elapsedSec >= 1.0) {
+                    fps = (frames / elapsedSec).toInt()
+                    frames = 0
+                    windowStartNanos = frameTimeNanos
+                }
+                choreographer.postFrameCallback(this)
+            }
         }
+        choreographer.postFrameCallback(callback)
+        onDispose { choreographer.removeFrameCallback(callback) }
     }
 
-    // Basic memory stats
+    // Real memory stats for this process
     val runtime = Runtime.getRuntime()
     val usedMemory = (runtime.totalMemory() - runtime.freeMemory()) / (1024 * 1024)
 

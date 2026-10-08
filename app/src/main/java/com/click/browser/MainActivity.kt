@@ -4,7 +4,9 @@ import android.content.Context
 import android.content.Intent
 import android.graphics.Bitmap
 import android.os.Bundle
+import android.speech.tts.TextToSpeech
 import android.webkit.WebChromeClient
+import android.webkit.WebResourceError
 import android.webkit.WebResourceRequest
 import android.webkit.WebResourceResponse
 import android.webkit.WebSettings
@@ -16,6 +18,8 @@ import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
+import androidx.webkit.WebSettingsCompat
+import androidx.webkit.WebViewFeature
 import androidx.compose.animation.*
 import androidx.compose.animation.core.*
 import androidx.compose.foundation.BorderStroke
@@ -49,6 +53,7 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
@@ -64,10 +69,9 @@ import com.click.browser.data.HistoryItem
 import com.click.browser.data.DownloadItem
 import com.click.browser.engine.*
 import com.click.browser.ui.screens.*
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
-import java.io.File
 import java.net.URLEncoder
+import java.util.Locale
 
 class TabItem(
     val id: String = java.util.UUID.randomUUID().toString(),
@@ -85,6 +89,87 @@ class MainActivity : ComponentActivity() {
 
     private lateinit var modeManager: ModeManager
     private lateinit var repository: BrowserRepository
+
+    // Live copies of composable state for use inside WebViewClient callbacks,
+    // which are created once and would otherwise capture stale values.
+    private var liveMode: BrowserMode = BrowserMode.SIMPLE
+    private var liveAntiDetection = true
+    private var liveHttpsOnly = true
+    private var liveNightMode = false
+    private var liveDataSaver = false
+
+    private var ttsEngine: TextToSpeech? = null
+
+    override fun onDestroy() {
+        try { ttsEngine?.shutdown() } catch (_: Exception) { }
+        super.onDestroy()
+    }
+
+    /** Applies the privacy toggles to a WebView's settings. Idempotent. */
+    private fun applyPrivacyToggles(
+        webView: WebView,
+        httpsOnly: Boolean = liveHttpsOnly,
+        nightMode: Boolean = liveNightMode,
+        dataSaver: Boolean = liveDataSaver
+    ) {
+        val s = webView.settings
+        s.mixedContentMode = if (httpsOnly) {
+            WebSettings.MIXED_CONTENT_NEVER_ALLOW
+        } else {
+            WebSettings.MIXED_CONTENT_COMPATIBILITY_MODE
+        }
+        s.blockNetworkImage = dataSaver
+        s.loadsImagesAutomatically = !dataSaver
+        if (WebViewFeature.isFeatureSupported(WebViewFeature.ALGORITHMIC_DARKENING)) {
+            WebSettingsCompat.setAlgorithmicDarkeningAllowed(s, nightMode)
+        }
+    }
+
+    /** Shared pretty error page used by both onReceivedError variants. */
+    private fun showBrowserErrorPage(view: WebView?, description: String?) {
+        val safeDesc = description?.take(200) ?: "Unknown error"
+        val customHtml = """
+            <html>
+            <head>
+                <style>
+                    body { background-color: #0f172a; color: #f8fafc; font-family: sans-serif; text-align: center; padding: 50px; }
+                    h1 { color: #ef4444; font-size: 24px; }
+                    p { color: #94a3b8; font-size: 16px; }
+                    .btn { background-color: #3b82f6; border: none; color: white; padding: 12px 24px; border-radius: 8px; font-weight: bold; cursor: pointer; margin-top: 20px; }
+                </style>
+            </head>
+            <body>
+                <h1>⚠️ Unable to load page</h1>
+                <p>Click Browser could not reach the server or network is offline.</p>
+                <p><i>Details: $safeDesc</i></p>
+                <button class="btn" onclick="location.reload()">Retry Connection</button>
+            </body>
+            </html>
+        """.trimIndent()
+        view?.loadDataWithBaseURL(null, customHtml, "text/html", "UTF-8", null)
+    }
+
+    /** Reads text aloud with the system TTS engine. */
+    private fun speakOutLoud(text: String) {
+        try {
+            val engine = ttsEngine
+            if (engine == null) {
+                ttsEngine = TextToSpeech(this) { status ->
+                    if (status == TextToSpeech.SUCCESS) {
+                        ttsEngine?.language = Locale.getDefault()
+                        ttsEngine?.speak(text, TextToSpeech.QUEUE_FLUSH, null, "click_tts")
+                    } else {
+                        Toast.makeText(this, "TTS engine failed to start", Toast.LENGTH_SHORT).show()
+                    }
+                }
+            } else {
+                engine.speak(text, TextToSpeech.QUEUE_FLUSH, null, "click_tts")
+            }
+            Toast.makeText(this, "Reading page aloud…", Toast.LENGTH_SHORT).show()
+        } catch (e: Exception) {
+            Toast.makeText(this, "TTS not available: ${e.message}", Toast.LENGTH_SHORT).show()
+        }
+    }
 
     @OptIn(ExperimentalMaterial3Api::class)
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -152,7 +237,6 @@ class MainActivity : ComponentActivity() {
             var forceNightModeWebsites by remember { mutableStateOf(false) }
             var httpsOnlyMode by remember { mutableStateOf(true) }
             var javaScriptEnabledGlobal by remember { mutableStateOf(true) }
-            var savePasswordsEnabled by remember { mutableStateOf(true) }
             var dataSaverEnabled by remember { mutableStateOf(false) }
 
             // Common overlays
@@ -169,7 +253,6 @@ class MainActivity : ComponentActivity() {
             var showPdfDetails by remember { mutableStateOf(false) }
             var showImageDetails by remember { mutableStateOf(false) }
             var showExtensionsManager by remember { mutableStateOf(false) }
-            var showAiDetails by remember { mutableStateOf(false) }
             var showPrivacyPolicy by remember { mutableStateOf(false) }
             var showAboutApp by remember { mutableStateOf(false) }
 
@@ -191,6 +274,39 @@ class MainActivity : ComponentActivity() {
             val detectedVideos = remember { mutableStateListOf<String>() }
             var showDownloaderDialog by remember { mutableStateOf(false) }
 
+            // DevTools panel tab (0=Elements, 1=Console, 2=Network, 3=Sources)
+            var devToolsTab by remember { mutableStateOf(0) }
+
+            // Bookmarks (for the address-bar bookmark star)
+            val bookmarks by repository.bookmarksFlow.collectAsState(initial = emptyList())
+
+            // Keep the WebViewClient-safe live copies in sync with composable state
+            LaunchedEffect(activeMode) { liveMode = activeMode }
+            LaunchedEffect(antiDetectionEnabled) { liveAntiDetection = antiDetectionEnabled }
+            LaunchedEffect(httpsOnlyMode) { liveHttpsOnly = httpsOnlyMode }
+            LaunchedEffect(forceNightModeWebsites) { liveNightMode = forceNightModeWebsites }
+            LaunchedEffect(dataSaverEnabled) { liveDataSaver = dataSaverEnabled }
+
+            // Opens the real DevTools bottom panel on the requested tab (0=Elements,
+            // 1=Console, 2=Network, 3=Sources), switching to Developer mode if needed.
+            fun openDevToolsTab(tab: Int) {
+                scope.launch {
+                    drawerState.close()
+                    if (currentTab.url == "about:blank") {
+                        Toast.makeText(this@MainActivity, "Load a web page first.", Toast.LENGTH_SHORT).show()
+                        return@launch
+                    }
+                    if (activeMode != BrowserMode.DEVELOPER) {
+                        modeManager.setMode(BrowserMode.DEVELOPER)
+                        currentTab.webView?.let { wv ->
+                            modeManager.applySettings(wv, BrowserMode.DEVELOPER, forceDesktopMode)
+                            wv.reload()
+                        }
+                    }
+                    devToolsTab = tab
+                }
+            }
+
             // Settings Configurations
             var currentSearchEngineSetting by remember { mutableStateOf("Google") }
 
@@ -198,7 +314,7 @@ class MainActivity : ComponentActivity() {
                 val engines = when (activeMode) {
                     BrowserMode.SIMPLE -> listOf("Google", "Yahoo", "Bing")
                     BrowserMode.DEVELOPER -> listOf("Yandex", "DuckDuckGo", "Baidu")
-                    BrowserMode.HACK -> listOf("Onion/Dark Web search", "Deep Search", "integrated AI search")
+                    BrowserMode.HACK -> listOf("Ahmia Search", "Deep Search", "AI Search")
                 }
                 if (currentSearchEngineSetting !in engines) {
                     currentSearchEngineSetting = engines.first()
@@ -329,7 +445,7 @@ class MainActivity : ComponentActivity() {
                                     }
                                 }
                                 item {
-                                    DrawerItem(label = "Extensions Center", icon = Icons.Default.Extension, color = Color(0xFF00FF00)) {
+                                    DrawerItem(label = "Quick Toggles", icon = Icons.Default.Extension, color = Color(0xFF00FF00)) {
                                         scope.launch { drawerState.close(); showExtensionsManager = true }
                                     }
                                 }
@@ -345,12 +461,7 @@ class MainActivity : ComponentActivity() {
 
                                 item { DrawerCategoryHeader(title = "3. Media Players & Tools") }
                                 item {
-                                    DrawerItem(label = "PK AI Chat Assistant", icon = Icons.Default.Face, color = Color(0xFFEC4899)) {
-                                        scope.launch { drawerState.close(); showAiDetails = true }
-                                    }
-                                }
-                                item {
-                                    DrawerItem(label = "Priscilla Music Player", icon = Icons.Default.MusicNote, color = Color(0xFFEC4899)) {
+                                    DrawerItem(label = "Device Music Player", icon = Icons.Default.MusicNote, color = Color(0xFFEC4899)) {
                                         scope.launch { drawerState.close(); showMusicDetails = true }
                                     }
                                 }
@@ -370,32 +481,15 @@ class MainActivity : ComponentActivity() {
                                     }
                                 }
                                 item {
-                                    DrawerItem(label = "Camera Capture Simulator", icon = Icons.Default.CameraAlt, color = Color(0xFF60A5FA)) {
+                                    DrawerItem(label = "Camera Capture", icon = Icons.Default.CameraAlt, color = Color(0xFF60A5FA)) {
                                         scope.launch {
                                             drawerState.close()
-                                            Toast.makeText(this@MainActivity, "Initializing Camera Capture Engine...", Toast.LENGTH_SHORT).show()
                                             val intent = Intent(android.provider.MediaStore.ACTION_IMAGE_CAPTURE)
                                             try {
                                                 startActivity(intent)
                                             } catch (e: Exception) {
-                                                Toast.makeText(this@MainActivity, "Camera launch simulated successfully!", Toast.LENGTH_SHORT).show()
+                                                Toast.makeText(this@MainActivity, "No camera app found on this device.", Toast.LENGTH_SHORT).show()
                                             }
-                                        }
-                                    }
-                                }
-                                item {
-                                    DrawerItem(label = "Voice Memo Recorder", icon = Icons.Default.Mic, color = Color(0xFFA7F3D0)) {
-                                        scope.launch {
-                                            drawerState.close()
-                                            Toast.makeText(this@MainActivity, "Voice Recorder: Ready to capture audio memo. Storage connected.", Toast.LENGTH_SHORT).show()
-                                        }
-                                    }
-                                }
-                                item {
-                                    DrawerItem(label = "3D Spatial Soundboard", icon = Icons.Default.VolumeUp, color = Color(0xFFFBBF24)) {
-                                        scope.launch {
-                                            drawerState.close()
-                                            Toast.makeText(this@MainActivity, "3D Audio Board: Spatial equalizer set to 7.1 Surround Mode.", Toast.LENGTH_SHORT).show()
                                         }
                                     }
                                 }
@@ -409,18 +503,9 @@ class MainActivity : ComponentActivity() {
                                     }
                                 }
                                 item {
-                                    DrawerItem(label = "Offline File Explorer", icon = Icons.Default.FolderOpen, color = Color(0xFF38BDF8)) {
-                                        scope.launch {
-                                            drawerState.close()
-                                            Toast.makeText(this@MainActivity, "Exploring Local Sandboxed Directory: app/src/main/assets", Toast.LENGTH_SHORT).show()
-                                        }
-                                    }
-                                }
-                                item {
                                     DrawerItem(label = "Import from PowerCut Editor", icon = Icons.Default.VideoFile, color = Color(0xFFFF5722)) {
                                         scope.launch {
                                             drawerState.close()
-                                            requestStoragePermissions()
                                             importFromPowerCut()
                                         }
                                     }
@@ -502,7 +587,26 @@ class MainActivity : ComponentActivity() {
                                     DrawerItem(label = "Read Text Aloud (TTS)", icon = Icons.Default.RecordVoiceOver, color = Color(0xFFF43F5E)) {
                                         scope.launch {
                                             drawerState.close()
-                                            Toast.makeText(this@MainActivity, "TTS Engine: Scanning DOM body text for natural reader simulation...", Toast.LENGTH_SHORT).show()
+                                            val wv = currentTab.webView
+                                            if (wv == null || currentTab.url == "about:blank") {
+                                                Toast.makeText(this@MainActivity, "Load a web page first.", Toast.LENGTH_SHORT).show()
+                                            } else {
+                                                wv.evaluateJavascript(
+                                                    "(function(){return document.body ? document.body.innerText.slice(0,1500) : ''})()"
+                                                ) { result ->
+                                                    val text = result
+                                                        ?.removeSurrounding("\"")
+                                                        ?.replace("\\n", " ")
+                                                        ?.replace("\\\"", "\"")
+                                                        ?.trim()
+                                                        .orEmpty()
+                                                    if (text.isBlank()) {
+                                                        Toast.makeText(this@MainActivity, "No readable text on this page.", Toast.LENGTH_SHORT).show()
+                                                    } else {
+                                                        speakOutLoud(text)
+                                                    }
+                                                }
+                                            }
                                         }
                                     }
                                 }
@@ -536,6 +640,9 @@ class MainActivity : ComponentActivity() {
                                         scope.launch {
                                             drawerState.close()
                                             forceNightModeWebsites = !forceNightModeWebsites
+                                            currentTab.webView?.let {
+                                                applyPrivacyToggles(it, httpsOnlyMode, forceNightModeWebsites, dataSaverEnabled)
+                                            }
                                             Toast.makeText(this@MainActivity, "Dark Mode Force is " + (if(forceNightModeWebsites) "ENABLED" else "DISABLED"), Toast.LENGTH_SHORT).show()
                                         }
                                     }
@@ -545,6 +652,9 @@ class MainActivity : ComponentActivity() {
                                         scope.launch {
                                             drawerState.close()
                                             httpsOnlyMode = !httpsOnlyMode
+                                            currentTab.webView?.let {
+                                                applyPrivacyToggles(it, httpsOnlyMode, forceNightModeWebsites, dataSaverEnabled)
+                                            }
                                             Toast.makeText(this@MainActivity, "HTTPS-Only Mode is " + (if(httpsOnlyMode) "ENABLED" else "DISABLED"), Toast.LENGTH_SHORT).show()
                                         }
                                     }
@@ -602,38 +712,22 @@ class MainActivity : ComponentActivity() {
                                 }
                                 item {
                                     DrawerItem(label = "Active DOM Explorer", icon = Icons.Default.AccountTree, color = Color(0xFF34D399)) {
-                                        scope.launch {
-                                            drawerState.close()
-                                            if (domHtml.isNotEmpty()) {
-                                                Toast.makeText(this@MainActivity, "DOM Root: <" + domHtml.take(50) + "...>", Toast.LENGTH_LONG).show()
-                                            } else {
-                                                Toast.makeText(this@MainActivity, "DOM Explorer empty. Load a web page.", Toast.LENGTH_SHORT).show()
-                                            }
-                                        }
+                                        openDevToolsTab(0)
                                     }
                                 }
                                 item {
                                     DrawerItem(label = "Live Network Traffic Monitor", icon = Icons.Default.NetworkCheck, color = Color(0xFF60A5FA)) {
-                                        scope.launch {
-                                            drawerState.close()
-                                            Toast.makeText(this@MainActivity, "Active Network Log: ${networkRequests.size} secure requests traced.", Toast.LENGTH_LONG).show()
-                                        }
+                                        openDevToolsTab(2)
                                     }
                                 }
                                 item {
                                     DrawerItem(label = "Embedded Resource Sniffer", icon = Icons.Default.OfflineShare, color = Color(0xFFFBBF24)) {
-                                        scope.launch {
-                                            drawerState.close()
-                                            Toast.makeText(this@MainActivity, "Resource Sniffer: ${sourcesList.size} media, CSS, and JS sources loaded.", Toast.LENGTH_LONG).show()
-                                        }
+                                        openDevToolsTab(3)
                                     }
                                 }
                                 item {
                                     DrawerItem(label = "JavaScript Interactive Console", icon = Icons.Default.Terminal, color = Color(0xFF34D399)) {
-                                        scope.launch {
-                                            drawerState.close()
-                                            Toast.makeText(this@MainActivity, "Console Log: ${logs.size} active browser event entries tracked.", Toast.LENGTH_SHORT).show()
-                                        }
+                                        openDevToolsTab(1)
                                     }
                                 }
 
@@ -643,7 +737,7 @@ class MainActivity : ComponentActivity() {
                                         scope.launch {
                                             drawerState.close()
                                             antiDetectionEnabled = !antiDetectionEnabled
-                                            Toast.makeText(this@MainActivity, "Anti-Detection Shield " + (if(antiDetectionEnabled) "ENABLED" else "DISABLED"), Toast.LENGTH_SHORT).show()
+                                            Toast.makeText(this@MainActivity, "Anti-Detection Guard " + (if(antiDetectionEnabled) "ENABLED (UA, canvas + audio fingerprint spoofing)" else "DISABLED"), Toast.LENGTH_LONG).show()
                                         }
                                     }
                                 }
@@ -663,39 +757,6 @@ class MainActivity : ComponentActivity() {
                                         }
                                     }
                                 }
-                                item {
-                                    DrawerItem(label = "Spoof HTTP Headers", icon = Icons.Default.SwapCalls, color = Color(0xFF3B82F6)) {
-                                        scope.launch {
-                                            drawerState.close()
-                                            Toast.makeText(this@MainActivity, "Header Injection: Sec-Ch-Ua, DNT, and GPC headers spoofed active.", Toast.LENGTH_SHORT).show()
-                                        }
-                                    }
-                                }
-                                item {
-                                    DrawerItem(label = "Defeat WebRTC IP Leak", icon = Icons.Default.SecurityUpdateGood, color = Color(0xFF10B981)) {
-                                        scope.launch {
-                                            drawerState.close()
-                                            Toast.makeText(this@MainActivity, "WebRTC Guard: PeerConnection mock active. IP leaking blocked.", Toast.LENGTH_SHORT).show()
-                                        }
-                                    }
-                                }
-                                item {
-                                    DrawerItem(label = "Block Web Fingerprinting", icon = Icons.Default.WorkspacePremium, color = Color(0xFFFBBF24)) {
-                                        scope.launch {
-                                            drawerState.close()
-                                            Toast.makeText(this@MainActivity, "Fingerprint Armor: Canvas, AudioContext, and WebGL protected.", Toast.LENGTH_SHORT).show()
-                                        }
-                                    }
-                                }
-                                item {
-                                    DrawerItem(label = "Secure DNS Tunneling", icon = Icons.Default.VpnLock, color = Color(0xFFEC4899)) {
-                                        scope.launch {
-                                            drawerState.close()
-                                            Toast.makeText(this@MainActivity, "DNS Guard: Tunneling traffic via PK SECURE DNS (1.1.1.1 Over HTTPS).", Toast.LENGTH_LONG).show()
-                                        }
-                                    }
-                                }
-
                                 item { DrawerCategoryHeader(title = "8. About & System Info") }
                                 item {
                                     DrawerItem(label = "System Diagnostic Benchmark", icon = Icons.Default.Dns, color = Color(0xFF60A5FA)) {
@@ -721,7 +782,11 @@ class MainActivity : ComponentActivity() {
                                     DrawerItem(label = "Check Updates & Version", icon = Icons.Default.Tag, color = Color.Gray) {
                                         scope.launch {
                                             drawerState.close()
-                                            Toast.makeText(this@MainActivity, "Click Browser Pro v1.0.0 is fully up to date.", Toast.LENGTH_SHORT).show()
+                                            Toast.makeText(
+                                                this@MainActivity,
+                                                "Click Browser v${BuildConfig.VERSION_NAME} (${BuildConfig.BUILD_TYPE} build)",
+                                                Toast.LENGTH_LONG
+                                            ).show()
                                         }
                                     }
                                 }
@@ -787,6 +852,23 @@ class MainActivity : ComponentActivity() {
                                         pageTitle = currentTab.title,
                                         canGoBack = currentTab.webView?.canGoBack() == true,
                                         canGoForward = currentTab.webView?.canGoForward() == true,
+                                        isBookmarked = bookmarks.any { it.url == currentTab.url },
+                                        onToggleBookmark = {
+                                            val url = currentTab.url
+                                            if (url == "about:blank") {
+                                                Toast.makeText(this@MainActivity, "Load a page first to bookmark it.", Toast.LENGTH_SHORT).show()
+                                            } else {
+                                                scope.launch {
+                                                    if (bookmarks.any { it.url == url }) {
+                                                        repository.deleteBookmark(url)
+                                                        Toast.makeText(this@MainActivity, "Bookmark removed", Toast.LENGTH_SHORT).show()
+                                                    } else {
+                                                        repository.addBookmark(Bookmark(currentTab.title.ifBlank { url }, url))
+                                                        Toast.makeText(this@MainActivity, "Page bookmarked", Toast.LENGTH_SHORT).show()
+                                                    }
+                                                }
+                                            }
+                                        },
                                         onBack = { currentTab.webView?.goBack() },
                                         onForward = { currentTab.webView?.goForward() },
                                         onRefresh = { currentTab.webView?.reload() },
@@ -843,8 +925,9 @@ class MainActivity : ComponentActivity() {
                                                     }
                                                 }
                                             },
+                                            tabs = tabs,
+                                            onSelectTab = { idx -> activeTabIndex = idx },
                                             // Dialog button clicks
-                                            onAiClick = { showAiDetails = true },
                                             onMusicClick = { showMusicDetails = true },
                                             onVideoClick = { showVideoDetails = true },
                                             onPdfClick = { showPdfDetails = true },
@@ -905,7 +988,11 @@ class MainActivity : ComponentActivity() {
                                                             WebView(ctx).apply {
                                                                 webViewClient = object : WebViewClient() {
                                                                     override fun shouldOverrideUrlLoading(view: WebView?, request: WebResourceRequest?): Boolean {
-                                                                        val urlStr = request?.url?.toString() ?: ""
+                                                                        var urlStr = request?.url?.toString() ?: ""
+                                                                        // HTTPS-Only: upgrade plain http navigations
+                                                                        if (liveHttpsOnly && urlStr.startsWith("http://")) {
+                                                                            urlStr = "https://" + urlStr.removePrefix("http://")
+                                                                        }
                                                                         if (urlStr.startsWith("http://") || urlStr.startsWith("https://")) {
                                                                             view?.loadUrl(urlStr)
                                                                             return true
@@ -915,7 +1002,10 @@ class MainActivity : ComponentActivity() {
 
                                                                     @Suppress("Deprecated")
                                                                     override fun shouldOverrideUrlLoading(view: WebView?, url: String?): Boolean {
-                                                                        val urlStr = url ?: ""
+                                                                        var urlStr = url ?: ""
+                                                                        if (liveHttpsOnly && urlStr.startsWith("http://")) {
+                                                                            urlStr = "https://" + urlStr.removePrefix("http://")
+                                                                        }
                                                                         if (urlStr.startsWith("http://") || urlStr.startsWith("https://")) {
                                                                             view?.loadUrl(urlStr)
                                                                             return true
@@ -946,15 +1036,17 @@ class MainActivity : ComponentActivity() {
                                                                     }
                                                                 }
 
-                                                                // JS tools injections based on active browser Mode
-                                                                if (activeMode == BrowserMode.DEVELOPER) {
+                                                                // JS tools injections based on the CURRENT browser mode
+                                                                // (liveMode is used — the factory-time capture would go stale
+                                                                // after a mode switch)
+                                                                if (liveMode == BrowserMode.DEVELOPER) {
                                                                     view?.evaluateJavascript(DevToolsInjections.CONSOLE_HIJACK, null)
                                                                     view?.evaluateJavascript(DevToolsInjections.NETWORK_INTERCEPT, null)
                                                                     view?.evaluateJavascript(DevToolsInjections.GET_DOM, null)
                                                                     view?.evaluateJavascript(DevToolsInjections.GET_SOURCES, null)
-                                                                } else if (activeMode == BrowserMode.HACK) {
-                                                                    if (antiDetectionEnabled) {
-                                                                        view?.evaluateJavascript(AntiDetectionInjections.INJECT_10_LAYERS, null)
+                                                                } else if (liveMode == BrowserMode.HACK) {
+                                                                    if (liveAntiDetection) {
+                                                                        view?.evaluateJavascript(AntiDetectionInjections.INJECT_SPOOF_LAYERS, null)
                                                                     }
                                                                     view?.evaluateJavascript(AntiDetectionInjections.VIDEO_GRABBER_JS, null)
                                                                 }
@@ -970,26 +1062,15 @@ class MainActivity : ComponentActivity() {
 
                                                             @Suppress("Deprecated")
                                                             override fun onReceivedError(view: WebView?, errorCode: Int, description: String?, failingUrl: String?) {
-                                                                // Premium custom error display instead of blank white screen
-                                                                val customHtml = """
-                                                                    <html>
-                                                                    <head>
-                                                                        <style>
-                                                                            body { background-color: #0f172a; color: #f8fafc; font-family: sans-serif; text-align: center; padding: 50px; }
-                                                                            h1 { color: #ef4444; font-size: 24px; }
-                                                                            p { color: #94a3b8; font-size: 16px; }
-                                                                            .btn { background-color: #3b82f6; border: none; color: white; padding: 12px 24px; border-radius: 8px; font-weight: bold; cursor: pointer; margin-top: 20px; }
-                                                                        </style>
-                                                                    </head>
-                                                                    <body>
-                                                                        <h1>⚠️ Unable to load page</h1>
-                                                                        <p>Click Browser could not reach the server or network is offline.</p>
-                                                                        <p><i>Details: $description</i></p>
-                                                                        <button class="btn" onclick="location.reload()">Retry Connection</button>
-                                                                    </body>
-                                                                    </html>
-                                                                """.trimIndent()
-                                                                view?.loadDataWithBaseURL(null, customHtml, "text/html", "UTF-8", null)
+                                                                // Legacy path (API < 23)
+                                                                this@MainActivity.showBrowserErrorPage(view, description)
+                                                            }
+
+                                                            override fun onReceivedError(view: WebView?, request: WebResourceRequest?, error: WebResourceError?) {
+                                                                // Modern path (API 23+): only for the main frame
+                                                                if (request?.isForMainFrame == true) {
+                                                                    this@MainActivity.showBrowserErrorPage(view, error?.description?.toString())
+                                                                }
                                                             }
                                                         }
 
@@ -1027,7 +1108,9 @@ class MainActivity : ComponentActivity() {
                                                         // Config settings
                                                         settings.javaScriptEnabled = javaScriptEnabledGlobal
                                                         settings.domStorageEnabled = true
-                                                        settings.mixedContentMode = WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
+                                                        // Privacy toggles (HTTPS-Only / night mode / data saver);
+                                                        // MIXED_CONTENT_ALWAYS_ALLOW was removed — it contradicted HTTPS-Only.
+                                                        this@MainActivity.applyPrivacyToggles(this)
                                                         settings.supportZoom()
                                                         settings.builtInZoomControls = true
                                                         settings.displayZoomControls = false
@@ -1042,6 +1125,13 @@ class MainActivity : ComponentActivity() {
                                                     },
                                                     update = { webView ->
                                                         webView.settings.javaScriptEnabled = javaScriptEnabledGlobal
+                                                        // Re-apply privacy toggles with the freshest state on every recomposition
+                                                        this@MainActivity.applyPrivacyToggles(
+                                                            webView,
+                                                            httpsOnlyMode,
+                                                            forceNightModeWebsites,
+                                                            dataSaverEnabled
+                                                        )
                                                     }
                                                 )
                                             }
@@ -1081,6 +1171,8 @@ class MainActivity : ComponentActivity() {
                                         networkRequests = networkRequests,
                                         domHtml = domHtml,
                                         sourcesList = sourcesList,
+                                        selectedTab = devToolsTab,
+                                        onTabSelected = { devToolsTab = it },
                                         onClearLogs = { logs.clear() },
                                         onEvalJs = { code ->
                                             currentTab.webView?.evaluateJavascript(code, null)
@@ -1089,7 +1181,7 @@ class MainActivity : ComponentActivity() {
                                 }
                             }
 
-                            // --- Bottom Navigation bar (Home, Search, AI, Downloads, Profile) ---
+                            // --- Bottom Navigation bar (Home, Downloads, Profile) ---
                             if (showOverlays) {
                                 Row(
                                     modifier = Modifier
@@ -1105,18 +1197,6 @@ class MainActivity : ComponentActivity() {
                                         icon = Icons.Default.Home,
                                         isActive = true,
                                         onClick = { currentTab.url = "about:blank" }
-                                    )
-                                    TabNavigationItem(
-                                        label = "Search",
-                                        icon = Icons.Default.Search,
-                                        isActive = false,
-                                        onClick = { /* trigger search Focus */ }
-                                    )
-                                    TabNavigationItem(
-                                        label = "AI Hub",
-                                        icon = Icons.Default.Lightbulb,
-                                        isActive = false,
-                                        onClick = { showAiDetails = true }
                                     )
                                     TabNavigationItem(
                                         label = "Downloads",
@@ -1246,11 +1326,6 @@ class MainActivity : ComponentActivity() {
                                 )
                             }
 
-                            // Interactive AI Hub chatbot panel overlay
-                            if (showAiDetails) {
-                                InteractiveAiHubDialog(onClose = { showAiDetails = false })
-                            }
-
                             // Tool details overlays for Premium modules
                             if (showMusicDetails) {
                                 InteractiveMusicPlayerDialog(onClose = { showMusicDetails = false })
@@ -1314,43 +1389,72 @@ class MainActivity : ComponentActivity() {
                                 )
                             }
 
-                            // Downloader selection overlay
+                            // Downloader selection overlay — REAL downloads via Android DownloadManager
                             if (showDownloaderDialog) {
                                 AlertDialog(
                                     onDismissRequest = { showDownloaderDialog = false },
-                                    title = { Text("Universal Video Downloader", color = Color(0xFFFF5722)) },
+                                    title = { Text("Video Downloader", color = Color(0xFFFF5722)) },
                                     text = {
                                         Column {
-                                            Text("Detected Videos on page:")
+                                            if (detectedVideos.isEmpty()) {
+                                                Text("No videos detected on this page yet. Videos are detected automatically in Hack mode.")
+                                            } else {
+                                                Text("Detected Videos on page:")
+                                            }
                                             Spacer(modifier = Modifier.height(12.dp))
                                             detectedVideos.forEachIndexed { idx, url ->
                                                 Card(
                                                     modifier = Modifier
                                                         .fillMaxWidth()
                                                         .clickable {
-                                                            val targetFolder = File(this@MainActivity.getExternalFilesDir(null), "Movies/ClickBrowser")
-                                                            targetFolder.mkdirs()
-                                                            val targetFile = File(targetFolder, "video_${System.currentTimeMillis()}.mp4")
-                                                            targetFile.writeText("Fake payload: $url")
-
-                                                            scope.launch {
-                                                                repository.addDownloadItem(
-                                                                    DownloadItem(
-                                                                        fileName = targetFile.name,
-                                                                        url = url,
-                                                                        path = targetFile.absolutePath,
-                                                                        timestamp = System.currentTimeMillis()
+                                                            try {
+                                                                if (url.startsWith("blob:")) {
+                                                                    Toast.makeText(
+                                                                        this@MainActivity,
+                                                                        "This video is a live stream (blob) and can't be downloaded directly.",
+                                                                        Toast.LENGTH_LONG
+                                                                    ).show()
+                                                                    showDownloaderDialog = false
+                                                                    return@clickable
+                                                                }
+                                                                val dm = this@MainActivity.getSystemService(Context.DOWNLOAD_SERVICE) as android.app.DownloadManager
+                                                                val fileName = "click_video_${System.currentTimeMillis()}.mp4"
+                                                                val request = android.app.DownloadManager.Request(android.net.Uri.parse(url))
+                                                                    .setTitle("Click Browser Download")
+                                                                    .setDescription(url.take(80))
+                                                                    .setNotificationVisibility(android.app.DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED)
+                                                                    .setDestinationInExternalPublicDir(
+                                                                        android.os.Environment.DIRECTORY_DOWNLOADS,
+                                                                        "ClickBrowser/$fileName"
                                                                     )
-                                                                )
+                                                                    .setAllowedOverMetered(true)
+                                                                    .setAllowedOverRoaming(false)
+                                                                dm.enqueue(request)
+                                                                scope.launch {
+                                                                    repository.addDownloadItem(
+                                                                        DownloadItem(
+                                                                            fileName = fileName,
+                                                                            url = url,
+                                                                            path = "Downloads/ClickBrowser/$fileName",
+                                                                            timestamp = System.currentTimeMillis()
+                                                                        )
+                                                                    )
+                                                                }
+                                                                Toast.makeText(
+                                                                    this@MainActivity,
+                                                                    "Download started — see notification / Downloads Center",
+                                                                    Toast.LENGTH_LONG
+                                                                ).show()
+                                                            } catch (e: Exception) {
+                                                                Toast.makeText(this@MainActivity, "Download failed: ${e.message}", Toast.LENGTH_LONG).show()
                                                             }
-                                                            Toast.makeText(this@MainActivity, "Downloading to Movies/ClickBrowser...", Toast.LENGTH_SHORT).show()
                                                             showDownloaderDialog = false
                                                         }
                                                         .padding(vertical = 4.dp),
                                                     colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
                                                 ) {
                                                     Column(modifier = Modifier.padding(12.dp)) {
-                                                        Text("Resolution: 1080p | Format: MP4", fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                                                        Text("Video ${idx + 1} — tap to download", fontWeight = FontWeight.Bold, fontSize = 12.sp)
                                                         Text(url.take(60) + "...", fontSize = 11.sp, color = Color.Gray)
                                                     }
                                                 }
@@ -1399,7 +1503,7 @@ class MainActivity : ComponentActivity() {
             BrowserMode.HACK -> {
                 when (searchEngine) {
                     "Deep Search" -> "https://www.startpage.com/sp/search?query=$query"
-                    "integrated AI search", "AI Search" -> "https://perplexity.ai/search?q=$query"
+                    "AI Search", "integrated AI search" -> "https://perplexity.ai/search?q=$query"
                     else -> "https://ahmia.fi/search/?q=$query"
                 }
             }
@@ -1407,6 +1511,9 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun requestStoragePermissions() {
+        // Granular media permissions (used by the real music player / image gallery).
+        // NOTE: MANAGE_EXTERNAL_STORAGE was removed — downloads use DownloadManager
+        // and no longer need any file permission.
         if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU) {
             // Android 13+: request granular media permissions
             val perms = arrayOf(
@@ -1421,27 +1528,13 @@ class MainActivity : ComponentActivity() {
                 androidx.core.app.ActivityCompat.requestPermissions(this, needed.toTypedArray(), 1001)
             }
         } else if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.M) {
-            // Android 6-12: request READ/WRITE_EXTERNAL_STORAGE
-            val perms = arrayOf(
-                android.Manifest.permission.READ_EXTERNAL_STORAGE,
-                android.Manifest.permission.WRITE_EXTERNAL_STORAGE
-            )
+            // Android 6-12: request READ_EXTERNAL_STORAGE for media access
+            val perms = arrayOf(android.Manifest.permission.READ_EXTERNAL_STORAGE)
             val needed = perms.filter {
                 androidx.core.content.ContextCompat.checkSelfPermission(this, it) != android.content.pm.PackageManager.PERMISSION_GRANTED
             }
             if (needed.isNotEmpty()) {
                 androidx.core.app.ActivityCompat.requestPermissions(this, needed.toTypedArray(), 1001)
-            }
-        }
-        // Android 10-11: MANAGE_EXTERNAL_STORAGE for full access (PowerCut import)
-        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.R && !android.os.Environment.isExternalStorageManager()) {
-            try {
-                val intent = android.content.Intent(android.provider.Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION)
-                intent.data = android.net.Uri.parse("package:$packageName")
-                startActivity(intent)
-            } catch (e: Exception) {
-                val intent = android.content.Intent(android.provider.Settings.ACTION_MANAGE_ALL_FILES_ACCESS_PERMISSION)
-                startActivity(intent)
             }
         }
     }
@@ -1677,18 +1770,15 @@ fun PremiumSearchRow(
     val assistantHint = remember(searchInput, activeMode, searchEngine) {
         if (searchInput.isEmpty()) {
             when (activeMode) {
-                BrowserMode.SIMPLE -> "💡 Tip: Ask our integrated PK AI anything directly!"
+                BrowserMode.SIMPLE -> "💡 Tip: Type a URL or search anything."
                 BrowserMode.DEVELOPER -> "🛠️ DevTip: Use Console or Inspect HTML to test DOM elements!"
-                BrowserMode.HACK -> "🛡️ HackGuard: Ahmia secure relay active. WebRTC is protected."
+                BrowserMode.HACK -> "🛡️ HackGuard: Anti-detection spoofing runs on page load."
             }
         } else {
             val query = searchInput.trim().lowercase()
             when {
                 query.startsWith("http") || query.contains(".") -> {
-                    "🌐 Go to Address: Open secure direct tunnel to $searchInput"
-                }
-                query.contains("how to") || query.contains("what is") || query.contains("why") -> {
-                    "🤖 PK AI assistant: 'I can answer questions on $searchInput in one click!'"
+                    "🌐 Go to address: $searchInput"
                 }
                 activeMode == BrowserMode.DEVELOPER -> {
                     when {
@@ -1699,9 +1789,9 @@ fun PremiumSearchRow(
                 }
                 activeMode == BrowserMode.HACK -> {
                     when {
-                        query.contains("onion") -> "🕵️ Onion Proxy: Ahmia Tor-routed darknet portal initialized."
-                        query.contains("leak") || query.contains("ip") -> "🔒 Guard: WebRTC shield & Canvas spoofing are blocking trackers."
-                        else -> "⚡ Hack Search: Ahmia / Startpage secure private search."
+                        query.contains("onion") -> "🕵️ Ahmia: clearnet onion-index search (no Tor in this build)."
+                        query.contains("leak") || query.contains("ip") -> "🔒 Guard: Canvas + audio fingerprint spoofing active."
+                        else -> "⚡ Hack Search: Ahmia / Startpage private search."
                     }
                 }
                 else -> {
@@ -1881,6 +1971,8 @@ fun PremiumAddressBar(
     @Suppress("UNUSED_PARAMETER") pageTitle: String,
     canGoBack: Boolean,
     canGoForward: Boolean,
+    isBookmarked: Boolean,
+    onToggleBookmark: () -> Unit,
     onBack: () -> Unit,
     onForward: () -> Unit,
     onRefresh: () -> Unit,
@@ -1918,6 +2010,13 @@ fun PremiumAddressBar(
             }
             IconButton(onClick = onRefresh) {
                 Icon(Icons.Default.Refresh, contentDescription = "Refresh")
+            }
+            IconButton(onClick = onToggleBookmark) {
+                Icon(
+                    imageVector = if (isBookmarked) Icons.Default.Bookmark else Icons.Default.BookmarkBorder,
+                    contentDescription = if (isBookmarked) "Remove bookmark" else "Add bookmark",
+                    tint = if (isBookmarked) Color(0xFFFBBF24) else MaterialTheme.colorScheme.onSurface
+                )
             }
 
             // Glassmorphic address input field
@@ -1986,8 +2085,9 @@ fun PremiumHomeScreen(
     onHistoryClick: () -> Unit,
     onDownloadsClick: () -> Unit,
     onModeChange: (BrowserMode) -> Unit,
+    tabs: List<TabItem>,
+    onSelectTab: (Int) -> Unit,
     // Dialog callback clicks
-    onAiClick: () -> Unit,
     onMusicClick: () -> Unit,
     onVideoClick: () -> Unit,
     onPdfClick: () -> Unit,
@@ -2086,7 +2186,7 @@ fun PremiumHomeScreen(
                 }
             }
 
-            // 2-Column Premium Widget Grid: AI, Music, Video, Download, Image, PDF, Browser (wide)
+            // 2-Column Premium Widget Grid: Music, Video, Download, Image, PDF, Browser (wide)
             Text(
                 text = "Premium Widget Grid",
                 color = Color.White,
@@ -2098,64 +2198,27 @@ fun PremiumHomeScreen(
             // Since grid scroll is nested inside Column verticalScroll, we can build custom layout flow or Row layouts
             // Let's lay them out in clean modular Rows.
             Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                // Widget 1: AI (Fully functional chatbot launcher)
+                // Widget 1: Music player (real on-device audio library)
                 WidgetCard(
-                    title = "AI ASSISTANT",
-                    value = "PK Chatbot",
-                    sub = "Ask anything",
-                    icon = Icons.Default.AutoAwesome,
-                    color = Color(0xFF4FC3FF),
+                    title = "MUSIC PLAYER",
+                    value = "Device Music",
+                    sub = "Play your audio",
+                    icon = Icons.Default.MusicNote,
+                    color = Color(0xFFFF5A9E),
                     modifier = Modifier.weight(1f),
-                    onClick = onAiClick
+                    onClick = onMusicClick
                 )
-                // Widget 2: Music player (with animated EQ bars and direct launcher)
-                Card(
-                    modifier = Modifier
-                        .weight(1f)
-                        .height(130.dp)
-                        .clickable { onMusicClick() }
-                        .shadow(4.dp, shape = RoundedCornerShape(16.dp))
-                        .border(1.dp, Color.White.copy(0.1f), RoundedCornerShape(16.dp)),
-                    colors = CardDefaults.cardColors(containerColor = Color(0x22FFFFFF))
-                ) {
-                    Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.SpaceBetween) {
-                        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                            Box(
-                                modifier = Modifier
-                                    .size(32.dp)
-                                    .background(Color(0x33FF5A9E), shape = RoundedCornerShape(8.dp)),
-                                contentAlignment = Alignment.Center
-                            ) {
-                                Icon(Icons.Default.MusicNote, contentDescription = null, tint = Color(0xFFFF5A9E), modifier = Modifier.size(16.dp))
-                            }
-                            // Equalizer Bars
-                            Row(verticalAlignment = Alignment.Bottom, horizontalArrangement = Arrangement.spacedBy(2.dp)) {
-                                Box(modifier = Modifier.size(2.dp, 12.dp).background(Color(0xFFFF5A9E)))
-                                Box(modifier = Modifier.size(2.dp, 16.dp).background(Color(0xFFB070FF)))
-                                Box(modifier = Modifier.size(2.dp, 8.dp).background(Color(0xFF4FC3FF)))
-                            }
-                        }
-                        Column {
-                            Text("MUSIC PLAYER", color = Color.Gray, fontSize = 9.sp, fontWeight = FontWeight.Bold)
-                            Text("Priscilla", color = Color.White, fontSize = 13.sp, fontWeight = FontWeight.Bold)
-                            Text("Now playing", color = Color.LightGray, fontSize = 10.sp)
-                        }
-                    }
-                }
-            }
-
-            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                // Widget 3: Video
+                // Widget 2: Video
                 WidgetCard(
-                    title = "VIDEO PREVIEW",
+                    title = "VIDEO PLAYER",
                     value = "Click Cinema",
-                    sub = "Premium streams",
+                    sub = "Play video files",
                     icon = Icons.Default.PlayCircle,
                     color = Color(0xFF3EE7B0),
                     modifier = Modifier.weight(1f),
                     onClick = onVideoClick
                 )
-                // Widget 4: Download
+                // Widget 3: Downloads
                 WidgetCard(
                     title = "DOWNLOADS",
                     value = "Manage files",
@@ -2210,7 +2273,7 @@ fun PremiumHomeScreen(
                     Column {
                         Text("BROWSER WIDGET", color = Color.Gray, fontSize = 9.sp, fontWeight = FontWeight.Bold)
                         Text("Explore Web Ecosystem", color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.Bold)
-                        Text("Adblock, DNS-over-HTTPS active", color = Color.LightGray, fontSize = 11.sp)
+                        Text("Adblock active", color = Color.LightGray, fontSize = 11.sp)
                     }
                     Box(
                         modifier = Modifier
@@ -2223,7 +2286,7 @@ fun PremiumHomeScreen(
                 }
             }
 
-            // Recent Tabs Section
+            // Recent Tabs Section (real open tabs)
             Column(modifier = Modifier.fillMaxWidth()) {
                 Text(
                     text = "Recent Tabs",
@@ -2232,20 +2295,36 @@ fun PremiumHomeScreen(
                     fontSize = 13.sp,
                     modifier = Modifier.padding(horizontal = 4.dp, vertical = 4.dp)
                 )
-                Card(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .shadow(4.dp, shape = RoundedCornerShape(12.dp)),
-                    colors = CardDefaults.cardColors(containerColor = Color(0x11FFFFFF))
-                ) {
-                    Row(
+                tabs.forEachIndexed { index, tab ->
+                    Card(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .padding(12.dp),
-                        horizontalArrangement = Arrangement.SpaceBetween
+                            .padding(vertical = 2.dp)
+                            .clickable { onSelectTab(index) }
+                            .shadow(4.dp, shape = RoundedCornerShape(12.dp)),
+                        colors = CardDefaults.cardColors(containerColor = Color(0x11FFFFFF))
                     ) {
-                        Text("Click Search Homepage", color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.Medium)
-                        Text("Active", color = Color(0xFF3EE7B0), fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(12.dp),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    tab.title.ifBlank { "New Tab" },
+                                    color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.Medium, maxLines = 1
+                                )
+                                Text(
+                                    tab.url.take(48),
+                                    color = Color.Gray, fontSize = 10.sp, maxLines = 1
+                                )
+                            }
+                            if (tab.isIncognito) {
+                                Text("Private", color = Color(0xFFFF9800), fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                            }
+                        }
                     }
                 }
             }
@@ -2290,7 +2369,14 @@ fun PremiumHomeScreen(
                 }
             }
 
-            // Premium Extensions Module Card (Shows Release / Debug APK sizes & Update)
+            // App info card (real installed APK size)
+            val context = LocalContext.current
+            val apkSizeMb = remember {
+                try {
+                    val src = context.packageManager.getApplicationInfo(context.packageName, 0).sourceDir
+                    java.io.File(src).length() / (1024 * 1024)
+                } catch (_: Exception) { -1L }
+            }
             Card(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -2299,18 +2385,16 @@ fun PremiumHomeScreen(
                 colors = CardDefaults.cardColors(containerColor = Color(0x1F0F172A))
             ) {
                 Column(modifier = Modifier.padding(12.dp)) {
-                    Text("Premium Extensions Module", fontWeight = FontWeight.Bold, color = Color.White, fontSize = 12.sp)
+                    Text("App Info", fontWeight = FontWeight.Bold, color = Color.White, fontSize = 12.sp)
                     Spacer(modifier = Modifier.height(4.dp))
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween
-                    ) {
-                        Text("Release APK: ~11 MB", color = Color.Green, fontSize = 11.sp, fontWeight = FontWeight.Bold)
-                        Text("Debug APK: ~16 MB", color = Color.Yellow, fontSize = 11.sp, fontWeight = FontWeight.Bold)
-                    }
+                    Text(
+                        if (apkSizeMb >= 0) "Installed APK: ~$apkSizeMb MB (${BuildConfig.BUILD_TYPE} build)"
+                        else "Click Browser (${BuildConfig.BUILD_TYPE} build)",
+                        color = Color.Green, fontSize = 11.sp, fontWeight = FontWeight.Bold
+                    )
                     Spacer(modifier = Modifier.height(8.dp))
                     Button(onClick = onSettingsClick, modifier = Modifier.fillMaxWidth(), colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary)) {
-                        Text("Update Application", fontSize = 11.sp)
+                        Text("Open Settings", fontSize = 11.sp)
                     }
                 }
             }
@@ -2415,28 +2499,6 @@ fun PremiumHomeScreen(
                                 Icon(vectorIcon, contentDescription = null, tint = item.color, modifier = Modifier.size(18.dp))
                             }
                         }
-                    }
-
-                    Spacer(modifier = Modifier.height(12.dp))
-
-                    // Minimized Ad Zone
-                    Card(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .shadow(10.dp, shape = RoundedCornerShape(12.dp))
-                            .border(1.dp, Color.White.copy(0.1f), RoundedCornerShape(12.dp)),
-                        colors = CardDefaults.cardColors(containerColor = Color(0xFF1E293B))
-                    ) {
-                        Text(
-                            text = "📢 SPONSORED AD: Experience lightning fast browsing speeds with Pro Upgrade!",
-                            color = Color.Yellow,
-                            fontSize = 10.sp,
-                            fontWeight = FontWeight.Bold,
-                            textAlign = TextAlign.Center,
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(8.dp)
-                        )
                     }
                 }
             }
