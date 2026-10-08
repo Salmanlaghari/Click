@@ -44,9 +44,9 @@ jobs:
             echo "trial" > /tmp/dummy.txt && (cd /tmp && zip -q dummy.zip dummy.txt)
             if "$APKSIGNER_BIN" sign \
                 --ks app/click-release.p12 \
-                --ks-pass:pass "$KEYSTORE_PASSWORD" \
+                --ks-pass "pass:$KEYSTORE_PASSWORD" \
                 --ks-key-alias "$KEY_ALIAS" \
-                --key-pass:pass "$KEY_PASSWORD" \
+                --key-pass "pass:$KEY_PASSWORD" \
                 --out /tmp/dummy-signed.apk /tmp/dummy.zip 2>/tmp/sign-err.log; then
               {
                 echo "CLICK_KEYSTORE_FILE=$GITHUB_WORKSPACE/app/click-release.p12"
