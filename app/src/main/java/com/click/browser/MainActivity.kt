@@ -287,26 +287,6 @@ class MainActivity : ComponentActivity() {
             LaunchedEffect(forceNightModeWebsites) { liveNightMode = forceNightModeWebsites }
             LaunchedEffect(dataSaverEnabled) { liveDataSaver = dataSaverEnabled }
 
-            // Opens the real DevTools bottom panel on the requested tab (0=Elements,
-            // 1=Console, 2=Network, 3=Sources), switching to Developer mode if needed.
-            fun openDevToolsTab(tab: Int) {
-                scope.launch {
-                    drawerState.close()
-                    if (currentTab.url == "about:blank") {
-                        Toast.makeText(this@MainActivity, "Load a web page first.", Toast.LENGTH_SHORT).show()
-                        return@launch
-                    }
-                    if (activeMode != BrowserMode.DEVELOPER) {
-                        modeManager.setMode(BrowserMode.DEVELOPER)
-                        currentTab.webView?.let { wv ->
-                            modeManager.applySettings(wv, BrowserMode.DEVELOPER, forceDesktopMode)
-                            wv.reload()
-                        }
-                    }
-                    devToolsTab = tab
-                }
-            }
-
             // Settings Configurations
             var currentSearchEngineSetting by remember { mutableStateOf("Google") }
 
@@ -333,6 +313,27 @@ class MainActivity : ComponentActivity() {
 
             // Drawer Navigation State (Simple, Dev, Power and shortcuts inside the hamburger menu)
             val drawerState = rememberDrawerState(initialValue = DrawerValue.Closed)
+
+            // Opens the real DevTools bottom panel on the requested tab (0=Elements,
+            // 1=Console, 2=Network, 3=Sources), switching to Developer mode if needed.
+            // Declared after drawerState so the drawer can be closed from it.
+            fun openDevToolsTab(tab: Int) {
+                scope.launch {
+                    drawerState.close()
+                    if (currentTab.url == "about:blank") {
+                        Toast.makeText(this@MainActivity, "Load a web page first.", Toast.LENGTH_SHORT).show()
+                        return@launch
+                    }
+                    if (activeMode != BrowserMode.DEVELOPER) {
+                        modeManager.setMode(BrowserMode.DEVELOPER)
+                        currentTab.webView?.let { wv ->
+                            modeManager.applySettings(wv, BrowserMode.DEVELOPER, forceDesktopMode)
+                            wv.reload()
+                        }
+                    }
+                    devToolsTab = tab
+                }
+            }
 
             MaterialTheme(colorScheme = themeColors) {
                 ModalNavigationDrawer(
