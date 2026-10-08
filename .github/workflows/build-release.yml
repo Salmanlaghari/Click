@@ -29,21 +29,31 @@ jobs:
 
       - name: Setup release signing (Play closed testing)
         run: |
+          SIGNED_LABEL="debug-signed"
           if [ -n "${{ secrets.CLICK_KEYSTORE_BASE64 }}" ]; then
             echo "${{ secrets.CLICK_KEYSTORE_BASE64 }}" | base64 -d > app/click-release.p12
-            {
-              echo "CLICK_KEYSTORE_FILE=$GITHUB_WORKSPACE/app/click-release.p12"
-              echo "CLICK_KEYSTORE_PASSWORD=${{ secrets.CLICK_KEYSTORE_PASSWORD }}"
-              echo "CLICK_KEY_ALIAS=${{ secrets.CLICK_KEY_ALIAS }}"
-              echo "CLICK_KEY_PASSWORD=${{ secrets.CLICK_KEY_PASSWORD }}"
-              echo "SIGNED_LABEL=signed"
-            } >> "$GITHUB_ENV"
-            echo "Release signing configured from secrets."
+            # Validate the keystore BEFORE building: a corrupt file or wrong
+            # password must not fail the whole build — fall back to debug-signed.
+            if keytool -list -keystore app/click-release.p12 \
+                -storepass "${{ secrets.CLICK_KEYSTORE_PASSWORD }}" >/dev/null 2>&1; then
+              {
+                echo "CLICK_KEYSTORE_FILE=$GITHUB_WORKSPACE/app/click-release.p12"
+                echo "CLICK_KEYSTORE_PASSWORD=${{ secrets.CLICK_KEYSTORE_PASSWORD }}"
+                echo "CLICK_KEY_ALIAS=${{ secrets.CLICK_KEY_ALIAS }}"
+                echo "CLICK_KEY_PASSWORD=${{ secrets.CLICK_KEY_PASSWORD }}"
+              } >> "$GITHUB_ENV"
+              SIGNED_LABEL="signed"
+              echo "Release signing configured from secrets."
+            else
+              echo "WARNING: CLICK_KEYSTORE_BASE64 is not a valid PKCS12 keystore or the password is wrong — building debug-signed APK/AAB."
+              echo "Prince: re-export the keystore as PKCS12 (.p12), base64 it, and update the 4 CLICK_KEYSTORE_* secrets."
+              rm -f app/click-release.p12
+            fi
           else
             echo "WARNING: CLICK_KEYSTORE_BASE64 secret is missing — building debug-signed APK/AAB."
             echo "Add the 4 CLICK_KEYSTORE_* secrets to get Play-ready signed artifacts."
-            echo "SIGNED_LABEL=debug-signed" >> "$GITHUB_ENV"
           fi
+          echo "SIGNED_LABEL=$SIGNED_LABEL" >> "$GITHUB_ENV"
 
       - name: Grant Gradle Permission
         run: chmod +x gradlew
