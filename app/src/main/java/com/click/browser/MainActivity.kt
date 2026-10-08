@@ -343,6 +343,11 @@ class MainActivity : ComponentActivity() {
             // Chrome/Mises-style browser menu (bottom sheet) + recent tabs +
             // delete-browsing-data confirmation.
             var showBrowserMenu by remember { mutableStateOf(false) }
+            // Premium UI v2: bottom-left FAB feature menu (always visible).
+            var showFeatureMenu by remember { mutableStateOf(false) }
+            // Tab-close snackbar with UNDO (Premium UI v2).
+            val snackbarHostState = remember { SnackbarHostState() }
+            var lastClosedTab by remember { mutableStateOf<Triple<String, String, Int>?>(null) }
             var showRecentTabs by remember { mutableStateOf(false) }
             var showDeleteBrowsingConfirm by remember { mutableStateOf(false) }
             // Bumps every time a tab thumbnail is captured → recomposes the
@@ -353,12 +358,17 @@ class MainActivity : ComponentActivity() {
              * Single close-tab path used by the top tab strip AND the visual
              * switcher: remembers the tab for "Recent tabs" (never private
              * ones), drops its thumbnail, and keeps one blank tab minimum.
+             * Premium UI v2: also offers UNDO via a bottom snackbar.
              */
             fun closeTabAt(idx: Int) {
                 if (idx !in tabs.indices) return
                 val closed = tabs[idx]
                 RecentlyClosedTabs.push(closed.title, closed.url, closed.isIncognito)
                 TabThumbnailStore.remove(closed.id)
+                // Remember for UNDO (not for private tabs — privacy first).
+                val undoInfo: Triple<String, String, Int>? =
+                    if (closed.isIncognito) null
+                    else Triple(closed.title, closed.url, idx.coerceAtMost(tabs.size - 1))
                 if (tabs.size > 1) {
                     tabs.removeAt(idx)
                     if (activeTabIndex >= tabs.size) {
@@ -367,6 +377,182 @@ class MainActivity : ComponentActivity() {
                 } else {
                     tabs[0] = TabItem(url = "about:blank", title = "New Tab")
                     activeTabIndex = 0
+                }
+                // Premium UI v2: "Tab closed" snackbar with UNDO (4s).
+                if (undoInfo != null) {
+                    lastClosedTab = undoInfo
+                    scope.launch {
+                        val result = snackbarHostState.showSnackbar(
+                            message = "Tab closed",
+                            actionLabel = "UNDO",
+                            duration = SnackbarDuration.Short
+                        )
+                        if (result == SnackbarResult.ActionPerformed) {
+                            lastClosedTab?.let { (title, url, atIdx) ->
+                                val restored = TabItem(url = url, title = title.ifBlank { "New Tab" })
+                                val insertAt = atIdx.coerceIn(0, tabs.size)
+                                tabs.add(insertAt, restored)
+                                activeTabIndex = insertAt
+                            }
+                            lastClosedTab = null
+                        }
+                    }
+                }
+            }
+
+            /**
+             * Premium UI v2: wires the 32 bottom-left FAB menu features to the
+             * existing screens/actions. Reuses current handlers — no feature is
+             * reimplemented. Closes the FAB panel first.
+             */
+            fun handleFeature(id: FeatureId) {
+                showFeatureMenu = false
+                when (id) {
+                    FeatureId.HISTORY -> showHistory = true
+                    FeatureId.SETTINGS -> showSettings = true
+                    FeatureId.STORAGE, FeatureId.CLEAR_DATA -> showDeleteBrowsingConfirm = true
+                    FeatureId.PASSWORDS -> Toast.makeText(
+                        this@MainActivity, "No password manager yet.", Toast.LENGTH_SHORT
+                    ).show()
+                    FeatureId.TOOLS -> showExtensionsManager = true
+                    FeatureId.DEVTOOLS -> {
+                        showDebugOverlay = !showDebugOverlay
+                        Toast.makeText(
+                            this@MainActivity,
+                            if (showDebugOverlay) "DevTools overlay ON" else "DevTools overlay OFF",
+                            Toast.LENGTH_SHORT
+                        ).show()
+                    }
+                    FeatureId.DOWNLOADS -> {
+                        this@MainActivity.requestStoragePermissions()
+                        showDownloads = true
+                    }
+                    FeatureId.BOOKMARKS -> showBookmarks = true
+                    FeatureId.AI_CHAT -> {
+                        // Same tamper gate as the drawer entry (Play-policy critical).
+                        if (tamperBlocked) showTamperDialog = true else showAiChat = true
+                    }
+                    FeatureId.TRANSLATE -> {
+                        val url = currentTab.url
+                        if (url == "about:blank" || !url.startsWith("http")) {
+                            Toast.makeText(this@MainActivity, "Open a page first to translate it.", Toast.LENGTH_SHORT).show()
+                        } else {
+                            val lang = java.util.Locale.getDefault().language.ifBlank { "en" }
+                            val tUrl = "https://translate.google.com/translate?sl=auto&tl=$lang&u=" +
+                                java.net.URLEncoder.encode(url, "UTF-8")
+                            tabs.add(TabItem(url = tUrl, title = "Translate"))
+                            activeTabIndex = tabs.size - 1
+                        }
+                    }
+                    FeatureId.DESKTOP -> {
+                        val host = try { android.net.Uri.parse(currentTab.url).host?.lowercase().orEmpty() } catch (_: Exception) { "" }
+                        scope.launch {
+                            if (host.isEmpty() || currentTab.url == "about:blank") {
+                                Toast.makeText(this@MainActivity, "Open a page first.", Toast.LENGTH_SHORT).show()
+                            } else {
+                                val isDesktop = host in desktopHosts ||
+                                    desktopHosts.any { h -> host == h || host.endsWith(".$h") }
+                                repository.setDesktopHost(host, !isDesktop)
+                                currentTab.webView?.let { wv ->
+                                    modeManager.applyDesktopOverride(wv, activeMode, !isDesktop)
+                                }
+                                currentTab.webView?.reload()
+                                Toast.makeText(
+                                    this@MainActivity,
+                                    if (!isDesktop) "Desktop site ON" else "Desktop site OFF",
+                                    Toast.LENGTH_SHORT
+                                ).show()
+                            }
+                        }
+                    }
+                    FeatureId.NEW_TAB -> {
+                        tabs.add(TabItem(url = "about:blank", title = "New Tab"))
+                        activeTabIndex = tabs.size - 1
+                    }
+                    FeatureId.PRIVATE_TAB -> {
+                        tabs.add(TabItem(url = "about:blank", title = "Private Tab", isIncognito = true))
+                        activeTabIndex = tabs.size - 1
+                        Toast.makeText(this@MainActivity, "Private tab opened — history is not recorded.", Toast.LENGTH_SHORT).show()
+                    }
+                    FeatureId.TABS -> showTabsManager = true
+                    FeatureId.RECENT_TABS -> showRecentTabs = true
+                    FeatureId.SHARE -> {
+                        val url = currentTab.url
+                        if (url == "about:blank") {
+                            Toast.makeText(this@MainActivity, "Nothing to share yet.", Toast.LENGTH_SHORT).show()
+                        } else {
+                            val share = Intent(Intent.ACTION_SEND).apply {
+                                type = "text/plain"
+                                putExtra(Intent.EXTRA_SUBJECT, currentTab.title)
+                                putExtra(Intent.EXTRA_TEXT, "${currentTab.title}\n$url")
+                            }
+                            startActivity(Intent.createChooser(share, "Share page via"))
+                        }
+                    }
+                    FeatureId.FIND_IN_PAGE -> {
+                        findQuery = ""
+                        showFindInPageDialog = true
+                    }
+                    FeatureId.EXTENSIONS -> showUserscripts = true
+                    FeatureId.ADBLOCK -> {
+                        adBlockerEnabled = !adBlockerEnabled
+                        Toast.makeText(
+                            this@MainActivity,
+                            if (adBlockerEnabled) "AdBlock ON" else "AdBlock OFF",
+                            Toast.LENGTH_SHORT
+                        ).show()
+                    }
+                    FeatureId.READER -> Toast.makeText(
+                        this@MainActivity, "Reader mode coming soon.", Toast.LENGTH_SHORT
+                    ).show()
+                    FeatureId.SCREENSHOT -> Toast.makeText(
+                        this@MainActivity, "Screenshot coming soon.", Toast.LENGTH_SHORT
+                    ).show()
+                    FeatureId.SAVE_PDF -> {
+                        val printManager = getSystemService(Context.PRINT_SERVICE) as? android.print.PrintManager
+                        val adapter = currentTab.webView?.createPrintDocumentAdapter("Click Browser Print Job")
+                        if (printManager != null && adapter != null) {
+                            printManager.print("Click Browser Document", adapter, android.print.PrintAttributes.Builder().build())
+                        } else {
+                            Toast.makeText(this@MainActivity, "Printing not available.", Toast.LENGTH_SHORT).show()
+                        }
+                    }
+                    FeatureId.ADD_HOME -> Toast.makeText(
+                        this@MainActivity, "Add to Home coming soon.", Toast.LENGTH_SHORT
+                    ).show()
+                    FeatureId.SITE_INFO -> {
+                        val host = try { android.net.Uri.parse(currentTab.url).host ?: currentTab.url } catch (_: Exception) { currentTab.url }
+                        Toast.makeText(this@MainActivity, host, Toast.LENGTH_LONG).show()
+                    }
+                    FeatureId.PRIVACY_GUARDS -> showPrivacyGuards = true
+                    FeatureId.UA_SPOOFER, FeatureId.UA_SWITCHER -> {
+                        spoofedUAIndex = (spoofedUAIndex + 1) % 4
+                        val uaStr = when (spoofedUAIndex) {
+                            0 -> ModeManager.UA_HACK
+                            1 -> "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Safari/605.1.15"
+                            2 -> "Mozilla/5.0 (X11; Linux x86_64; rv:109.0) Gecko/20100101 Firefox/125.0"
+                            else -> ModeManager.UA_SIMPLE
+                        }
+                        currentTab.webView?.settings?.userAgentString = uaStr
+                        Toast.makeText(this@MainActivity, "User-Agent switched ($spoofedUAIndex)", Toast.LENGTH_SHORT).show()
+                    }
+                    FeatureId.FULLSCREEN -> immersiveMode = !immersiveMode
+                    FeatureId.TEXT_SIZE -> {
+                        val currentZoom = currentTab.webView?.settings?.textZoom ?: 100
+                        val newZoom = if (currentZoom >= 180) 100 else currentZoom + 20
+                        currentTab.webView?.settings?.textZoom = newZoom
+                        Toast.makeText(this@MainActivity, "Text zoom $newZoom%", Toast.LENGTH_SHORT).show()
+                    }
+                    FeatureId.NIGHT_MODE -> {
+                        forceNightModeWebsites = !forceNightModeWebsites
+                        currentTab.webView?.let { modeManager.applySettings(it, activeMode, forceDesktopMode) }
+                        Toast.makeText(
+                            this@MainActivity,
+                            if (forceNightModeWebsites) "Night mode ON" else "Night mode OFF",
+                            Toast.LENGTH_SHORT
+                        ).show()
+                    }
+                    FeatureId.ABOUT -> showAboutApp = true
                 }
             }
             var isIncognitoMode by remember { mutableStateOf(false) }
@@ -1244,86 +1430,31 @@ class MainActivity : ComponentActivity() {
 
                             Column(modifier = Modifier.fillMaxSize()) {
 
-                                // UNIFIED TOP BAR — fixed at the very top in every mode
-                                // (Prince: full-width search/address bar at top, small stylish
-                                // mode pill, no big mode button). Manual Immersive mode
-                                // (drawer toggle) hides it completely.
+                                // PREMIUM UI v2 — Chrome-like single-row top bar (Prince-approved
+                                // design): back, forward, rounded address bar, tab-count badge,
+                                // ⋮ browser menu. The old 2-row bar + separate tab strip are
+                                // gone; the counter opens the visual tab switcher, and the
+                                // bottom-left FAB menu replaces the top hamburger.
                                 AnimatedVisibility(
                                     visible = !immersiveMode,
                                     enter = expandVertically() + fadeIn(),
                                     exit = shrinkVertically() + fadeOut()
                                 ) {
-                                    BrowserTopBar(
-                                        activeMode = activeMode,
+                                    ChromeTopBar(
                                         theme = theme,
                                         currentUrl = currentTab.url,
                                         canGoBack = currentTab.webView?.canGoBack() == true,
                                         canGoForward = currentTab.webView?.canGoForward() == true,
-                                        isBookmarked = bookmarks.any { it.url == currentTab.url },
-                                        onMenuClick = {
-                                            scope.launch { drawerState.open() }
-                                        },
-                                        onSettingsClick = { showSettings = true },
-                                        onBrowserMenuClick = { showBrowserMenu = true },
+                                        tabCount = tabs.size,
                                         onBack = { currentTab.webView?.goBack() },
                                         onForward = { currentTab.webView?.goForward() },
-                                        onRefresh = { currentTab.webView?.reload() },
-                                        onToggleBookmark = {
-                                            val url = currentTab.url
-                                            if (url == "about:blank") {
-                                                Toast.makeText(this@MainActivity, "Load a page first to bookmark it.", Toast.LENGTH_SHORT).show()
-                                            } else {
-                                                scope.launch {
-                                                    if (bookmarks.any { it.url == url }) {
-                                                        repository.deleteBookmark(url)
-                                                        Toast.makeText(this@MainActivity, "Bookmark removed", Toast.LENGTH_SHORT).show()
-                                                    } else {
-                                                        repository.addBookmark(Bookmark(currentTab.title.ifBlank { url }, url))
-                                                        Toast.makeText(this@MainActivity, "Page bookmarked", Toast.LENGTH_SHORT).show()
-                                                    }
-                                                }
-                                            }
-                                        },
                                         onNavigate = { input ->
                                             val destination = formatUrl(input, currentSearchEngineSetting, activeMode)
                                             currentTab.url = destination
                                             currentTab.webView?.loadUrl(destination)
                                         },
-                                        elementInspectorEnabled = elementInspectorEnabled,
-                                        onToggleInspector = {
-                                            elementInspectorEnabled = !elementInspectorEnabled
-                                            currentTab.webView?.evaluateJavascript(
-                                                if (elementInspectorEnabled) DevToolsInjections.ELEMENT_INSPECTOR_ENABLE else DevToolsInjections.ELEMENT_INSPECTOR_DISABLE,
-                                                null
-                                            )
-                                        },
-                                        deviceEmulatorMode = deviceEmulatorMode,
-                                        onToggleEmulator = {
-                                            deviceEmulatorMode = when (deviceEmulatorMode) {
-                                                "Mobile" -> "Tablet"
-                                                "Tablet" -> "Desktop"
-                                                else -> "Mobile"
-                                            }
-                                            currentTab.webView?.let { webView ->
-                                                modeManager.applySettings(webView, activeMode, deviceEmulatorMode == "Desktop")
-                                                webView.reload()
-                                            }
-                                        }
-                                    )
-                                    // Desktop-style top tab strip: quick switcher below the
-                                    // search bar (follows the mode theme). The full Tabs
-                                    // Manager screen remains available via the drawer.
-                                    TabStrip(
-                                        tabs = tabs,
-                                        activeTabIndex = activeTabIndex,
-                                        theme = theme,
-                                        onSelectTab = { idx -> activeTabIndex = idx },
-                                        onCloseTab = { idx -> closeTabAt(idx) },
-                                        onNewTab = {
-                                            tabs.add(TabItem(url = "about:blank", title = "New Tab"))
-                                            activeTabIndex = tabs.size - 1
-                                        },
-                                        onOpenTabSwitcher = { showTabsManager = true }
+                                        onTabCounterClick = { showTabsManager = true },
+                                        onMenuClick = { showBrowserMenu = true },
                                     )
                                 }
 
@@ -1766,23 +1897,47 @@ class MainActivity : ComponentActivity() {
                                 }
                             }
 
-                            // Add a Floating home button back in fullscreen mode for immersive web surfing
-                            if (!showOverlays) {
-                                Box(
-                                    modifier = Modifier
-                                        .align(Alignment.BottomStart)
-                                        .padding(16.dp)
-                                ) {
-                                    FloatingActionButton(
-                                        onClick = { currentTab.url = "about:blank" },
-                                        containerColor = MaterialTheme.colorScheme.primary,
-                                        contentColor = Color.White,
-                                        modifier = Modifier.size(48.dp)
-                                    ) {
-                                        Icon(Icons.Default.Home, contentDescription = "Home", modifier = Modifier.size(20.dp))
-                                    }
-                                }
+                            // Premium UI v2: always-visible bottom-left feature menu FAB
+                            // (replaces the old floating home button; the 32-feature
+                            // panel covers navigation, and Home stays in the bottom
+                            // nav). Hidden in immersive fullscreen for chrome-free view.
+                            if (!immersiveMode) {
+                                FeatureMenuFabOverlay(
+                                    theme = theme,
+                                    expanded = showFeatureMenu,
+                                    activeMode = activeMode,
+                                    onToggle = { showFeatureMenu = !showFeatureMenu },
+                                    onDismiss = { showFeatureMenu = false },
+                                    onModeChange = { mode ->
+                                        showFeatureMenu = false
+                                        scope.launch {
+                                            modeManager.setMode(mode)
+                                            currentTab.webView?.let {
+                                                modeManager.applySettings(it, mode, forceDesktopMode)
+                                            }
+                                            val label = when (mode) {
+                                                BrowserMode.SIMPLE -> "Simple"
+                                                BrowserMode.DEVELOPER -> "Developer"
+                                                else -> "Hack"
+                                            }
+                                            Toast.makeText(
+                                                this@MainActivity, "$label Mode Activated",
+                                                Toast.LENGTH_SHORT
+                                            ).show()
+                                        }
+                                    },
+                                    onFeature = { id -> handleFeature(id) },
+                                )
                             }
+
+                            // Tab-close UNDO snackbar (Premium UI v2) — sits above
+                            // the bottom nav / FAB so it never overlaps them.
+                            SnackbarHost(
+                                hostState = snackbarHostState,
+                                modifier = Modifier
+                                    .align(Alignment.BottomCenter)
+                                    .padding(start = 16.dp, end = 16.dp, bottom = 96.dp)
+                            )
 
                             // --- Visual tab switcher (Mises/Chrome-style card grid) ---
                             // Replaces the old PremiumTabsManager: thumbnails,
