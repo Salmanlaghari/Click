@@ -7,7 +7,6 @@ import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.scaleOut
 import androidx.compose.animation.slideInVertically
-import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -206,13 +205,14 @@ fun TabSwitcherScreen(
                     // Premium UI v2: staggered fade+slide entry (~70ms), and
                     // animated close (scale-down + slide-out, ~300ms).
                     val stagger = (index % 10) * 70
+                    val enterAnim = fadeIn(animationSpec = tween(380, delayMillis = stagger)) +
+                        slideInVertically(animationSpec = tween(380, delayMillis = stagger)) { h -> h / 3 }
+                    val exitAnim = fadeOut(animationSpec = tween(180)) +
+                        scaleOut(animationSpec = tween(300), targetScale = 0.7f)
                     AnimatedVisibility(
                         visible = cardsVisible && closingTabId != tab.id,
-                        enter = fadeIn(animationSpec = tween(380, delayMillis = stagger)) +
-                            slideInVertically(animationSpec = tween(380, delayMillis = stagger)) { it / 3 },
-                        exit = fadeOut(animationSpec = tween(180)) +
-                            scaleOut(animationSpec = tween(300), targetScale = 0.7f) +
-                            slideOutHorizontally(animationSpec = tween(300)) { it / 2 },
+                        enter = enterAnim,
+                        exit = exitAnim,
                     ) {
                     Card(
                         modifier = Modifier

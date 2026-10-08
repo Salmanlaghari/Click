@@ -480,6 +480,11 @@ class MainActivity : ComponentActivity() {
             // (Prince: no auto-hide on scroll — user control via the drawer toggle.)
             var immersiveMode by remember { mutableStateOf(false) }
 
+            // Pull-to-refresh state for web pages.
+            var isRefreshing by remember { mutableStateOf(false) }
+            // Per-site desktop preference (persisted per host).
+            val desktopHosts by repository.desktopHostsFlow.collectAsState(initial = emptySet())
+
             /**
              * Premium UI v2: wires the 32 bottom-left FAB menu features to the
              * existing screens/actions. Reuses current handlers — no feature is
@@ -635,10 +640,6 @@ class MainActivity : ComponentActivity() {
                     FeatureId.ABOUT -> showAboutApp = true
                 }
             }
-            // Pull-to-refresh state for web pages.
-            var isRefreshing by remember { mutableStateOf(false) }
-            // Per-site desktop preference (persisted per host).
-            val desktopHosts by repository.desktopHostsFlow.collectAsState(initial = emptySet())
 
             // Bookmarks (for the address-bar bookmark star)
             val bookmarks by repository.bookmarksFlow.collectAsState(initial = emptyList())
