@@ -388,22 +388,6 @@ class MainActivity : ComponentActivity() {
             LaunchedEffect(secureDnsEnabled) { liveSecureDns = secureDnsEnabled }
             LaunchedEffect(customHeaders) { liveCustomHeaders = customHeaders.associate { it.name to it.value } }
 
-            // Load AI + privacy-guard + appearance settings from DataStore once at startup.
-            LaunchedEffect(Unit) {
-                dataStore.data.first().let { prefs ->
-                    aiApiKey = prefs[AppSettings.AI_API_KEY].orEmpty()
-                    aiProvider = prefs[AppSettings.AI_PROVIDER] ?: "groq"
-                    aiModel = prefs[AppSettings.AI_MODEL].orEmpty()
-                    headerSpoofEnabled = prefs[AppSettings.HEADER_SPOOF_ENABLED] == true
-                    fingerprintProtection = prefs[AppSettings.FINGERPRINT_PROTECTION] ?: true
-                    secureDnsEnabled = prefs[AppSettings.SECURE_DNS_ENABLED] == true
-                    customHeaders = AppSettings.parseHeaders(prefs[AppSettings.CUSTOM_HEADERS_JSON])
-                    currentThemeSetting = if (prefs[AppSettings.UI_DARK_MODE] == false) "Light" else "Dark"
-                    wallpaperUri = prefs[AppSettings.WALLPAPER_URI]
-                }
-                refreshUserscripts()
-            }
-
             // Reloads the userscript list + code cache (DataStore + files).
             fun refreshUserscripts() {
                 scope.launch(Dispatchers.IO) {
@@ -469,6 +453,22 @@ class MainActivity : ComponentActivity() {
                         webrtcTested = true
                     }
                 }
+            }
+
+            // Load AI + privacy-guard + appearance settings from DataStore once at startup.
+            LaunchedEffect(Unit) {
+                dataStore.data.first().let { prefs ->
+                    aiApiKey = prefs[AppSettings.AI_API_KEY].orEmpty()
+                    aiProvider = prefs[AppSettings.AI_PROVIDER] ?: "groq"
+                    aiModel = prefs[AppSettings.AI_MODEL].orEmpty()
+                    headerSpoofEnabled = prefs[AppSettings.HEADER_SPOOF_ENABLED] == true
+                    fingerprintProtection = prefs[AppSettings.FINGERPRINT_PROTECTION] ?: true
+                    secureDnsEnabled = prefs[AppSettings.SECURE_DNS_ENABLED] == true
+                    customHeaders = AppSettings.parseHeaders(prefs[AppSettings.CUSTOM_HEADERS_JSON])
+                    currentThemeSetting = if (prefs[AppSettings.UI_DARK_MODE] == false) "Light" else "Dark"
+                    wallpaperUri = prefs[AppSettings.WALLPAPER_URI]
+                }
+                refreshUserscripts()
             }
 
             // Settings Configurations
