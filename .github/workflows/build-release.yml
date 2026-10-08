@@ -32,10 +32,17 @@ jobs:
           SIGNED_LABEL="debug-signed"
           if [ -n "${{ secrets.CLICK_KEYSTORE_BASE64 }}" ]; then
             echo "${{ secrets.CLICK_KEYSTORE_BASE64 }}" | base64 -d > app/click-release.p12
-            # Validate the keystore BEFORE building: a corrupt file or wrong
-            # password must not fail the whole build — fall back to debug-signed.
-            if keytool -list -keystore app/click-release.p12 \
-                -storepass "${{ secrets.CLICK_KEYSTORE_PASSWORD }}" >/dev/null 2>&1; then
+            # Validate the FULL signing chain (store password + alias + key password)
+            # with a real trial signature. Anything invalid -> debug-signed fallback,
+            # never a failed build.
+            APKSIGNER_BIN=$(echo "$ANDROID_HOME"/build-tools/*/apksigner | tr ' ' '\n' | sort -V | tail -1)
+            echo "trial" > /tmp/dummy.txt && (cd /tmp && zip -q dummy.zip dummy.txt)
+            if "$APKSIGNER_BIN" sign \
+                --ks app/click-release.p12 \
+                --ks-pass:pass "${{ secrets.CLICK_KEYSTORE_PASSWORD }}" \
+                --ks-key-alias "${{ secrets.CLICK_KEY_ALIAS }}" \
+                --key-pass:pass "${{ secrets.CLICK_KEY_PASSWORD }}" \
+                --out /tmp/dummy-signed.apk /tmp/dummy.zip 2>/tmp/sign-err.log; then
               {
                 echo "CLICK_KEYSTORE_FILE=$GITHUB_WORKSPACE/app/click-release.p12"
                 echo "CLICK_KEYSTORE_PASSWORD=${{ secrets.CLICK_KEYSTORE_PASSWORD }}"
@@ -43,10 +50,12 @@ jobs:
                 echo "CLICK_KEY_PASSWORD=${{ secrets.CLICK_KEY_PASSWORD }}"
               } >> "$GITHUB_ENV"
               SIGNED_LABEL="signed"
-              echo "Release signing configured from secrets."
+              echo "Release signing configured from secrets (trial signature OK)."
             else
-              echo "WARNING: CLICK_KEYSTORE_BASE64 is not a valid PKCS12 keystore or the password is wrong — building debug-signed APK/AAB."
-              echo "Prince: re-export the keystore as PKCS12 (.p12), base64 it, and update the 4 CLICK_KEYSTORE_* secrets."
+              echo "WARNING: release keystore secrets failed validation — building debug-signed APK/AAB."
+              head -5 /tmp/sign-err.log
+              echo "Prince: check the 4 CLICK_KEYSTORE_* secrets — the .p12 must be a valid PKCS12,"
+              echo "the alias must exist in it, and both passwords must match."
               rm -f app/click-release.p12
             fi
           else
