@@ -126,6 +126,8 @@ dependencies {
     implementation(libs.androidx.material.icons.extended)
     implementation(libs.androidx.datastore.preferences)
     implementation(libs.androidx.webkit)
+    implementation(libs.okhttp)
+    implementation(libs.okhttp.dnsoverhttps)
 
     testImplementation(libs.junit)
     androidTestImplementation(libs.androidx.junit)
