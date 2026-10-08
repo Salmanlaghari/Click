@@ -23,6 +23,7 @@ import androidx.webkit.WebViewFeature
 import androidx.compose.animation.*
 import androidx.compose.animation.core.*
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -51,8 +52,10 @@ import androidx.compose.ui.draw.scale
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
@@ -69,9 +72,17 @@ import com.click.browser.data.HistoryItem
 import com.click.browser.data.DownloadItem
 import com.click.browser.engine.*
 import com.click.browser.ui.screens.*
+import androidx.datastore.preferences.core.edit
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import okhttp3.OkHttpClient
+import okhttp3.Request
 import java.net.URLEncoder
 import java.util.Locale
+import java.util.concurrent.TimeUnit
 
 class TabItem(
     val id: String = java.util.UUID.randomUUID().toString(),
@@ -97,6 +108,88 @@ class MainActivity : ComponentActivity() {
     private var liveHttpsOnly = true
     private var liveNightMode = false
     private var liveDataSaver = false
+    // Live copies for the privacy-guard features (see PrivacyGuards).
+    private var liveHeaderSpoof = false
+    private var liveFingerprintProtection = true
+    private var liveSecureDns = false
+    private var liveCustomHeaders: Map<String, String> = emptyMap()
+
+    // Session salt for per-session fingerprint-noise randomization.
+    // Generated once per app launch: noise is stable within a session but
+    // differs on every launch, so hashes can't be correlated across sessions.
+    private val sessionSalt: String = java.util.UUID.randomUUID().toString()
+    private val fingerprintScript: String by lazy { PrivacyGuards.buildFingerprintScript(sessionSalt) }
+
+    // Userscript extensions (HACK mode). Live caches are refreshed whenever
+    // the script list changes so WebViewClient always sees current data.
+    private val userscriptManager by lazy { UserscriptManager(this) }
+    private var liveUserscripts: List<UserscriptInfo> = emptyList()
+    private var liveUserscriptCode: Map<String, String> = emptyMap()
+
+    /** Downloads a text file (used for installing userscripts from URL). Null on any failure. */
+    private fun downloadText(url: String): String? {
+        return try {
+            val req = Request.Builder().url(url)
+                .header("User-Agent", "ClickBrowser/1.0").build()
+            getHeaderFetchClient().newCall(req).execute().use { resp ->
+                if (!resp.isSuccessful) return null
+                resp.body?.string()
+            }
+        } catch (_: Exception) {
+            null
+        }
+    }
+
+    // OkHttp client used to re-fetch page resources with spoofed headers.
+    // Rebuilt when the Secure-DNS mode changes.
+    private var headerFetchClient: OkHttpClient? = null
+    private var headerFetchClientSecureDns = false
+
+    private fun getHeaderFetchClient(): OkHttpClient {
+        val wantSecure = liveSecureDns
+        val cached = headerFetchClient
+        if (cached != null && headerFetchClientSecureDns == wantSecure) return cached
+        val builder = OkHttpClient.Builder()
+            .connectTimeout(20, TimeUnit.SECONDS)
+            .readTimeout(30, TimeUnit.SECONDS)
+        if (wantSecure) {
+            // Secure DNS covers the app's own requests (this re-fetch is one
+            // of them). WebView page loads still use the system DNS resolver.
+            try { builder.dns(PrivacyGuards.buildSecureDns()) } catch (_: Exception) { }
+        }
+        return builder.build().also {
+            headerFetchClient = it
+            headerFetchClientSecureDns = wantSecure
+        }
+    }
+
+    /**
+     * Re-fetches [url] with the user's spoofed custom headers.
+     * Returns null when the fetch fails — the caller then lets WebView load
+     * the resource normally (honest degradation, never a fake response).
+     */
+    private fun fetchWithSpoofedHeaders(url: String): WebResourceResponse? {
+        return try {
+            val req = Request.Builder().url(url).apply {
+                liveCustomHeaders.forEach { (name, value) -> header(name, value) }
+            }.build()
+            val resp = getHeaderFetchClient().newCall(req).execute()
+            val body = resp.body ?: return null
+            val contentType = resp.header("Content-Type") ?: "text/html"
+            val mime = contentType.substringBefore(";").trim().ifEmpty { "text/html" }
+            val charset = contentType.substringAfter("charset=", "").substringBefore(";").trim()
+            WebResourceResponse(
+                mime,
+                charset.ifEmpty { "UTF-8" },
+                resp.code,
+                "OK",
+                mapOf("Content-Type" to contentType),
+                body.byteStream()
+            )
+        } catch (_: Exception) {
+            null
+        }
+    }
 
     private var ttsEngine: TextToSpeech? = null
 
@@ -182,48 +275,33 @@ class MainActivity : ComponentActivity() {
             val scope = rememberCoroutineScope()
             val activeMode by modeManager.modeFlow.collectAsState(initial = BrowserMode.SIMPLE)
 
-            // App Layout configuration: Dark/System/Light Theme Toggles
+            // App Layout configuration: global Day/Night toggle.
+            // Each browsing mode has its own premium light/dark theme
+            // (see ModeThemes — adapted from the approved design references).
             var currentThemeSetting by remember { mutableStateOf("Dark") }
-            val isDark = currentThemeSetting == "Dark" || activeMode != BrowserMode.SIMPLE
+            var wallpaperUri by remember { mutableStateOf<String?>(null) }
+            val theme = remember(activeMode, currentThemeSetting) {
+                ModeThemes.forMode(activeMode, currentThemeSetting == "Dark")
+            }
 
-            val themeColors = when (activeMode) {
-                BrowserMode.SIMPLE -> {
-                    if (isDark) {
-                        darkColorScheme(
-                            primary = Color(0xFF3B82F6),
-                            surface = Color(0xFF1E293B),
-                            background = Color(0xFF0F172A),
-                            secondary = Color(0xFF2563EB)
-                        )
-                    } else {
-                        lightColorScheme(
-                            primary = Color(0xFF2563EB),
-                            surface = Color(0xFFFFFFFF),
-                            background = Color(0xFFF8FAFC),
-                            secondary = Color(0xFF3B82F6)
-                        )
-                    }
-                }
-                BrowserMode.DEVELOPER -> {
-                    darkColorScheme(
-                        primary = Color(0xFF7C3AED),
-                        surface = Color(0xFF0F172A),
-                        background = Color(0xFF020617),
-                        secondary = Color(0xFF9333EA),
-                        onBackground = Color(0xFFA78BFA),
-                        onSurface = Color(0xFFA78BFA)
-                    )
-                }
-                BrowserMode.HACK -> {
-                    darkColorScheme(
-                        primary = Color(0xFFDC2626),
-                        surface = Color(0xFF18181B),
-                        background = Color(0xFF09090B),
-                        secondary = Color(0xFFEF4444),
-                        onBackground = Color(0xFF00FF00),
-                        onSurface = Color(0xFF00FF00)
-                    )
-                }
+            val themeColors = if (theme.dark) {
+                darkColorScheme(
+                    primary = theme.primary,
+                    surface = theme.surface,
+                    background = theme.background,
+                    secondary = theme.secondary,
+                    onBackground = theme.onBackground,
+                    onSurface = theme.onSurface
+                )
+            } else {
+                lightColorScheme(
+                    primary = theme.primary,
+                    surface = theme.surface,
+                    background = theme.background,
+                    secondary = theme.secondary,
+                    onBackground = theme.onBackground,
+                    onSurface = theme.onSurface
+                )
             }
 
             // Browser Premium Feature States
@@ -256,6 +334,25 @@ class MainActivity : ComponentActivity() {
             var showPrivacyPolicy by remember { mutableStateOf(false) }
             var showAboutApp by remember { mutableStateOf(false) }
 
+            // AI chat + privacy guards
+            var showAiChat by remember { mutableStateOf(false) }
+            var showPrivacyGuards by remember { mutableStateOf(false) }
+            var aiApiKey by remember { mutableStateOf("") }
+            var aiProvider by remember { mutableStateOf("groq") }
+            var aiModel by remember { mutableStateOf("") }
+            var headerSpoofEnabled by remember { mutableStateOf(false) }
+            var fingerprintProtection by remember { mutableStateOf(true) }
+            var secureDnsEnabled by remember { mutableStateOf(false) }
+            var customHeaders by remember { mutableStateOf(listOf<AppSettings.CustomHeader>()) }
+            var webrtcTestRunning by remember { mutableStateOf(false) }
+            var webrtcTested by remember { mutableStateOf(false) }
+            var webrtcIps by remember { mutableStateOf<List<String>?>(null) }
+
+            // Userscript extensions (HACK mode)
+            var showUserscripts by remember { mutableStateOf(false) }
+            var userscripts by remember { mutableStateOf(listOf<UserscriptInfo>()) }
+            var userscriptNotice by remember { mutableStateOf<String?>(null) }
+
             // Dev tools states
             var elementInspectorEnabled by remember { mutableStateOf(false) }
             var deviceEmulatorMode by remember { mutableStateOf("Desktop") } // Mobile, Tablet, Desktop
@@ -286,6 +383,93 @@ class MainActivity : ComponentActivity() {
             LaunchedEffect(httpsOnlyMode) { liveHttpsOnly = httpsOnlyMode }
             LaunchedEffect(forceNightModeWebsites) { liveNightMode = forceNightModeWebsites }
             LaunchedEffect(dataSaverEnabled) { liveDataSaver = dataSaverEnabled }
+            LaunchedEffect(headerSpoofEnabled) { liveHeaderSpoof = headerSpoofEnabled }
+            LaunchedEffect(fingerprintProtection) { liveFingerprintProtection = fingerprintProtection }
+            LaunchedEffect(secureDnsEnabled) { liveSecureDns = secureDnsEnabled }
+            LaunchedEffect(customHeaders) { liveCustomHeaders = customHeaders.associate { it.name to it.value } }
+
+            // Reloads the userscript list + code cache (DataStore + files).
+            fun refreshUserscripts() {
+                scope.launch(Dispatchers.IO) {
+                    val scripts = userscriptManager.listScripts()
+                    val codes = scripts
+                        .filter { it.enabled }
+                        .associate { it.id to (userscriptManager.getCode(it.id).orEmpty()) }
+                    withContext(Dispatchers.Main) {
+                        userscripts = scripts
+                        liveUserscripts = scripts
+                        liveUserscriptCode = codes
+                    }
+                }
+            }
+
+            // Installs a userscript from raw .user.js source text.
+            fun installUserscriptFromSource(source: String) {
+                scope.launch(Dispatchers.IO) {
+                    val result = userscriptManager.install(source)
+                    withContext(Dispatchers.Main) {
+                        userscriptNotice = result.fold(
+                            onSuccess = { "Installed \"${it.meta.name}\"." },
+                            onFailure = { "Install failed: ${it.message}" }
+                        )
+                    }
+                    refreshUserscripts()
+                }
+            }
+
+            // Installs a userscript by downloading it from a URL.
+            fun installUserscriptFromUrl(url: String) {
+                scope.launch(Dispatchers.IO) {
+                    val text = downloadText(url)
+                    withContext(Dispatchers.Main) {
+                        if (text.isNullOrBlank()) {
+                            userscriptNotice = "Download failed — check the URL."
+                        } else {
+                            installUserscriptFromSource(text)
+                        }
+                    }
+                }
+            }
+
+            // Runs the real WebRTC leak test in the current tab.
+            fun runWebrtcLeakTest() {
+                val wv = currentTab.webView
+                if (wv == null || currentTab.url.isBlank() || currentTab.url == "about:blank") {
+                    Toast.makeText(
+                        this@MainActivity,
+                        "Open a website first, then run the test.",
+                        Toast.LENGTH_SHORT
+                    ).show()
+                    return
+                }
+                webrtcTestRunning = true
+                webrtcTested = false
+                webrtcIps = null
+                wv.evaluateJavascript(PrivacyGuards.WEBRTC_LEAK_TEST_JS, null)
+                scope.launch {
+                    delay(9000)
+                    if (webrtcTestRunning) {
+                        webrtcTestRunning = false
+                        webrtcTested = true
+                    }
+                }
+            }
+
+            // Load AI + privacy-guard + appearance settings from DataStore once at startup.
+            LaunchedEffect(Unit) {
+                dataStore.data.first().let { prefs ->
+                    aiApiKey = prefs[AppSettings.AI_API_KEY].orEmpty()
+                    aiProvider = prefs[AppSettings.AI_PROVIDER] ?: "groq"
+                    aiModel = prefs[AppSettings.AI_MODEL].orEmpty()
+                    headerSpoofEnabled = prefs[AppSettings.HEADER_SPOOF_ENABLED] == true
+                    fingerprintProtection = prefs[AppSettings.FINGERPRINT_PROTECTION] ?: true
+                    secureDnsEnabled = prefs[AppSettings.SECURE_DNS_ENABLED] == true
+                    customHeaders = AppSettings.parseHeaders(prefs[AppSettings.CUSTOM_HEADERS_JSON])
+                    currentThemeSetting = if (prefs[AppSettings.UI_DARK_MODE] == false) "Light" else "Dark"
+                    wallpaperUri = prefs[AppSettings.WALLPAPER_URI]
+                }
+                refreshUserscripts()
+            }
 
             // Settings Configurations
             var currentSearchEngineSetting by remember { mutableStateOf("Google") }
@@ -759,7 +943,26 @@ class MainActivity : ComponentActivity() {
                                         }
                                     }
                                 }
-                                item { DrawerCategoryHeader(title = "8. About & System Info") }
+                                // Userscript extensions live here only — HACK mode only.
+                                if (activeMode == BrowserMode.HACK) {
+                                    item {
+                                        DrawerItem(label = "Userscript Extensions", icon = Icons.Default.Extension, color = Color(0xFF39FF14)) {
+                                            scope.launch { drawerState.close(); showUserscripts = true }
+                                        }
+                                    }
+                                }
+                                item { DrawerCategoryHeader(title = "8. AI & Privacy Guards") }
+                                item {
+                                    DrawerItem(label = "AI Chat Assistant", icon = Icons.Default.AutoAwesome, color = Color(0xFF4FC3FF)) {
+                                        scope.launch { drawerState.close(); showAiChat = true }
+                                    }
+                                }
+                                item {
+                                    DrawerItem(label = "Privacy Guards", icon = Icons.Default.Shield, color = Color(0xFF34D399)) {
+                                        scope.launch { drawerState.close(); showPrivacyGuards = true }
+                                    }
+                                }
+                                item { DrawerCategoryHeader(title = "9. About & System Info") }
                                 item {
                                     DrawerItem(label = "System Diagnostic Benchmark", icon = Icons.Default.Dns, color = Color(0xFF60A5FA)) {
                                         scope.launch {
@@ -819,6 +1022,7 @@ class MainActivity : ComponentActivity() {
                                     // 1. TOP PREMIUM BAR with small Click logo-LEFT, centered search below, and menu toggle-RIGHT
                                     PremiumTopBar(
                                         activeMode = activeMode,
+                                        theme = theme,
                                         onModeChange = { mode ->
                                             scope.launch {
                                                 modeManager.setMode(mode)
@@ -837,6 +1041,7 @@ class MainActivity : ComponentActivity() {
                                     // 2. CENTERED FULL-WIDTH SEARCH BAR (centered, fits right below top bar, rounded pill shape, search+mic)
                                     PremiumSearchRow(
                                         activeMode = activeMode,
+                                        theme = theme,
                                         searchEngine = currentSearchEngineSetting,
                                         onSearch = { input ->
                                             val destination = formatUrl(input, currentSearchEngineSetting, activeMode)
@@ -850,6 +1055,7 @@ class MainActivity : ComponentActivity() {
                                 if (currentTab.url != "about:blank") {
                                     PremiumAddressBar(
                                         activeMode = activeMode,
+                                        theme = theme,
                                         currentUrl = currentTab.url,
                                         pageTitle = currentTab.title,
                                         canGoBack = currentTab.webView?.canGoBack() == true,
@@ -909,6 +1115,8 @@ class MainActivity : ComponentActivity() {
                                         // Overhauled premium dashboard home page
                                         PremiumHomeScreen(
                                             activeMode = activeMode,
+                                            theme = theme,
+                                            wallpaperUri = wallpaperUri,
                                             isIncognito = currentTab.isIncognito,
                                             onNavigate = { url ->
                                                 currentTab.url = url
@@ -996,7 +1204,12 @@ class MainActivity : ComponentActivity() {
                                                                             urlStr = "https://" + urlStr.removePrefix("http://")
                                                                         }
                                                                         if (urlStr.startsWith("http://") || urlStr.startsWith("https://")) {
-                                                                            view?.loadUrl(urlStr)
+                                                                            // Header spoofing: navigations carry the custom headers.
+                                                                            if (liveHeaderSpoof && liveCustomHeaders.isNotEmpty()) {
+                                                                                view?.loadUrl(urlStr, liveCustomHeaders)
+                                                                            } else {
+                                                                                view?.loadUrl(urlStr)
+                                                                            }
                                                                             return true
                                                                         }
                                                                         return false
@@ -1009,7 +1222,11 @@ class MainActivity : ComponentActivity() {
                                                                             urlStr = "https://" + urlStr.removePrefix("http://")
                                                                         }
                                                                         if (urlStr.startsWith("http://") || urlStr.startsWith("https://")) {
-                                                                            view?.loadUrl(urlStr)
+                                                                            if (liveHeaderSpoof && liveCustomHeaders.isNotEmpty()) {
+                                                                                view?.loadUrl(urlStr, liveCustomHeaders)
+                                                                            } else {
+                                                                                view?.loadUrl(urlStr)
+                                                                            }
                                                                             return true
                                                                         }
                                                                         return false
@@ -1052,12 +1269,50 @@ class MainActivity : ComponentActivity() {
                                                                     }
                                                                     view?.evaluateJavascript(AntiDetectionInjections.VIDEO_GRABBER_JS, null)
                                                                 }
+
+                                                                // Fingerprint Protection: session-randomized canvas/audio
+                                                                // noise in EVERY mode (see PrivacyGuards).
+                                                                if (liveFingerprintProtection) {
+                                                                    view?.evaluateJavascript(this@MainActivity.fingerprintScript, null)
+                                                                }
+
+                                                                // Userscript extensions (HACK mode only): inject every
+                                                                // enabled script whose @match/@include fits this URL.
+                                                                // NOTE: WebView has no true document-start hook, so
+                                                                // @run-at document-start scripts also run here at
+                                                                // page finish — the earliest reliable point. The UI
+                                                                // states this plainly.
+                                                                if (liveMode == BrowserMode.HACK) {
+                                                                    val pageUrl = url.orEmpty()
+                                                                    liveUserscripts.forEach { script ->
+                                                                        if (script.enabled && UserscriptEngine.matchesUrl(script.meta, pageUrl)) {
+                                                                            val code = liveUserscriptCode[script.id]
+                                                                            if (!code.isNullOrBlank()) {
+                                                                                view?.evaluateJavascript(
+                                                                                    UserscriptEngine.buildInjection(script.id, script.meta.name, code),
+                                                                                    null
+                                                                                )
+                                                                            }
+                                                                        }
+                                                                    }
+                                                                }
                                                             }
 
                                                             override fun shouldInterceptRequest(view: WebView?, request: WebResourceRequest?): WebResourceResponse? {
                                                                 // Basic Ad Blocker check
                                                                 if (adBlockerEnabled && AdBlocker.shouldBlock(request?.url?.toString())) {
                                                                     return WebResourceResponse("text/plain", "UTF-8", null)
+                                                                }
+                                                                // Header spoofing: re-fetch subresources with the
+                                                                // user's custom headers. Main-frame navigations
+                                                                // already carry them via loadUrl(url, extraHeaders).
+                                                                if (liveHeaderSpoof && liveCustomHeaders.isNotEmpty()
+                                                                    && request?.isForMainFrame == false
+                                                                ) {
+                                                                    val resUrl = request.url?.toString().orEmpty()
+                                                                    if (resUrl.startsWith("http://") || resUrl.startsWith("https://")) {
+                                                                        this@MainActivity.fetchWithSpoofedHeaders(resUrl)?.let { return it }
+                                                                    }
                                                                 }
                                                                 return super.shouldInterceptRequest(view, request)
                                                             }
@@ -1105,6 +1360,26 @@ class MainActivity : ComponentActivity() {
                                                                 }
                                                             ),
                                                             "VideoGrabberBridge"
+                                                        )
+
+                                                        // Receives the result of the real WebRTC leak test.
+                                                        addJavascriptInterface(
+                                                            WebRtcTestBridge(
+                                                                onResult = { ips ->
+                                                                    scope.launch {
+                                                                        webrtcIps = ips
+                                                                        webrtcTestRunning = false
+                                                                        webrtcTested = true
+                                                                    }
+                                                                }
+                                                            ),
+                                                            "WebRtcTestBridge"
+                                                        )
+
+                                                        // GM_* storage bridge for userscript extensions.
+                                                        addJavascriptInterface(
+                                                            UserscriptBridge(ctx),
+                                                            "UserscriptBridge"
                                                         )
 
                                                         // Config settings
@@ -1189,7 +1464,7 @@ class MainActivity : ComponentActivity() {
                                     modifier = Modifier
                                         .align(Alignment.BottomCenter)
                                         .fillMaxWidth()
-                                        .background(Color(0xFF0F172A))
+                                        .background(theme.topBarBg)
                                         .padding(vertical = 12.dp),
                                     horizontalArrangement = Arrangement.SpaceEvenly,
                                     verticalAlignment = Alignment.CenterVertically
@@ -1295,7 +1570,24 @@ class MainActivity : ComponentActivity() {
                             if (showSettings) {
                                 PremiumSettingsScreen(
                                     currentThemeSetting = currentThemeSetting,
-                                    onThemeChange = { currentThemeSetting = it },
+                                    onThemeChange = {
+                                        currentThemeSetting = it
+                                        scope.launch {
+                                            dataStore.edit { prefs ->
+                                                prefs[AppSettings.UI_DARK_MODE] = it == "Dark"
+                                            }
+                                        }
+                                    },
+                                    wallpaperUri = wallpaperUri,
+                                    onWallpaperChange = { uri ->
+                                        wallpaperUri = uri
+                                        scope.launch {
+                                            dataStore.edit { prefs ->
+                                                if (uri == null) prefs.remove(AppSettings.WALLPAPER_URI)
+                                                else prefs[AppSettings.WALLPAPER_URI] = uri
+                                            }
+                                        }
+                                    },
                                     activeMode = activeMode,
                                     onModeChange = { mode ->
                                         scope.launch {
@@ -1318,6 +1610,28 @@ class MainActivity : ComponentActivity() {
                                     onToggleJs = { javaScriptEnabledGlobal = it },
                                     dataSaver = dataSaverEnabled,
                                     onToggleDataSaver = { dataSaverEnabled = it },
+                                    aiApiKey = aiApiKey,
+                                    onAiApiKeyChange = { v ->
+                                        aiApiKey = v
+                                        // Auto-detect provider from the key prefix.
+                                        if (v.isNotBlank()) aiProvider = AppSettings.detectProvider(v)
+                                        scope.launch {
+                                            dataStore.edit { prefs ->
+                                                prefs[AppSettings.AI_API_KEY] = v
+                                                prefs[AppSettings.AI_PROVIDER] = aiProvider
+                                            }
+                                        }
+                                    },
+                                    aiProvider = aiProvider,
+                                    onAiProviderChange = { v ->
+                                        aiProvider = v
+                                        scope.launch { dataStore.edit { prefs -> prefs[AppSettings.AI_PROVIDER] = v } }
+                                    },
+                                    aiModel = aiModel,
+                                    onAiModelChange = { v ->
+                                        aiModel = v
+                                        scope.launch { dataStore.edit { prefs -> prefs[AppSettings.AI_MODEL] = v } }
+                                    },
                                     onClearData = {
                                         scope.launch {
                                             repository.clearHistory()
@@ -1355,6 +1669,84 @@ class MainActivity : ComponentActivity() {
                             }
                             if (showAboutApp) {
                                 AboutAppDialog(onClose = { showAboutApp = false })
+                            }
+                            if (showAiChat) {
+                                AiChatScreen(
+                                    apiKey = aiApiKey,
+                                    providerId = aiProvider,
+                                    model = aiModel,
+                                    secureDns = secureDnsEnabled,
+                                    onOpenSettings = { showAiChat = false; showSettings = true },
+                                    onClose = { showAiChat = false }
+                                )
+                            }
+                            if (showPrivacyGuards) {
+                                PrivacyGuardsScreen(
+                                    headerSpoofEnabled = headerSpoofEnabled,
+                                    onToggleHeaderSpoof = { v ->
+                                        headerSpoofEnabled = v
+                                        scope.launch { dataStore.edit { prefs -> prefs[AppSettings.HEADER_SPOOF_ENABLED] = v } }
+                                    },
+                                    customHeaders = customHeaders,
+                                    onAddHeader = { name, value ->
+                                        customHeaders = customHeaders + AppSettings.CustomHeader(name, value)
+                                        scope.launch {
+                                            dataStore.edit { prefs ->
+                                                prefs[AppSettings.CUSTOM_HEADERS_JSON] = AppSettings.headersToJson(customHeaders)
+                                            }
+                                        }
+                                    },
+                                    onRemoveHeader = { index ->
+                                        customHeaders = customHeaders.filterIndexed { i, _ -> i != index }
+                                        scope.launch {
+                                            dataStore.edit { prefs ->
+                                                prefs[AppSettings.CUSTOM_HEADERS_JSON] = AppSettings.headersToJson(customHeaders)
+                                            }
+                                        }
+                                    },
+                                    fingerprintProtection = fingerprintProtection,
+                                    onToggleFingerprint = { v ->
+                                        fingerprintProtection = v
+                                        scope.launch { dataStore.edit { prefs -> prefs[AppSettings.FINGERPRINT_PROTECTION] = v } }
+                                    },
+                                    secureDns = secureDnsEnabled,
+                                    onToggleSecureDns = { v ->
+                                        secureDnsEnabled = v
+                                        scope.launch { dataStore.edit { prefs -> prefs[AppSettings.SECURE_DNS_ENABLED] = v } }
+                                    },
+                                    webrtcRunning = webrtcTestRunning,
+                                    webrtcIps = webrtcIps,
+                                    webrtcTested = webrtcTested,
+                                    onRunWebrtcTest = { runWebrtcLeakTest() },
+                                    onClose = { showPrivacyGuards = false }
+                                )
+                            }
+                            if (showUserscripts) {
+                                UserscriptsScreen(
+                                    scripts = userscripts,
+                                    notice = userscriptNotice,
+                                    onToggleScript = { id, enabled ->
+                                        scope.launch(Dispatchers.IO) {
+                                            userscriptManager.setEnabled(id, enabled)
+                                            withContext(Dispatchers.Main) { refreshUserscripts() }
+                                        }
+                                    },
+                                    onDeleteScript = { id ->
+                                        scope.launch(Dispatchers.IO) {
+                                            userscriptManager.delete(id)
+                                            withContext(Dispatchers.Main) {
+                                                userscriptNotice = "Script deleted."
+                                                refreshUserscripts()
+                                            }
+                                        }
+                                    },
+                                    onInstallSource = { source -> installUserscriptFromSource(source) },
+                                    onInstallUrl = { url -> installUserscriptFromUrl(url) },
+                                    onClose = {
+                                        showUserscripts = false
+                                        userscriptNotice = null
+                                    }
+                                )
                             }
 
                             // Find in Page overlay
@@ -1686,20 +2078,15 @@ fun DrawerItem(
 @Composable
 fun PremiumTopBar(
     activeMode: BrowserMode,
+    theme: ModeTheme,
     onModeChange: (BrowserMode) -> Unit,
     onSettingsClick: () -> Unit,
     onMenuClick: () -> Unit
 ) {
-    val barColor = when (activeMode) {
-        BrowserMode.SIMPLE -> Color(0xFF1E293B)
-        BrowserMode.DEVELOPER -> Color(0xFF0F172A)
-        BrowserMode.HACK -> Color(0xFF18181B)
-    }
-
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .background(barColor)
+            .background(theme.topBarBg)
             .padding(vertical = 8.dp, horizontal = 16.dp),
         horizontalArrangement = Arrangement.SpaceBetween,
         verticalAlignment = Alignment.CenterVertically
@@ -1707,19 +2094,34 @@ fun PremiumTopBar(
         // Top-left "Click" logo and settings gear next to it
         Row(verticalAlignment = Alignment.CenterVertically) {
             IconButton(onClick = onMenuClick) {
-                Icon(Icons.Default.Menu, contentDescription = "Drawer Menu", tint = Color.White)
+                Icon(Icons.Default.Menu, contentDescription = "Drawer Menu", tint = theme.onTopBar)
             }
             Text(
                 text = "Click Pro",
-                color = Color.White,
+                color = theme.onTopBar,
                 fontWeight = FontWeight.ExtraBold,
                 fontSize = 18.sp
             )
+            Spacer(modifier = Modifier.width(8.dp))
+            // Mode pill badge (SIMPLE MODE / DEVELOPER MODE / HACK MODE • ACTIVE)
+            Box(
+                modifier = Modifier
+                    .background(theme.primary.copy(alpha = 0.15f), shape = RoundedCornerShape(12.dp))
+                    .border(1.dp, theme.primary.copy(alpha = 0.5f), RoundedCornerShape(12.dp))
+                    .padding(vertical = 3.dp, horizontal = 8.dp)
+            ) {
+                Text(
+                    text = theme.modePillText,
+                    color = theme.primary,
+                    fontSize = 8.sp,
+                    fontWeight = FontWeight.ExtraBold
+                )
+            }
             Spacer(modifier = Modifier.width(4.dp))
             Icon(
                 Icons.Default.Settings,
                 contentDescription = "Settings",
-                tint = Color.White,
+                tint = theme.onTopBar,
                 modifier = Modifier
                     .size(16.dp)
                     .clickable { onSettingsClick() }
@@ -1729,7 +2131,7 @@ fun PremiumTopBar(
         // Top-right tiny mode segmented control switcher (Simple / Developer / Hack) replacing old theme segmented control
         Row(
             modifier = Modifier
-                .background(Color(0xFF262626), shape = RoundedCornerShape(12.dp))
+                .background(theme.surfaceVariant, shape = RoundedCornerShape(12.dp))
                 .padding(2.dp)
         ) {
             BrowserMode.values().forEach { mode ->
@@ -1748,7 +2150,7 @@ fun PremiumTopBar(
                 ) {
                     Text(
                         text = mode.name.first() + mode.name.substring(1).lowercase(),
-                        color = Color.White,
+                        color = if (isSelected) Color.White else theme.onSurface,
                         fontSize = 9.sp,
                         fontWeight = FontWeight.Bold
                     )
@@ -1761,22 +2163,14 @@ fun PremiumTopBar(
 @Composable
 fun PremiumSearchRow(
     activeMode: BrowserMode,
+    theme: ModeTheme,
     searchEngine: String,
     onSearch: (String) -> Unit
 ) {
     var searchInput by remember { mutableStateOf("") }
 
-    val barColor = when (activeMode) {
-        BrowserMode.SIMPLE -> Color(0xFF0F172A)
-        BrowserMode.DEVELOPER -> Color(0xFF020617)
-        BrowserMode.HACK -> Color(0xFF090514)
-    }
-
-    val glowColor = when (activeMode) {
-        BrowserMode.SIMPLE -> Color(0xFF3B82F6)
-        BrowserMode.DEVELOPER -> Color(0xFF8B5CF6)
-        BrowserMode.HACK -> Color(0xFFEF4444)
-    }
+    val barColor = theme.surface
+    val glowColor = theme.glow
 
     val infiniteTransition = rememberInfiniteTransition(label = "SearchPulse")
     val pulseGlow by infiniteTransition.animateFloat(
@@ -2000,6 +2394,7 @@ fun PremiumSearchRow(
 @Composable
 fun PremiumAddressBar(
     activeMode: BrowserMode,
+    theme: ModeTheme,
     currentUrl: String,
     @Suppress("UNUSED_PARAMETER") pageTitle: String,
     canGoBack: Boolean,
@@ -2018,16 +2413,13 @@ fun PremiumAddressBar(
 ) {
     var textInput by remember(currentUrl) { mutableStateOf(currentUrl) }
 
-    val barColor = when (activeMode) {
-        BrowserMode.SIMPLE -> Color(0xFF2563EB)
-        BrowserMode.DEVELOPER -> Color(0xFF7C3AED)
-        BrowserMode.HACK -> Color(0xFFDC2626)
-    }
+    // Accent pill uses the per-mode theme primary (royal blue / purple / neon red).
+    val barColor = theme.primary
 
     Column(
         modifier = Modifier
             .fillMaxWidth()
-            .background(MaterialTheme.colorScheme.surface)
+            .background(theme.surface)
             .shadow(6.dp, shape = RoundedCornerShape(bottomStart = 16.dp, bottomEnd = 16.dp))
             .padding(8.dp)
     ) {
@@ -2111,6 +2503,8 @@ fun PremiumAddressBar(
 @Composable
 fun PremiumHomeScreen(
     activeMode: BrowserMode,
+    theme: ModeTheme,
+    wallpaperUri: String?,
     @Suppress("UNUSED_PARAMETER") isIncognito: Boolean,
     onNavigate: (String) -> Unit,
     onSettingsClick: () -> Unit,
@@ -2147,6 +2541,22 @@ fun PremiumHomeScreen(
     // Settings module expandable state
     var settingsExpanded by remember { mutableStateOf(false) }
 
+    // Custom wallpaper (decoded off the main thread). When set, it replaces
+    // the theme background with a dimmed photo.
+    val context = LocalContext.current
+    var wallpaperBitmap by remember(wallpaperUri) { mutableStateOf<Bitmap?>(null) }
+    LaunchedEffect(wallpaperUri) {
+        wallpaperBitmap = withContext(Dispatchers.IO) {
+            try {
+                wallpaperUri?.let { uriStr ->
+                    context.contentResolver.openInputStream(android.net.Uri.parse(uriStr))?.use { input ->
+                        android.graphics.BitmapFactory.decodeStream(input)
+                    }
+                }
+            } catch (_: Exception) { null }
+        }
+    }
+
     // Premium Social Shortcuts without text (Google, YouTube, Facebook, Instagram, WhatsApp, TikTok, Telegram, Discord, GitHub, Reddit, Pinterest, Netflix, Spotify, Amazon)
     val socialShortcuts = listOf(
         SocialIconInfo("Google", "https://google.com", Color(0xFF4285F4)),
@@ -2166,6 +2576,27 @@ fun PremiumHomeScreen(
     )
 
     Box(modifier = Modifier.fillMaxSize()) {
+        // Background: custom wallpaper (dimmed) or the per-mode theme color.
+        val wallpaper = wallpaperBitmap
+        if (wallpaper != null) {
+            Image(
+                bitmap = wallpaper.asImageBitmap(),
+                contentDescription = null,
+                modifier = Modifier.fillMaxSize(),
+                contentScale = ContentScale.Crop
+            )
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(theme.background.copy(alpha = 0.55f))
+            )
+        } else {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(theme.background)
+            )
+        }
         if (activeMode == BrowserMode.HACK) {
             MatrixGridAnimation()
         }
@@ -2185,8 +2616,8 @@ fun PremiumHomeScreen(
                 modifier = Modifier
                     .fillMaxWidth()
                     .shadow(12.dp, shape = RoundedCornerShape(16.dp))
-                    .border(BorderStroke(1.dp, Brush.horizontalGradient(listOf(Color(0xFF4FC3FF), Color(0xFFB070FF)))), shape = RoundedCornerShape(16.dp)),
-                colors = CardDefaults.cardColors(containerColor = Color(0x33000000))
+                    .border(BorderStroke(1.dp, Brush.horizontalGradient(listOf(theme.primary, theme.secondary))), shape = RoundedCornerShape(16.dp)),
+                colors = CardDefaults.cardColors(containerColor = theme.surface.copy(alpha = 0.85f))
             ) {
                 Column(modifier = Modifier.padding(16.dp)) {
                     Row(
@@ -2196,14 +2627,14 @@ fun PremiumHomeScreen(
                     ) {
                         Text(
                             text = "AI greeting",
-                            color = Color(0xFF4FC3FF),
+                            color = theme.primary,
                             fontWeight = FontWeight.Bold,
                             fontSize = 11.sp
                         )
                         Box(
                             modifier = Modifier
                                 .size(24.dp)
-                                .background(Brush.linearGradient(listOf(Color(0xFF4FC3FF), Color(0xFFB070FF))), CircleShape),
+                                .background(Brush.linearGradient(listOf(theme.primary, theme.secondary)), CircleShape),
                             contentAlignment = Alignment.Center
                         ) {
                             Icon(Icons.Default.AutoAwesome, contentDescription = null, tint = Color.White, modifier = Modifier.size(12.dp))
@@ -2212,7 +2643,7 @@ fun PremiumHomeScreen(
                     Spacer(modifier = Modifier.height(8.dp))
                     Text(
                         text = "Welcome to the Click Pro Browser ecosystem. Select high performance modes or surf secure.",
-                        color = Color.White,
+                        color = theme.onBackground,
                         fontSize = 14.sp,
                         fontWeight = FontWeight.Medium
                     )
@@ -2222,7 +2653,7 @@ fun PremiumHomeScreen(
             // 2-Column Premium Widget Grid: Music, Video, Download, Image, PDF, Browser (wide)
             Text(
                 text = "Premium Widget Grid",
-                color = Color.White,
+                color = theme.onBackground,
                 fontWeight = FontWeight.Bold,
                 fontSize = 13.sp,
                 modifier = Modifier.fillMaxWidth().padding(horizontal = 4.dp)
@@ -2233,6 +2664,7 @@ fun PremiumHomeScreen(
             Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                 // Widget 1: Music player (real on-device audio library)
                 WidgetCard(
+                    theme = theme,
                     title = "MUSIC PLAYER",
                     value = "Device Music",
                     sub = "Play your audio",
@@ -2243,6 +2675,7 @@ fun PremiumHomeScreen(
                 )
                 // Widget 2: Video
                 WidgetCard(
+                    theme = theme,
                     title = "VIDEO PLAYER",
                     value = "Click Cinema",
                     sub = "Play video files",
@@ -2253,6 +2686,7 @@ fun PremiumHomeScreen(
                 )
                 // Widget 3: Downloads
                 WidgetCard(
+                    theme = theme,
                     title = "DOWNLOADS",
                     value = "Manage files",
                     sub = "High-speed",
@@ -2266,6 +2700,7 @@ fun PremiumHomeScreen(
             Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                 // Widget 5: Images
                 WidgetCard(
+                    theme = theme,
                     title = "GALLERY",
                     value = "Image Gallery",
                     sub = "4D preview",
@@ -2276,6 +2711,7 @@ fun PremiumHomeScreen(
                 )
                 // Widget 6: PDF
                 WidgetCard(
+                    theme = theme,
                     title = "PDF READER",
                     value = "Document PDF",
                     sub = "Scroll & Zoom",
@@ -2293,8 +2729,8 @@ fun PremiumHomeScreen(
                     .height(96.dp)
                     .clickable { onNavigate("https://google.com") }
                     .shadow(4.dp, shape = RoundedCornerShape(16.dp))
-                    .border(1.dp, Color.White.copy(0.1f), RoundedCornerShape(16.dp)),
-                colors = CardDefaults.cardColors(containerColor = Color(0x22FFFFFF))
+                    .border(1.dp, theme.onBackground.copy(0.1f), RoundedCornerShape(16.dp)),
+                colors = CardDefaults.cardColors(containerColor = theme.surfaceVariant)
             ) {
                 Row(
                     modifier = Modifier
@@ -2305,8 +2741,8 @@ fun PremiumHomeScreen(
                 ) {
                     Column {
                         Text("BROWSER WIDGET", color = Color.Gray, fontSize = 9.sp, fontWeight = FontWeight.Bold)
-                        Text("Explore Web Ecosystem", color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.Bold)
-                        Text("Adblock active", color = Color.LightGray, fontSize = 11.sp)
+                        Text("Explore Web Ecosystem", color = theme.onBackground, fontSize = 14.sp, fontWeight = FontWeight.Bold)
+                        Text("Adblock active", color = theme.onSurface.copy(alpha = 0.7f), fontSize = 11.sp)
                     }
                     Box(
                         modifier = Modifier
@@ -2323,7 +2759,7 @@ fun PremiumHomeScreen(
             Column(modifier = Modifier.fillMaxWidth()) {
                 Text(
                     text = "Recent Tabs",
-                    color = Color.White,
+                    color = theme.onBackground,
                     fontWeight = FontWeight.Bold,
                     fontSize = 13.sp,
                     modifier = Modifier.padding(horizontal = 4.dp, vertical = 4.dp)
@@ -2347,7 +2783,7 @@ fun PremiumHomeScreen(
                             Column(modifier = Modifier.weight(1f)) {
                                 Text(
                                     tab.title.ifBlank { "New Tab" },
-                                    color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.Medium, maxLines = 1
+                                    color = theme.onBackground, fontSize = 12.sp, fontWeight = FontWeight.Medium, maxLines = 1
                                 )
                                 Text(
                                     tab.url.take(48),
@@ -2366,7 +2802,7 @@ fun PremiumHomeScreen(
             Column(modifier = Modifier.fillMaxWidth()) {
                 Text(
                     text = "Pinned Websites",
-                    color = Color.White,
+                    color = theme.onBackground,
                     fontWeight = FontWeight.Bold,
                     fontSize = 13.sp,
                     modifier = Modifier.padding(horizontal = 4.dp, vertical = 4.dp)
@@ -2414,11 +2850,11 @@ fun PremiumHomeScreen(
                 modifier = Modifier
                     .fillMaxWidth()
                     .shadow(10.dp, shape = RoundedCornerShape(16.dp))
-                    .border(1.dp, Color.White.copy(0.1f), RoundedCornerShape(16.dp)),
-                colors = CardDefaults.cardColors(containerColor = Color(0x1F0F172A))
+                    .border(1.dp, theme.onBackground.copy(0.1f), RoundedCornerShape(16.dp)),
+                colors = CardDefaults.cardColors(containerColor = theme.surface)
             ) {
                 Column(modifier = Modifier.padding(12.dp)) {
-                    Text("App Info", fontWeight = FontWeight.Bold, color = Color.White, fontSize = 12.sp)
+                    Text("App Info", fontWeight = FontWeight.Bold, color = theme.onBackground, fontSize = 12.sp)
                     Spacer(modifier = Modifier.height(4.dp))
                     Text(
                         if (apkSizeMb >= 0) "Installed APK: ~$apkSizeMb MB (${BuildConfig.BUILD_TYPE} build)"
@@ -2437,8 +2873,8 @@ fun PremiumHomeScreen(
                 modifier = Modifier
                     .fillMaxWidth()
                     .shadow(10.dp, shape = RoundedCornerShape(16.dp))
-                    .border(1.dp, Color.White.copy(0.1f), RoundedCornerShape(16.dp)),
-                colors = CardDefaults.cardColors(containerColor = Color(0x1F0F172A))
+                    .border(1.dp, theme.onBackground.copy(0.1f), RoundedCornerShape(16.dp)),
+                colors = CardDefaults.cardColors(containerColor = theme.surface)
             ) {
                 Column(modifier = Modifier.padding(12.dp)) {
                     Row(
@@ -2448,11 +2884,11 @@ fun PremiumHomeScreen(
                         horizontalArrangement = Arrangement.SpaceBetween,
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Text("Consolidated Settings Module", fontWeight = FontWeight.Bold, color = Color.White, fontSize = 13.sp)
+                        Text("Consolidated Settings Module", fontWeight = FontWeight.Bold, color = theme.onBackground, fontSize = 13.sp)
                         Icon(
                             imageVector = if (settingsExpanded) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
                             contentDescription = null,
-                            tint = Color.White
+                            tint = theme.onBackground
                         )
                     }
 
@@ -2460,31 +2896,31 @@ fun PremiumHomeScreen(
                         Column(modifier = Modifier.padding(top = 12.dp)) {
                             // adblock
                             Row(modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp), horizontalArrangement = Arrangement.SpaceBetween) {
-                                Text("🧩 Adblocker Extension Active", color = Color.White, fontSize = 11.sp)
+                                Text("🧩 Adblocker Extension Active", color = theme.onBackground, fontSize = 11.sp)
                                 Switch(checked = adBlockerEnabled, onCheckedChange = onToggleAdBlocker, modifier = Modifier.scale(0.8f))
                             }
                             // night mode
                             Row(modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp), horizontalArrangement = Arrangement.SpaceBetween) {
-                                Text("🌙 Force Night Mode Website", color = Color.White, fontSize = 11.sp)
+                                Text("🌙 Force Night Mode Website", color = theme.onBackground, fontSize = 11.sp)
                                 Switch(checked = forceNightMode, onCheckedChange = onToggleNightMode, modifier = Modifier.scale(0.8f))
                             }
                             // HTTPS only
                             Row(modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp), horizontalArrangement = Arrangement.SpaceBetween) {
-                                Text("🔒 HTTPS Only Mode", color = Color.White, fontSize = 11.sp)
+                                Text("🔒 HTTPS Only Mode", color = theme.onBackground, fontSize = 11.sp)
                                 Switch(checked = httpsOnlyMode, onCheckedChange = onToggleHttpsOnly, modifier = Modifier.scale(0.8f))
                             }
                             // JS
                             Row(modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp), horizontalArrangement = Arrangement.SpaceBetween) {
-                                Text("⚡ JavaScript Execution Support", color = Color.White, fontSize = 11.sp)
+                                Text("⚡ JavaScript Execution Support", color = theme.onBackground, fontSize = 11.sp)
                                 Switch(checked = jsEnabled, onCheckedChange = onToggleJs, modifier = Modifier.scale(0.8f))
                             }
                             // data saver
                             Row(modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp), horizontalArrangement = Arrangement.SpaceBetween) {
-                                Text("📦 Data Saver Mode", color = Color.White, fontSize = 11.sp)
+                                Text("📦 Data Saver Mode", color = theme.onBackground, fontSize = 11.sp)
                                 Switch(checked = dataSaver, onCheckedChange = onToggleDataSaver, modifier = Modifier.scale(0.8f))
                             }
 
-                            HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp), color = Color.White.copy(0.1f))
+                            HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp), color = theme.onBackground.copy(0.1f))
 
                             // About credits
                             Text("Team: Team PK AI", fontWeight = FontWeight.Bold, color = Color.Cyan, fontSize = 11.sp)
@@ -2500,10 +2936,10 @@ fun PremiumHomeScreen(
                     .fillMaxWidth()
                     .shadow(10.dp, shape = RoundedCornerShape(16.dp))
                     .border(1.dp, Color.White.copy(0.1f), RoundedCornerShape(16.dp)),
-                colors = CardDefaults.cardColors(containerColor = Color(0x1F0F172A))
+                colors = CardDefaults.cardColors(containerColor = theme.surface)
             ) {
                 Column(modifier = Modifier.padding(12.dp)) {
-                    Text("Consolidated System & Download Module", fontWeight = FontWeight.Bold, color = Color.White, fontSize = 12.sp, modifier = Modifier.padding(bottom = 8.dp))
+                    Text("Consolidated System & Download Module", fontWeight = FontWeight.Bold, color = theme.onBackground, fontSize = 12.sp, modifier = Modifier.padding(bottom = 8.dp))
 
                     // Shortcut list layout flow row
                     Row(
@@ -2548,6 +2984,7 @@ fun WidgetCard(
     sub: String,
     icon: ImageVector,
     color: Color,
+    theme: ModeTheme,
     modifier: Modifier = Modifier,
     onClick: () -> Unit = {}
 ) {
@@ -2557,7 +2994,7 @@ fun WidgetCard(
             .clickable { onClick() }
             .shadow(4.dp, shape = RoundedCornerShape(16.dp))
             .border(1.dp, Color.White.copy(0.1f), RoundedCornerShape(16.dp)),
-        colors = CardDefaults.cardColors(containerColor = Color(0x22FFFFFF))
+        colors = CardDefaults.cardColors(containerColor = theme.surfaceVariant)
     ) {
         Column(
             modifier = Modifier.padding(12.dp),
@@ -2572,9 +3009,9 @@ fun WidgetCard(
                 Icon(icon, contentDescription = null, tint = color, modifier = Modifier.size(16.dp))
             }
             Column {
-                Text(title, color = Color.Gray, fontSize = 9.sp, fontWeight = FontWeight.Bold)
-                Text(value, color = Color.White, fontSize = 13.sp, fontWeight = FontWeight.Bold)
-                Text(sub, color = Color.LightGray, fontSize = 10.sp)
+                Text(title, color = theme.onSurface.copy(alpha = 0.6f), fontSize = 9.sp, fontWeight = FontWeight.Bold)
+                Text(value, color = theme.onBackground, fontSize = 13.sp, fontWeight = FontWeight.Bold)
+                Text(sub, color = theme.onSurface.copy(alpha = 0.7f), fontSize = 10.sp)
             }
         }
     }
