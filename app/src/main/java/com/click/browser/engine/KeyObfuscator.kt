@@ -1,7 +1,5 @@
 package com.click.browser.engine
 
-package com.click.browser.engine
-
 import com.click.browser.BuildConfig
 
 /**
