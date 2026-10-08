@@ -38,7 +38,8 @@ class ModeManager(private val context: Context) {
         }
     }
 
-    fun applySettings(webView: WebView, mode: BrowserMode, forceDesktop: Boolean = false) {        val settings = webView.settings
+    fun applySettings(webView: WebView, mode: BrowserMode, forceDesktop: Boolean = false) {
+        val settings = webView.settings
 
         // General always-on configs as requested
         settings.javaScriptEnabled = true

@@ -28,10 +28,15 @@ jobs:
       # NOTE: AGP generates the debug keystore automatically — no manual step needed.
 
       - name: Setup release signing (Play closed testing)
+        env:
+          KEYSTORE_B64: ${{ secrets.CLICK_KEYSTORE_BASE64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.CLICK_KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.CLICK_KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.CLICK_KEY_PASSWORD }}
         run: |
           SIGNED_LABEL="debug-signed"
-          if [ -n "${{ secrets.CLICK_KEYSTORE_BASE64 }}" ]; then
-            echo "${{ secrets.CLICK_KEYSTORE_BASE64 }}" | base64 -d > app/click-release.p12
+          if [ -n "$KEYSTORE_B64" ]; then
+            echo "$KEYSTORE_B64" | base64 -d > app/click-release.p12
             # Validate the FULL signing chain (store password + alias + key password)
             # with a real trial signature. Anything invalid -> debug-signed fallback,
             # never a failed build.
@@ -39,15 +44,15 @@ jobs:
             echo "trial" > /tmp/dummy.txt && (cd /tmp && zip -q dummy.zip dummy.txt)
             if "$APKSIGNER_BIN" sign \
                 --ks app/click-release.p12 \
-                --ks-pass:pass "${{ secrets.CLICK_KEYSTORE_PASSWORD }}" \
-                --ks-key-alias "${{ secrets.CLICK_KEY_ALIAS }}" \
-                --key-pass:pass "${{ secrets.CLICK_KEY_PASSWORD }}" \
+                --ks-pass:pass "$KEYSTORE_PASSWORD" \
+                --ks-key-alias "$KEY_ALIAS" \
+                --key-pass:pass "$KEY_PASSWORD" \
                 --out /tmp/dummy-signed.apk /tmp/dummy.zip 2>/tmp/sign-err.log; then
               {
                 echo "CLICK_KEYSTORE_FILE=$GITHUB_WORKSPACE/app/click-release.p12"
-                echo "CLICK_KEYSTORE_PASSWORD=${{ secrets.CLICK_KEYSTORE_PASSWORD }}"
-                echo "CLICK_KEY_ALIAS=${{ secrets.CLICK_KEY_ALIAS }}"
-                echo "CLICK_KEY_PASSWORD=${{ secrets.CLICK_KEY_PASSWORD }}"
+                echo "CLICK_KEYSTORE_PASSWORD=$KEYSTORE_PASSWORD"
+                echo "CLICK_KEY_ALIAS=$KEY_ALIAS"
+                echo "CLICK_KEY_PASSWORD=$KEY_PASSWORD"
               } >> "$GITHUB_ENV"
               SIGNED_LABEL="signed"
               echo "Release signing configured from secrets (trial signature OK)."
