@@ -296,21 +296,29 @@ fun FeatureMenuFabOverlay(
                 tonalElevation = 8.dp
             ) {
                 Column(modifier = Modifier.padding(12.dp)) {
-                    // Mode chips
+                    // Mode chips (official display names per the 3-mode reference)
                     Row(
                         horizontalArrangement = Arrangement.spacedBy(8.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        ModeChip("Simple", activeMode == BrowserMode.SIMPLE, accent, theme) {
+                        ModeChip("Light", activeMode == BrowserMode.SIMPLE, accent, theme) {
                             onModeChange(BrowserMode.SIMPLE)
                         }
-                        ModeChip("Developer", activeMode == BrowserMode.DEVELOPER, accent, theme) {
+                        ModeChip("Dark", activeMode == BrowserMode.DEVELOPER, accent, theme) {
                             onModeChange(BrowserMode.DEVELOPER)
                         }
-                        ModeChip("Hack", activeMode == BrowserMode.HACK, accent, theme) {
+                        ModeChip("OLED Black", activeMode == BrowserMode.HACK, accent, theme) {
                             onModeChange(BrowserMode.HACK)
                         }
                     }
+                    // Active mode tagline (e.g. "LIGHT MODE — Clean · Fresh · Easy on Eyes")
+                    Text(
+                        "${activeMode.display().title} — ${activeMode.display().tagline}",
+                        fontSize = 10.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        color = accent,
+                        modifier = Modifier.padding(top = 6.dp)
+                    )
                     Spacer(modifier = Modifier.height(10.dp))
                     // 32-feature grid (4 columns, scrollable)
                     LazyVerticalGrid(

@@ -52,6 +52,10 @@ import androidx.compose.material3.*
 import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
+import androidx.compose.ui.input.nestedscroll.NestedScrollSource
+import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -101,6 +105,8 @@ class TabItem(
     var url by mutableStateOf(url)
     var title by mutableStateOf(title)
     var isIncognito by mutableStateOf(isIncognito)
+    /** 0..100 page-load progress (drives the thin progress bar under the top bar). */
+    var loadProgress by mutableStateOf(0)
 }
 
 class MainActivity : ComponentActivity() {
@@ -882,33 +888,42 @@ class MainActivity : ComponentActivity() {
                                 // Hamburger menu items in order (50+ categorized working options)
                                 item { DrawerCategoryHeader(title = "1. Browser Core Modes") }
                                 item {
-                                    DrawerItem(label = "Simple Mode", icon = Icons.Default.Filter1, color = Color(0xFF3B82F6)) {
+                                    DrawerItem(
+                                        label = BrowserMode.SIMPLE.display().title,
+                                        subtitle = BrowserMode.SIMPLE.display().tagline,
+                                        icon = Icons.Default.Filter1, color = Color(0xFF3B82F6)
+                                    ) {
                                         scope.launch {
                                             drawerState.close()
                                             // V9: engine switch (restarts when the engine changes).
                                             val restarting = v9SwitchMode(BrowserMode.SIMPLE, currentTab.webView, forceDesktopMode)
-                                            if (!restarting) Toast.makeText(this@MainActivity, "Simple Mode Activated", Toast.LENGTH_SHORT).show()
-                                        }
+                                            if (!restarting) Toast.makeText(this@MainActivity, "Light Mode Activated", Toast.LENGTH_SHORT).show()                                        }
                                     }
                                 }
                                 item {
-                                    DrawerItem(label = "Developer Mode", icon = Icons.Default.Filter2, color = Color(0xFF7C3AED)) {
+                                    DrawerItem(
+                                        label = BrowserMode.DEVELOPER.display().title,
+                                        subtitle = BrowserMode.DEVELOPER.display().tagline,
+                                        icon = Icons.Default.Filter2, color = Color(0xFF7C3AED)
+                                    ) {
                                         scope.launch {
                                             drawerState.close()
                                             // V9: engine switch (restarts when the engine changes).
                                             val restarting = v9SwitchMode(BrowserMode.DEVELOPER, currentTab.webView, forceDesktopMode)
-                                            if (!restarting) Toast.makeText(this@MainActivity, "Developer Mode Activated", Toast.LENGTH_SHORT).show()
-                                        }
+                                            if (!restarting) Toast.makeText(this@MainActivity, "Dark Mode Activated", Toast.LENGTH_SHORT).show()                                        }
                                     }
                                 }
                                 item {
-                                    DrawerItem(label = "Power / Hack Mode", icon = Icons.Default.Filter3, color = Color(0xFFDC2626)) {
+                                    DrawerItem(
+                                        label = BrowserMode.HACK.display().title,
+                                        subtitle = BrowserMode.HACK.display().tagline,
+                                        icon = Icons.Default.Filter3, color = Color(0xFFDC2626)
+                                    ) {
                                         scope.launch {
                                             drawerState.close()
                                             // V9: engine switch (restarts when the engine changes).
                                             val restarting = v9SwitchMode(BrowserMode.HACK, currentTab.webView, forceDesktopMode)
-                                            if (!restarting) Toast.makeText(this@MainActivity, "Power Hack Mode Activated", Toast.LENGTH_SHORT).show()
-                                        }
+                                            if (!restarting) Toast.makeText(this@MainActivity, "OLED Black / Future Mode Activated", Toast.LENGTH_SHORT).show()                                        }
                                     }
                                 }
 
@@ -1426,6 +1441,25 @@ class MainActivity : ComponentActivity() {
                             // Immersive Fullscreen WebView setup: if loaded, hide overlays for full screen coverage!
                             val showOverlays = currentTab.url == "about:blank"
 
+                            // Browse-surface polish: hide the top toolbar while the user
+                            // scrolls page content down, reveal on scroll up.
+                            // Event-driven only (no continuous animation — battery-safe).
+                            var toolbarVisible by remember { mutableStateOf(true) }
+                            val toolbarScrollConnection = remember {
+                                object : NestedScrollConnection {
+                                    override fun onPreScroll(
+                                        available: Offset,
+                                        source: NestedScrollSource
+                                    ): Offset {
+                                        if (available.y < -8f) toolbarVisible = false
+                                        else if (available.y > 8f) toolbarVisible = true
+                                        return Offset.Zero
+                                    }
+                                }
+                            }
+                            // New page → toolbar back.
+                            LaunchedEffect(currentTab.url) { toolbarVisible = true }
+
                             // Manual immersive mode also hides the Android system bars.
                             LaunchedEffect(immersiveMode) {
                                 val controller = WindowInsetsControllerCompat(window, window.decorView)
@@ -1448,34 +1482,61 @@ class MainActivity : ComponentActivity() {
                                 // SURFACE 2 — Browsing: compact address bar + privacy strip.
                                 // (Home surface has no browser top bar — it has its own
                                 // big search bar; tab switching lives in the bottom nav.)
+                                //
+                                // Polish: toolbar auto-hides on scroll-down / reveals on
+                                // scroll-up (event-driven), thin page-load progress bar,
+                                // and a one-shot crossfade when the mode theme changes.
                                 AnimatedVisibility(
-                                    visible = !immersiveMode && !showOverlays,
+                                    visible = !immersiveMode && !showOverlays && toolbarVisible,
                                     enter = expandVertically() + fadeIn(),
                                     exit = shrinkVertically() + fadeOut()
                                 ) {
-                                    Column {
-                                        CompactBrowseBar(
-                                            theme = theme,
-                                            currentUrl = currentTab.url,
-                                            onNavigate = { input ->
-                                                val destination = formatUrl(input, currentSearchEngineSetting, activeMode)
-                                                currentTab.url = destination
-                                                currentTab.webView?.loadUrl(destination)
-                                            },
-                                            onReload = { currentTab.webView?.reload() },
-                                            onMenuClick = { showBrowserMenu = true }
-                                        )
-                                        PrivacyStrip(
-                                            theme = theme,
-                                            adBlockerEnabled = adBlockerEnabled,
-                                            blockedCount = blockedCount,
-                                            onClick = { showPrivacyGuards = true }
-                                        )
+                                    Crossfade(targetState = theme, label = "topbarTheme") { themed ->
+                                        Column {
+                                            CompactBrowseBar(
+                                                theme = themed,
+                                                currentUrl = currentTab.url,
+                                                onNavigate = { input ->
+                                                    val destination = formatUrl(input, currentSearchEngineSetting, activeMode)
+                                                    currentTab.url = destination
+                                                    currentTab.webView?.loadUrl(destination)
+                                                },
+                                                onReload = { currentTab.webView?.reload() },
+                                                onMenuClick = { showBrowserMenu = true }
+                                            )
+                                            PrivacyStrip(
+                                                theme = themed,
+                                                adBlockerEnabled = adBlockerEnabled,
+                                                blockedCount = blockedCount,
+                                                onClick = { showPrivacyGuards = true }
+                                            )
+                                            // Thin page-load progress indicator.
+                                            val progress = currentTab.loadProgress
+                                            androidx.compose.animation.AnimatedVisibility(
+                                                visible = progress in 1..99,
+                                                enter = fadeIn(),
+                                                exit = fadeOut()
+                                            ) {
+                                                LinearProgressIndicator(
+                                                    progress = progress / 100f,
+                                                    modifier = Modifier
+                                                        .fillMaxWidth()
+                                                        .height(2.dp),
+                                                    color = themed.primary,
+                                                    trackColor = themed.topBarBg
+                                                )
+                                            }
+                                        }
                                     }
                                 }
 
                                 // 4. MAIN CONTENT CONTAINER (WIDGET-STYLE DASHBOARD OR WEBVIEW)
-                                Box(modifier = Modifier.weight(1f)) {
+                                // Nested-scroll: drives the toolbar auto-hide on page scroll.
+                                Box(
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .nestedScroll(toolbarScrollConnection)
+                                ) {
                                     if (currentTab.url == "about:blank") {
                                         // Overhauled premium dashboard home page
                                         ClickHomeScreen(
@@ -1723,6 +1784,13 @@ class MainActivity : ComponentActivity() {
                                                                 super.onReceivedTitle(view, title)
                                                                 currentTab.title = title ?: "Page"
                                                             }
+
+                                                            // Page-load progress → thin progress bar under the
+                                                            // top bar (battery-safe: only fires while loading).
+                                                            override fun onProgressChanged(view: WebView?, newProgress: Int) {
+                                                                super.onProgressChanged(view, newProgress)
+                                                                tabs.firstOrNull { it.webView === view }?.loadProgress = newProgress
+                                                            }
                                                         }
 
                                                         // Setup Bridges
@@ -1881,22 +1949,29 @@ class MainActivity : ComponentActivity() {
                                 )
                             }
 
-                            // SURFACE 2 — Browsing bottom nav: Back · Forward · Home ·
-                            // Tabs (count badge) · Menu. (No center AI tab here — AI
-                            // lives in the floating button.)
+                            // SURFACE 2 — Browsing bottom nav: ☰ Menu(drawer) · ‹ Back ·
+                            // › Forward · ⌂ Home · ▭ Tabs (count badge) · ⋮ More.
+                            // (No center AI tab here — AI lives in the floating pill.)
+                            // Polish: one-shot theme crossfade (battery-safe).
                             if (!showOverlays && !immersiveMode) {
-                                BrowseBottomNav(
-                                    theme = ModeThemes.forMode(activeMode, dark = activeMode != BrowserMode.SIMPLE),
-                                    tabCount = tabs.size,
-                                    canGoBack = currentTab.webView?.canGoBack() == true,
-                                    canGoForward = currentTab.webView?.canGoForward() == true,
-                                    onBack = { currentTab.webView?.goBack() },
-                                    onForward = { currentTab.webView?.goForward() },
-                                    onHome = { currentTab.url = "about:blank" },
-                                    onTabs = { showTabsManager = true },
-                                    onMenu = { showBrowserMenu = true },
+                                Crossfade(
+                                    targetState = theme,
+                                    label = "browseNavTheme",
                                     modifier = Modifier.align(Alignment.BottomCenter)
-                                )
+                                ) { themed ->
+                                    BrowseBottomNav(
+                                        theme = themed,
+                                        tabCount = tabs.size,
+                                        canGoBack = currentTab.webView?.canGoBack() == true,
+                                        canGoForward = currentTab.webView?.canGoForward() == true,
+                                        onDrawerClick = { scope.launch { drawerState.open() } },
+                                        onBack = { currentTab.webView?.goBack() },
+                                        onForward = { currentTab.webView?.goForward() },
+                                        onHome = { currentTab.url = "about:blank" },
+                                        onTabs = { showTabsManager = true },
+                                        onMenu = { showBrowserMenu = true }
+                                    )
+                                }
                             }
 
                             // Premium UI v2: always-visible bottom-left feature menu FAB
@@ -2131,6 +2206,24 @@ class MainActivity : ComponentActivity() {
                                     }
                                 )
                             }
+                            // AI chat panel — one-shot slide/spring entrance (battery-safe:
+                            // no continuous animation).
+                            androidx.compose.animation.AnimatedVisibility(
+                                visible = showAiChat && !tamperBlocked,
+                                enter = androidx.compose.animation.slideInVertically(
+                                    initialOffsetY = { it },
+                                    animationSpec = androidx.compose.animation.core.spring(
+                                        dampingRatio = androidx.compose.animation.core.Spring.DampingRatioLowBouncy,
+                                        stiffness = androidx.compose.animation.core.Spring.StiffnessMediumLow
+                                    )
+                                ) + androidx.compose.animation.fadeIn(),
+                                exit = androidx.compose.animation.slideOutVertically(
+                                    targetOffsetY = { it },
+                                    animationSpec = androidx.compose.animation.core.tween(220)
+                                ) + androidx.compose.animation.fadeOut(
+                                    animationSpec = androidx.compose.animation.core.tween(180)
+                                )
+                            ) {
                             if (showAiChat && !tamperBlocked) {
                                 // Key resolution: the user's own Settings key wins; otherwise fall
                                 // back to the built-in Groq key (XOR-obfuscated in BuildConfig,
@@ -2167,6 +2260,7 @@ class MainActivity : ComponentActivity() {
                                     onClose = { showAiChat = false }
                                 )
                             }
+                            } // AnimatedVisibility (AI chat slide/spring)
                             if (showPrivacyGuards) {
                                 PrivacyGuardsScreen(
                                     headerSpoofEnabled = headerSpoofEnabled,
@@ -2737,6 +2831,7 @@ fun DrawerItem(
     label: String,
     icon: ImageVector,
     color: Color,
+    subtitle: String? = null,
     onClick: () -> Unit = {}
 ) {
     var pressed by remember { mutableStateOf(false) }
@@ -2776,14 +2871,25 @@ fun DrawerItem(
                 Icon(icon, contentDescription = null, tint = color, modifier = Modifier.size(16.dp))
             }
             Spacer(modifier = Modifier.width(12.dp))
-            Text(
-                text = label,
-                color = MaterialTheme.colorScheme.onSurface,
-                fontSize = 11.sp,
-                fontWeight = FontWeight.Bold,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis
-            )
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = label,
+                    color = MaterialTheme.colorScheme.onSurface,
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.Bold,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+                if (subtitle != null) {
+                    Text(
+                        text = subtitle,
+                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.55f),
+                        fontSize = 9.sp,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
+            }
         }
     }
 }
