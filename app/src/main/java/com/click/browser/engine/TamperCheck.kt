@@ -25,6 +25,16 @@ import java.security.MessageDigest
  *   SHA-256 (Play Console → Setup → App integrity → "App signing key
  *   certificate", filled 2026-10-09). Both fingerprints are accepted; any
  *   other certificate still triggers the warning.
+ *
+ * Fingerprint runbook (keep these current or installs will false-positive):
+ * - Play rotates the app signing key, or the upload keystore
+ *   (click-browser.p12) is ever replaced → update the constants below and
+ *   ship a new release BEFORE the next Play upload.
+ * - Source of truth: Play Console → Setup → App integrity → "App signing
+ *   key certificate" (SHA-256) and the upload keystore's own SHA-256.
+ * - After pasting, verify the 64-hex-char value character-by-character
+ *   against the Console (a single wrong char reintroduces the false
+ *   positive); the runtime comparison is case- and colon-insensitive.
  */
 object TamperCheck {
 
