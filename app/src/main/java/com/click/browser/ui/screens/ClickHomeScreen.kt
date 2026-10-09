@@ -28,9 +28,9 @@ import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.minimumInteractiveComponentSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.sizeIn
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
@@ -1481,7 +1481,7 @@ private fun BrowseNavContent(
         horizontalAlignment = Alignment.CenterHorizontally,
         modifier = Modifier
             .padding(2.dp)
-            .minimumInteractiveComponentSize()
+            .sizeIn(minHeight = 48.dp, minWidth = 48.dp)
     ) {
         Icon(icon, contentDescription = label, tint = tint, modifier = Modifier.size(19.dp))
         Text(

@@ -88,6 +88,7 @@ import com.click.browser.ui.screens.*
 import androidx.datastore.preferences.core.edit
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -1650,9 +1651,9 @@ class MainActivity : ComponentActivity() {
                                 if (currentTab.url == "about:blank") return@LaunchedEffect
                                 var lastShownAt = android.os.SystemClock.uptimeMillis()
                                 while (true) {
-                                    kotlinx.coroutines.ensureActive()
+                                    ensureActive()
                                     kotlinx.coroutines.delay(18_000)
-                                    kotlinx.coroutines.ensureActive()
+                                    ensureActive()
                                     val now = android.os.SystemClock.uptimeMillis()
                                     val tab = currentTab
                                     if (tab.url == "about:blank") break
