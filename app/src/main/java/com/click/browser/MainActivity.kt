@@ -1060,7 +1060,7 @@ class MainActivity : ComponentActivity() {
                                             drawerState.close()
                                             // V9: engine switch (restarts when the engine changes).
                                             val restarting = v9SwitchMode(BrowserMode.SIMPLE, currentTab.webView, forceDesktopMode)
-                                            if (!restarting) Toast.makeText(this@MainActivity, "Light Mode Activated", Toast.LENGTH_SHORT).show()                                        }
+                                            if (!restarting) Toast.makeText(this@MainActivity, "Simple Mode Activated", Toast.LENGTH_SHORT).show()                                        }
                                     }
                                 }
                                 item {
@@ -1073,7 +1073,7 @@ class MainActivity : ComponentActivity() {
                                             drawerState.close()
                                             // V9: engine switch (restarts when the engine changes).
                                             val restarting = v9SwitchMode(BrowserMode.DEVELOPER, currentTab.webView, forceDesktopMode)
-                                            if (!restarting) Toast.makeText(this@MainActivity, "Dark Mode Activated", Toast.LENGTH_SHORT).show()                                        }
+                                            if (!restarting) Toast.makeText(this@MainActivity, "Developer Mode Activated", Toast.LENGTH_SHORT).show()                                        }
                                     }
                                 }
                                 item {
@@ -1086,7 +1086,7 @@ class MainActivity : ComponentActivity() {
                                             drawerState.close()
                                             // V9: engine switch (restarts when the engine changes).
                                             val restarting = v9SwitchMode(BrowserMode.HACK, currentTab.webView, forceDesktopMode)
-                                            if (!restarting) Toast.makeText(this@MainActivity, "OLED Black / Future Mode Activated", Toast.LENGTH_SHORT).show()                                        }
+                                            if (!restarting) Toast.makeText(this@MainActivity, "Hack Mode Activated", Toast.LENGTH_SHORT).show()                                        }
                                     }
                                 }
 
@@ -3119,10 +3119,17 @@ class MainActivity : ComponentActivity() {
         android.widget.Toast.makeText(
             this, "Switching V9 engine — restarting…", android.widget.Toast.LENGTH_LONG
         ).show()
-        V9Engine.restartForEngineSwitch(
+        val restarted = V9Engine.restartForEngineSwitch(
             this, modeManager, mode,
             hackIntro = (mode == BrowserMode.HACK)
         )
+        if (!restarted) {
+            // Restart wasn't possible (alarm unavailable etc.) — apply the
+            // mode in-place WITHOUT engine isolation rather than killing
+            // the app. Cookies stay shared, but the app stays alive.
+            webView?.let { modeManager.applySettings(it, mode, forceDesktop) }
+            return false
+        }
         return true // unreachable — the process is killed above
     }
 
