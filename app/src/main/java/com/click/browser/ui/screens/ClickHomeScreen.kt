@@ -15,6 +15,8 @@ import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
@@ -79,6 +81,8 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -92,12 +96,16 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
 import com.click.browser.engine.BrowserMode
+import com.click.browser.engine.ModePersonalization
+import com.click.browser.engine.QuickSiteDef
+import kotlinx.coroutines.launch
 import com.click.browser.engine.ModeTheme
 import com.click.browser.engine.NewsArticle
 import com.click.browser.engine.NewsCategory
@@ -171,6 +179,7 @@ fun ClickHomeScreen(
         )
 
         QuickSitesGrid(
+            mode = activeMode,
             cardBg = cardBg,
             cardBorder = cardBorder,
             onSurface = theme.onSurface,
@@ -436,29 +445,27 @@ private fun VoiceMicButton(
     }
 }
 
-private data class QuickSite(val label: String, val url: String, val bg: Color, val glyph: String, val glyphColor: Color)
-
-/** 2×4 quick-site tiles: Google, YouTube, Facebook, Wikipedia, Amazon, Instagram, X, Add. */
+/** Per-mode quick-site tiles — each V9 mode gets its own set, fully user-customizable. */
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun QuickSitesGrid(
+    mode: BrowserMode,
     cardBg: Color,
     cardBorder: Color,
     onSurface: Color,
     onNavigate: (String) -> Unit
 ) {
     val context = LocalContext.current
-    val sites = listOf(
-        QuickSite("Google", "https://google.com", Color(0xFF4285F4), "G", Color.White),
-        QuickSite("YouTube", "https://youtube.com", Color(0xFFFF0000), "▶", Color.White),
-        QuickSite("Facebook", "https://facebook.com", Color(0xFF1877F2), "f", Color.White),
-        QuickSite("Wikipedia", "https://wikipedia.org", Color(0xFFF5F5F5), "W", Color(0xFF333333)),
-        QuickSite("Amazon", "https://amazon.com", Color(0xFF232F3E), "a", Color(0xFFFF9900)),
-        QuickSite("Instagram", "https://instagram.com", Color(0xFFE4405F), "◉", Color.White),
-        QuickSite("X", "https://x.com", Color(0xFF111111), "𝕏", Color.White),
-        QuickSite("Add", "", Color.Transparent, "+", onSurface)
-    )
+    val scope = rememberCoroutineScope()
+    val sites by ModePersonalization.quickSitesFlow(context, mode)
+        .collectAsState(initial = ModePersonalization.defaultQuickSites(mode))
+    var showAddDialog by remember(mode) { mutableStateOf(false) }
+    var manageSite by remember(mode) { mutableStateOf<QuickSiteDef?>(null) }
+
     Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-        sites.chunked(4).forEach { row ->
+        // null entry = the trailing "Add" tile.
+        val tiles: List<QuickSiteDef?> = sites + listOf(null)
+        tiles.chunked(4).forEach { row ->
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceEvenly
@@ -468,46 +475,167 @@ private fun QuickSitesGrid(
                         horizontalAlignment = Alignment.CenterHorizontally,
                         modifier = Modifier
                             .weight(1f)
-                            .clickable(
+                            .combinedClickable(
                                 interactionSource = remember { MutableInteractionSource() },
-                                indication = null
-                            ) {
-                                if (site.label == "Add") {
-                                    Toast.makeText(context, "Custom shortcuts coming soon.", Toast.LENGTH_SHORT).show()
-                                } else onNavigate(site.url)
-                            }
+                                indication = null,
+                                onClick = {
+                                    if (site == null) showAddDialog = true
+                                    else onNavigate(site.url)
+                                },
+                                onLongClick = { if (site != null) manageSite = site }
+                            )
                     ) {
-                        val isAdd = site.label == "Add"
+                        val isAdd = site == null
                         Box(
                             modifier = Modifier
                                 .size(52.dp)
                                 .clip(CircleShape)
                                 .then(
                                     if (isAdd) Modifier.border(1.5.dp, onSurface.copy(alpha = 0.25f), CircleShape)
-                                    else Modifier.background(site.bg)
+                                    else Modifier.background(Color(site!!.bgArgb))
                                 )
                                 .then(
-                                    if (!isAdd && site.label == "Instagram") Modifier.background(
+                                    if (!isAdd && site!!.label == "Instagram") Modifier.background(
                                         Brush.linearGradient(listOf(Color(0xFFFEDA75), Color(0xFFD62976), Color(0xFF962FBF)))
                                     ) else Modifier
                                 ),
                             contentAlignment = Alignment.Center
                         ) {
                             Text(
-                                site.glyph,
-                                color = site.glyphColor,
+                                site?.glyph ?: "+",
+                                color = if (site == null) onSurface else Color(site.glyphColorArgb),
                                 fontWeight = FontWeight.Black,
                                 fontSize = if (isAdd) 24.sp else 20.sp
                             )
                         }
                         Spacer(modifier = Modifier.height(4.dp))
-                        Text(site.label, fontSize = 10.5.sp, color = onSurface.copy(alpha = 0.75f), maxLines = 1)
+                        Text(
+                            site?.label ?: "Add",
+                            fontSize = 10.5.sp,
+                            color = onSurface.copy(alpha = 0.75f),
+                            maxLines = 1
+                        )
                     }
                 }
+                // Pad short rows so tiles keep even spacing.
+                repeat(4 - row.size) { Spacer(modifier = Modifier.weight(1f)) }
             }
         }
     }
+
+    if (showAddDialog) {
+        QuickSiteEditDialog(
+            initial = null,
+            onDismiss = { showAddDialog = false },
+            onSave = { label, url ->
+                scope.launch {
+                    ModePersonalization.addQuickSite(
+                        context, mode,
+                        QuickSiteDef(label, url, 0xFF3A3A4A, label.take(1).uppercase(), 0xFFFFFFFF)
+                    )
+                }
+                showAddDialog = false
+            }
+        )
+    }
+
+    manageSite?.let { target ->
+        var editing by remember(target) { mutableStateOf(false) }
+        if (editing) {
+            QuickSiteEditDialog(
+                initial = target,
+                onDismiss = { editing = false },
+                onSave = { label, url ->
+                    scope.launch {
+                        ModePersonalization.removeQuickSite(context, mode, target.label)
+                        ModePersonalization.addQuickSite(
+                            context, mode,
+                            QuickSiteDef(label, url, target.bgArgb, target.glyph, target.glyphColorArgb)
+                        )
+                    }
+                    manageSite = null
+                }
+            )
+        } else {
+            AlertDialog(
+                onDismissRequest = { manageSite = null },
+                title = { Text(target.label) },
+                text = { Text(target.url, fontSize = 12.sp) },
+                confirmButton = {
+                    TextButton(onClick = { editing = true }) { Text("Edit") }
+                },
+                dismissButton = {
+                    Row {
+                        TextButton(
+                            onClick = {
+                                scope.launch { ModePersonalization.resetQuickSites(context, mode) }
+                                manageSite = null
+                                Toast.makeText(context, "Quick sites reset to defaults", Toast.LENGTH_SHORT).show()
+                            }
+                        ) { Text("Reset all") }
+                        TextButton(
+                            onClick = {
+                                scope.launch { ModePersonalization.removeQuickSite(context, mode, target.label) }
+                                manageSite = null
+                                Toast.makeText(context, "\"${target.label}\" removed", Toast.LENGTH_SHORT).show()
+                            }
+                        ) { Text("Remove") }
+                    }
+                }
+            )
+        }
+    }
 }
+
+/** Add / edit dialog for a quick-site tile. */
+@Composable
+private fun QuickSiteEditDialog(
+    initial: QuickSiteDef?,
+    onDismiss: () -> Unit,
+    onSave: (label: String, url: String) -> Unit
+) {
+    var label by remember { mutableStateOf(initial?.label ?: "") }
+    var url by remember { mutableStateOf(initial?.url ?: "") }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(if (initial == null) "Add shortcut" else "Edit shortcut") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                OutlinedTextField(
+                    value = label,
+                    onValueChange = { label = it.take(18) },
+                    label = { Text("Name") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth()
+                )
+                OutlinedTextField(
+                    value = url,
+                    onValueChange = { url = it },
+                    label = { Text("URL") },
+                    placeholder = { Text("https://example.com") },
+                    singleLine = true,
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri),
+                    modifier = Modifier.fillMaxWidth()
+                )
+            }
+        },
+        confirmButton = {
+            TextButton(
+                onClick = {
+                    val cleanLabel = label.trim()
+                    var cleanUrl = url.trim()
+                    if (cleanLabel.isEmpty() || cleanUrl.isEmpty()) return@TextButton
+                    if (!cleanUrl.startsWith("http://") && !cleanUrl.startsWith("https://")) {
+                        cleanUrl = "https://$cleanUrl"
+                    }
+                    onSave(cleanLabel, cleanUrl)
+                }
+            ) { Text("Save") }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } }
+    )
+}
+
 
 /** Category pill tabs: All (selected blue), News, Tech, AI, Sports, trailing ☰. */
 @Composable

@@ -24,6 +24,7 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.unit.dp
 import com.click.browser.engine.AiProviders
 import com.click.browser.engine.BrowserMode
+import com.click.browser.engine.ModePersonalization
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -182,11 +183,7 @@ fun PremiumSettingsScreen(
             item {
                 Text("Default Search Engine", style = MaterialTheme.typography.titleSmall)
                 Column {
-                    val engines = when (activeMode) {
-                        BrowserMode.SIMPLE -> listOf("Google", "Yahoo", "Bing")
-                        BrowserMode.DEVELOPER -> listOf("Yandex", "DuckDuckGo", "Baidu")
-                        BrowserMode.HACK -> listOf("Onion/Dark Web search", "Deep Search", "integrated AI search")
-                    }
+                    val engines = ModePersonalization.searchEngines(activeMode)
 
                     LaunchedEffect(activeMode) {
                         if (currentSearchEngineSetting !in engines) {
