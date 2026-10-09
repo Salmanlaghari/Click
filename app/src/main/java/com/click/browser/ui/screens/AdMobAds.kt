@@ -32,7 +32,6 @@ import com.google.android.gms.ads.AdRequest
 import com.google.android.gms.ads.AdSize
 import com.google.android.gms.ads.AdView
 import com.google.android.gms.ads.LoadAdError
-import com.google.android.gms.ads.MobileAds
 import com.google.android.gms.ads.nativead.MediaView
 import com.google.android.gms.ads.nativead.NativeAd
 import com.google.android.gms.ads.nativead.NativeAdOptions
@@ -74,7 +73,7 @@ fun AdMobBannerAd(modifier: Modifier = Modifier) {
             )
             adListener = object : AdListener() {
                 override fun onAdFailedToLoad(error: LoadAdError) {
-                    Log.w(TAG, "Banner ad failed to load: ${error.message}")
+                    Log.w(TAG, "Banner ad failed to load: ${error.message ?: "unknown error"}")
                 }
             }
         }
@@ -124,7 +123,7 @@ fun AdMobNativeAd(
             }
             .withAdListener(object : AdListener() {
                 override fun onAdFailedToLoad(error: LoadAdError) {
-                    Log.w(TAG, "Native ad failed to load: ${error.message}")
+                    Log.w(TAG, "Native ad failed to load: ${error.message ?: "unknown error"}")
                 }
             })
             .withNativeAdOptions(NativeAdOptions.Builder().build())
@@ -161,12 +160,12 @@ fun AdMobNativeAd(
                 }
 
                 // "Ad" badge — required by AdMob policy for native ads.
-                // Grey 700 + white text: high contrast on any theme.
+                // Grey 800 + white text: ~9:1 contrast, WCAG AA safe on any theme.
                 val badge = TextView(ctx).apply {
                     text = "Ad"
                     textSize = 10f
                     setTextColor(android.graphics.Color.WHITE)
-                    setBackgroundColor(Color(0xFF616161).toArgb())
+                    setBackgroundColor(Color(0xFF424242).toArgb())
                     val hPad = (8 * density).toInt()
                     val vPad = (3 * density).toInt()
                     setPadding(hPad, vPad, hPad, vPad)
