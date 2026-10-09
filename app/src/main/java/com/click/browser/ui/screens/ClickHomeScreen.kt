@@ -246,7 +246,9 @@ fun ClickHomeScreen(
             onReaderMode = onReaderMode
         )
 
-        Spacer(modifier = Modifier.height(8.dp))
+        // Bottom nav overlays the content (aligned BottomCenter) — without this
+        // padding the last items hide behind it with nothing to scroll.
+        Spacer(modifier = Modifier.height(96.dp))
     }
     } // Box: wallpaper background + content
 }
