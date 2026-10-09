@@ -22,23 +22,23 @@ import com.click.browser.engine.BrowserMode
  * Browse-surface polish (Prince's "Same Website. 3 Beautiful Modes." reference).
  *
  * Official per-mode display names + taglines, used by every mode switcher:
- * - LIGHT MODE — Clean · Fresh · Easy on Eyes
- * - DARK MODE — Modern · Stylish · Premium
- * - OLED BLACK / FUTURE MODE — Pure Black · Neon Glow · Next Level
+ * - Simple — Clean · Fresh · Easy on Eyes
+ * - Developer — Modern · Stylish · Premium
+ * - Hack — Pure Black · Neon Glow · Next Level
  */
 data class ModeDisplay(val title: String, val tagline: String)
 
 fun BrowserMode.display(): ModeDisplay = when (this) {
     BrowserMode.SIMPLE -> ModeDisplay(
-        "LIGHT MODE",
+        "Simple",
         "Clean · Fresh · Easy on Eyes"
     )
     BrowserMode.DEVELOPER -> ModeDisplay(
-        "DARK MODE",
+        "Developer",
         "Modern · Stylish · Premium"
     )
     BrowserMode.HACK -> ModeDisplay(
-        "OLED BLACK / FUTURE MODE",
+        "Hack",
         "Pure Black · Neon Glow · Next Level"
     )
 }

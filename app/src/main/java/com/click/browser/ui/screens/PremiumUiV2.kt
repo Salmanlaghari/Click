@@ -303,17 +303,17 @@ fun FeatureMenuFabOverlay(
                         horizontalArrangement = Arrangement.spacedBy(8.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        ModeChip("Light", activeMode == BrowserMode.SIMPLE, accent, theme) {
+                        ModeChip("Simple", activeMode == BrowserMode.SIMPLE, accent, theme) {
                             onModeChange(BrowserMode.SIMPLE)
                         }
-                        ModeChip("Dark", activeMode == BrowserMode.DEVELOPER, accent, theme) {
+                        ModeChip("Developer", activeMode == BrowserMode.DEVELOPER, accent, theme) {
                             onModeChange(BrowserMode.DEVELOPER)
                         }
-                        ModeChip("OLED Black", activeMode == BrowserMode.HACK, accent, theme) {
+                        ModeChip("Hack", activeMode == BrowserMode.HACK, accent, theme) {
                             onModeChange(BrowserMode.HACK)
                         }
                     }
-                    // Active mode tagline (e.g. "LIGHT MODE — Clean · Fresh · Easy on Eyes")
+                    // Active mode tagline (e.g. "Simple — Clean · Fresh · Easy on Eyes")
                     Text(
                         "${activeMode.display().title} — ${activeMode.display().tagline}",
                         fontSize = 10.sp,

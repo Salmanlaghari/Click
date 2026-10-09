@@ -148,37 +148,95 @@ object V9Engine {
      * directory takes effect. setMode() is suspend and returns after the
      * DataStore write completes, so the new mode is durable before we die.
      *
+     * RELIABILITY: the old code called Process.killProcess() UNCONDITIONALLY,
+     * even when the restart alarm was never scheduled (null launch intent or
+     * exception) — the app died and never came back. It also used an inexact
+     * 400ms alarm that MIUI/OEM battery optimizers routinely swallow after a
+     * kill. This version:
+     *  1. NEVER kills the process unless a restart is actually scheduled
+     *     (returns false so the caller can apply the mode in-place instead).
+     *  2. Uses RTC_WAKEUP + setAndAllowWhileIdle (fires even in Doze, no
+     *     SCHEDULE_EXACT_ALARM permission needed) with a 1s delay.
+     *  3. Also starts the relaunch intent directly as a backup before dying.
+     *
      * @param hackIntro when true, the relaunched process shows the Hack Mode
      *   Markhor intro animation once (see HackIntroOverlay).
+     * @return true if a restart was triggered; false if we stayed alive
+     *   (caller should apply the mode in-place without engine isolation).
      */
     suspend fun restartForEngineSwitch(
         context: Context,
         modeManager: ModeManager,
         mode: BrowserMode,
         hackIntro: Boolean = false,
-    ) {
+    ): Boolean {
         modeManager.setMode(mode)
-        try {
-            val launch = context.packageManager
+
+        // 1. Build the relaunch intent. If this fails we MUST NOT kill the
+        // process — better to stay alive on the old engine than to die.
+        val launch: Intent? = try {
+            context.packageManager
                 .getLaunchIntentForPackage(context.packageName)
                 ?.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK)
-            if (launch != null) {
-                if (hackIntro) launch.putExtra(EXTRA_HACK_INTRO, true)
-                val pi = PendingIntent.getActivity(
-                    context, 0, launch,
-                    PendingIntent.FLAG_CANCEL_CURRENT or PendingIntent.FLAG_IMMUTABLE
-                )
-                val am = context.getSystemService(Context.ALARM_SERVICE) as AlarmManager
-                am.set(AlarmManager.RTC, System.currentTimeMillis() + 400, pi)
-            }
+                ?.also { if (hackIntro) it.putExtra(EXTRA_HACK_INTRO, true) }
+        } catch (t: Throwable) {
+            Log.e(TAG, "V9: cannot build relaunch intent", t)
+            null
+        }
+        if (launch == null) {
+            Log.e(TAG, "V9: no launch intent — staying alive, mode applied in-place")
+            return false
+        }
+
+        // 2. Schedule the relaunch via AlarmManager. setAndAllowWhileIdle
+        // fires even in Doze and needs no exact-alarm permission.
+        var scheduled = false
+        try {
+            val pi = PendingIntent.getActivity(
+                context, RESTART_REQUEST_CODE, launch,
+                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+            )
+            val am = context.getSystemService(Context.ALARM_SERVICE) as AlarmManager
+            am.setAndAllowWhileIdle(
+                AlarmManager.RTC_WAKEUP,
+                System.currentTimeMillis() + RESTART_DELAY_MS,
+                pi
+            )
+            scheduled = true
         } catch (t: Throwable) {
             Log.e(TAG, "V9 restart schedule failed", t)
         }
+
+        // 3. Backup: start the relaunch intent directly NOW. With
+        // CLEAR_TASK|NEW_TASK the old stack is torn down. If an OEM skin
+        // swallows the alarm after killProcess, the system still has a live
+        // activity record to keep the app visible.
+        try {
+            context.startActivity(launch)
+        } catch (t: Throwable) {
+            Log.e(TAG, "V9: direct relaunch failed, relying on alarm", t)
+        }
+
+        if (!scheduled) {
+            // Last resort: do NOT kill — a live app on the old engine beats
+            // a dead app. Caller applies the mode in-place.
+            Log.e(TAG, "V9: restart not scheduled — staying alive")
+            return false
+        }
+
+        // 4. Give the alarm + the directly-started activity a moment, then die.
+        // The alarm fires in a FRESH process where ClickApplication pins the
+        // new engine's WebView data directory.
+        kotlinx.coroutines.delay(RESTART_DELAY_MS)
         Process.killProcess(Process.myPid())
+        return true // unreachable
     }
 
     /** Intent extra: show the Hack Mode intro animation on launch. */
     const val EXTRA_HACK_INTRO = "v9_hack_intro"
+
+    private const val RESTART_REQUEST_CODE = 9001
+    private const val RESTART_DELAY_MS = 1000L
 
     /**
      * Per-engine JS fingerprint: overrides navigator/screen/WebGL values to
