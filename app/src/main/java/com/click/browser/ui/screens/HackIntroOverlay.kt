@@ -12,6 +12,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.*
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -196,6 +197,28 @@ fun HackIntroOverlay(
             val g = (glitchT * 997).toInt()
             val xOff = if (g % 11 < 2) ((g % 5) - 2) * 6f else 0f
             val glowAlpha = 0.55f + 0.35f * pulse
+            // Hoisted out of the word loop (Kilo): styles are remembered, not
+            // rebuilt on every recomposition. Highlight offset is density-
+            // independent (Kilo suggestion).
+            val highlightRimPx = with(LocalDensity.current) { 3.dp.toPx() }
+            val headlineStyle = remember(glowAlpha) {
+                TextStyle(
+                    shadow = Shadow(
+                        color = Color(0xFFEF4444).copy(alpha = glowAlpha),
+                        offset = Offset(0f, 0f),
+                        blurRadius = 26f
+                    )
+                )
+            }
+            val subtitleStyle = remember {
+                TextStyle(
+                    shadow = Shadow(
+                        color = Color(0xFFEF4444).copy(alpha = 0.60f),
+                        offset = Offset(0f, 0f),
+                        blurRadius = 12f
+                    )
+                )
+            }
             val words = title.split(" ").filter { it.isNotBlank() }
             words.forEachIndexed { i, word ->
                 Box {
@@ -210,7 +233,7 @@ fun HackIntroOverlay(
                         lineHeight = 54.sp,
                         modifier = Modifier.graphicsLayer {
                             translationX = xOff
-                            translationY = -3f
+                            translationY = -highlightRimPx
                         }
                     )
                     // Main glyph: deep red that melts into the background.
@@ -221,13 +244,7 @@ fun HackIntroOverlay(
                         fontWeight = FontWeight.Black,
                         letterSpacing = 6.sp,
                         lineHeight = 54.sp,
-                        style = TextStyle(
-                            shadow = Shadow(
-                                color = Color(0xFFEF4444).copy(alpha = glowAlpha),
-                                offset = Offset(0f, 0f),
-                                blurRadius = 26f
-                            )
-                        ),
+                        style = headlineStyle,
                         modifier = Modifier.graphicsLayer { translationX = xOff }
                     )
                 }
@@ -240,18 +257,21 @@ fun HackIntroOverlay(
                 fontSize = 13.sp,
                 fontWeight = FontWeight.Bold,
                 letterSpacing = 4.sp,
-                style = TextStyle(
-                    shadow = Shadow(
-                        color = Color(0xFFEF4444).copy(alpha = 0.60f),
-                        offset = Offset(0f, 0f),
-                        blurRadius = 12f
-                    )
-                )
+                style = subtitleStyle
             )
         }
 
         // TEAM PK AI ERA mark at the bottom — hidden when the subtitle already
         // says it (app-start intro), to avoid showing it twice.
+        val bottomMarkStyle = remember {
+            TextStyle(
+                shadow = Shadow(
+                    color = Color(0xFFEF4444).copy(alpha = 0.70f),
+                    offset = Offset(0f, 0f),
+                    blurRadius = 18f
+                )
+            )
+        }
         if (!subtitle.equals("TEAM PK AI ERA", ignoreCase = true)) {
             Column(
                 modifier = Modifier
@@ -265,13 +285,7 @@ fun HackIntroOverlay(
                     fontSize = 22.sp,
                     fontWeight = FontWeight.ExtraBold,
                     letterSpacing = 5.sp,
-                    style = TextStyle(
-                        shadow = Shadow(
-                            color = Color(0xFFEF4444).copy(alpha = 0.70f),
-                            offset = Offset(0f, 0f),
-                            blurRadius = 18f
-                        )
-                    )
+                    style = bottomMarkStyle
                 )
                 Spacer(Modifier.height(4.dp))
                 Text(
