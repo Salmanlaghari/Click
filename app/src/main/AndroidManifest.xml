@@ -38,6 +38,11 @@
             </intent-filter>
         </activity>
 
+        <!-- Google AdMob application ID (Prince's AdMob account). -->
+        <meta-data
+            android:name="com.google.android.gms.ads.APPLICATION_ID"
+            android:value="ca-app-pub-8178045957849630~6809369700" />
+
         <!-- V9 Shield VPN service (DNS protection tunnel). -->
         <service
             android:name=".engine.V9VpnService"
