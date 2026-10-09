@@ -1530,6 +1530,38 @@ class MainActivity : ComponentActivity() {
                                 }
                             }
 
+                            // Bottom-address-bar flag: the bar renders below the page.
+                            // Defined at this outer scope so both top and bottom
+                            // call sites can see it.
+                            @Composable
+                            fun BrowseTopBarBlock() {
+                                AnimatedVisibility(
+                                    visible = !immersiveMode && !showOverlays,
+                                    enter = expandVertically() + fadeIn(),
+                                    exit = shrinkVertically() + fadeOut()
+                                ) {
+                                    Column {
+                                        CompactBrowseBar(
+                                            theme = theme,
+                                            currentUrl = currentTab.url,
+                                            onNavigate = { input ->
+                                                val destination = formatUrl(input, currentSearchEngineSetting, activeMode)
+                                                currentTab.url = destination
+                                                currentTab.webView?.loadUrl(destination)
+                                            },
+                                            onReload = { currentTab.webView?.reload() },
+                                            onMenuClick = { showBrowserMenu = true }
+                                        )
+                                        PrivacyStrip(
+                                            theme = theme,
+                                            adBlockerEnabled = adBlockerEnabled,
+                                            blockedCount = blockedCount,
+                                            onClick = { showPrivacyGuards = true }
+                                        )
+                                    }
+                                }
+                            }
+
                             Column(modifier = Modifier.fillMaxSize()) {
 
                                 // PREMIUM UI v2 — Chrome-like single-row top bar (Prince-approved
@@ -1540,37 +1572,6 @@ class MainActivity : ComponentActivity() {
                                 // SURFACE 2 — Browsing: compact address bar + privacy strip.
                                 // (Home surface has no browser top bar — it has its own
                                 // big search bar; tab switching lives in the bottom nav.)
-                                // Bottom-address-bar flag: the bar renders below the page.
-                                // Defined at this outer scope so both top and bottom
-                                // call sites can see it.
-                                @Composable
-                                fun BrowseTopBarBlock() {
-                                    AnimatedVisibility(
-                                        visible = !immersiveMode && !showOverlays,
-                                        enter = expandVertically() + fadeIn(),
-                                        exit = shrinkVertically() + fadeOut()
-                                    ) {
-                                        Column {
-                                            CompactBrowseBar(
-                                                theme = theme,
-                                                currentUrl = currentTab.url,
-                                                onNavigate = { input ->
-                                                    val destination = formatUrl(input, currentSearchEngineSetting, activeMode)
-                                                    currentTab.url = destination
-                                                    currentTab.webView?.loadUrl(destination)
-                                                },
-                                                onReload = { currentTab.webView?.reload() },
-                                                onMenuClick = { showBrowserMenu = true }
-                                            )
-                                            PrivacyStrip(
-                                                theme = theme,
-                                                adBlockerEnabled = adBlockerEnabled,
-                                                blockedCount = blockedCount,
-                                                onClick = { showPrivacyGuards = true }
-                                            )
-                                        }
-                                    }
-                                }
                                 if (!flagsUi.bottomAddressBar) BrowseTopBarBlock()
 
                                 // 4. MAIN CONTENT CONTAINER (WIDGET-STYLE DASHBOARD OR WEBVIEW)
