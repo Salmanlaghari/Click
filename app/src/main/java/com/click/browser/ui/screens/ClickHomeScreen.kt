@@ -136,12 +136,14 @@ fun ClickHomeScreen(
     adBlockerEnabled: Boolean,
     blockedCount: Int,
     wallpaperUri: String? = null,
+    shieldActive: Boolean = false,
     onNavigate: (String) -> Unit,
     onOpenAiChat: () -> Unit,
     onTranslate: () -> Unit,
     onReaderMode: () -> Unit,
     onQrClick: () -> Unit,
     onProfileClick: () -> Unit,
+    onV9ShieldClick: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val isHackNeon = activeMode == BrowserMode.HACK
@@ -222,6 +224,17 @@ fun ClickHomeScreen(
             onQrClick = onQrClick
         )
 
+        // V9 Shield: big prominent VPN toggle card (Prince couldn't find it).
+        // One tap opens the Shield screen; shows live ON/OFF state.
+        V9ShieldCard(
+            theme = theme,
+            active = shieldActive,
+            neon = isHackNeon,
+            cardBg = cardBg,
+            cardBorder = cardBorder,
+            onClick = onV9ShieldClick
+        )
+
         QuickSitesGrid(
             mode = activeMode,
             cardBg = cardBg,
@@ -252,6 +265,83 @@ fun ClickHomeScreen(
         Spacer(modifier = Modifier.height(96.dp))
     }
     } // Box: wallpaper background + content
+}
+
+/** V9 Shield: big prominent VPN card on the home screen. One tap toggles. */
+@Composable
+private fun V9ShieldCard(
+    theme: ModeTheme,
+    active: Boolean,
+    neon: Boolean,
+    cardBg: Color,
+    cardBorder: Color,
+    onClick: () -> Unit
+) {
+    val accent = if (active) Color(0xFF22C55E) else theme.primary
+    Card(
+        shape = RoundedCornerShape(18.dp),
+        colors = CardDefaults.cardColors(containerColor = cardBg),
+        border = androidx.compose.foundation.BorderStroke(
+            1.5.dp,
+            if (active) Color(0xFF22C55E).copy(alpha = 0.6f) else cardBorder
+        ),
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onClick)
+    ) {
+        Row(
+            modifier = Modifier.padding(16.dp).fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Box(
+                modifier = Modifier
+                    .size(52.dp)
+                    .background(
+                        Brush.linearGradient(
+                            listOf(
+                                accent,
+                                if (neon) Color(0xFF22D3EE) else theme.primary.copy(alpha = 0.6f)
+                            )
+                        ),
+                        RoundedCornerShape(14.dp)
+                    ),
+                contentAlignment = Alignment.Center
+            ) {
+                Text("🛡️", fontSize = 26.sp)
+            }
+            Spacer(Modifier.width(14.dp))
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    "V9 Shield VPN",
+                    color = theme.onSurface,
+                    fontWeight = FontWeight.ExtraBold,
+                    fontSize = 16.sp
+                )
+                Text(
+                    if (active) "● Protected — encrypted DNS active"
+                    else "Tap to enable private browsing protection",
+                    color = if (active) Color(0xFF22C55E) else theme.onSurface.copy(alpha = 0.6f),
+                    fontSize = 12.sp
+                )
+            }
+            // Toggle pill.
+            Box(
+                modifier = Modifier
+                    .background(
+                        if (active) Color(0xFF22C55E) else theme.onSurface.copy(alpha = 0.15f),
+                        RoundedCornerShape(50)
+                    )
+                    .padding(horizontal = 14.dp, vertical = 8.dp)
+            ) {
+                Text(
+                    if (active) "ON" else "OFF",
+                    color = Color.White,
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 12.sp
+                )
+            }
+        }
+    }
 }
 
 /** Top row: gradient "C Click" logo · Protected pill · avatar. */

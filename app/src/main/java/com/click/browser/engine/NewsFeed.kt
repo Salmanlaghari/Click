@@ -77,10 +77,14 @@ object NewsFeed {
     private val feeds = listOf(
         FeedDef("https://feeds.bbci.co.uk/news/rss.xml", "BBC News", NewsCategory.NEWS),
         FeedDef("https://www.dawn.com/feed", "Dawn", NewsCategory.NEWS),
+        FeedDef("https://news.google.com/rss?hl=en-US&gl=US&ceid=US:en", "Google News", NewsCategory.NEWS),
         FeedDef("https://feeds.bbci.co.uk/news/technology/rss.xml", "BBC Tech", NewsCategory.TECH),
         FeedDef("https://techcrunch.com/feed/", "TechCrunch", NewsCategory.TECH),
+        FeedDef("https://news.google.com/rss/search?q=technology&hl=en-US&gl=US&ceid=US:en", "Google Tech", NewsCategory.TECH),
         FeedDef("https://techcrunch.com/category/artificial-intelligence/feed/", "TechCrunch AI", NewsCategory.AI),
-        FeedDef("https://feeds.bbci.co.uk/sport/rss.xml", "BBC Sport", NewsCategory.SPORTS)
+        FeedDef("https://news.google.com/rss/search?q=artificial%20intelligence&hl=en-US&gl=US&ceid=US:en", "Google AI", NewsCategory.AI),
+        FeedDef("https://feeds.bbci.co.uk/sport/rss.xml", "BBC Sport", NewsCategory.SPORTS),
+        FeedDef("https://news.google.com/rss/search?q=sports&hl=en-US&gl=US&ceid=US:en", "Google Sports", NewsCategory.SPORTS)
     )
 
     private const val CACHE_TTL_MS = 30 * 60 * 1000L // 30 minutes

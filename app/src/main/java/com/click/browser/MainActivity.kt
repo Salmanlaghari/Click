@@ -441,7 +441,9 @@ class MainActivity : ComponentActivity() {
         com.click.browser.engine.MlKitTranslator.loadLanguages(this)
 
         setContent {
-            // Premium cold-start splash (rememberSaveable: not replayed on rotation).
+            // App-start intro: 5s Markhor "TEAM PK AI ERA" animation on EVERY
+            // cold start (Prince's request). rememberSaveable: not replayed
+            // on rotation. Tap skips immediately.
             var showSplash by rememberSaveable { mutableStateOf(true) }
             val scope = rememberCoroutineScope()
             val activeMode by modeManager.modeFlow.collectAsState(initial = BrowserMode.SIMPLE)
@@ -548,6 +550,8 @@ class MainActivity : ComponentActivity() {
             var adBlockerEnabled by remember { mutableStateOf(true) }
             // Real session count of blocked tracker/ad requests (home privacy pill).
             val blockedCount by AdBlocker.blockedCountFlow.collectAsState()
+            // V9 Shield VPN running state (for the home shield card).
+            val shieldActive by com.click.browser.engine.V9VpnController.isRunning.collectAsState()
             var forceNightModeWebsites by remember { mutableStateOf(false) }
             var httpsOnlyMode by remember { mutableStateOf(true) }
             var javaScriptEnabledGlobal by remember { mutableStateOf(true) }
@@ -582,9 +586,18 @@ class MainActivity : ComponentActivity() {
             // V9: Shield screen (VPN + DNS + engines) and the Hack Mode
             // Markhor intro animation (shown once after a Hack engine boot).
             var showV9Shield by remember { mutableStateOf(false) }
+            // Help & Feedback screen.
+            var showHelp by remember { mutableStateOf(false) }
             var showHackIntro by remember {
                 mutableStateOf(intent.getBooleanExtra(V9Engine.EXTRA_HACK_INTRO, false))
             }
+            // Password manager: save-offer dialog state.
+            var showPasswordSaveDialog by remember { mutableStateOf(false) }
+            var pendingPasswordSave by remember {
+                mutableStateOf<com.click.browser.engine.SavedPassword?>(null)
+            }
+            // Password manager: saved-logins management screen.
+            var showPasswordManager by remember { mutableStateOf(false) }
             // Built-in engines (Safe Browsing / Translate / PDF)
             var showTranslateSheet by remember { mutableStateOf(false) }
             var pdfOfferUrl by remember { mutableStateOf<String?>(null) }
@@ -661,9 +674,7 @@ class MainActivity : ComponentActivity() {
                     FeatureId.HISTORY -> showHistory = true
                     FeatureId.SETTINGS -> showSettings = true
                     FeatureId.STORAGE, FeatureId.CLEAR_DATA -> showDeleteBrowsingConfirm = true
-                    FeatureId.PASSWORDS -> Toast.makeText(
-                        this@MainActivity, "No password manager yet.", Toast.LENGTH_SHORT
-                    ).show()
+                    FeatureId.PASSWORDS -> showPasswordManager = true
                     FeatureId.TOOLS -> showExtensionsManager = true
                     FeatureId.DEVTOOLS -> {
                         showDebugOverlay = !showDebugOverlay
@@ -775,6 +786,7 @@ class MainActivity : ComponentActivity() {
                     FeatureId.PRIVACY_GUARDS -> showPrivacyGuards = true
                     // V9: Shield screen (built-in VPN + DNS + 3-engine identities).
                     FeatureId.V9_SHIELD -> showV9Shield = true
+                    FeatureId.HELP_FEEDBACK -> showHelp = true
                     FeatureId.UA_SPOOFER, FeatureId.UA_SWITCHER -> {
                         spoofedUAIndex = (spoofedUAIndex + 1) % 4
                         val uaStr = when (spoofedUAIndex) {
@@ -1742,6 +1754,8 @@ class MainActivity : ComponentActivity() {
                                             adBlockerEnabled = adBlockerEnabled,
                                             blockedCount = blockedCount,
                                             wallpaperUri = wallpaperUri,
+                                            shieldActive = shieldActive,
+                                            onV9ShieldClick = { showV9Shield = true },
                                             onNavigate = { input ->
                                                 val destination = formatUrl(input, currentSearchEngineSetting, activeMode)
                                                 currentTab.url = destination
@@ -1837,6 +1851,13 @@ class MainActivity : ComponentActivity() {
                                                                         if (liveHttpsOnly && urlStr.startsWith("http://")) {
                                                                             urlStr = "https://" + urlStr.removePrefix("http://")
                                                                         }
+                                                                        // HACK mode desktop persistence: sites like YouTube
+                                                                        // redirect to their mobile domain (m.youtube.com)
+                                                                        // even with a desktop UA. Force the desktop host
+                                                                        // so Hack mode STAYS in desktop view.
+                                                                        if (liveMode == BrowserMode.HACK) {
+                                                                            urlStr = forceDesktopHost(urlStr)
+                                                                        }
                                                                         // click:// internal pages (chrome://-style): open natively.
                                                                         ClickInternalPages.interceptNavigation(urlStr)?.let { pageKey ->
                                                                             showClickPage = pageKey
@@ -1869,6 +1890,10 @@ class MainActivity : ComponentActivity() {
                                                                         }
                                                                         if (liveHttpsOnly && urlStr.startsWith("http://")) {
                                                                             urlStr = "https://" + urlStr.removePrefix("http://")
+                                                                        }
+                                                                        // HACK mode desktop persistence (see above).
+                                                                        if (liveMode == BrowserMode.HACK) {
+                                                                            urlStr = forceDesktopHost(urlStr)
                                                                         }
                                                                         // click:// internal pages (chrome://-style): open natively.
                                                                         ClickInternalPages.interceptNavigation(urlStr)?.let { pageKey ->
@@ -1931,6 +1956,31 @@ class MainActivity : ComponentActivity() {
                                                                 pageLoadTime = System.currentTimeMillis() - lastPageStart
                                                                 // Pull-to-refresh completes when the page finishes loading.
                                                                 if (isRefreshing) isRefreshing = false
+
+                                                                // Password manager: inject form detection + auto-fill
+                                                                // saved credentials for this host (if any).
+                                                                view?.let { wv ->
+                                                                    wv.evaluateJavascript(
+                                                                        com.click.browser.engine.PasswordDetector.PASSWORD_DETECT_JS,
+                                                                        null
+                                                                    )
+                                                                    val host = try {
+                                                                        android.net.Uri.parse(url.orEmpty()).host.orEmpty()
+                                                                    } catch (_: Exception) { "" }
+                                                                    if (host.isNotBlank() && !currentTab.isIncognito) {
+                                                                        scope.launch {
+                                                                            val saved = com.click.browser.engine.PasswordManager.getForHost(
+                                                                                this@MainActivity, host
+                                                                            )
+                                                                            if (saved != null) {
+                                                                                val js = "window.__clickFillLogin(" +
+                                                                                    "'${saved.username.replace("'", "\\'")}', " +
+                                                                                    "'${saved.password.replace("'", "\\'")}')"
+                                                                                wv.post { wv.evaluateJavascript(js, null) }
+                                                                            }
+                                                                        }
+                                                                    }
+                                                                }
 
                                                                 // History tracking (skip if Incognito Tab)
                                                                 if (!currentTab.isIncognito && url != null && url != "about:blank") {
@@ -2088,6 +2138,21 @@ class MainActivity : ComponentActivity() {
                                                         addJavascriptInterface(
                                                             UserscriptBridge(ctx),
                                                             "UserscriptBridge"
+                                                        )
+
+                                                        // Password manager: detects login forms, offers to save.
+                                                        addJavascriptInterface(
+                                                            com.click.browser.engine.PasswordBridge { host, username, password ->
+                                                                scope.launch {
+                                                                    pendingPasswordSave = com.click.browser.engine.SavedPassword(
+                                                                        host = host,
+                                                                        username = username,
+                                                                        password = password
+                                                                    )
+                                                                    showPasswordSaveDialog = true
+                                                                }
+                                                            },
+                                                            "PasswordBridge"
                                                         )
 
                                                         // Config settings
@@ -2565,6 +2630,20 @@ class MainActivity : ComponentActivity() {
                             if (showV9Shield) {
                                 V9ShieldScreen(onClose = { showV9Shield = false })
                             }
+                            // Help & Feedback (FAQ + email to Prince).
+                            if (showHelp) {
+                                com.click.browser.ui.screens.HelpFeedbackScreen(
+                                    theme = theme,
+                                    onClose = { showHelp = false }
+                                )
+                            }
+                            // Password manager: saved-logins list.
+                            if (showPasswordManager) {
+                                com.click.browser.ui.screens.PasswordManagerScreen(
+                                    theme = theme,
+                                    onClose = { showPasswordManager = false }
+                                )
+                            }
                             // V9: Hack Mode signature moment — full-screen 5s
                             // Markhor intro after a Hack engine boot. Tap to skip.
                             if (showHackIntro) {
@@ -2668,6 +2747,51 @@ class MainActivity : ComponentActivity() {
                                         viewingPdfFile = null
                                         pdfOfferUrl = null
                                         try { pdfFile.delete() } catch (_: Exception) { }
+                                    }
+                                )
+                            }
+                            // Password manager: "Save password?" offer dialog.
+                            val pwSave = pendingPasswordSave
+                            if (showPasswordSaveDialog && pwSave != null) {
+                                AlertDialog(
+                                    onDismissRequest = {
+                                        showPasswordSaveDialog = false
+                                        pendingPasswordSave = null
+                                    },
+                                    title = { Text("Save password?") },
+                                    text = {
+                                        Text(
+                                            "Save the login for ${pwSave.host} " +
+                                                (if (pwSave.username.isNotBlank()) "(${pwSave.username}) " else "") +
+                                                "in Click's encrypted password manager?"
+                                        )
+                                    },
+                                    confirmButton = {
+                                        TextButton(onClick = {
+                                            scope.launch {
+                                                com.click.browser.engine.PasswordManager.save(
+                                                    this@MainActivity,
+                                                    pwSave.host, pwSave.username, pwSave.password
+                                                )
+                                            }
+                                            showPasswordSaveDialog = false
+                                            pendingPasswordSave = null
+                                            Toast.makeText(
+                                                this@MainActivity,
+                                                "Password saved (encrypted).",
+                                                Toast.LENGTH_SHORT
+                                            ).show()
+                                        }) {
+                                            Text("Save")
+                                        }
+                                    },
+                                    dismissButton = {
+                                        TextButton(onClick = {
+                                            showPasswordSaveDialog = false
+                                            pendingPasswordSave = null
+                                        }) {
+                                            Text("Not now")
+                                        }
                                     }
                                 )
                             }
@@ -3112,16 +3236,22 @@ class MainActivity : ComponentActivity() {
                                 )
                             }
 
-                            // Premium cold-start splash — last child of the root
-                            // composition, so it draws above everything for ~2.5 s
-                            // (tap anywhere skips it immediately).
+                            // App-start intro: 5s Markhor animation on EVERY cold
+                            // start (Prince's request) — last child of the root
+                            // composition, so it draws above everything.
+                            // Tap anywhere skips it immediately.
                             AnimatedVisibility(
                                 visible = showSplash,
                                 enter = EnterTransition.None,
                                 exit = fadeOut(animationSpec = tween(450)),
                                 modifier = Modifier.fillMaxSize()
                             ) {
-                                SplashScreen(onFinished = { showSplash = false })
+                                HackIntroOverlay(
+                                    onDone = { showSplash = false },
+                                    durationMs = 5000L,
+                                    title = "CLICK BROWSER",
+                                    subtitle = "TEAM PK AI ERA"
+                                )
                             }
                         }
                     }
@@ -3134,6 +3264,37 @@ class MainActivity : ComponentActivity() {
     private fun homeUrl(): String {
         val custom = liveFlags.customHomepage.trim()
         return if (custom.isEmpty()) "about:blank" else custom
+    }
+
+    /**
+     * HACK mode desktop persistence: rewrites known mobile hosts to their
+     * desktop equivalents so sites can't flip Hack mode back to mobile view.
+     * e.g. m.youtube.com -> www.youtube.com, m.facebook.com -> www.facebook.com
+     */
+    private fun forceDesktopHost(url: String): String {
+        var result = url
+        val mobileToDesktop = mapOf(
+            "m.youtube.com" to "www.youtube.com",
+            "youtu.be" to "www.youtube.com", // shorts links open full site
+            "m.facebook.com" to "www.facebook.com",
+            "m.twitter.com" to "x.com",
+            "mobile.twitter.com" to "x.com",
+            "m.instagram.com" to "www.instagram.com",
+            "m.reddit.com" to "www.reddit.com",
+            "old.reddit.com" to "www.reddit.com",
+            "m.wikipedia.org" to "en.wikipedia.org",
+            "m.amazon.com" to "www.amazon.com",
+            "m.ebay.com" to "www.ebay.com"
+        )
+        for ((mobile, desktop) in mobileToDesktop) {
+            if (result.contains("://$mobile/") || result.contains("://$mobile?") ||
+                result.endsWith("://$mobile")
+            ) {
+                result = result.replace("://$mobile", "://$desktop")
+                break
+            }
+        }
+        return result
     }
 
     private fun formatUrl(input: String, searchEngine: String, mode: BrowserMode): String {
