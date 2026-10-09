@@ -224,8 +224,64 @@ class MainActivity : ComponentActivity() {
         super.onDestroy()
     }
 
-    /** Applies the privacy toggles to a WebView's settings. Idempotent. */
-    private fun applyPrivacyToggles(
+    /** True for direct PDF links — intercepted for the in-app viewer offer. */
+    private fun isPdfUrl(url: String): Boolean {
+        return try {
+            val path = android.net.Uri.parse(url).path?.lowercase().orEmpty()
+            (url.startsWith("http://") || url.startsWith("https://")) &&
+                (path.endsWith(".pdf"))
+        } catch (_: Exception) {
+            false
+        }
+    }
+
+    /**
+     * Downloads a PDF to the app cache dir for the in-app viewer.
+     * Returns the file, or null on failure. Call off the main thread.
+     */
+    private fun downloadPdfToCache(url: String): java.io.File? {
+        return try {
+            val client = okhttp3.OkHttpClient.Builder()
+                .connectTimeout(20, java.util.concurrent.TimeUnit.SECONDS)
+                .readTimeout(60, java.util.concurrent.TimeUnit.SECONDS)
+                .build()
+            val req = okhttp3.Request.Builder().url(url).get()
+                .header("User-Agent", "Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36")
+                .build()
+            client.newCall(req).execute().use { resp ->
+                if (!resp.isSuccessful) return null
+                val body = resp.body ?: return null
+                // Sanity cap: 50 MB.
+                val file = java.io.File(cacheDir, "click_pdf_${System.currentTimeMillis()}.pdf")
+                file.outputStream().use { out ->
+                    val buf = ByteArray(32 * 1024)
+                    var total = 0L
+                    while (true) {
+                        val n = body.byteStream().read(buf)
+                        if (n < 0) break
+                        total += n
+                        if (total > 50L * 1024 * 1024) {
+                            file.delete()
+                            return null
+                        }
+                        out.write(buf, 0, n)
+                    }
+                }
+                // Verify it looks like a PDF.
+                val header = ByteArray(5)
+                java.io.FileInputStream(file).use { it.read(header) }
+                if (String(header) != "%PDF-") {
+                    file.delete()
+                    return null
+                }
+                file
+            }
+        } catch (_: Exception) {
+            null
+        }
+    }
+
+    /** Applies the privacy toggles to a WebView's settings. Idempotent. */    private fun applyPrivacyToggles(
         webView: WebView,
         httpsOnly: Boolean = liveHttpsOnly,
         nightMode: Boolean = liveNightMode,
@@ -241,6 +297,11 @@ class MainActivity : ComponentActivity() {
         s.loadsImagesAutomatically = !dataSaver
         if (WebViewFeature.isFeatureSupported(WebViewFeature.ALGORITHMIC_DARKENING)) {
             WebSettingsCompat.setAlgorithmicDarkeningAllowed(s, nightMode)
+        }
+        // Safe Browsing: Google's harmful-site protection, enforced on every
+        // WebView. Hits surface via framework onSafeBrowsingHit (API 27+).
+        if (WebViewFeature.isFeatureSupported(WebViewFeature.SAFE_BROWSING_ENABLE)) {
+            WebSettingsCompat.setSafeBrowsingEnabled(s, true)
         }
     }
 
@@ -365,6 +426,10 @@ class MainActivity : ComponentActivity() {
 
         modeManager = ModeManager(this)
         repository = BrowserRepository(this)
+        // Bundled ad/tracker filter lists (assets) + weekly remote updates.
+        com.click.browser.engine.FilterListManager.init(this)
+        // Translate language list (asset-overridable, built-in fallback).
+        com.click.browser.engine.MlKitTranslator.loadLanguages(this)
 
         setContent {
             // Premium cold-start splash (rememberSaveable: not replayed on rotation).
@@ -511,6 +576,13 @@ class MainActivity : ComponentActivity() {
             var showHackIntro by remember {
                 mutableStateOf(intent.getBooleanExtra(V9Engine.EXTRA_HACK_INTRO, false))
             }
+            // Built-in engines (Safe Browsing / Translate / PDF)
+            var showTranslateSheet by remember { mutableStateOf(false) }
+            var pdfOfferUrl by remember { mutableStateOf<String?>(null) }
+            var viewingPdfFile by remember { mutableStateOf<java.io.File?>(null) }
+            var pdfDownloading by remember { mutableStateOf(false) }
+            val safeBrowsingHit by com.click.browser.engine.SafeBrowsingManager.pendingHit
+                .collectAsState(initial = null)
             // Tamper detection (decompile guard): release builds verify the
             // signing certificate on start; mismatch disables AI chat.
             var tamperBlocked by remember { mutableStateOf(false) }
@@ -606,11 +678,9 @@ class MainActivity : ComponentActivity() {
                         if (url == "about:blank" || !url.startsWith("http")) {
                             Toast.makeText(this@MainActivity, "Open a page first to translate it.", Toast.LENGTH_SHORT).show()
                         } else {
-                            val lang = java.util.Locale.getDefault().language.ifBlank { "en" }
-                            val tUrl = "https://translate.google.com/translate?sl=auto&tl=$lang&u=" +
-                                java.net.URLEncoder.encode(url, "UTF-8")
-                            tabs.add(TabItem(url = tUrl, title = "Translate"))
-                            activeTabIndex = tabs.size - 1
+                            // On-device ML Kit translation sheet (models download
+                            // on demand — no Google Translate proxy tab anymore).
+                            showTranslateSheet = true
                         }
                     }
                     FeatureId.DESKTOP -> {
@@ -1250,11 +1320,9 @@ class MainActivity : ComponentActivity() {
                                         scope.launch {
                                             drawerState.close()
                                             val currentUrl = currentTab.url
-                                            if (currentUrl != "about:blank") {
-                                                val transUrl = "https://translate.google.com/translate?sl=auto&tl=en&u=" + java.net.URLEncoder.encode(currentUrl, "UTF-8")
-                                                currentTab.url = transUrl
-                                                currentTab.webView?.loadUrl(transUrl)
-                                                Toast.makeText(this@MainActivity, "Redirecting to Google Translate...", Toast.LENGTH_SHORT).show()
+                                            if (currentUrl != "about:blank" && currentUrl.startsWith("http")) {
+                                                // On-device ML Kit translation sheet.
+                                                showTranslateSheet = true
                                             } else {
                                                 Toast.makeText(this@MainActivity, "Please load a web page first to translate.", Toast.LENGTH_SHORT).show()
                                             }
@@ -1645,8 +1713,34 @@ class MainActivity : ComponentActivity() {
                                                         } else {
                                                             WebView(ctx).apply {
                                                                 webViewClient = object : WebViewClient() {
+                                                                    // Safe Browsing interstitial (Click's own premium UI).
+                                                                    // Framework API 27+; kept on plain WebViewClient (NOT the
+                                                                    // Compat wrapper — Compat's SHOULD_OVERRIDE_WITH_REDIRECTS
+                                                                    // caused redirect reload loops that broke page scrolling).
+                                                                    @RequiresApi(android.os.Build.VERSION_CODES.O_MR1)
+                                                                    override fun onSafeBrowsingHit(
+                                                                        view: WebView,
+                                                                        request: WebResourceRequest,
+                                                                        threatType: Int,
+                                                                        callback: android.webkit.SafeBrowsingResponse
+                                                                    ) {
+                                                                        val url = request.url?.toString() ?: ""
+                                                                        com.click.browser.engine.SafeBrowsingManager.reportHit(
+                                                                            url, threatType, callback
+                                                                        )
+                                                                    }
+
                                                                     override fun shouldOverrideUrlLoading(view: WebView?, request: WebResourceRequest?): Boolean {
+                                                                        // Never hijack subframes; never manually re-load a redirect
+                                                                        // (reload loops reset scroll position — page feels unscrollable).
+                                                                        if (request != null && !request.isForMainFrame) return false
                                                                         var urlStr = request?.url?.toString() ?: ""
+                                                                        // PDF: offer in-app viewing instead of navigating.
+                                                                        if (isPdfUrl(urlStr)) {
+                                                                            pdfOfferUrl = urlStr
+                                                                            return true
+                                                                        }
+                                                                        if (request != null && request.isRedirect) return false
                                                                         // HTTPS-Only: upgrade plain http navigations FIRST
                                                                         // (so http://click://flags can't bypass the upgrade).
                                                                         if (liveHttpsOnly && urlStr.startsWith("http://")) {
@@ -1666,7 +1760,7 @@ class MainActivity : ComponentActivity() {
                                                                             if (liveHeaderSpoof && navHeaders.isNotEmpty()) {
                                                                                 view?.loadUrl(urlStr, navHeaders)
                                                                             } else {
-                                                                                view?.loadUrl(urlStr)
+                                                                                view.loadUrl(urlStr)
                                                                             }
                                                                             return true
                                                                         }
@@ -1677,6 +1771,11 @@ class MainActivity : ComponentActivity() {
                                                                     override fun shouldOverrideUrlLoading(view: WebView?, url: String?): Boolean {
                                                                         var urlStr = url ?: ""
                                                                         // HTTPS-Only upgrade FIRST (see above).
+                                                                        // PDF: offer in-app viewing instead of navigating.
+                                                                        if (isPdfUrl(urlStr)) {
+                                                                            pdfOfferUrl = urlStr
+                                                                            return true
+                                                                        }
                                                                         if (liveHttpsOnly && urlStr.startsWith("http://")) {
                                                                             urlStr = "https://" + urlStr.removePrefix("http://")
                                                                         }
@@ -1836,16 +1935,10 @@ class MainActivity : ComponentActivity() {
 
                                                             @Suppress("Deprecated")
                                                             override fun onReceivedError(view: WebView?, errorCode: Int, description: String?, failingUrl: String?) {
-                                                                // Legacy path (API < 23)
+                                                                // Framework routes main-frame errors to the deprecated overload
                                                                 this@MainActivity.showBrowserErrorPage(view, description)
                                                             }
 
-                                                            override fun onReceivedError(view: WebView?, request: WebResourceRequest?, error: WebResourceError?) {
-                                                                // Modern path (API 23+): only for the main frame
-                                                                if (request?.isForMainFrame == true) {
-                                                                    this@MainActivity.showBrowserErrorPage(view, error?.description?.toString())
-                                                                }
-                                                            }
                                                         }
 
                                                         webChromeClient = object : WebChromeClient() {
@@ -2325,6 +2418,107 @@ class MainActivity : ComponentActivity() {
                             if (showHackIntro) {
                                 HackIntroOverlay(onDone = { showHackIntro = false })
                             }
+                            // ---- Built-in engines ----
+                            // Safe Browsing interstitial (premium-styled, theme-aware).
+                            val sbHit = safeBrowsingHit
+                            if (sbHit != null) {
+                                com.click.browser.ui.screens.SafeBrowsingWarningScreen(
+                                    hit = sbHit,
+                                    theme = theme,
+                                    onBackToSafety = {
+                                        com.click.browser.engine.SafeBrowsingManager.backToSafety()
+                                    },
+                                    onProceedAnyway = {
+                                        com.click.browser.engine.SafeBrowsingManager.proceedAnyway()
+                                    }
+                                )
+                            }
+                            // On-device ML Kit translation sheet.
+                            if (showTranslateSheet) {
+                                com.click.browser.ui.screens.TranslateSheet(
+                                    theme = theme,
+                                    webView = currentTab.webView,
+                                    pageUrl = currentTab.url,
+                                    onDismiss = { showTranslateSheet = false }
+                                )
+                            }
+                            // PDF: offer in-app viewing when a PDF link is tapped.
+                            val offerUrl = pdfOfferUrl
+                            if (offerUrl != null && viewingPdfFile == null) {
+                                com.click.browser.ui.screens.PdfOfferSheet(
+                                    theme = theme,
+                                    pdfUrl = offerUrl,
+                                    downloading = pdfDownloading,
+                                    onViewInClick = {
+                                        pdfDownloading = true
+                                        scope.launch(kotlinx.coroutines.Dispatchers.IO) {
+                                            val file = downloadPdfToCache(offerUrl)
+                                            withContext(kotlinx.coroutines.Dispatchers.Main) {
+                                                pdfDownloading = false
+                                                if (file != null) {
+                                                    viewingPdfFile = file
+                                                } else {
+                                                    Toast.makeText(
+                                                        this@MainActivity,
+                                                        "Couldn't download the PDF.",
+                                                        Toast.LENGTH_SHORT
+                                                    ).show()
+                                                    pdfOfferUrl = null
+                                                }
+                                            }
+                                        }
+                                    },
+                                    onDownload = {
+                                        // Real download via DownloadManager (existing pattern).
+                                        try {
+                                            val dm = getSystemService(Context.DOWNLOAD_SERVICE) as android.app.DownloadManager
+                                            val fileName = offerUrl.substringAfterLast("/").take(64).ifBlank { "document.pdf" }
+                                            val request = android.app.DownloadManager.Request(android.net.Uri.parse(offerUrl))
+                                                .setTitle("Click Browser Download")
+                                                .setDescription(fileName)
+                                                .setNotificationVisibility(android.app.DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED)
+                                                .setDestinationInExternalPublicDir(
+                                                    android.os.Environment.DIRECTORY_DOWNLOADS,
+                                                    "ClickBrowser/$fileName"
+                                                )
+                                                .setAllowedOverMetered(true)
+                                                .setAllowedOverRoaming(false)
+                                            dm.enqueue(request)
+                                            Toast.makeText(this@MainActivity, "Downloading PDF…", Toast.LENGTH_SHORT).show()
+                                        } catch (e: Exception) {
+                                            Toast.makeText(this@MainActivity, "Download failed.", Toast.LENGTH_SHORT).show()
+                                        }
+                                        pdfOfferUrl = null
+                                    },
+                                    onOpenExternal = {
+                                        try {
+                                            startActivity(
+                                                Intent(
+                                                    Intent.ACTION_VIEW,
+                                                    android.net.Uri.parse(offerUrl)
+                                                )
+                                            )
+                                        } catch (e: Exception) {
+                                            Toast.makeText(this@MainActivity, "No app can open this PDF.", Toast.LENGTH_SHORT).show()
+                                        }
+                                        pdfOfferUrl = null
+                                    },
+                                    onDismiss = { pdfOfferUrl = null }
+                                )
+                            }
+                            // Full-screen in-app PDF viewer.
+                            val pdfFile = viewingPdfFile
+                            if (pdfFile != null) {
+                                com.click.browser.ui.screens.PdfViewerScreen(
+                                    pdfFile = pdfFile,
+                                    theme = theme,
+                                    onClose = {
+                                        viewingPdfFile = null
+                                        pdfOfferUrl = null
+                                        try { pdfFile.delete() } catch (_: Exception) { }
+                                    }
+                                )
+                            }
                             if (showTamperDialog) {
                                 // Warning for repackaged/modified copies.
                                 // Dismissible (back press / outside tap / Dismiss), but AI chat
@@ -2560,13 +2754,8 @@ class MainActivity : ComponentActivity() {
                                         if (url == "about:blank" || !url.startsWith("http")) {
                                             Toast.makeText(this@MainActivity, "Open a page first to translate it.", Toast.LENGTH_SHORT).show()
                                         } else {
-                                            // Honest page translation via Google Translate's
-                                            // translate proxy, opened in a new tab.
-                                            val lang = java.util.Locale.getDefault().language.ifBlank { "en" }
-                                            val tUrl = "https://translate.google.com/translate?sl=auto&tl=$lang&u=" +
-                                                java.net.URLEncoder.encode(url, "UTF-8")
-                                            tabs.add(TabItem(url = tUrl, title = "Translate"))
-                                            activeTabIndex = tabs.size - 1
+                                            // On-device ML Kit translation sheet.
+                                            showTranslateSheet = true
                                         }
                                     },
                                     onToggleDesktopSite = {
