@@ -52,11 +52,20 @@ object AdBlocker {
     private val _blockedCountFlow = MutableStateFlow(0)
     val blockedCountFlow: StateFlow<Int> = _blockedCountFlow.asStateFlow()
 
+    /** Called by SafeBrowsingManager so threats feed the same privacy count. */
+    fun reportBlockedThreat() {
+        _blockedCountFlow.value = _blockedCount.incrementAndGet()
+    }
+
     fun shouldBlock(url: String?): Boolean {
         if (url == null) return false
         try {
             val host = Uri.parse(url).host ?: return false
-            val blocked = blockedHosts.any { host.contains(it, ignoreCase = true) } ||
+            // Suffix-aware matching everywhere (never substring): "notdoubleclick.net"
+            // must not match "doubleclick.net". Sources: bundled 278-domain
+            // filter list, built-in blocklist, and aggressive-mode trackers.
+            val blocked = FilterListManager.isBlockedHost(host) ||
+                blockedHosts.any { hostMatches(host, it) } ||
                 (aggressive && aggressiveHosts.any { hostMatches(host, it) })
             if (blocked) {
                 _blockedCountFlow.value = _blockedCount.incrementAndGet()

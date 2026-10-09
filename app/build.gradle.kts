@@ -140,6 +140,9 @@ dependencies {
     implementation(libs.androidx.webkit)
     implementation(libs.okhttp)
     implementation(libs.okhttp.dnsoverhttps)
+    // On-device translation (ML Kit). Language MODELS are downloaded on
+    // demand at runtime — nothing is bundled, so the APK stays lean.
+    implementation(libs.mlkit.translate)
 
     testImplementation(libs.junit)
     androidTestImplementation(libs.androidx.junit)
