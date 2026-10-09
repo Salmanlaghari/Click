@@ -38,7 +38,7 @@ android {
         applicationId = "com.teampkai.clickbrowser"
         minSdk = 26
         targetSdk = 36
-        versionCode = 2
+        versionCode = 3
         versionName = "1.1.0"
 
         // Built-in Groq key for AI chat, injected at build time from the
