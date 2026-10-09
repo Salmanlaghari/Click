@@ -21,11 +21,20 @@ import java.security.MessageDigest
  * - Debug builds always pass (BuildConfig.DEBUG) — developers are not "tamperers".
  * - IMPORTANT — Play App Signing: Google Play re-signs the AAB on upload, so
  *   the runtime certificate of a Play-installed copy is PLAY'S key, not the
- *   upload keystore's. [PLAY_SIGNING_SHA256] MUST be filled with your Play
- *   App Signing SHA-256 (Play Console → Setup → App integrity → "App signing
- *   key certificate") right after the first upload — otherwise Play installs
- *   will false-positive and AI chat will stay disabled for real users.
- *   Until then, blank entries are simply skipped.
+ *   upload keystore's. PLAY_SIGNING_SHA256 below holds the Play App Signing
+ *   SHA-256 (Play Console → Setup → App integrity → "App signing key
+ *   certificate", filled 2026-10-09). Both fingerprints are accepted; any
+ *   other certificate still triggers the warning.
+ *
+ * Fingerprint runbook (keep these current or installs will false-positive):
+ * - Play rotates the app signing key, or the upload keystore
+ *   (click-browser.p12) is ever replaced → update the constants below and
+ *   ship a new release BEFORE the next Play upload.
+ * - Source of truth: Play Console → Setup → App integrity → "App signing
+ *   key certificate" (SHA-256) and the upload keystore's own SHA-256.
+ * - After pasting, verify the 64-hex-char value character-by-character
+ *   against the Console (a single wrong char reintroduces the false
+ *   positive); the runtime comparison is case- and colon-insensitive.
  */
 object TamperCheck {
 
@@ -35,10 +44,13 @@ object TamperCheck {
 
     /**
      * Play App Signing certificate SHA-256 (hex, colons optional).
-     * TODO(Prince): paste from Play Console → Setup → App integrity after
-     * the first AAB upload. Leave "" until then.
+     * Filled 2026-10-09 from Play Console → Setup → App integrity → "App signing
+     * key certificate". Play re-signs every AAB on upload, so Play-installed
+     * copies carry THIS certificate — it must stay accepted or real users get
+     * the tamper warning.
      */
-    private const val PLAY_SIGNING_SHA256 = ""
+    private const val PLAY_SIGNING_SHA256 =
+        "6b2d6ded06c011150c416efeedd74a384a9d56872d1c62944451f861cc68f312"
 
     /**
      * Accepted signing-certificate SHA-256 fingerprints (hex, colons optional).
