@@ -1,6 +1,7 @@
 package com.click.browser
 
 import android.app.Application
+import android.util.Log
 import com.click.browser.engine.V9Engine
 import com.google.android.gms.ads.MobileAds
 
@@ -17,6 +18,8 @@ class ClickApplication : Application() {
         super.onCreate()
         // Initialize Google AdMob (news-feed banner + native ads).
         // Initialization is async and safe on the main thread.
-        MobileAds.initialize(this) {}
+        MobileAds.initialize(this) { status ->
+            Log.d("AdMobAds", "MobileAds initialized: ${status.adapterStatusMap.keys}")
+        }
     }
 }

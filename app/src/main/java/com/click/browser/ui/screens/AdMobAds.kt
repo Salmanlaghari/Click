@@ -1,7 +1,9 @@
 package com.click.browser.ui.screens
 
+import android.util.Log
 import android.view.View
 import android.view.ViewGroup
+import android.widget.Button
 import android.widget.FrameLayout
 import android.widget.ImageView
 import android.widget.LinearLayout
@@ -16,6 +18,7 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -29,10 +32,13 @@ import com.google.android.gms.ads.AdRequest
 import com.google.android.gms.ads.AdSize
 import com.google.android.gms.ads.AdView
 import com.google.android.gms.ads.LoadAdError
+import com.google.android.gms.ads.MobileAds
 import com.google.android.gms.ads.nativead.MediaView
 import com.google.android.gms.ads.nativead.NativeAd
 import com.google.android.gms.ads.nativead.NativeAdOptions
 import com.google.android.gms.ads.nativead.NativeAdView
+
+private const val TAG = "AdMobAds"
 
 /**
  * Google AdMob ad units for Click Browser (Prince's AdMob account).
@@ -41,7 +47,8 @@ import com.google.android.gms.ads.nativead.NativeAdView
  * - [NATIVE_AD_UNIT]: native ad styled like a news card, always labeled "Ad".
  *
  * AdMob policy notes honored here:
- * - Native ads are clearly labeled with an "Ad" badge.
+ * - Native ads are clearly labeled with an "Ad" badge and register the
+ *   call-to-action view.
  * - Ads never sit flush against tappable content — outer padding is applied
  *   by the callers (see NewsSection).
  */
@@ -65,6 +72,11 @@ fun AdMobBannerAd(modifier: Modifier = Modifier) {
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 ViewGroup.LayoutParams.WRAP_CONTENT
             )
+            adListener = object : AdListener() {
+                override fun onAdFailedToLoad(error: LoadAdError) {
+                    Log.w(TAG, "Banner ad failed to load: ${error.message}")
+                }
+            }
         }
     }
 
@@ -99,17 +111,20 @@ fun AdMobNativeAd(
 ) {
     val context = LocalContext.current
     var nativeAd by remember { mutableStateOf<NativeAd?>(null) }
+    // Always-fresh reference for the AndroidView update lambda.
+    val currentAd by rememberUpdatedState(nativeAd)
 
     DisposableEffect(Unit) {
         val loader = AdLoader.Builder(context, AdMobUnits.NATIVE_AD_UNIT)
             .forNativeAd { ad ->
-                nativeAd?.destroy()
+                // Swap the state; the previously bound ad is destroyed only
+                // after the new one is bound in the view's update lambda,
+                // so the NativeAdView never shows a destroyed ad.
                 nativeAd = ad
             }
             .withAdListener(object : AdListener() {
                 override fun onAdFailedToLoad(error: LoadAdError) {
-                    nativeAd?.destroy()
-                    nativeAd = null
+                    Log.w(TAG, "Native ad failed to load: ${error.message}")
                 }
             })
             .withNativeAdOptions(NativeAdOptions.Builder().build())
@@ -146,16 +161,16 @@ fun AdMobNativeAd(
                 }
 
                 // "Ad" badge — required by AdMob policy for native ads.
+                // Grey 700 + white text: high contrast on any theme.
                 val badge = TextView(ctx).apply {
                     text = "Ad"
                     textSize = 10f
                     setTextColor(android.graphics.Color.WHITE)
-                    setBackgroundColor(Color(0xFFB8860B).toArgb())
+                    setBackgroundColor(Color(0xFF616161).toArgb())
                     val hPad = (8 * density).toInt()
                     val vPad = (3 * density).toInt()
                     setPadding(hPad, vPad, hPad, vPad)
                 }
-                // Wrap badge so it doesn't stretch full width.
                 val badgeRow = LinearLayout(ctx).apply {
                     orientation = LinearLayout.HORIZONTAL
                     addView(badge)
@@ -195,6 +210,15 @@ fun AdMobNativeAd(
                 }
                 root.addView(body)
 
+                val cta = Button(ctx).apply {
+                    textSize = 12f
+                    layoutParams = LinearLayout.LayoutParams(
+                        ViewGroup.LayoutParams.WRAP_CONTENT,
+                        ViewGroup.LayoutParams.WRAP_CONTENT
+                    ).apply { topMargin = (8 * density).toInt() }
+                }
+                root.addView(cta)
+
                 val advertiser = TextView(ctx).apply {
                     textSize = 10.5f
                     val c = onSurface.toArgb()
@@ -221,41 +245,55 @@ fun AdMobNativeAd(
                 }
                 root.addView(iconView)
 
-                // Register asset views with the NativeAdView.
+                // Register asset views with the NativeAdView — including the
+                // call-to-action view, as required by AdMob policy.
                 adView.headlineView = headline
                 adView.bodyView = body
+                adView.callToActionView = cta
                 adView.advertiserView = advertiser
                 adView.mediaView = mediaView
                 adView.iconView = iconView
 
                 adView.addView(root)
-                adView.tag = NativeAdBinding(headline, body, advertiser, mediaView, iconView)
+                adView.tag = NativeAdBinding(headline, body, cta, advertiser, mediaView, iconView)
                 adView
             },
             update = { adView ->
                 val binding = adView.tag as? NativeAdBinding ?: return@AndroidView
-                binding.headline.text = ad.headline
-                binding.body.text = ad.body
-                if (ad.advertiser != null) {
-                    binding.advertiser.text = ad.advertiser
+                val freshAd = currentAd ?: return@AndroidView
+                binding.headline.text = freshAd.headline
+                binding.body.text = freshAd.body
+                if (freshAd.callToAction != null) {
+                    binding.cta.text = freshAd.callToAction
+                    binding.cta.visibility = View.VISIBLE
+                } else {
+                    binding.cta.visibility = View.GONE
+                }
+                if (freshAd.advertiser != null) {
+                    binding.advertiser.text = freshAd.advertiser
                     binding.advertiser.visibility = View.VISIBLE
                 } else {
                     binding.advertiser.visibility = View.GONE
                 }
-                // MediaView is required for video ads; guard when no media.
-                if (ad.mediaContent != null) {
-                    binding.media.mediaContent = ad.mediaContent
+                if (freshAd.mediaContent != null) {
+                    binding.media.mediaContent = freshAd.mediaContent
                     binding.media.visibility = View.VISIBLE
                 } else {
                     binding.media.visibility = View.GONE
                 }
-                if (ad.icon != null) {
-                    binding.icon.setImageDrawable(ad.icon!!.drawable)
+                if (freshAd.icon != null) {
+                    binding.icon.setImageDrawable(freshAd.icon!!.drawable)
                     binding.icon.visibility = View.VISIBLE
                 } else {
                     binding.icon.visibility = View.GONE
                 }
-                adView.setNativeAd(ad)
+                val previouslyBound = binding.boundAd
+                adView.setNativeAd(freshAd)
+                binding.boundAd = freshAd
+                // Now that the new ad is bound, the old one can be destroyed safely.
+                if (previouslyBound != null && previouslyBound != freshAd) {
+                    previouslyBound.destroy()
+                }
             },
             modifier = Modifier.fillMaxWidth()
         )
@@ -266,7 +304,9 @@ fun AdMobNativeAd(
 private data class NativeAdBinding(
     val headline: TextView,
     val body: TextView,
+    val cta: Button,
     val advertiser: TextView,
     val media: MediaView,
-    val icon: ImageView
+    val icon: ImageView,
+    var boundAd: NativeAd? = null
 )
