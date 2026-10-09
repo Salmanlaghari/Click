@@ -59,6 +59,10 @@ object V9Engine {
         val canvasSeed: Long,
         /** Human-readable device identity shown in the V9 Shield screen. */
         val deviceLabel: String,
+        /** Spoofed timezone (IANA name) — distinct per engine. */
+        val timezone: String,
+        /** Spoofed timezone offset in minutes (for Date.getTimezoneOffset). */
+        val timezoneOffsetMinutes: Int,
     )
 
     fun profileFor(mode: BrowserMode): EngineProfile = when (mode) {
@@ -78,13 +82,15 @@ object V9Engine {
             webglRenderer = "ANGLE (ARM, Mali-G715 MC7, OpenGL ES 3.2)",
             canvasSeed = 5101151L,
             deviceLabel = "Pixel 8 · Android 14 · Chrome Mobile",
+            timezone = "America/New_York",
+            timezoneOffsetMinutes = 300,
         )
         BrowserMode.DEVELOPER -> EngineProfile(
             mode = mode,
             userAgent = ModeManager.UA_DEVELOPER,
             platform = "Linux armv8l",
             vendor = "Google Inc.",
-            languages = listOf("en-US", "en"),
+            languages = listOf("en-GB", "en"),
             hardwareConcurrency = 8,
             deviceMemory = 12,
             screenW = 1080,
@@ -95,6 +101,8 @@ object V9Engine {
             webglRenderer = "ANGLE (Qualcomm, Adreno 750, OpenGL ES 3.2)",
             canvasSeed = 90231117L,
             deviceLabel = "Galaxy S24 · Android 14 · Chrome Mobile",
+            timezone = "Europe/London",
+            timezoneOffsetMinutes = 0,
         )
         BrowserMode.HACK -> EngineProfile(
             mode = mode,
@@ -102,8 +110,8 @@ object V9Engine {
             platform = "Win32",
             vendor = "Google Inc.",
             languages = listOf("en-US", "en"),
-            hardwareConcurrency = 8,
-            deviceMemory = 8,
+            hardwareConcurrency = 16,
+            deviceMemory = 16,
             screenW = 1920,
             screenH = 1080,
             devicePixelRatio = 1.0,
@@ -112,6 +120,8 @@ object V9Engine {
             webglRenderer = "ANGLE (NVIDIA, NVIDIA GeForce RTX 4070 Ti/PCIe/SSE2, OpenGL 4.5)",
             canvasSeed = 90031991L,
             deviceLabel = "Windows 11 · Chrome Desktop",
+            timezone = "America/Los_Angeles",
+            timezoneOffsetMinutes = 480,
         )
     }
 
@@ -263,6 +273,22 @@ object V9Engine {
           def(navigator,'hardwareConcurrency',${p.hardwareConcurrency});
           def(navigator,'deviceMemory',${p.deviceMemory});
           def(navigator,'maxTouchPoints',${p.maxTouchPoints});
+          // Timezone spoofing: distinct per engine (IANA name + offset).
+          // Honest limit: this spoofs JS-visible timezone only; OS timezone
+          // and IP geolocation are unchanged (would need root/VPN to alter).
+          try {
+            var tzName = '${p.timezone}';
+            var tzOffset = ${p.timezoneOffsetMinutes};
+            Date.prototype.getTimezoneOffset = function(){ return tzOffset; };
+            if (typeof Intl !== 'undefined' && Intl.DateTimeFormat) {
+              var origResolved = Intl.DateTimeFormat.prototype.resolvedOptions;
+              Intl.DateTimeFormat.prototype.resolvedOptions = function(){
+                var o = origResolved.apply(this, arguments);
+                try { o.timeZone = tzName; } catch(e){}
+                return o;
+              };
+            }
+          } catch(e){}
           def(window.screen,'width',${p.screenW}); def(window.screen,'height',${p.screenH});
           def(window.screen,'availWidth',${p.screenW}); def(window.screen,'availHeight',${p.screenH - 40});
           def(window,'devicePixelRatio',${p.devicePixelRatio});

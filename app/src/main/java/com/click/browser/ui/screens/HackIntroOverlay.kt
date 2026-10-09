@@ -26,13 +26,21 @@ import kotlin.random.Random
  * "Revenge type" aggressive feel: blood-red pulse, glitch slices, rising
  * embers, flared markhor horns, and the TEAM PK AI ERA mark.
  *
+ * Also used as the app-start intro (every cold start) with [title] =
+ * "CLICK BROWSER" — Prince's request: 5s Markhor animation on app open.
+ *
  * Pure vector/Compose — no video asset, no licensing issues, tiny footprint.
  * Tap anywhere to skip; auto-dismisses after [durationMs].
+ *
+ * @param title Main headline (default "HACK MODE").
+ * @param subtitle Sub-headline (default "V9 ENGINE ENGAGED").
  */
 @Composable
 fun HackIntroOverlay(
     onDone: () -> Unit,
     durationMs: Long = 5000L,
+    title: String = "HACK MODE",
+    subtitle: String = "V9 ENGINE ENGAGED",
 ) {
     LaunchedEffect(Unit) {
         delay(durationMs)
@@ -179,7 +187,7 @@ fun HackIntroOverlay(
             val g = (glitchT * 997).toInt()
             val xOff = if (g % 11 < 2) ((g % 5) - 2) * 6f else 0f
             Text(
-                text = "HACK MODE",
+                text = title,
                 color = Color.White,
                 fontSize = 44.sp,
                 fontWeight = FontWeight.Black,
@@ -188,7 +196,7 @@ fun HackIntroOverlay(
             )
             Spacer(Modifier.height(6.dp))
             Text(
-                text = "V9 ENGINE ENGAGED",
+                text = subtitle,
                 color = Color(0xFFEF4444),
                 fontSize = 13.sp,
                 fontWeight = FontWeight.Bold,
