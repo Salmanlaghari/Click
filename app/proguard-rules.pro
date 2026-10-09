@@ -33,3 +33,14 @@
 # from ClickApplication (called before anything else).
 -keep class com.click.browser.engine.V9Engine { *; }
 -keep class com.click.browser.ClickApplication { *; }
+
+# ML Kit Translation: keep only the API surface we actually call
+# (ML Kit ships its own consumer rules for internals). Narrowed per review —
+# the old blanket keeps blocked obfuscation of whole packages.
+-keep class com.google.mlkit.nl.translate.Translation { *; }
+-keep class com.google.mlkit.nl.translate.Translator { *; }
+-keep class com.google.mlkit.nl.translate.TranslatorOptions { *; }
+-keep class com.google.mlkit.nl.translate.TranslatorOptions$Builder { *; }
+-keep class com.google.mlkit.nl.translate.TranslateLanguage { *; }
+-keep class com.google.mlkit.common.model.DownloadConditions { *; }
+-keep class com.google.mlkit.common.model.DownloadConditions$Builder { *; }
