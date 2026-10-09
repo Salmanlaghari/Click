@@ -122,6 +122,10 @@ class MainActivity : ComponentActivity() {
     private var liveCustomHeaders: Map<String, String> = emptyMap()
     // Live copy of per-site desktop hosts (persisted per host via BrowserRepository).
     private var liveDesktopHosts: Set<String> = emptySet()
+    // Live copy of experimental flags (click://flags) for WebViewClient callbacks.
+    private var liveFlags = ExperimentalFlags()
+    // Registry of live WebViews for flag-driven cleanup (clear-on-exit).
+    private val liveWebViews = mutableListOf<android.webkit.WebView>()
 
     // Session salt for per-session fingerprint-noise randomization.
     // Generated once per app launch: noise is stable within a session but
@@ -204,6 +208,19 @@ class MainActivity : ComponentActivity() {
 
     override fun onDestroy() {
         try { ttsEngine?.shutdown() } catch (_: Exception) { }
+        // Experimental flags: clear data / history on exit.
+        if (liveFlags.clearOnExit) {
+            try {
+                liveWebViews.forEach { it.clearCache(true) }
+                android.webkit.CookieManager.getInstance().removeAllCookies(null)
+                android.webkit.WebStorage.getInstance().deleteAllData()
+            } catch (_: Exception) { }
+        }
+        if (liveFlags.clearHistoryOnExit) {
+            kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.IO).launch {
+                try { repository.clearHistory() } catch (_: Exception) { }
+            }
+        }
         super.onDestroy()
     }
 
@@ -227,6 +244,56 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+
+    /**
+     * Applies the experimental flags (click://flags) to a WebView's settings.
+     * Idempotent — safe to call on every recomposition.
+     */
+    private fun applyExperimentalFlags(webView: WebView) {
+        val s = webView.settings
+        val f = liveFlags
+        // Custom UA overrides the mode default (applied after modeManager.applySettings).
+        if (f.customUserAgent.isNotBlank()) s.userAgentString = f.customUserAgent
+        // OR with dataSaver: the flag adds blocking, never removes it.
+        s.blockNetworkImage = s.blockNetworkImage || f.blockImages
+        s.javaScriptCanOpenWindowsAutomatically = !f.blockPopups
+        s.mediaPlaybackRequiresUserGesture = f.autoplayBlock
+        if (f.forceZoom) {
+            s.setSupportZoom(true)
+            s.builtInZoomControls = true
+            s.displayZoomControls = false
+            s.loadWithOverviewMode = true
+            s.useWideViewPort = true
+        }
+        s.textZoom = if (f.textZoomLarge) 125 else 100
+        // Only overrides when the flag explicitly allows mixed content.
+        if (f.mixedContentAllow) {
+            s.mixedContentMode = WebSettings.MIXED_CONTENT_COMPATIBILITY_MODE
+        }
+        val cm = android.webkit.CookieManager.getInstance()
+        cm.setAcceptCookie(f.cookieAccept)
+        try {
+            cm.setAcceptThirdPartyCookies(webView, !f.blockThirdPartyCookies)
+        } catch (_: Exception) { }
+        webView.overScrollMode = if (f.overscrollGlow) {
+            android.view.View.OVER_SCROLL_ALWAYS
+        } else {
+            android.view.View.OVER_SCROLL_NEVER
+        }
+        if (WebViewFeature.isFeatureSupported(WebViewFeature.SAFE_BROWSING_ENABLE)) {
+            WebSettingsCompat.setSafeBrowsingEnabled(s, f.safeBrowsing)
+        }
+        AdBlocker.aggressive = f.aggressiveAdblock
+    }
+
+    /** Applies FLAG_SECURE from the block-screenshots flag. */
+    private fun applyScreenshotFlag() {
+        if (liveFlags.blockScreenshots) {
+            window.addFlags(android.view.WindowManager.LayoutParams.FLAG_SECURE)
+        } else {
+            window.clearFlags(android.view.WindowManager.LayoutParams.FLAG_SECURE)
+        }
+    }
     /**
      * Applies the per-site desktop/mobile override for the given URL.
      * If the URL's host is in the persisted desktop-hosts set, the WebView gets
@@ -335,7 +402,7 @@ class MainActivity : ComponentActivity() {
             }
 
             // Browser Premium Feature States
-            val tabs = remember { mutableStateListOf<TabItem>(TabItem(url = "about:blank", title = "New Tab")) }
+            val tabs = remember { mutableStateListOf<TabItem>(TabItem(url = homeUrl(), title = "New Tab")) }
             var activeTabIndex by remember { mutableStateOf(0) }
             val currentTab = tabs.getOrNull(activeTabIndex) ?: TabItem(url = "about:blank")
 
@@ -365,6 +432,9 @@ class MainActivity : ComponentActivity() {
                 val closed = tabs[idx]
                 RecentlyClosedTabs.push(closed.title, closed.url, closed.isIncognito)
                 TabThumbnailStore.remove(closed.id)
+                // Drop the closed tab's WebView from the flags registry so
+                // clear-on-exit doesn't iterate stale, detached WebViews.
+                closed.webView?.let { liveWebViews.remove(it) }
                 // Remember for UNDO (not for private tabs — privacy first).
                 val undoInfo: Triple<String, String, Int>? =
                     if (closed.isIncognito) null
@@ -375,7 +445,7 @@ class MainActivity : ComponentActivity() {
                         activeTabIndex = tabs.size - 1
                     }
                 } else {
-                    tabs[0] = TabItem(url = "about:blank", title = "New Tab")
+                    tabs[0] = TabItem(url = homeUrl(), title = "New Tab")
                     activeTabIndex = 0
                 }
                 // Premium UI v2: "Tab closed" snackbar with UNDO (4s).
@@ -429,6 +499,12 @@ class MainActivity : ComponentActivity() {
             // AI chat + privacy guards
             var showAiChat by remember { mutableStateOf(false) }
             var showPrivacyGuards by remember { mutableStateOf(false) }
+            // click:// internal pages (chrome://-style). Holds the page key or null.
+            var showClickPage by remember { mutableStateOf<String?>(null) }
+            // Experimental flags (click://flags) — UI mirror of liveFlags.
+            var flagsUi by remember { mutableStateOf(ExperimentalFlags()) }
+            // Confirm-exit dialog (flag).
+            var showExitConfirm by remember { mutableStateOf(false) }
             // V9: Shield screen (VPN + DNS + engines) and the Hack Mode
             // Markhor intro animation (shown once after a Hack engine boot).
             var showV9Shield by remember { mutableStateOf(false) }
@@ -559,7 +635,7 @@ class MainActivity : ComponentActivity() {
                         }
                     }
                     FeatureId.NEW_TAB -> {
-                        tabs.add(TabItem(url = "about:blank", title = "New Tab"))
+                        tabs.add(TabItem(url = homeUrl(), title = "New Tab"))
                         activeTabIndex = tabs.size - 1
                     }
                     FeatureId.PRIVATE_TAB -> {
@@ -648,6 +724,8 @@ class MainActivity : ComponentActivity() {
                         ).show()
                     }
                     FeatureId.ABOUT -> showAboutApp = true
+                    FeatureId.FLAGS -> showClickPage = "flags"
+                    FeatureId.VERSION -> showClickPage = "version"
                 }
             }
 
@@ -745,6 +823,10 @@ class MainActivity : ComponentActivity() {
                     customHeaders = AppSettings.parseHeaders(prefs[AppSettings.CUSTOM_HEADERS_JSON])
                     currentThemeSetting = if (prefs[AppSettings.UI_DARK_MODE] == false) "Light" else "Dark"
                     wallpaperUri = prefs[AppSettings.WALLPAPER_URI]
+                    // Experimental flags (click://flags).
+                    liveFlags = ExperimentalFlags.load(prefs)
+                    flagsUi = liveFlags
+                    applyScreenshotFlag()
                 }
                 // First run: install the bundled pre-installed userscript
                 // extensions (enabled by default; user can disable/delete
@@ -775,6 +857,16 @@ class MainActivity : ComponentActivity() {
                 } else {
                     currentTab.url = "about:blank"
                 }
+            }
+
+            // click:// page open: back closes the native page first.
+            BackHandler(enabled = showClickPage != null) {
+                showClickPage = null
+            }
+
+            // Confirm-exit flag: ask before closing the browser from home.
+            BackHandler(enabled = showClickPage == null && currentTab.url == "about:blank" && flagsUi.confirmExit) {
+                showExitConfirm = true
             }
 
             // Drawer Navigation State (Simple, Dev, Power and shortcuts inside the hamburger menu)
@@ -917,7 +1009,7 @@ class MainActivity : ComponentActivity() {
                                     DrawerItem(label = "New Tab", icon = Icons.Default.Add, color = Color(0xFF10B981)) {
                                         scope.launch {
                                             drawerState.close()
-                                            tabs.add(TabItem(url = "about:blank", title = "New Tab"))
+                                            tabs.add(TabItem(url = homeUrl(), title = "New Tab"))
                                             activeTabIndex = tabs.size - 1
                                             Toast.makeText(this@MainActivity, "New Tab Created", Toast.LENGTH_SHORT).show()
                                         }
@@ -1448,31 +1540,38 @@ class MainActivity : ComponentActivity() {
                                 // SURFACE 2 — Browsing: compact address bar + privacy strip.
                                 // (Home surface has no browser top bar — it has its own
                                 // big search bar; tab switching lives in the bottom nav.)
-                                AnimatedVisibility(
-                                    visible = !immersiveMode && !showOverlays,
-                                    enter = expandVertically() + fadeIn(),
-                                    exit = shrinkVertically() + fadeOut()
-                                ) {
-                                    Column {
-                                        CompactBrowseBar(
-                                            theme = theme,
-                                            currentUrl = currentTab.url,
-                                            onNavigate = { input ->
-                                                val destination = formatUrl(input, currentSearchEngineSetting, activeMode)
-                                                currentTab.url = destination
-                                                currentTab.webView?.loadUrl(destination)
-                                            },
-                                            onReload = { currentTab.webView?.reload() },
-                                            onMenuClick = { showBrowserMenu = true }
-                                        )
-                                        PrivacyStrip(
-                                            theme = theme,
-                                            adBlockerEnabled = adBlockerEnabled,
-                                            blockedCount = blockedCount,
-                                            onClick = { showPrivacyGuards = true }
-                                        )
+                                // Bottom-address-bar flag: the bar renders below the page.
+                                // Defined at this outer scope so both top and bottom
+                                // call sites can see it.
+                                @Composable
+                                fun BrowseTopBarBlock() {
+                                    AnimatedVisibility(
+                                        visible = !immersiveMode && !showOverlays,
+                                        enter = expandVertically() + fadeIn(),
+                                        exit = shrinkVertically() + fadeOut()
+                                    ) {
+                                        Column {
+                                            CompactBrowseBar(
+                                                theme = theme,
+                                                currentUrl = currentTab.url,
+                                                onNavigate = { input ->
+                                                    val destination = formatUrl(input, currentSearchEngineSetting, activeMode)
+                                                    currentTab.url = destination
+                                                    currentTab.webView?.loadUrl(destination)
+                                                },
+                                                onReload = { currentTab.webView?.reload() },
+                                                onMenuClick = { showBrowserMenu = true }
+                                            )
+                                            PrivacyStrip(
+                                                theme = theme,
+                                                adBlockerEnabled = adBlockerEnabled,
+                                                blockedCount = blockedCount,
+                                                onClick = { showPrivacyGuards = true }
+                                            )
+                                        }
                                     }
                                 }
+                                if (!flagsUi.bottomAddressBar) BrowseTopBarBlock()
 
                                 // 4. MAIN CONTENT CONTAINER (WIDGET-STYLE DASHBOARD OR WEBVIEW)
                                 Box(modifier = Modifier.weight(1f)) {
@@ -1499,16 +1598,30 @@ class MainActivity : ComponentActivity() {
                                             onProfileClick = { showSettings = true }
                                         )
                                     } else {
-                                        // Pull-to-refresh on web pages (real WebView.reload()).
-                                        // Nested-scroll aware: only triggers at the top of the page.
-                                        PullToRefreshBox(
-                                            isRefreshing = isRefreshing,
-                                            onRefresh = {
-                                                isRefreshing = true
-                                                currentTab.webView?.reload()
-                                            },
-                                            modifier = Modifier.fillMaxSize()
-                                        ) {
+                                        // Pull-to-refresh flag: when off, the page renders
+                                        // without the PullToRefreshBox wrapper at all.
+                                        @Composable
+                                        fun RefreshablePage(content: @Composable () -> Unit) {
+                                            if (flagsUi.pullToRefreshEnabled) {
+                                                // Pull-to-refresh on web pages (real WebView.reload()).
+                                                // Nested-scroll aware: only triggers at the top of the page.
+                                                PullToRefreshBox(
+                                                    isRefreshing = isRefreshing,
+                                                    onRefresh = {
+                                                        isRefreshing = true
+                                                        currentTab.webView?.reload()
+                                                    },
+                                                    modifier = Modifier.fillMaxSize()
+                                                ) {
+                                                    content()
+                                                }
+                                            } else {
+                                                Box(modifier = Modifier.fillMaxSize()) {
+                                                    content()
+                                                }
+                                            }
+                                        }
+                                        RefreshablePage {
                                         // Adaptive Layout Frame to mimic Laptop / Tablet viewports cleanly
                                         val emulatorWidthModifier = when (deviceEmulatorMode) {
                                             "Tablet" -> Modifier.fillMaxHeight().width(768.dp)
@@ -1533,16 +1646,24 @@ class MainActivity : ComponentActivity() {
                                                                 webViewClient = object : WebViewClient() {
                                                                     override fun shouldOverrideUrlLoading(view: WebView?, request: WebResourceRequest?): Boolean {
                                                                         var urlStr = request?.url?.toString() ?: ""
-                                                                        // HTTPS-Only: upgrade plain http navigations
+                                                                        // HTTPS-Only: upgrade plain http navigations FIRST
+                                                                        // (so http://click://flags can't bypass the upgrade).
                                                                         if (liveHttpsOnly && urlStr.startsWith("http://")) {
                                                                             urlStr = "https://" + urlStr.removePrefix("http://")
+                                                                        }
+                                                                        // click:// internal pages (chrome://-style): open natively.
+                                                                        ClickInternalPages.interceptNavigation(urlStr)?.let { pageKey ->
+                                                                            showClickPage = pageKey
+                                                                            return true
                                                                         }
                                                                         if (urlStr.startsWith("http://") || urlStr.startsWith("https://")) {
                                                                             // Per-site desktop override BEFORE loading (UA must be set first).
                                                                             if (view != null) this@MainActivity.applyPerSiteDesktop(view, urlStr)
-                                                                            // Header spoofing: navigations carry the custom headers.
-                                                                            if (liveHeaderSpoof && liveCustomHeaders.isNotEmpty()) {
-                                                                                view?.loadUrl(urlStr, liveCustomHeaders)
+                                                                            // Header spoofing + DNT flag: navigations carry the custom headers.
+                                                                            val navHeaders = liveCustomHeaders.toMutableMap()
+                                                                            if (liveFlags.dntHeader) navHeaders["DNT"] = "1"
+                                                                            if (liveHeaderSpoof && navHeaders.isNotEmpty()) {
+                                                                                view?.loadUrl(urlStr, navHeaders)
                                                                             } else {
                                                                                 view?.loadUrl(urlStr)
                                                                             }
@@ -1554,13 +1675,21 @@ class MainActivity : ComponentActivity() {
                                                                     @Suppress("Deprecated")
                                                                     override fun shouldOverrideUrlLoading(view: WebView?, url: String?): Boolean {
                                                                         var urlStr = url ?: ""
+                                                                        // HTTPS-Only upgrade FIRST (see above).
                                                                         if (liveHttpsOnly && urlStr.startsWith("http://")) {
                                                                             urlStr = "https://" + urlStr.removePrefix("http://")
                                                                         }
+                                                                        // click:// internal pages (chrome://-style): open natively.
+                                                                        ClickInternalPages.interceptNavigation(urlStr)?.let { pageKey ->
+                                                                            showClickPage = pageKey
+                                                                            return true
+                                                                        }
                                                                         if (urlStr.startsWith("http://") || urlStr.startsWith("https://")) {
                                                                             if (view != null) this@MainActivity.applyPerSiteDesktop(view, urlStr)
-                                                                            if (liveHeaderSpoof && liveCustomHeaders.isNotEmpty()) {
-                                                                                view?.loadUrl(urlStr, liveCustomHeaders)
+                                                                            val navHeaders = liveCustomHeaders.toMutableMap()
+                                                                            if (liveFlags.dntHeader) navHeaders["DNT"] = "1"
+                                                                            if (liveHeaderSpoof && navHeaders.isNotEmpty()) {
+                                                                                view?.loadUrl(urlStr, navHeaders)
                                                                             } else {
                                                                                 view?.loadUrl(urlStr)
                                                                             }
@@ -1779,10 +1908,18 @@ class MainActivity : ComponentActivity() {
                                                         settings.builtInZoomControls = true
                                                         settings.displayZoomControls = false
 
-                                                                modeManager.applySettings(this, activeMode, forceDesktopMode)
+                                                                modeManager.applySettings(this, activeMode, forceDesktopMode || liveFlags.desktopDefault)
+                                                                // Experimental flags (click://flags) — AFTER mode settings
+                                                                // so custom UA / zoom / etc. override the mode defaults.
+                                                                // Consistent with the desktopDefault OR above: the flag
+                                                                // participates in the mode decision, then fine-tunes it.
+                                                                this@MainActivity.applyExperimentalFlags(this)
                                                                 // Per-site desktop override for the initial URL.
                                                                 this@MainActivity.applyPerSiteDesktop(this, currentTab.url)
                                                                 currentTab.webView = this
+                                                                if (!this@MainActivity.liveWebViews.contains(this)) {
+                                                                    this@MainActivity.liveWebViews.add(this)
+                                                                }
 
                                                                 if (currentTab.url != "about:blank") {
                                                                     loadUrl(currentTab.url)
@@ -1799,6 +1936,8 @@ class MainActivity : ComponentActivity() {
                                                             forceNightModeWebsites,
                                                             dataSaverEnabled
                                                         )
+                                                        // Re-apply experimental flags too.
+                                                        this@MainActivity.applyExperimentalFlags(webView)
                                                     }
                                                 )
                                             }
@@ -1884,6 +2023,8 @@ class MainActivity : ComponentActivity() {
                             // SURFACE 2 — Browsing bottom nav: Back · Forward · Home ·
                             // Tabs (count badge) · Menu. (No center AI tab here — AI
                             // lives in the floating button.)
+                            // Bottom-address-bar flag: bar renders below the page.
+                            if (flagsUi.bottomAddressBar) BrowseTopBarBlock()
                             if (!showOverlays && !immersiveMode) {
                                 BrowseBottomNav(
                                     theme = ModeThemes.forMode(activeMode, dark = activeMode != BrowserMode.SIMPLE),
@@ -1952,13 +2093,14 @@ class MainActivity : ComponentActivity() {
                                         activeTabIndex = activeTabIndex,
                                         theme = theme,
                                         thumbnails = TabThumbnailStore.snapshot(),
+                                        animationsEnabled = flagsUi.tabAnimations,
                                         onSelectTab = { idx ->
                                             activeTabIndex = idx
                                             showTabsManager = false
                                         },
                                         onCloseTab = { idx -> closeTabAt(idx) },
                                         onNewTab = {
-                                            tabs.add(TabItem(url = "about:blank", title = "New Tab"))
+                                            tabs.add(TabItem(url = homeUrl(), title = "New Tab"))
                                             activeTabIndex = tabs.size - 1
                                             showTabsManager = false
                                         },
@@ -1995,6 +2137,79 @@ class MainActivity : ComponentActivity() {
                                 DownloadsScreen(
                                     repository = repository,
                                     onClose = { showDownloads = false }
+                                )
+                            }
+
+                            // click:// internal pages (chrome://-style) full-screen overlay.
+                            if (showClickPage != null) {
+                                ClickPageHost(
+                                    pageKey = showClickPage!!,
+                                    theme = theme,
+                                    flags = flagsUi,
+                                    versionName = BuildConfig.VERSION_NAME,
+                                    versionCode = BuildConfig.VERSION_CODE,
+                                    onFlagToggle = { meta, value ->
+                                        scope.launch {
+                                            dataStore.edit { prefs -> prefs[meta.key] = value }
+                                            liveFlags = meta.set(liveFlags, value)
+                                            flagsUi = liveFlags
+                                            if (meta == ExperimentalFlags.Meta.BLOCK_SCREENSHOTS) {
+                                                applyScreenshotFlag()
+                                            }
+                                            // Re-apply to all live WebViews right away.
+                                            liveWebViews.forEach { wv ->
+                                                try { applyExperimentalFlags(wv) } catch (_: Exception) { }
+                                            }
+                                        }
+                                    },
+                                    onStringFlag = { key, value ->
+                                        scope.launch {
+                                            dataStore.edit { prefs -> prefs[key] = value }
+                                            liveFlags = liveFlags.copy(
+                                                customUserAgent = if (key == ExperimentalFlags.K_CUSTOM_UA) value else liveFlags.customUserAgent,
+                                                customHomepage = if (key == ExperimentalFlags.K_CUSTOM_HOMEPAGE) value else liveFlags.customHomepage
+                                            )
+                                            flagsUi = liveFlags
+                                            liveWebViews.forEach { wv ->
+                                                try { applyExperimentalFlags(wv) } catch (_: Exception) { }
+                                            }
+                                        }
+                                    },
+                                    onOpenPage = { key ->
+                                        when (key) {
+                                            "settings" -> { showClickPage = null; showSettings = true }
+                                            "history" -> { showClickPage = null; showHistory = true }
+                                            "downloads" -> { showClickPage = null; showDownloads = true }
+                                            "bookmarks" -> { showClickPage = null; showBookmarks = true }
+                                            "newtab" -> {
+                                                showClickPage = null
+                                                tabs.add(TabItem(url = homeUrl(), title = "New Tab"))
+                                                activeTabIndex = tabs.size - 1
+                                            }
+                                            "vpn" -> { showClickPage = null; showV9Shield = true }
+                                            "dns" -> { showClickPage = null; showV9Shield = true }
+                                            else -> showClickPage = key
+                                        }
+                                    },
+                                    onClose = { showClickPage = null }
+                                )
+                            }
+
+                            // Confirm-exit dialog (flag).
+                            if (showExitConfirm) {
+                                androidx.compose.material3.AlertDialog(
+                                    onDismissRequest = { showExitConfirm = false },
+                                    title = { androidx.compose.material3.Text("Exit Click Browser?") },
+                                    confirmButton = {
+                                        androidx.compose.material3.TextButton(onClick = { finish() }) {
+                                            androidx.compose.material3.Text("Exit")
+                                        }
+                                    },
+                                    dismissButton = {
+                                        androidx.compose.material3.TextButton(onClick = { showExitConfirm = false }) {
+                                            androidx.compose.material3.Text("Stay")
+                                        }
+                                    }
                                 )
                             }
 
@@ -2293,7 +2508,7 @@ class MainActivity : ComponentActivity() {
                                     isDesktopForSite = menuDesktopForSite,
                                     onNewTab = {
                                         showBrowserMenu = false
-                                        tabs.add(TabItem(url = "about:blank", title = "New Tab"))
+                                        tabs.add(TabItem(url = homeUrl(), title = "New Tab"))
                                         activeTabIndex = tabs.size - 1
                                     },
                                     onNewPrivateTab = {
@@ -2554,8 +2769,20 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    /** New-tab URL: custom homepage flag or the premium home (about:blank). */
+    private fun homeUrl(): String {
+        val custom = liveFlags.customHomepage.trim()
+        return if (custom.isEmpty()) "about:blank" else custom
+    }
+
     private fun formatUrl(input: String, searchEngine: String, mode: BrowserMode): String {
         val trimmed = input.trim()
+        // click:// internal pages (chrome://-style): pass through (normalized
+        // to lowercase) so shouldOverrideUrlLoading can intercept them into
+        // native screens.
+        if (trimmed.startsWith("click://", ignoreCase = true)) {
+            return trimmed.lowercase()
+        }
         if (trimmed.startsWith("http://") || trimmed.startsWith("https://")) {
             return trimmed
         }

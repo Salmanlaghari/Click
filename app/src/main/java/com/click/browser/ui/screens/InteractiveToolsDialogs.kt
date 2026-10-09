@@ -846,6 +846,13 @@ fun AboutAppDialog(onClose: () -> Unit) {
                     fontSize = 11.sp,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
+                Spacer(modifier = Modifier.height(8.dp))
+                Text(
+                    "${com.click.browser.engine.ClickInternalPages.FEATURE_COUNT} built-in features — see click://version",
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = MaterialTheme.colorScheme.primary
+                )
             }
         },
         confirmButton = {
