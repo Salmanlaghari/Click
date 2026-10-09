@@ -67,6 +67,10 @@ class V9VpnService : VpnService() {
     private val ipId = AtomicInteger(1)
     private val queryCount = AtomicLong(0)
     private val blockedCount = AtomicLong(0)
+    // Fail-open safety: track consecutive DoH failures.
+    private val dohFailStreak = AtomicInteger(0)
+    private val dohOkStreak = AtomicInteger(0)
+    @Volatile private var dohDegradedNotified = false
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         when (intent?.action) {
@@ -108,6 +112,8 @@ class V9VpnService : VpnService() {
         startForegroundCompat(buildNotification())
         loopOn = true
         _running.value = true
+        // Protect our own DoH sockets from the TUN (else TLS loops back in).
+        V9DohResolver.socketProtector = { sock -> protect(sock) }
         thread(name = "v9-dns-loop", isDaemon = true) { packetLoop(fd) }
         Log.i(TAG, "V9 Shield ON")
     }
@@ -115,6 +121,7 @@ class V9VpnService : VpnService() {
     private fun stopShield() {
         loopOn = false
         _running.value = false
+        V9DohResolver.socketProtector = null
         try { tun?.close() } catch (_: Throwable) {}
         tun = null
         try { stopForeground(STOP_FOREGROUND_REMOVE) } catch (_: Throwable) {}
@@ -207,8 +214,33 @@ class V9VpnService : VpnService() {
             _blocked.value = blockedCount.get()
             buildDnsResponse(query, sinkhole = true)
         } else {
-            val ips = V9DohResolver.resolve(query.name, query.qtype, dohEndpoint())
-            buildDnsResponse(query, ips = ips)
+            val (provider, customUrl) = dohConfig()
+            var ips = V9DohResolver.resolve(query.name, query.qtype, provider, customUrl)
+            if (ips.isNotEmpty()) {
+                dohFailStreak.set(0)
+                if (dohOkStreak.incrementAndGet() >= 10) dohDegradedNotified = false
+            } else {
+                // DoH failed — FAIL-OPEN: forward the raw query over plain UDP
+                // via a protected socket so browsing never breaks.
+                val fails = dohFailStreak.incrementAndGet()
+                dohOkStreak.set(0)
+                Log.w(TAG, "DoH failed for ${query.name} (streak=$fails), fail-open via UDP")
+                if (fails == 5 && !dohDegradedNotified) {
+                    dohDegradedNotified = true
+                    notifyDnsDegraded()
+                }
+                ips = emptyList()
+            }
+            val rawQuery = buf.copyOfRange(dnsOff, len)
+            val relayed = if (ips.isEmpty()) forwardViaUdp(rawQuery) else null
+            if (relayed != null) {
+                // Relay the upstream response, fixing the TXID to ours.
+                relayed[0] = buf[dnsOff]
+                relayed[1] = buf[dnsOff + 1]
+                relayed
+            } else {
+                buildDnsResponse(query, ips = ips)
+            }
         }
         out.write(buildUdpIpPacket(srcIp, srcPort, response))
     }
@@ -347,15 +379,67 @@ class V9VpnService : VpnService() {
         return sum.inv() and 0xFFFF
     }
 
-    private fun dohEndpoint(): String {
+    /** Returns (dohProvider, dohCustomUrl) from settings. */
+    private fun dohConfig(): Pair<String, String> {
         return try {
             val prefs = runBlocking { dataStore.data.first() }
             val provider = prefs[AppSettings.DOH_PROVIDER]
                 ?: V9DohResolver.PROVIDER_CLOUDFLARE
             val custom = prefs[AppSettings.DOH_CUSTOM_URL].orEmpty()
-            V9DohResolver.endpointUrl(provider, custom)
+            provider to custom
         } catch (_: Throwable) {
-            "https://cloudflare-dns.com/dns-query"
+            V9DohResolver.PROVIDER_CLOUDFLARE to ""
         }
+    }
+
+    /**
+     * Fail-open: forwards a raw DNS query over plain UDP/53 to upstream
+     * resolvers via a PROTECTED socket (bypasses the TUN), and returns the
+     * raw response bytes, or null on failure.
+     */
+    private fun forwardViaUdp(query: ByteArray): ByteArray? {
+        val upstreams = listOf("1.1.1.1", "8.8.8.8")
+        for (host in upstreams) {
+            try {
+                java.net.DatagramSocket().use { sock ->
+                    if (!protect(sock)) {
+                        Log.w(TAG, "protect() failed for fail-open socket")
+                        return@use
+                    }
+                    sock.soTimeout = 4000
+                    val addr = java.net.InetSocketAddress(host, 53)
+                    sock.send(java.net.DatagramPacket(query, query.size, addr))
+                    val respBuf = ByteArray(512)
+                    val resp = java.net.DatagramPacket(respBuf, respBuf.size)
+                    sock.receive(resp)
+                    return resp.data.copyOf(resp.length)
+                }
+            } catch (t: Throwable) {
+                Log.w(TAG, "UDP fail-open via $host failed", t)
+            }
+        }
+        return null
+    }
+
+    /** User-visible note when DoH keeps failing (we've failed open to UDP). */
+    private fun notifyDnsDegraded() {
+        try {
+            val nm = getSystemService(NOTIFICATION_SERVICE) as NotificationManager
+            if (android.os.Build.VERSION.SDK_INT >= 26) {
+                nm.createNotificationChannel(
+                    NotificationChannel(
+                        CHANNEL_ID, "V9 Shield",
+                        NotificationManager.IMPORTANCE_LOW
+                    )
+                )
+            }
+            val n = NotificationCompat.Builder(this, CHANNEL_ID)
+                .setSmallIcon(R.mipmap.ic_launcher)
+                .setContentTitle("V9 Shield: encrypted DNS degraded")
+                .setContentText("Falling back to plain DNS so browsing keeps working.")
+                .setAutoCancel(true)
+                .build()
+            nm.notify(NOTIF_ID + 1, n)
+        } catch (_: Throwable) {}
     }
 }
