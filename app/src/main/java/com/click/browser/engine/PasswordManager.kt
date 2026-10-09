@@ -5,6 +5,7 @@ import android.security.keystore.KeyGenParameterSpec
 import android.security.keystore.KeyProperties
 import android.util.Base64
 import androidx.datastore.preferences.core.edit
+import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
@@ -36,7 +37,7 @@ object PasswordManager {
     private const val KEYSTORE_ALIAS = "ClickBrowserPasswords"
     private const val ANDROID_KEYSTORE = "AndroidKeyStore"
     private val PASSWORDS_KEY = stringPreferencesKey("saved_passwords_v1")
-    private val ENABLED_KEY = stringPreferencesKey("password_manager_enabled")
+    private val ENABLED_KEY = booleanPreferencesKey("password_manager_enabled")
 
     private fun getOrCreateKey(): SecretKey {
         val ks = KeyStore.getInstance(ANDROID_KEYSTORE).apply { load(null) }
