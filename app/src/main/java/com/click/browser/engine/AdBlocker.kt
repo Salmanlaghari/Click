@@ -7,6 +7,19 @@ import kotlinx.coroutines.flow.asStateFlow
 import java.util.concurrent.atomic.AtomicInteger
 
 object AdBlocker {
+    private val blockedHosts = setOf(
+        "doubleclick.net",
+        "google-analytics.com",
+        "googlesyndication.com",
+        "googleadservices.com",
+        "adservice.google.com",
+        "adsystem.com",
+        "adnxs.com",
+        "popads.net",
+        "outbrain.com",
+        "taboola.com"
+    )
+
     /** Aggressive mode (click://flags): also block analytics/trackers, not just ads. */
     @Volatile
     var aggressive: Boolean = false

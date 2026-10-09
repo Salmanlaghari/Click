@@ -22,6 +22,7 @@ import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
 import androidx.core.content.ContextCompat
 import androidx.webkit.WebSettingsCompat
+import androidx.annotation.RequiresApi
 import androidx.webkit.WebViewFeature
 import androidx.compose.animation.*
 import androidx.compose.animation.core.*
