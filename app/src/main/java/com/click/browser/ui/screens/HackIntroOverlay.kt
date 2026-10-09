@@ -197,10 +197,12 @@ fun HackIntroOverlay(
             val g = (glitchT * 997).toInt()
             val xOff = if (g % 11 < 2) ((g % 5) - 2) * 6f else 0f
             val glowAlpha = 0.55f + 0.35f * pulse
-            // Hoisted out of the word loop (Kilo): styles are remembered, not
-            // rebuilt on every recomposition. Highlight offset is density-
-            // independent (Kilo suggestion).
-            val highlightRimPx = with(LocalDensity.current) { 3.dp.toPx() }
+            // Hoisted out of the word loop (Kilo): headline style is remembered
+            // and only rebuilt when glowAlpha changes; subtitle style is a
+            // constant remember. Highlight offset is density-independent and
+            // remembered (Kilo suggestions).
+            val density = LocalDensity.current
+            val highlightRimPx = remember(density) { with(density) { 3.dp.toPx() } }
             val headlineStyle = remember(glowAlpha) {
                 TextStyle(
                     shadow = Shadow(
@@ -262,17 +264,18 @@ fun HackIntroOverlay(
         }
 
         // TEAM PK AI ERA mark at the bottom — hidden when the subtitle already
-        // says it (app-start intro), to avoid showing it twice.
-        val bottomMarkStyle = remember {
-            TextStyle(
-                shadow = Shadow(
-                    color = Color(0xFFEF4444).copy(alpha = 0.70f),
-                    offset = Offset(0f, 0f),
-                    blurRadius = 18f
-                )
-            )
-        }
+        // says it (app-start intro), to avoid showing it twice. Style is
+        // remembered inside the branch so it is only created when shown (Kilo).
         if (!subtitle.equals("TEAM PK AI ERA", ignoreCase = true)) {
+            val bottomMarkStyle = remember {
+                TextStyle(
+                    shadow = Shadow(
+                        color = Color(0xFFEF4444).copy(alpha = 0.70f),
+                        offset = Offset(0f, 0f),
+                        blurRadius = 18f
+                    )
+                )
+            }
             Column(
                 modifier = Modifier
                     .align(Alignment.BottomCenter)
