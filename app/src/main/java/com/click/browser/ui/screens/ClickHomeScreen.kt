@@ -924,6 +924,14 @@ private fun NewsSection(
                         }
                     }
                 }
+                // AdMob native ad, styled as a news card and labeled "Ad" per policy.
+                // Placed between the hero and the list with the column's 10.dp spacing
+                // so it never sits flush against tappable cards.
+                AdMobNativeAd(
+                    cardBg = cardBg,
+                    cardBorder = cardBorder,
+                    onSurface = theme.onSurface
+                )
                 // Small list cards: thumbnail left, title + source right
                 articles.drop(1).take(5).forEach { article ->
                     Card(
@@ -966,6 +974,10 @@ private fun NewsSection(
                         }
                     }
                 }
+                // AdMob banner ad after the news list (Prince's AdMob account).
+                // Extra spacing keeps the ad clear of tappable cards per AdMob policy.
+                Spacer(modifier = Modifier.height(4.dp))
+                AdMobBannerAd()
             }
         }
     }

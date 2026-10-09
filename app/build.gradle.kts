@@ -146,6 +146,8 @@ dependencies {
     // On-device translation (ML Kit). Language MODELS are downloaded on
     // demand at runtime — nothing is bundled, so the APK stays lean.
     implementation(libs.mlkit.translate)
+    // Google AdMob for news-feed monetization (banner + native ads).
+    implementation(libs.play.services.ads)
 
     testImplementation(libs.junit)
     androidTestImplementation(libs.androidx.junit)
