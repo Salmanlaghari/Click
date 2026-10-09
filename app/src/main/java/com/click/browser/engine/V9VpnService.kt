@@ -46,8 +46,8 @@ import kotlin.concurrent.thread
 class V9VpnService : VpnService() {
 
     companion object {
-        const val ACTION_START = "com.click.browser.engine.V9VpnService.START"
-        const val ACTION_STOP = "com.click.browser.engine.V9VpnService.STOP"
+        const val ACTION_START = "com.teampkai.clickbrowser.engine.V9VpnService.START"
+        const val ACTION_STOP = "com.teampkai.clickbrowser.engine.V9VpnService.STOP"
         const val VPN_ADDRESS = "10.8.0.2"
         const val VPN_DNS = "10.8.0.1"
         private const val NOTIF_ID = 4401
