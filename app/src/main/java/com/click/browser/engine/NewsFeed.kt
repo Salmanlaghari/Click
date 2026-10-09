@@ -76,7 +76,9 @@ object NewsFeed {
 
     private val feeds = listOf(
         FeedDef("https://feeds.bbci.co.uk/news/rss.xml", "BBC News", NewsCategory.NEWS),
-        FeedDef("https://www.dawn.com/feed", "Dawn", NewsCategory.NEWS),
+        // NOTE: https://www.dawn.com/feed 301-redirects to http:// (cleartext),
+        // which Android 9+ blocks. Use the direct HTTPS URL instead.
+        FeedDef("https://www.dawn.com/feeds/home", "Dawn", NewsCategory.NEWS),
         FeedDef("https://news.google.com/rss?hl=en-US&gl=US&ceid=US:en", "Google News", NewsCategory.NEWS),
         FeedDef("https://feeds.bbci.co.uk/news/technology/rss.xml", "BBC Tech", NewsCategory.TECH),
         FeedDef("https://techcrunch.com/feed/", "TechCrunch", NewsCategory.TECH),
@@ -168,10 +170,22 @@ object NewsFeed {
             .url(feed.url)
             .header("User-Agent", FEED_USER_AGENT)
             .build()
-        client.newCall(request).execute().use { resp ->
-            if (!resp.isSuccessful) return emptyList()
-            val body = resp.body?.string() ?: return emptyList()
-            return parseRss(body, feed)
+        try {
+            client.newCall(request).execute().use { resp ->
+                if (!resp.isSuccessful) {
+                    android.util.Log.w("NewsFeed", "${feed.source}: HTTP ${resp.code}")
+                    return emptyList()
+                }
+                val body = resp.body?.string() ?: return emptyList()
+                val articles = parseRss(body, feed)
+                if (articles.isEmpty()) {
+                    android.util.Log.w("NewsFeed", "${feed.source}: parsed 0 articles (${body.length} chars)")
+                }
+                return articles
+            }
+        } catch (e: Exception) {
+            android.util.Log.w("NewsFeed", "${feed.source}: ${e.javaClass.simpleName}: ${e.message}")
+            return emptyList()
         }
     }
 
@@ -185,14 +199,20 @@ object NewsFeed {
             var inItem = false
             var title = ""; var link = ""; var pubDate = ""; var thumb: String? = null
             var description = ""
+            // Track the current open tag: parser.name is null during TEXT events,
+            // so we must remember it from the last START_TAG (root cause of the
+            // "news never loads" bug — text was silently dropped for every feed).
+            var currentTag = ""
             while (event != XmlPullParser.END_DOCUMENT) {
                 val ns = parser.namespace ?: ""
                 val name = parser.name ?: ""
                 when (event) {
                     XmlPullParser.START_TAG -> {
+                        currentTag = name
                         if (name.equals("item", ignoreCase = true) || name.equals("entry", ignoreCase = true)) {
                             inItem = true
                             title = ""; link = ""; pubDate = ""; thumb = null; description = ""
+                            currentTag = ""
                         } else if (inItem) {
                             when {
                                 name.equals("thumbnail", ignoreCase = true) &&
@@ -214,12 +234,12 @@ object NewsFeed {
                         if (inItem) {
                             val text = parser.text.orEmpty()
                             when {
-                                name.equals("title", ignoreCase = true) -> title += text
-                                name.equals("link", ignoreCase = true) ->
+                                currentTag.equals("title", ignoreCase = true) -> title += text
+                                currentTag.equals("link", ignoreCase = true) ->
                                     if (link.isBlank()) link = text.trim()
-                                name.equals("pubDate", ignoreCase = true) || name.equals("published", ignoreCase = true) ||
-                                    name.equals("updated", ignoreCase = true) -> if (pubDate.isBlank()) pubDate = text.trim()
-                                name.equals("description", ignoreCase = true) || name.equals("summary", ignoreCase = true) ->
+                                currentTag.equals("pubDate", ignoreCase = true) || currentTag.equals("published", ignoreCase = true) ||
+                                    currentTag.equals("updated", ignoreCase = true) -> if (pubDate.isBlank()) pubDate = text.trim()
+                                currentTag.equals("description", ignoreCase = true) || currentTag.equals("summary", ignoreCase = true) ->
                                     description += text
                             }
                         }
@@ -250,6 +270,7 @@ object NewsFeed {
                                 )
                             }
                         }
+                        currentTag = ""
                     }
                 }
                 event = parser.next()
