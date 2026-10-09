@@ -550,6 +550,8 @@ class MainActivity : ComponentActivity() {
             var adBlockerEnabled by remember { mutableStateOf(true) }
             // Real session count of blocked tracker/ad requests (home privacy pill).
             val blockedCount by AdBlocker.blockedCountFlow.collectAsState()
+            // V9 Shield VPN running state (for the home shield card).
+            val shieldActive by com.click.browser.engine.V9VpnController.isRunning.collectAsState()
             var forceNightModeWebsites by remember { mutableStateOf(false) }
             var httpsOnlyMode by remember { mutableStateOf(true) }
             var javaScriptEnabledGlobal by remember { mutableStateOf(true) }
@@ -1752,7 +1754,7 @@ class MainActivity : ComponentActivity() {
                                             adBlockerEnabled = adBlockerEnabled,
                                             blockedCount = blockedCount,
                                             wallpaperUri = wallpaperUri,
-                                            shieldActive = com.click.browser.engine.V9VpnController.isRunning,
+                                            shieldActive = shieldActive,
                                             onV9ShieldClick = { showV9Shield = true },
                                             onNavigate = { input ->
                                                 val destination = formatUrl(input, currentSearchEngineSetting, activeMode)
