@@ -32,7 +32,10 @@ android {
     }
 
     defaultConfig {
-        applicationId = "com.click.browser"
+        // Play Store package: com.teampkai.clickbrowser
+        // (namespace stays com.click.browser so BuildConfig/R keep resolving;
+        //  namespace != applicationId is fully supported by AGP)
+        applicationId = "com.teampkai.clickbrowser"
         minSdk = 26
         targetSdk = 36
         versionCode = 2
