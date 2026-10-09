@@ -35,6 +35,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
@@ -807,6 +808,41 @@ fun AboutAppDialog(onClose: () -> Unit) {
                 Spacer(modifier = Modifier.height(12.dp))
                 Text(
                     "A multi-mode Android browser (Simple / Developer / Hack) with ad-blocking, devtools, anti-detection spoofing and a real video downloader.",
+                    fontSize = 11.sp,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Spacer(modifier = Modifier.height(12.dp))
+                // V9 — Prince's signature feature.
+                Text(
+                    "V9 — 1 Browser, 3 Engines",
+                    fontSize = 13.sp,
+                    fontWeight = FontWeight.ExtraBold,
+                    color = MaterialTheme.colorScheme.primary
+                )
+                Spacer(modifier = Modifier.height(4.dp))
+                Text(
+                    "Each mode is a fully separate engine: its own cookies, storage, device identity and fingerprint — websites see three different browsers.",
+                    fontSize = 11.sp,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Spacer(modifier = Modifier.height(4.dp))
+                Text(
+                    "\"First time in the World We Present A Superior Testing Future\"",
+                    fontSize = 11.sp,
+                    fontStyle = FontStyle.Italic,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Spacer(modifier = Modifier.height(12.dp))
+                // Safety section — the anti-misuse protection suite.
+                Text(
+                    "Safety",
+                    fontSize = 13.sp,
+                    fontWeight = FontWeight.ExtraBold,
+                    color = MaterialTheme.colorScheme.primary
+                )
+                Spacer(modifier = Modifier.height(4.dp))
+                Text(
+                    "Click Browser protects you with Safe Browsing warnings, malware/phishing blocking, adult-content filtering and the V9 Shield VPN (encrypted DNS). These tools are for your privacy and safety — please use them responsibly, not for illegal activity. Click Browser does not censor political or news content.",
                     fontSize = 11.sp,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )

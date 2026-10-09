@@ -16,10 +16,14 @@ val Context.dataStore: DataStore<Preferences> by preferencesDataStore(name = "br
 class ModeManager(private val context: Context) {
 
     companion object {
-        private val MODE_KEY = stringPreferencesKey("browser_mode")
+        // Public: V9Engine reads the saved mode synchronously in Application.onCreate
+        // to pin the process to the correct engine data directory.
+        val MODE_KEY = stringPreferencesKey("browser_mode")
 
-        const val UA_SIMPLE = "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Mobile Safari/537.36"
-        const val UA_DEVELOPER = "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Mobile Safari/537.36 DevTools"
+        // V9 per-engine User-Agents — deliberately distinct devices/browsers so
+        // websites (e.g. Google) see three different browsers, one per engine.
+        const val UA_SIMPLE = "Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Mobile Safari/537.36"
+        const val UA_DEVELOPER = "Mozilla/5.0 (Linux; Android 14; SM-S921B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Mobile Safari/537.36"
         const val UA_HACK = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36"
     }
 

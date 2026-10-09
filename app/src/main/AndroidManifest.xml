@@ -12,7 +12,13 @@
     <!-- AI chat voice input: requested at runtime with a rationale dialog. -->
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
 
+    <!-- V9 Shield (built-in VPN): packet tunnel + foreground service. -->
+    <uses-permission android:name="android.permission.BIND_VPN_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
+
     <application
+        android:name=".ClickApplication"
         android:allowBackup="true"
         android:enableOnBackInvokedCallback="true"
         android:hardwareAccelerated="true"
@@ -31,6 +37,20 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+
+        <!-- V9 Shield VPN service (DNS protection tunnel). -->
+        <service
+            android:name=".engine.V9VpnService"
+            android:permission="android.permission.BIND_VPN_SERVICE"
+            android:foregroundServiceType="specialUse"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="android.net.VpnService" />
+            </intent-filter>
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="Encrypted DNS and DNS-based threat blocking (V9 Shield)" />
+        </service>
     </application>
 
 </manifest>

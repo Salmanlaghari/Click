@@ -26,6 +26,12 @@ object AppSettings {
     val UI_DARK_MODE = booleanPreferencesKey("ui_dark_mode")
     val WALLPAPER_URI = stringPreferencesKey("wallpaper_uri")
 
+    // V9 Shield: DNS-over-HTTPS provider + VPN toggle.
+    // "cloudflare" | "google" | "custom" (see V9DohResolver).
+    val DOH_PROVIDER = stringPreferencesKey("doh_provider")
+    val DOH_CUSTOM_URL = stringPreferencesKey("doh_custom_url")
+    val V9_VPN_ENABLED = booleanPreferencesKey("v9_vpn_enabled")
+
     data class CustomHeader(val name: String, val value: String)
 
     /** Auto-detect provider from the key prefix. `gsk_` -> Groq, `sk-or-` -> OpenRouter. */

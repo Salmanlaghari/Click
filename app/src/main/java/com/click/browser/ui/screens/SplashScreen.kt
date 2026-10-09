@@ -170,6 +170,15 @@ fun SplashScreen(onFinished: () -> Unit) {
                 text = "Welcome to The Team PK AI Era",
                 wordDelayMs = 130L
             )
+            Spacer(modifier = Modifier.height(10.dp))
+            // V9 brand line — Prince's signature feature.
+            Text(
+                "V9 · 1 BROWSER · 3 ENGINES",
+                color = Color(0xFF7C6CFF),
+                fontSize = 12.sp,
+                fontWeight = FontWeight.ExtraBold,
+                letterSpacing = 4.sp
+            )
         }
     }
 }
