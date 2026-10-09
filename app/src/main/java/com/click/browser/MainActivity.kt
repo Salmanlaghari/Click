@@ -1710,6 +1710,7 @@ class MainActivity : ComponentActivity() {
                                             activeMode = activeMode,
                                             adBlockerEnabled = adBlockerEnabled,
                                             blockedCount = blockedCount,
+                                            wallpaperUri = wallpaperUri,
                                             onNavigate = { input ->
                                                 val destination = formatUrl(input, currentSearchEngineSetting, activeMode)
                                                 currentTab.url = destination

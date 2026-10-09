@@ -97,6 +97,8 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -132,6 +134,7 @@ fun ClickHomeScreen(
     activeMode: BrowserMode,
     adBlockerEnabled: Boolean,
     blockedCount: Int,
+    wallpaperUri: String? = null,
     onNavigate: (String) -> Unit,
     onOpenAiChat: () -> Unit,
     onTranslate: () -> Unit,
@@ -154,10 +157,49 @@ fun ClickHomeScreen(
         else -> theme.onSurface.copy(alpha = 0.08f)
     }
 
+    // Custom wallpaper (decoded off the main thread). When set, it replaces
+    // the theme background with a dimmed photo so content stays readable
+    // in all 3 modes.
+    val context = LocalContext.current
+    var wallpaperBitmap by remember(wallpaperUri) { mutableStateOf<Bitmap?>(null) }
+    LaunchedEffect(wallpaperUri) {
+        wallpaperBitmap = withContext(Dispatchers.IO) {
+            try {
+                wallpaperUri?.let { uriStr ->
+                    context.contentResolver.openInputStream(android.net.Uri.parse(uriStr))?.use { input ->
+                        android.graphics.BitmapFactory.decodeStream(input)
+                    }
+                }
+            } catch (_: Exception) { null }
+        }
+    }
+
+    Box(modifier = modifier.fillMaxSize()) {
+        // Background: custom wallpaper (dimmed) or the per-mode theme color.
+        val wallpaper = wallpaperBitmap
+        if (wallpaper != null) {
+            Image(
+                bitmap = wallpaper.asImageBitmap(),
+                contentDescription = null,
+                modifier = Modifier.fillMaxSize(),
+                contentScale = ContentScale.Crop
+            )
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(theme.background.copy(alpha = 0.6f))
+            )
+        } else {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(theme.background)
+            )
+        }
+
     Column(
-        modifier = modifier
+        modifier = Modifier
             .fillMaxSize()
-            .background(theme.background)
             .verticalScroll(rememberScrollState())
             .padding(horizontal = 16.dp),
         verticalArrangement = Arrangement.spacedBy(14.dp)
@@ -206,6 +248,7 @@ fun ClickHomeScreen(
 
         Spacer(modifier = Modifier.height(8.dp))
     }
+    } // Box: wallpaper background + content
 }
 
 /** Top row: gradient "C Click" logo · Protected pill · avatar. */
