@@ -2834,8 +2834,8 @@ fun DrawerItem(
     label: String,
     icon: ImageVector,
     color: Color,
-    onClick: () -> Unit = {},
-    subtitle: String? = null
+    subtitle: String? = null,
+    onClick: () -> Unit = {}
 ) {
     var pressed by remember { mutableStateOf(false) }
     val scale by animateFloatAsState(if (pressed) 0.95f else 1f, label = "drawer_item_scale")
