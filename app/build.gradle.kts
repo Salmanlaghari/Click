@@ -67,6 +67,15 @@ android {
         vectorDrawables {
             useSupportLibrary = true
         }
+
+        // ML Kit Translate ships a ~16MB native inference engine per ABI.
+        // Ship only real-device ABIs (arm64-v8a + armeabi-v7a); x86/x86_64 are
+        // emulator-only and would add ~35MB of dead weight to the APK.
+        // (The language MODELS themselves are still downloaded on demand,
+        // never bundled — see MlKitTranslator.)
+        ndk {
+            abiFilters += listOf("arm64-v8a", "armeabi-v7a")
+        }
     }
 
     buildTypes {
@@ -140,6 +149,9 @@ dependencies {
     implementation(libs.androidx.webkit)
     implementation(libs.okhttp)
     implementation(libs.okhttp.dnsoverhttps)
+    // On-device translation (ML Kit). Language MODELS are downloaded on
+    // demand at runtime — nothing is bundled, so the APK stays lean.
+    implementation(libs.mlkit.translate)
 
     testImplementation(libs.junit)
     androidTestImplementation(libs.androidx.junit)

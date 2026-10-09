@@ -22,7 +22,9 @@ import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
 import androidx.core.content.ContextCompat
 import androidx.webkit.WebSettingsCompat
+import androidx.webkit.WebViewClientCompat
 import androidx.webkit.WebViewFeature
+import androidx.webkit.SafeBrowsingResponseCompat
 import androidx.compose.animation.*
 import androidx.compose.animation.core.*
 import androidx.compose.foundation.BorderStroke
@@ -52,10 +54,6 @@ import androidx.compose.material3.*
 import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
-import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
-import androidx.compose.ui.input.nestedscroll.NestedScrollSource
-import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -105,8 +103,6 @@ class TabItem(
     var url by mutableStateOf(url)
     var title by mutableStateOf(title)
     var isIncognito by mutableStateOf(isIncognito)
-    /** 0..100 page-load progress (drives the thin progress bar under the top bar). */
-    var loadProgress by mutableStateOf(0)
 }
 
 class MainActivity : ComponentActivity() {
@@ -213,8 +209,64 @@ class MainActivity : ComponentActivity() {
         super.onDestroy()
     }
 
-    /** Applies the privacy toggles to a WebView's settings. Idempotent. */
-    private fun applyPrivacyToggles(
+    /** True for direct PDF links — intercepted for the in-app viewer offer. */
+    private fun isPdfUrl(url: String): Boolean {
+        return try {
+            val path = android.net.Uri.parse(url).path?.lowercase().orEmpty()
+            (url.startsWith("http://") || url.startsWith("https://")) &&
+                (path.endsWith(".pdf"))
+        } catch (_: Exception) {
+            false
+        }
+    }
+
+    /**
+     * Downloads a PDF to the app cache dir for the in-app viewer.
+     * Returns the file, or null on failure. Call off the main thread.
+     */
+    private fun downloadPdfToCache(url: String): java.io.File? {
+        return try {
+            val client = okhttp3.OkHttpClient.Builder()
+                .connectTimeout(20, java.util.concurrent.TimeUnit.SECONDS)
+                .readTimeout(60, java.util.concurrent.TimeUnit.SECONDS)
+                .build()
+            val req = okhttp3.Request.Builder().url(url).get()
+                .header("User-Agent", "Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36")
+                .build()
+            client.newCall(req).execute().use { resp ->
+                if (!resp.isSuccessful) return null
+                val body = resp.body ?: return null
+                // Sanity cap: 50 MB.
+                val file = java.io.File(cacheDir, "click_pdf_${System.currentTimeMillis()}.pdf")
+                file.outputStream().use { out ->
+                    val buf = ByteArray(32 * 1024)
+                    var total = 0L
+                    while (true) {
+                        val n = body.byteStream().read(buf)
+                        if (n < 0) break
+                        total += n
+                        if (total > 50L * 1024 * 1024) {
+                            file.delete()
+                            return null
+                        }
+                        out.write(buf, 0, n)
+                    }
+                }
+                // Verify it looks like a PDF.
+                val header = ByteArray(5)
+                java.io.FileInputStream(file).use { it.read(header) }
+                if (String(header) != "%PDF-") {
+                    file.delete()
+                    return null
+                }
+                file
+            }
+        } catch (_: Exception) {
+            null
+        }
+    }
+
+    /** Applies the privacy toggles to a WebView's settings. Idempotent. */    private fun applyPrivacyToggles(
         webView: WebView,
         httpsOnly: Boolean = liveHttpsOnly,
         nightMode: Boolean = liveNightMode,
@@ -230,6 +282,11 @@ class MainActivity : ComponentActivity() {
         s.loadsImagesAutomatically = !dataSaver
         if (WebViewFeature.isFeatureSupported(WebViewFeature.ALGORITHMIC_DARKENING)) {
             WebSettingsCompat.setAlgorithmicDarkeningAllowed(s, nightMode)
+        }
+        // Safe Browsing: Google's harmful-site protection, enforced on every
+        // WebView. Hits surface via onSafeBrowsingHit (WebViewClientCompat).
+        if (WebViewFeature.isFeatureSupported(WebViewFeature.SAFE_BROWSING_ENABLE)) {
+            WebSettingsCompat.setSafeBrowsingEnabled(s, true)
         }
     }
 
@@ -304,6 +361,10 @@ class MainActivity : ComponentActivity() {
 
         modeManager = ModeManager(this)
         repository = BrowserRepository(this)
+        // Bundled ad/tracker filter lists (assets) + weekly remote updates.
+        com.click.browser.engine.FilterListManager.init(this)
+        // Translate language list (asset-overridable, built-in fallback).
+        com.click.browser.engine.MlKitTranslator.loadLanguages(this)
 
         setContent {
             // Premium cold-start splash (rememberSaveable: not replayed on rotation).
@@ -435,12 +496,13 @@ class MainActivity : ComponentActivity() {
             // AI chat + privacy guards
             var showAiChat by remember { mutableStateOf(false) }
             var showPrivacyGuards by remember { mutableStateOf(false) }
-            // V9: Shield screen (VPN + DNS + engines) and the Hack Mode
-            // Markhor intro animation (shown once after a Hack engine boot).
-            var showV9Shield by remember { mutableStateOf(false) }
-            var showHackIntro by remember {
-                mutableStateOf(intent.getBooleanExtra(V9Engine.EXTRA_HACK_INTRO, false))
-            }
+            // Built-in engines (Safe Browsing / Translate / PDF)
+            var showTranslateSheet by remember { mutableStateOf(false) }
+            var pdfOfferUrl by remember { mutableStateOf<String?>(null) }
+            var viewingPdfFile by remember { mutableStateOf<java.io.File?>(null) }
+            var pdfDownloading by remember { mutableStateOf(false) }
+            val safeBrowsingHit by com.click.browser.engine.SafeBrowsingManager.pendingHit
+                .collectAsState(initial = null)
             // Tamper detection (decompile guard): release builds verify the
             // signing certificate on start; mismatch disables AI chat.
             var tamperBlocked by remember { mutableStateOf(false) }
@@ -536,11 +598,9 @@ class MainActivity : ComponentActivity() {
                         if (url == "about:blank" || !url.startsWith("http")) {
                             Toast.makeText(this@MainActivity, "Open a page first to translate it.", Toast.LENGTH_SHORT).show()
                         } else {
-                            val lang = java.util.Locale.getDefault().language.ifBlank { "en" }
-                            val tUrl = "https://translate.google.com/translate?sl=auto&tl=$lang&u=" +
-                                java.net.URLEncoder.encode(url, "UTF-8")
-                            tabs.add(TabItem(url = tUrl, title = "Translate"))
-                            activeTabIndex = tabs.size - 1
+                            // On-device ML Kit translation sheet (models download
+                            // on demand — no Google Translate proxy tab anymore).
+                            showTranslateSheet = true
                         }
                     }
                     FeatureId.DESKTOP -> {
@@ -624,8 +684,6 @@ class MainActivity : ComponentActivity() {
                         Toast.makeText(this@MainActivity, host, Toast.LENGTH_LONG).show()
                     }
                     FeatureId.PRIVACY_GUARDS -> showPrivacyGuards = true
-                    // V9: Shield screen (built-in VPN + DNS + 3-engine identities).
-                    FeatureId.V9_SHIELD -> showV9Shield = true
                     FeatureId.UA_SPOOFER, FeatureId.UA_SWITCHER -> {
                         spoofedUAIndex = (spoofedUAIndex + 1) % 4
                         val uaStr = when (spoofedUAIndex) {
@@ -797,9 +855,11 @@ class MainActivity : ComponentActivity() {
                         return@launch
                     }
                     if (activeMode != BrowserMode.DEVELOPER) {
-                        // V9: DevTools runs in the Developer engine.
-                        val restarting = v9SwitchMode(BrowserMode.DEVELOPER, currentTab.webView, forceDesktopMode)
-                        if (!restarting) currentTab.webView?.reload()
+                        modeManager.setMode(BrowserMode.DEVELOPER)
+                        currentTab.webView?.let { wv ->
+                            modeManager.applySettings(wv, BrowserMode.DEVELOPER, forceDesktopMode)
+                            wv.reload()
+                        }
                     }
                     devToolsTab = tab
                 }
@@ -888,44 +948,32 @@ class MainActivity : ComponentActivity() {
                                 // Hamburger menu items in order (50+ categorized working options)
                                 item { DrawerCategoryHeader(title = "1. Browser Core Modes") }
                                 item {
-                                    DrawerItem(
-                                        label = BrowserMode.SIMPLE.display().title,
-                                        subtitle = BrowserMode.SIMPLE.display().tagline,
-                                        icon = Icons.Default.Filter1, color = Color(0xFF3B82F6)
-                                    ) {
+                                    DrawerItem(label = "Simple Mode", icon = Icons.Default.Filter1, color = Color(0xFF3B82F6)) {
                                         scope.launch {
                                             drawerState.close()
-                                            // V9: engine switch (restarts when the engine changes).
-                                            val restarting = v9SwitchMode(BrowserMode.SIMPLE, currentTab.webView, forceDesktopMode)
-                                            if (!restarting) Toast.makeText(this@MainActivity, "Light Mode Activated", Toast.LENGTH_SHORT).show()
+                                            modeManager.setMode(BrowserMode.SIMPLE)
+                                            currentTab.webView?.let { modeManager.applySettings(it, BrowserMode.SIMPLE, forceDesktopMode) }
+                                            Toast.makeText(this@MainActivity, "Simple Mode Activated", Toast.LENGTH_SHORT).show()
                                         }
                                     }
                                 }
                                 item {
-                                    DrawerItem(
-                                        label = BrowserMode.DEVELOPER.display().title,
-                                        subtitle = BrowserMode.DEVELOPER.display().tagline,
-                                        icon = Icons.Default.Filter2, color = Color(0xFF7C3AED)
-                                    ) {
+                                    DrawerItem(label = "Developer Mode", icon = Icons.Default.Filter2, color = Color(0xFF7C3AED)) {
                                         scope.launch {
                                             drawerState.close()
-                                            // V9: engine switch (restarts when the engine changes).
-                                            val restarting = v9SwitchMode(BrowserMode.DEVELOPER, currentTab.webView, forceDesktopMode)
-                                            if (!restarting) Toast.makeText(this@MainActivity, "Dark Mode Activated", Toast.LENGTH_SHORT).show()
+                                            modeManager.setMode(BrowserMode.DEVELOPER)
+                                            currentTab.webView?.let { modeManager.applySettings(it, BrowserMode.DEVELOPER, forceDesktopMode) }
+                                            Toast.makeText(this@MainActivity, "Developer Mode Activated", Toast.LENGTH_SHORT).show()
                                         }
                                     }
                                 }
                                 item {
-                                    DrawerItem(
-                                        label = BrowserMode.HACK.display().title,
-                                        subtitle = BrowserMode.HACK.display().tagline,
-                                        icon = Icons.Default.Filter3, color = Color(0xFFDC2626)
-                                    ) {
+                                    DrawerItem(label = "Power / Hack Mode", icon = Icons.Default.Filter3, color = Color(0xFFDC2626)) {
                                         scope.launch {
                                             drawerState.close()
-                                            // V9: engine switch (restarts when the engine changes).
-                                            val restarting = v9SwitchMode(BrowserMode.HACK, currentTab.webView, forceDesktopMode)
-                                            if (!restarting) Toast.makeText(this@MainActivity, "OLED Black / Future Mode Activated", Toast.LENGTH_SHORT).show()
+                                            modeManager.setMode(BrowserMode.HACK)
+                                            currentTab.webView?.let { modeManager.applySettings(it, BrowserMode.HACK, forceDesktopMode) }
+                                            Toast.makeText(this@MainActivity, "Power Hack Mode Activated", Toast.LENGTH_SHORT).show()
                                         }
                                     }
                                 }
@@ -1176,11 +1224,9 @@ class MainActivity : ComponentActivity() {
                                         scope.launch {
                                             drawerState.close()
                                             val currentUrl = currentTab.url
-                                            if (currentUrl != "about:blank") {
-                                                val transUrl = "https://translate.google.com/translate?sl=auto&tl=en&u=" + java.net.URLEncoder.encode(currentUrl, "UTF-8")
-                                                currentTab.url = transUrl
-                                                currentTab.webView?.loadUrl(transUrl)
-                                                Toast.makeText(this@MainActivity, "Redirecting to Google Translate...", Toast.LENGTH_SHORT).show()
+                                            if (currentUrl != "about:blank" && currentUrl.startsWith("http")) {
+                                                // On-device ML Kit translation sheet.
+                                                showTranslateSheet = true
                                             } else {
                                                 Toast.makeText(this@MainActivity, "Please load a web page first to translate.", Toast.LENGTH_SHORT).show()
                                             }
@@ -1444,25 +1490,6 @@ class MainActivity : ComponentActivity() {
                             // Immersive Fullscreen WebView setup: if loaded, hide overlays for full screen coverage!
                             val showOverlays = currentTab.url == "about:blank"
 
-                            // Browse-surface polish: hide the top toolbar while the user
-                            // scrolls page content down, reveal on scroll up.
-                            // Event-driven only (no continuous animation — battery-safe).
-                            var toolbarVisible by remember { mutableStateOf(true) }
-                            val toolbarScrollConnection = remember {
-                                object : NestedScrollConnection {
-                                    override fun onPreScroll(
-                                        available: Offset,
-                                        source: NestedScrollSource
-                                    ): Offset {
-                                        if (available.y < -8f) toolbarVisible = false
-                                        else if (available.y > 8f) toolbarVisible = true
-                                        return Offset.Zero
-                                    }
-                                }
-                            }
-                            // New page → toolbar back.
-                            LaunchedEffect(currentTab.url) { toolbarVisible = true }
-
                             // Manual immersive mode also hides the Android system bars.
                             LaunchedEffect(immersiveMode) {
                                 val controller = WindowInsetsControllerCompat(window, window.decorView)
@@ -1485,61 +1512,34 @@ class MainActivity : ComponentActivity() {
                                 // SURFACE 2 — Browsing: compact address bar + privacy strip.
                                 // (Home surface has no browser top bar — it has its own
                                 // big search bar; tab switching lives in the bottom nav.)
-                                //
-                                // Polish: toolbar auto-hides on scroll-down / reveals on
-                                // scroll-up (event-driven), thin page-load progress bar,
-                                // and a one-shot crossfade when the mode theme changes.
                                 AnimatedVisibility(
-                                    visible = !immersiveMode && !showOverlays && toolbarVisible,
+                                    visible = !immersiveMode && !showOverlays,
                                     enter = expandVertically() + fadeIn(),
                                     exit = shrinkVertically() + fadeOut()
                                 ) {
-                                    Crossfade(targetState = theme, label = "topbarTheme") { themed ->
-                                        Column {
-                                            CompactBrowseBar(
-                                                theme = themed,
-                                                currentUrl = currentTab.url,
-                                                onNavigate = { input ->
-                                                    val destination = formatUrl(input, currentSearchEngineSetting, activeMode)
-                                                    currentTab.url = destination
-                                                    currentTab.webView?.loadUrl(destination)
-                                                },
-                                                onReload = { currentTab.webView?.reload() },
-                                                onMenuClick = { showBrowserMenu = true }
-                                            )
-                                            PrivacyStrip(
-                                                theme = themed,
-                                                adBlockerEnabled = adBlockerEnabled,
-                                                blockedCount = blockedCount,
-                                                onClick = { showPrivacyGuards = true }
-                                            )
-                                            // Thin page-load progress indicator.
-                                            val progress = currentTab.loadProgress
-                                            androidx.compose.animation.AnimatedVisibility(
-                                                visible = progress in 1..99,
-                                                enter = fadeIn(),
-                                                exit = fadeOut()
-                                            ) {
-                                                LinearProgressIndicator(
-                                                    progress = progress / 100f,
-                                                    modifier = Modifier
-                                                        .fillMaxWidth()
-                                                        .height(2.dp),
-                                                    color = themed.primary,
-                                                    trackColor = themed.topBarBg
-                                                )
-                                            }
-                                        }
+                                    Column {
+                                        CompactBrowseBar(
+                                            theme = theme,
+                                            currentUrl = currentTab.url,
+                                            onNavigate = { input ->
+                                                val destination = formatUrl(input, currentSearchEngineSetting, activeMode)
+                                                currentTab.url = destination
+                                                currentTab.webView?.loadUrl(destination)
+                                            },
+                                            onReload = { currentTab.webView?.reload() },
+                                            onMenuClick = { showBrowserMenu = true }
+                                        )
+                                        PrivacyStrip(
+                                            theme = theme,
+                                            adBlockerEnabled = adBlockerEnabled,
+                                            blockedCount = blockedCount,
+                                            onClick = { showPrivacyGuards = true }
+                                        )
                                     }
                                 }
 
                                 // 4. MAIN CONTENT CONTAINER (WIDGET-STYLE DASHBOARD OR WEBVIEW)
-                                // Nested-scroll: drives the toolbar auto-hide on page scroll.
-                                Box(
-                                    modifier = Modifier
-                                        .weight(1f)
-                                        .nestedScroll(toolbarScrollConnection)
-                                ) {
+                                Box(modifier = Modifier.weight(1f)) {
                                     if (currentTab.url == "about:blank") {
                                         // Overhauled premium dashboard home page
                                         ClickHomeScreen(
@@ -1594,21 +1594,42 @@ class MainActivity : ComponentActivity() {
                                                             existingWebView
                                                         } else {
                                                             WebView(ctx).apply {
-                                                                webViewClient = object : WebViewClient() {
-                                                                    override fun shouldOverrideUrlLoading(view: WebView?, request: WebResourceRequest?): Boolean {
-                                                                        var urlStr = request?.url?.toString() ?: ""
+
+                                                                webViewClient = object : WebViewClientCompat() {
+                                                                    override fun onSafeBrowsingHit(
+                                                                        view: WebView,
+                                                                        request: WebResourceRequest,
+                                                                        threatType: Int,
+                                                                        callback: SafeBrowsingResponseCompat
+                                                                    ) {
+                                                                        // Show Click's own premium interstitial
+                                                                        // instead of the stock warning page.
+                                                                        val url = request.url?.toString() ?: ""
+                                                                        com.click.browser.engine.SafeBrowsingManager.reportHit(
+                                                                            url, threatType, callback
+                                                                        )
+                                                                    }
+
+                                                                    override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean {
+                                                                        var urlStr = request.url?.toString() ?: ""
+                                                                        // PDF: offer in-app viewing instead of navigating.
+                                                                        if (isPdfUrl(urlStr)) {
+                                                                            pdfOfferUrl = urlStr
+                                                                            return true
+                                                                        }
+
                                                                         // HTTPS-Only: upgrade plain http navigations
                                                                         if (liveHttpsOnly && urlStr.startsWith("http://")) {
                                                                             urlStr = "https://" + urlStr.removePrefix("http://")
                                                                         }
                                                                         if (urlStr.startsWith("http://") || urlStr.startsWith("https://")) {
                                                                             // Per-site desktop override BEFORE loading (UA must be set first).
-                                                                            if (view != null) this@MainActivity.applyPerSiteDesktop(view, urlStr)
+                                                                            this@MainActivity.applyPerSiteDesktop(view, urlStr)
                                                                             // Header spoofing: navigations carry the custom headers.
                                                                             if (liveHeaderSpoof && liveCustomHeaders.isNotEmpty()) {
-                                                                                view?.loadUrl(urlStr, liveCustomHeaders)
+                                                                                view.loadUrl(urlStr, liveCustomHeaders)
                                                                             } else {
-                                                                                view?.loadUrl(urlStr)
+                                                                                view.loadUrl(urlStr)
                                                                             }
                                                                             return true
                                                                         }
@@ -1618,6 +1639,10 @@ class MainActivity : ComponentActivity() {
                                                                     @Suppress("Deprecated")
                                                                     override fun shouldOverrideUrlLoading(view: WebView?, url: String?): Boolean {
                                                                         var urlStr = url ?: ""
+                                                                        if (isPdfUrl(urlStr)) {
+                                                                            pdfOfferUrl = urlStr
+                                                                            return true
+                                                                        }
                                                                         if (liveHttpsOnly && urlStr.startsWith("http://")) {
                                                                             urlStr = "https://" + urlStr.removePrefix("http://")
                                                                         }
@@ -1655,18 +1680,6 @@ class MainActivity : ComponentActivity() {
                                                                         null
                                                                     )
                                                                 }
-
-                                                                // V9: per-engine fingerprint for ALL modes — each engine
-                                                                // presents a distinct device/browser identity (navigator,
-                                                                // screen, WebGL vendor/renderer, seeded canvas noise)
-                                                                // so websites see Simple / Developer / Hack as three
-                                                                // different browsers.
-                                                                try {
-                                                                    view?.evaluateJavascript(
-                                                                        V9Engine.fingerprintJs(liveMode),
-                                                                        null
-                                                                    )
-                                                                } catch (_: Exception) { /* non-fatal */ }
                                                             }
 
                                                             override fun onPageFinished(view: WebView?, url: String?) {
@@ -1770,29 +1783,16 @@ class MainActivity : ComponentActivity() {
 
                                                             @Suppress("Deprecated")
                                                             override fun onReceivedError(view: WebView?, errorCode: Int, description: String?, failingUrl: String?) {
-                                                                // Legacy path (API < 23)
+                                                                // WebViewClientCompat routes main-frame errors here on all API levels
                                                                 this@MainActivity.showBrowserErrorPage(view, description)
                                                             }
 
-                                                            override fun onReceivedError(view: WebView?, request: WebResourceRequest?, error: WebResourceError?) {
-                                                                // Modern path (API 23+): only for the main frame
-                                                                if (request?.isForMainFrame == true) {
-                                                                    this@MainActivity.showBrowserErrorPage(view, error?.description?.toString())
-                                                                }
-                                                            }
                                                         }
 
                                                         webChromeClient = object : WebChromeClient() {
                                                             override fun onReceivedTitle(view: WebView?, title: String?) {
                                                                 super.onReceivedTitle(view, title)
                                                                 currentTab.title = title ?: "Page"
-                                                            }
-
-                                                            // Page-load progress → thin progress bar under the
-                                                            // top bar (battery-safe: only fires while loading).
-                                                            override fun onProgressChanged(view: WebView?, newProgress: Int) {
-                                                                super.onProgressChanged(view, newProgress)
-                                                                tabs.firstOrNull { it.webView === view }?.loadProgress = newProgress
                                                             }
                                                         }
 
@@ -1952,29 +1952,22 @@ class MainActivity : ComponentActivity() {
                                 )
                             }
 
-                            // SURFACE 2 — Browsing bottom nav: ☰ Menu(drawer) · ‹ Back ·
-                            // › Forward · ⌂ Home · ▭ Tabs (count badge) · ⋮ More.
-                            // (No center AI tab here — AI lives in the floating pill.)
-                            // Polish: one-shot theme crossfade (battery-safe).
+                            // SURFACE 2 — Browsing bottom nav: Back · Forward · Home ·
+                            // Tabs (count badge) · Menu. (No center AI tab here — AI
+                            // lives in the floating button.)
                             if (!showOverlays && !immersiveMode) {
-                                Crossfade(
-                                    targetState = theme,
-                                    label = "browseNavTheme",
+                                BrowseBottomNav(
+                                    theme = ModeThemes.forMode(activeMode, dark = activeMode != BrowserMode.SIMPLE),
+                                    tabCount = tabs.size,
+                                    canGoBack = currentTab.webView?.canGoBack() == true,
+                                    canGoForward = currentTab.webView?.canGoForward() == true,
+                                    onBack = { currentTab.webView?.goBack() },
+                                    onForward = { currentTab.webView?.goForward() },
+                                    onHome = { currentTab.url = "about:blank" },
+                                    onTabs = { showTabsManager = true },
+                                    onMenu = { showBrowserMenu = true },
                                     modifier = Modifier.align(Alignment.BottomCenter)
-                                ) { themed ->
-                                    BrowseBottomNav(
-                                        theme = themed,
-                                        tabCount = tabs.size,
-                                        canGoBack = currentTab.webView?.canGoBack() == true,
-                                        canGoForward = currentTab.webView?.canGoForward() == true,
-                                        onDrawerClick = { scope.launch { drawerState.open() } },
-                                        onBack = { currentTab.webView?.goBack() },
-                                        onForward = { currentTab.webView?.goForward() },
-                                        onHome = { currentTab.url = "about:blank" },
-                                        onTabs = { showTabsManager = true },
-                                        onMenu = { showBrowserMenu = true }
-                                    )
-                                }
+                                )
                             }
 
                             // Premium UI v2: always-visible bottom-left feature menu FAB
@@ -1991,19 +1984,19 @@ class MainActivity : ComponentActivity() {
                                     onModeChange = { mode ->
                                         showFeatureMenu = false
                                         scope.launch {
-                                            // V9: engine switch (restarts when the engine changes).
-                                            val restarting = v9SwitchMode(mode, currentTab.webView, forceDesktopMode)
-                                            if (!restarting) {
-                                                val label = when (mode) {
-                                                    BrowserMode.SIMPLE -> "Simple"
-                                                    BrowserMode.DEVELOPER -> "Developer"
-                                                    else -> "Hack"
-                                                }
-                                                Toast.makeText(
-                                                    this@MainActivity, "$label Mode Activated",
-                                                    Toast.LENGTH_SHORT
-                                                ).show()
+                                            modeManager.setMode(mode)
+                                            currentTab.webView?.let {
+                                                modeManager.applySettings(it, mode, forceDesktopMode)
                                             }
+                                            val label = when (mode) {
+                                                BrowserMode.SIMPLE -> "Simple"
+                                                BrowserMode.DEVELOPER -> "Developer"
+                                                else -> "Hack"
+                                            }
+                                            Toast.makeText(
+                                                this@MainActivity, "$label Mode Activated",
+                                                Toast.LENGTH_SHORT
+                                            ).show()
                                         }
                                     },
                                     onFeature = { id -> handleFeature(id) },
@@ -2100,9 +2093,11 @@ class MainActivity : ComponentActivity() {
                                     activeMode = activeMode,
                                     onModeChange = { mode ->
                                         scope.launch {
-                                            // V9: engine switch (restarts when the engine changes).
-                                            val restarting = v9SwitchMode(mode, currentTab.webView, forceDesktopMode)
-                                            if (!restarting) currentTab.webView?.reload()
+                                            modeManager.setMode(mode)
+                                            currentTab.webView?.let { wv ->
+                                                modeManager.applySettings(wv, mode, forceDesktopMode)
+                                                wv.reload()
+                                            }
                                         }
                                     },
                                     currentSearchEngineSetting = currentSearchEngineSetting,
@@ -2178,14 +2173,106 @@ class MainActivity : ComponentActivity() {
                             if (showAboutApp) {
                                 AboutAppDialog(onClose = { showAboutApp = false })
                             }
-                            // V9 Shield screen (VPN + DNS + 3-engine identities).
-                            if (showV9Shield) {
-                                V9ShieldScreen(onClose = { showV9Shield = false })
+                            // ---- Built-in engines ----
+                            // Safe Browsing interstitial (premium-styled, theme-aware).
+                            val sbHit = safeBrowsingHit
+                            if (sbHit != null) {
+                                com.click.browser.ui.screens.SafeBrowsingWarningScreen(
+                                    hit = sbHit,
+                                    theme = theme,
+                                    onBackToSafety = {
+                                        com.click.browser.engine.SafeBrowsingManager.backToSafety()
+                                    },
+                                    onProceedAnyway = {
+                                        com.click.browser.engine.SafeBrowsingManager.proceedAnyway()
+                                    }
+                                )
                             }
-                            // V9: Hack Mode signature moment — full-screen 5s
-                            // Markhor intro after a Hack engine boot. Tap to skip.
-                            if (showHackIntro) {
-                                HackIntroOverlay(onDone = { showHackIntro = false })
+                            // On-device ML Kit translation sheet.
+                            if (showTranslateSheet) {
+                                com.click.browser.ui.screens.TranslateSheet(
+                                    theme = theme,
+                                    webView = currentTab.webView,
+                                    pageUrl = currentTab.url,
+                                    onDismiss = { showTranslateSheet = false }
+                                )
+                            }
+                            // PDF: offer in-app viewing when a PDF link is tapped.
+                            val offerUrl = pdfOfferUrl
+                            if (offerUrl != null && viewingPdfFile == null) {
+                                com.click.browser.ui.screens.PdfOfferSheet(
+                                    theme = theme,
+                                    pdfUrl = offerUrl,
+                                    downloading = pdfDownloading,
+                                    onViewInClick = {
+                                        pdfDownloading = true
+                                        scope.launch(kotlinx.coroutines.Dispatchers.IO) {
+                                            val file = downloadPdfToCache(offerUrl)
+                                            withContext(kotlinx.coroutines.Dispatchers.Main) {
+                                                pdfDownloading = false
+                                                if (file != null) {
+                                                    viewingPdfFile = file
+                                                } else {
+                                                    Toast.makeText(
+                                                        this@MainActivity,
+                                                        "Couldn't download the PDF.",
+                                                        Toast.LENGTH_SHORT
+                                                    ).show()
+                                                    pdfOfferUrl = null
+                                                }
+                                            }
+                                        }
+                                    },
+                                    onDownload = {
+                                        // Real download via DownloadManager (existing pattern).
+                                        try {
+                                            val dm = getSystemService(Context.DOWNLOAD_SERVICE) as android.app.DownloadManager
+                                            val fileName = offerUrl.substringAfterLast("/").take(64).ifBlank { "document.pdf" }
+                                            val request = android.app.DownloadManager.Request(android.net.Uri.parse(offerUrl))
+                                                .setTitle("Click Browser Download")
+                                                .setDescription(fileName)
+                                                .setNotificationVisibility(android.app.DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED)
+                                                .setDestinationInExternalPublicDir(
+                                                    android.os.Environment.DIRECTORY_DOWNLOADS,
+                                                    "ClickBrowser/$fileName"
+                                                )
+                                                .setAllowedOverMetered(true)
+                                                .setAllowedOverRoaming(false)
+                                            dm.enqueue(request)
+                                            Toast.makeText(this@MainActivity, "Downloading PDF…", Toast.LENGTH_SHORT).show()
+                                        } catch (e: Exception) {
+                                            Toast.makeText(this@MainActivity, "Download failed.", Toast.LENGTH_SHORT).show()
+                                        }
+                                        pdfOfferUrl = null
+                                    },
+                                    onOpenExternal = {
+                                        try {
+                                            startActivity(
+                                                Intent(
+                                                    Intent.ACTION_VIEW,
+                                                    android.net.Uri.parse(offerUrl)
+                                                )
+                                            )
+                                        } catch (e: Exception) {
+                                            Toast.makeText(this@MainActivity, "No app can open this PDF.", Toast.LENGTH_SHORT).show()
+                                        }
+                                        pdfOfferUrl = null
+                                    },
+                                    onDismiss = { pdfOfferUrl = null }
+                                )
+                            }
+                            // Full-screen in-app PDF viewer.
+                            val pdfFile = viewingPdfFile
+                            if (pdfFile != null) {
+                                com.click.browser.ui.screens.PdfViewerScreen(
+                                    pdfFile = pdfFile,
+                                    theme = theme,
+                                    onClose = {
+                                        viewingPdfFile = null
+                                        pdfOfferUrl = null
+                                        try { pdfFile.delete() } catch (_: Exception) { }
+                                    }
+                                )
                             }
                             if (showTamperDialog) {
                                 // Warning for repackaged/modified copies.
@@ -2209,24 +2296,6 @@ class MainActivity : ComponentActivity() {
                                     }
                                 )
                             }
-                            // AI chat panel — one-shot slide/spring entrance (battery-safe:
-                            // no continuous animation).
-                            androidx.compose.animation.AnimatedVisibility(
-                                visible = showAiChat && !tamperBlocked,
-                                enter = androidx.compose.animation.slideInVertically(
-                                    initialOffsetY = { it },
-                                    animationSpec = androidx.compose.animation.core.spring(
-                                        dampingRatio = androidx.compose.animation.core.Spring.DampingRatioLowBouncy,
-                                        stiffness = androidx.compose.animation.core.Spring.StiffnessMediumLow
-                                    )
-                                ) + androidx.compose.animation.fadeIn(),
-                                exit = androidx.compose.animation.slideOutVertically(
-                                    targetOffsetY = { it },
-                                    animationSpec = androidx.compose.animation.core.tween(220)
-                                ) + androidx.compose.animation.fadeOut(
-                                    animationSpec = androidx.compose.animation.core.tween(180)
-                                )
-                            ) {
                             if (showAiChat && !tamperBlocked) {
                                 // Key resolution: the user's own Settings key wins; otherwise fall
                                 // back to the built-in Groq key (XOR-obfuscated in BuildConfig,
@@ -2263,7 +2332,6 @@ class MainActivity : ComponentActivity() {
                                     onClose = { showAiChat = false }
                                 )
                             }
-                            } // AnimatedVisibility (AI chat slide/spring)
                             if (showPrivacyGuards) {
                                 PrivacyGuardsScreen(
                                     headerSpoofEnabled = headerSpoofEnabled,
@@ -2441,13 +2509,8 @@ class MainActivity : ComponentActivity() {
                                         if (url == "about:blank" || !url.startsWith("http")) {
                                             Toast.makeText(this@MainActivity, "Open a page first to translate it.", Toast.LENGTH_SHORT).show()
                                         } else {
-                                            // Honest page translation via Google Translate's
-                                            // translate proxy, opened in a new tab.
-                                            val lang = java.util.Locale.getDefault().language.ifBlank { "en" }
-                                            val tUrl = "https://translate.google.com/translate?sl=auto&tl=$lang&u=" +
-                                                java.net.URLEncoder.encode(url, "UTF-8")
-                                            tabs.add(TabItem(url = tUrl, title = "Translate"))
-                                            activeTabIndex = tabs.size - 1
+                                            // On-device ML Kit translation sheet.
+                                            showTranslateSheet = true
                                         }
                                     },
                                     onToggleDesktopSite = {
@@ -2686,33 +2749,6 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    /**
-     * V9: switching modes = switching engines. Each engine (Simple / Developer
-     * / Hack) owns an isolated WebView data directory, so when the selected
-     * mode differs from the engine this process booted with, the mode is
-     * persisted and the process restarts into the new engine.
-     *
-     * @return true if a restart was triggered (the process is dying).
-     */
-    private suspend fun v9SwitchMode(
-        mode: BrowserMode,
-        webView: android.webkit.WebView?,
-        forceDesktop: Boolean,
-    ): Boolean {
-        if (!V9Engine.needsRestart(mode)) {
-            webView?.let { modeManager.applySettings(it, mode, forceDesktop) }
-            return false
-        }
-        android.widget.Toast.makeText(
-            this, "Switching V9 engine — restarting…", android.widget.Toast.LENGTH_LONG
-        ).show()
-        V9Engine.restartForEngineSwitch(
-            this, modeManager, mode,
-            hackIntro = (mode == BrowserMode.HACK)
-        )
-        return true // unreachable — the process is killed above
-    }
-
     private fun requestStoragePermissions() {
         // Granular media permissions (used by the real music player / image gallery).
         // NOTE: MANAGE_EXTERNAL_STORAGE was removed — downloads use DownloadManager
@@ -2834,7 +2870,6 @@ fun DrawerItem(
     label: String,
     icon: ImageVector,
     color: Color,
-    subtitle: String? = null,
     onClick: () -> Unit = {}
 ) {
     var pressed by remember { mutableStateOf(false) }
@@ -2874,25 +2909,14 @@ fun DrawerItem(
                 Icon(icon, contentDescription = null, tint = color, modifier = Modifier.size(16.dp))
             }
             Spacer(modifier = Modifier.width(12.dp))
-            Column(modifier = Modifier.weight(1f)) {
-                Text(
-                    text = label,
-                    color = MaterialTheme.colorScheme.onSurface,
-                    fontSize = 11.sp,
-                    fontWeight = FontWeight.Bold,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
-                )
-                if (subtitle != null) {
-                    Text(
-                        text = subtitle,
-                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.55f),
-                        fontSize = 9.sp,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis
-                    )
-                }
-            }
+            Text(
+                text = label,
+                color = MaterialTheme.colorScheme.onSurface,
+                fontSize = 11.sp,
+                fontWeight = FontWeight.Bold,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
         }
     }
 }
