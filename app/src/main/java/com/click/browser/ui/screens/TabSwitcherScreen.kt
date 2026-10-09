@@ -81,7 +81,8 @@ fun TabSwitcherScreen(
     onSelectTab: (Int) -> Unit,
     onCloseTab: (Int) -> Unit,
     onNewTab: () -> Unit,
-    onClose: () -> Unit
+    onClose: () -> Unit,
+    animationsEnabled: Boolean = true
 ) {
     var query by remember { mutableStateOf("") }
     val filtered = remember(tabs, query) {
@@ -208,10 +209,16 @@ fun TabSwitcherScreen(
                     // Premium UI v2: staggered fade+slide entry (~70ms), and
                     // animated close (scale-down + slide-out, ~300ms).
                     val stagger = (index % 10) * 70
+                    // Durations collapse to 0 when the animations flag is off —
+                    // single source of truth so the values can't drift apart.
+                    val enterMs = if (animationsEnabled) 380 else 0
+                    val enterDelayMs = if (animationsEnabled) stagger else 0
+                    val exitMs = if (animationsEnabled) 180 else 0
+                    val exitScaleMs = if (animationsEnabled) 300 else 0
                     AnimatedVisibility(
                         visibleState = cardVisibility,
-                        enter = fadeIn(tween(380, delayMillis = stagger)),
-                        exit = fadeOut(tween(180)) + scaleOut(tween(300), 0.7f),
+                        enter = fadeIn(tween(enterMs, delayMillis = enterDelayMs)),
+                        exit = fadeOut(tween(exitMs)) + scaleOut(tween(exitScaleMs), 0.7f),
                     ) {
                     Card(
                         modifier = Modifier
