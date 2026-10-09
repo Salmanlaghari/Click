@@ -29,9 +29,9 @@ data class AiProviderInfo(
 object AiProviders {
     val GROQ = AiProviderInfo(
         id = "groq",
-        displayName = "Groq",
+        displayName = "Click AI",
         apiUrl = "https://api.groq.com/openai/v1/chat/completions",
-        defaultModel = "llama-3.3-70b-versatile",
+        defaultModel = "openai/gpt-oss-20b",
         keyPrefixHint = "gsk_…",
         keySignupUrl = "https://console.groq.com"
     )
