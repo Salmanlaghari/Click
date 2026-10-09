@@ -28,6 +28,7 @@ import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.minimumInteractiveComponentSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -1476,10 +1477,15 @@ private fun BrowseNavContent(
         enabled -> theme.onSurface.copy(alpha = 0.85f)
         else -> theme.onSurface.copy(alpha = 0.3f)
     }
-    Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.padding(2.dp)) {
+    Column(
+        horizontalAlignment = Alignment.CenterHorizontally,
+        modifier = Modifier
+            .padding(2.dp)
+            .minimumInteractiveComponentSize()
+    ) {
         Icon(icon, contentDescription = label, tint = tint, modifier = Modifier.size(19.dp))
         Text(
-            label, fontSize = 8.5.sp, color = tint,
+            label, fontSize = 10.sp, color = tint,
             fontWeight = if (highlight) FontWeight.ExtraBold else FontWeight.Bold
         )
     }

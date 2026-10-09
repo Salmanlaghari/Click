@@ -1648,13 +1648,25 @@ class MainActivity : ComponentActivity() {
                             LaunchedEffect(currentTab.url) {
                                 showPrivacyPopup = false
                                 if (currentTab.url == "about:blank") return@LaunchedEffect
+                                var lastShownAt = android.os.SystemClock.uptimeMillis()
                                 while (true) {
+                                    kotlinx.coroutines.ensureActive()
                                     kotlinx.coroutines.delay(18_000)
+                                    kotlinx.coroutines.ensureActive()
+                                    val now = android.os.SystemClock.uptimeMillis()
                                     val tab = currentTab
                                     if (tab.url == "about:blank") break
                                     if (!popupActivity.lifecycle.currentState
                                             .isAtLeast(Lifecycle.State.RESUMED)
-                                    ) continue
+                                    ) {
+                                        // Backgrounded: restart the 18s window so the
+                                        // popup doesn't fire immediately on resume.
+                                        lastShownAt = now
+                                        continue
+                                    }
+                                    // Require a full 18s of foreground time between popups.
+                                    if (now - lastShownAt < 18_000) continue
+                                    lastShownAt = now
                                     showPrivacyPopup = true
                                     kotlinx.coroutines.delay(2_500)
                                     showPrivacyPopup = false
@@ -1681,8 +1693,6 @@ class MainActivity : ComponentActivity() {
                                                 onReload = { currentTab.webView?.reload() },
                                                 onMenuClick = { showBrowserMenu = true }
                                             )
-                                            // (Privacy strip removed — replaced by the periodic
-                                            // glass popup; more vertical space for the page.)
                                             // Thin page-load progress indicator.
                                             val progress = currentTab.loadProgress
                                             androidx.compose.animation.AnimatedVisibility(
@@ -2160,6 +2170,7 @@ class MainActivity : ComponentActivity() {
                                         exit = androidx.compose.animation.fadeOut(),
                                         modifier = Modifier
                                             .align(Alignment.TopCenter)
+                                            .windowInsetsPadding(WindowInsets.statusBars)
                                             .padding(top = 12.dp)
                                     ) {
                                         Surface(
