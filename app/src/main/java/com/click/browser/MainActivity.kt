@@ -1761,7 +1761,7 @@ class MainActivity : ComponentActivity() {
                                                                             if (liveHeaderSpoof && navHeaders.isNotEmpty()) {
                                                                                 view?.loadUrl(urlStr, navHeaders)
                                                                             } else {
-                                                                                view.loadUrl(urlStr)
+                                                                                view?.loadUrl(urlStr)
                                                                             }
                                                                             return true
                                                                         }
