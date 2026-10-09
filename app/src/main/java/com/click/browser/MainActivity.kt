@@ -429,6 +429,12 @@ class MainActivity : ComponentActivity() {
             // AI chat + privacy guards
             var showAiChat by remember { mutableStateOf(false) }
             var showPrivacyGuards by remember { mutableStateOf(false) }
+            // V9: Shield screen (VPN + DNS + engines) and the Hack Mode
+            // Markhor intro animation (shown once after a Hack engine boot).
+            var showV9Shield by remember { mutableStateOf(false) }
+            var showHackIntro by remember {
+                mutableStateOf(intent.getBooleanExtra(V9Engine.EXTRA_HACK_INTRO, false))
+            }
             // Tamper detection (decompile guard): release builds verify the
             // signing certificate on start; mismatch disables AI chat.
             var tamperBlocked by remember { mutableStateOf(false) }
@@ -612,6 +618,8 @@ class MainActivity : ComponentActivity() {
                         Toast.makeText(this@MainActivity, host, Toast.LENGTH_LONG).show()
                     }
                     FeatureId.PRIVACY_GUARDS -> showPrivacyGuards = true
+                    // V9: Shield screen (built-in VPN + DNS + 3-engine identities).
+                    FeatureId.V9_SHIELD -> showV9Shield = true
                     FeatureId.UA_SPOOFER, FeatureId.UA_SWITCHER -> {
                         spoofedUAIndex = (spoofedUAIndex + 1) % 4
                         val uaStr = when (spoofedUAIndex) {
@@ -783,11 +791,9 @@ class MainActivity : ComponentActivity() {
                         return@launch
                     }
                     if (activeMode != BrowserMode.DEVELOPER) {
-                        modeManager.setMode(BrowserMode.DEVELOPER)
-                        currentTab.webView?.let { wv ->
-                            modeManager.applySettings(wv, BrowserMode.DEVELOPER, forceDesktopMode)
-                            wv.reload()
-                        }
+                        // V9: DevTools runs in the Developer engine.
+                        val restarting = v9SwitchMode(BrowserMode.DEVELOPER, currentTab.webView, forceDesktopMode)
+                        if (!restarting) currentTab.webView?.reload()
                     }
                     devToolsTab = tab
                 }
@@ -879,9 +885,9 @@ class MainActivity : ComponentActivity() {
                                     DrawerItem(label = "Simple Mode", icon = Icons.Default.Filter1, color = Color(0xFF3B82F6)) {
                                         scope.launch {
                                             drawerState.close()
-                                            modeManager.setMode(BrowserMode.SIMPLE)
-                                            currentTab.webView?.let { modeManager.applySettings(it, BrowserMode.SIMPLE, forceDesktopMode) }
-                                            Toast.makeText(this@MainActivity, "Simple Mode Activated", Toast.LENGTH_SHORT).show()
+                                            // V9: engine switch (restarts when the engine changes).
+                                            val restarting = v9SwitchMode(BrowserMode.SIMPLE, currentTab.webView, forceDesktopMode)
+                                            if (!restarting) Toast.makeText(this@MainActivity, "Simple Mode Activated", Toast.LENGTH_SHORT).show()
                                         }
                                     }
                                 }
@@ -889,9 +895,9 @@ class MainActivity : ComponentActivity() {
                                     DrawerItem(label = "Developer Mode", icon = Icons.Default.Filter2, color = Color(0xFF7C3AED)) {
                                         scope.launch {
                                             drawerState.close()
-                                            modeManager.setMode(BrowserMode.DEVELOPER)
-                                            currentTab.webView?.let { modeManager.applySettings(it, BrowserMode.DEVELOPER, forceDesktopMode) }
-                                            Toast.makeText(this@MainActivity, "Developer Mode Activated", Toast.LENGTH_SHORT).show()
+                                            // V9: engine switch (restarts when the engine changes).
+                                            val restarting = v9SwitchMode(BrowserMode.DEVELOPER, currentTab.webView, forceDesktopMode)
+                                            if (!restarting) Toast.makeText(this@MainActivity, "Developer Mode Activated", Toast.LENGTH_SHORT).show()
                                         }
                                     }
                                 }
@@ -899,9 +905,9 @@ class MainActivity : ComponentActivity() {
                                     DrawerItem(label = "Power / Hack Mode", icon = Icons.Default.Filter3, color = Color(0xFFDC2626)) {
                                         scope.launch {
                                             drawerState.close()
-                                            modeManager.setMode(BrowserMode.HACK)
-                                            currentTab.webView?.let { modeManager.applySettings(it, BrowserMode.HACK, forceDesktopMode) }
-                                            Toast.makeText(this@MainActivity, "Power Hack Mode Activated", Toast.LENGTH_SHORT).show()
+                                            // V9: engine switch (restarts when the engine changes).
+                                            val restarting = v9SwitchMode(BrowserMode.HACK, currentTab.webView, forceDesktopMode)
+                                            if (!restarting) Toast.makeText(this@MainActivity, "Power Hack Mode Activated", Toast.LENGTH_SHORT).show()
                                         }
                                     }
                                 }
@@ -1585,6 +1591,18 @@ class MainActivity : ComponentActivity() {
                                                                         null
                                                                     )
                                                                 }
+
+                                                                // V9: per-engine fingerprint for ALL modes — each engine
+                                                                // presents a distinct device/browser identity (navigator,
+                                                                // screen, WebGL vendor/renderer, seeded canvas noise)
+                                                                // so websites see Simple / Developer / Hack as three
+                                                                // different browsers.
+                                                                try {
+                                                                    view?.evaluateJavascript(
+                                                                        V9Engine.fingerprintJs(liveMode),
+                                                                        null
+                                                                    )
+                                                                } catch (_: Exception) { /* non-fatal */ }
                                                             }
 
                                                             override fun onPageFinished(view: WebView?, url: String?) {
@@ -1895,19 +1913,19 @@ class MainActivity : ComponentActivity() {
                                     onModeChange = { mode ->
                                         showFeatureMenu = false
                                         scope.launch {
-                                            modeManager.setMode(mode)
-                                            currentTab.webView?.let {
-                                                modeManager.applySettings(it, mode, forceDesktopMode)
+                                            // V9: engine switch (restarts when the engine changes).
+                                            val restarting = v9SwitchMode(mode, currentTab.webView, forceDesktopMode)
+                                            if (!restarting) {
+                                                val label = when (mode) {
+                                                    BrowserMode.SIMPLE -> "Simple"
+                                                    BrowserMode.DEVELOPER -> "Developer"
+                                                    else -> "Hack"
+                                                }
+                                                Toast.makeText(
+                                                    this@MainActivity, "$label Mode Activated",
+                                                    Toast.LENGTH_SHORT
+                                                ).show()
                                             }
-                                            val label = when (mode) {
-                                                BrowserMode.SIMPLE -> "Simple"
-                                                BrowserMode.DEVELOPER -> "Developer"
-                                                else -> "Hack"
-                                            }
-                                            Toast.makeText(
-                                                this@MainActivity, "$label Mode Activated",
-                                                Toast.LENGTH_SHORT
-                                            ).show()
                                         }
                                     },
                                     onFeature = { id -> handleFeature(id) },
@@ -2004,11 +2022,9 @@ class MainActivity : ComponentActivity() {
                                     activeMode = activeMode,
                                     onModeChange = { mode ->
                                         scope.launch {
-                                            modeManager.setMode(mode)
-                                            currentTab.webView?.let { wv ->
-                                                modeManager.applySettings(wv, mode, forceDesktopMode)
-                                                wv.reload()
-                                            }
+                                            // V9: engine switch (restarts when the engine changes).
+                                            val restarting = v9SwitchMode(mode, currentTab.webView, forceDesktopMode)
+                                            if (!restarting) currentTab.webView?.reload()
                                         }
                                     },
                                     currentSearchEngineSetting = currentSearchEngineSetting,
@@ -2083,6 +2099,15 @@ class MainActivity : ComponentActivity() {
                             }
                             if (showAboutApp) {
                                 AboutAppDialog(onClose = { showAboutApp = false })
+                            }
+                            // V9 Shield screen (VPN + DNS + 3-engine identities).
+                            if (showV9Shield) {
+                                V9ShieldScreen(onClose = { showV9Shield = false })
+                            }
+                            // V9: Hack Mode signature moment — full-screen 5s
+                            // Markhor intro after a Hack engine boot. Tap to skip.
+                            if (showHackIntro) {
+                                HackIntroOverlay(onDone = { showHackIntro = false })
                             }
                             if (showTamperDialog) {
                                 // Warning for repackaged/modified copies.
@@ -2562,6 +2587,33 @@ class MainActivity : ComponentActivity() {
                 }
             }
         }
+    }
+
+    /**
+     * V9: switching modes = switching engines. Each engine (Simple / Developer
+     * / Hack) owns an isolated WebView data directory, so when the selected
+     * mode differs from the engine this process booted with, the mode is
+     * persisted and the process restarts into the new engine.
+     *
+     * @return true if a restart was triggered (the process is dying).
+     */
+    private suspend fun v9SwitchMode(
+        mode: BrowserMode,
+        webView: android.webkit.WebView?,
+        forceDesktop: Boolean,
+    ): Boolean {
+        if (!V9Engine.needsRestart(mode)) {
+            webView?.let { modeManager.applySettings(it, mode, forceDesktop) }
+            return false
+        }
+        android.widget.Toast.makeText(
+            this, "Switching V9 engine — restarting…", android.widget.Toast.LENGTH_LONG
+        ).show()
+        V9Engine.restartForEngineSwitch(
+            this, modeManager, mode,
+            hackIntro = (mode == BrowserMode.HACK)
+        )
+        return true // unreachable — the process is killed above
     }
 
     private fun requestStoragePermissions() {

@@ -1,0 +1,238 @@
+package com.click.browser.engine
+
+import android.app.AlarmManager
+import android.app.PendingIntent
+import android.content.Context
+import android.content.Intent
+import android.os.Process
+import android.util.Log
+import android.webkit.WebView
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.runBlocking
+
+/**
+ * V9 — "1 Browser, 3 Engines".
+ *
+ * Prince's signature feature: one Click Browser app that behaves as three
+ * completely separate browsers (Simple / Developer / Hack). Each engine has:
+ *  - its own WebView data directory (separate cookies, cache, localStorage,
+ *    history, permissions) via [WebView.setDataDirectorySuffix]
+ *  - its own User-Agent + JS fingerprint profile, so websites (e.g. Google)
+ *    see three different browsers/devices
+ *
+ * HONEST LIMIT: OS-level identifiers (ANDROID_ID, ro.build.fingerprint)
+ * cannot be spoofed per-mode without root. Websites identify browsers via
+ * cookies + User-Agent + JS fingerprint — all three ARE fully distinct
+ * per engine here, which achieves the goal.
+ *
+ * Because the data-directory suffix is process-wide and can only be set once
+ * before any WebView exists, switching engines restarts the app process
+ * ([restartForEngineSwitch]). The suffix is applied in [ClickApplication.onCreate].
+ */
+object V9Engine {
+
+    private const val TAG = "V9Engine"
+    const val VERSION = "V9"
+    const val BRAND_LINE = "V9 · 1 Browser · 3 Engines"
+    const val TAGLINE = "First time in the World We Present A Superior Testing Future"
+
+    /** The engine this process booted with (set in [applyDataDirectorySuffix]). */
+    @Volatile
+    var bootMode: BrowserMode = BrowserMode.SIMPLE
+        private set
+
+    data class EngineProfile(
+        val mode: BrowserMode,
+        val userAgent: String,
+        val platform: String,
+        val vendor: String,
+        val languages: List<String>,
+        val hardwareConcurrency: Int,
+        val deviceMemory: Int,
+        val screenW: Int,
+        val screenH: Int,
+        val devicePixelRatio: Double,
+        val maxTouchPoints: Int,
+        val webglVendor: String,
+        val webglRenderer: String,
+        /** Seed for canvas noise: stable within an engine, distinct across engines. */
+        val canvasSeed: Long,
+        /** Human-readable device identity shown in the V9 Shield screen. */
+        val deviceLabel: String,
+    )
+
+    fun profileFor(mode: BrowserMode): EngineProfile = when (mode) {
+        BrowserMode.SIMPLE -> EngineProfile(
+            mode = mode,
+            userAgent = ModeManager.UA_SIMPLE,
+            platform = "Linux armv8l",
+            vendor = "Google Inc.",
+            languages = listOf("en-US", "en"),
+            hardwareConcurrency = 8,
+            deviceMemory = 8,
+            screenW = 1080,
+            screenH = 2400,
+            devicePixelRatio = 2.625,
+            maxTouchPoints = 5,
+            webglVendor = "Google Inc. (ARM)",
+            webglRenderer = "ANGLE (ARM, Mali-G715 MC7, OpenGL ES 3.2)",
+            canvasSeed = 5101151L,
+            deviceLabel = "Pixel 8 · Android 14 · Chrome Mobile",
+        )
+        BrowserMode.DEVELOPER -> EngineProfile(
+            mode = mode,
+            userAgent = ModeManager.UA_DEVELOPER,
+            platform = "Linux armv8l",
+            vendor = "Google Inc.",
+            languages = listOf("en-US", "en"),
+            hardwareConcurrency = 8,
+            deviceMemory = 12,
+            screenW = 1080,
+            screenH = 2340,
+            devicePixelRatio = 3.0,
+            maxTouchPoints = 5,
+            webglVendor = "Google Inc. (Qualcomm)",
+            webglRenderer = "ANGLE (Qualcomm, Adreno 750, OpenGL ES 3.2)",
+            canvasSeed = 90231117L,
+            deviceLabel = "Galaxy S24 · Android 14 · Chrome Mobile",
+        )
+        BrowserMode.HACK -> EngineProfile(
+            mode = mode,
+            userAgent = ModeManager.UA_HACK,
+            platform = "Win32",
+            vendor = "Google Inc.",
+            languages = listOf("en-US", "en"),
+            hardwareConcurrency = 8,
+            deviceMemory = 8,
+            screenW = 1920,
+            screenH = 1080,
+            devicePixelRatio = 1.0,
+            maxTouchPoints = 0,
+            webglVendor = "Google Inc. (NVIDIA)",
+            webglRenderer = "ANGLE (NVIDIA, NVIDIA GeForce RTX 4070 Ti/PCIe/SSE2, OpenGL 4.5)",
+            canvasSeed = 90031991L,
+            deviceLabel = "Windows 11 · Chrome Desktop",
+        )
+    }
+
+    fun suffixFor(mode: BrowserMode): String = "v9_" + mode.name.lowercase()
+
+    /**
+     * Must be called from Application.onCreate, before any WebView is created.
+     * Reads the saved mode synchronously (single DataStore read) and pins the
+     * process to that engine's data directory.
+     */
+    fun applyDataDirectorySuffix(context: Context) {
+        try {
+            val modeStr = runBlocking {
+                context.dataStore.data.first()[ModeManager.MODE_KEY]
+            } ?: BrowserMode.SIMPLE.name
+            val mode = try {
+                BrowserMode.valueOf(modeStr)
+            } catch (_: Exception) {
+                BrowserMode.SIMPLE
+            }
+            bootMode = mode
+            WebView.setDataDirectorySuffix(suffixFor(mode))
+            Log.i(TAG, "V9 engine online: ${suffixFor(mode)} (${profileFor(mode).deviceLabel})")
+        } catch (t: Throwable) {
+            Log.e(TAG, "V9 data-directory suffix failed; engines share storage", t)
+        }
+    }
+
+    /** True when switching to [mode] requires a process restart (engine change). */
+    fun needsRestart(mode: BrowserMode): Boolean = mode != bootMode
+
+    /**
+     * Persists [mode] then restarts the app process so the new engine's data
+     * directory takes effect. setMode() is suspend and returns after the
+     * DataStore write completes, so the new mode is durable before we die.
+     *
+     * @param hackIntro when true, the relaunched process shows the Hack Mode
+     *   Markhor intro animation once (see HackIntroOverlay).
+     */
+    suspend fun restartForEngineSwitch(
+        context: Context,
+        modeManager: ModeManager,
+        mode: BrowserMode,
+        hackIntro: Boolean = false,
+    ) {
+        modeManager.setMode(mode)
+        try {
+            val launch = context.packageManager
+                .getLaunchIntentForPackage(context.packageName)
+                ?.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK)
+            if (launch != null) {
+                if (hackIntro) launch.putExtra(EXTRA_HACK_INTRO, true)
+                val pi = PendingIntent.getActivity(
+                    context, 0, launch,
+                    PendingIntent.FLAG_CANCEL_CURRENT or PendingIntent.FLAG_IMMUTABLE
+                )
+                val am = context.getSystemService(Context.ALARM_SERVICE) as AlarmManager
+                am.set(AlarmManager.RTC, System.currentTimeMillis() + 400, pi)
+            }
+        } catch (t: Throwable) {
+            Log.e(TAG, "V9 restart schedule failed", t)
+        }
+        Process.killProcess(Process.myPid())
+    }
+
+    /** Intent extra: show the Hack Mode intro animation on launch. */
+    const val EXTRA_HACK_INTRO = "v9_hack_intro"
+
+    /**
+     * Per-engine JS fingerprint: overrides navigator/screen/WebGL values to
+     * match the engine profile and poisons canvas readback with seeded noise
+     * (stable within an engine, distinct across engines).
+     *
+     * Injected at onPageStarted so sites see a consistent identity from the
+     * first script they run.
+     */
+    fun fingerprintJs(mode: BrowserMode): String {
+        val p = profileFor(mode)
+        val langs = p.languages.joinToString(",") { "'$it'" }
+        // NOTE: single-quoted JS strings — UA/profile strings contain no quotes.
+        return """
+        (function(){
+          if (window.__v9fp) return; window.__v9fp = true;
+          var seed = ${p.canvasSeed};
+          function rng(){ seed|=0; seed = seed + 0x6D2B79F5 | 0; var t = Math.imul(seed ^ seed >>> 15, 1 | seed); t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t; return ((t ^ t >>> 14) >>> 0) / 4294967296; }
+          function def(o,k,v){ try { Object.defineProperty(o,k,{ get:function(){ return v; }, configurable:true }); } catch(e){} }
+          var UA = '${p.userAgent}';
+          def(navigator,'userAgent',UA); def(navigator,'appVersion',UA);
+          def(navigator,'platform','${p.platform}'); def(navigator,'vendor','${p.vendor}');
+          def(navigator,'language','${p.languages.first()}'); def(navigator,'languages',[${langs}]);
+          def(navigator,'hardwareConcurrency',${p.hardwareConcurrency});
+          def(navigator,'deviceMemory',${p.deviceMemory});
+          def(navigator,'maxTouchPoints',${p.maxTouchPoints});
+          def(window.screen,'width',${p.screenW}); def(window.screen,'height',${p.screenH});
+          def(window.screen,'availWidth',${p.screenW}); def(window.screen,'availHeight',${p.screenH - 40});
+          def(window,'devicePixelRatio',${p.devicePixelRatio});
+          if (${p.maxTouchPoints} === 0) { try { delete window.ontouchstart; delete window.ontouchend; } catch(e){} }
+          try {
+            var proto = WebGLRenderingContext.prototype, orig = proto.getParameter;
+            var hook = function(param){
+              if (param === 37445) return '${p.webglVendor}';
+              if (param === 37446) return '${p.webglRenderer}';
+              return orig.apply(this, arguments);
+            };
+            proto.getParameter = hook;
+            if (window.WebGL2RenderingContext) WebGL2RenderingContext.prototype.getParameter = hook;
+          } catch(e){}
+          try {
+            var origToDataURL = HTMLCanvasElement.prototype.toDataURL;
+            HTMLCanvasElement.prototype.toDataURL = function(){
+              try { var c = this.getContext('2d'); if (c) { var im = c.getImageData(0,0,this.width,this.height), d = im.data; for (var i=0;i<d.length;i+=4){ var n=(rng()-0.5)*3; d[i]+=n; d[i+1]+=n; d[i+2]+=n; } c.putImageData(im,0,0); } } catch(e){}
+              return origToDataURL.apply(this, arguments);
+            };
+            var origGetImageData = CanvasRenderingContext2D.prototype.getImageData;
+            CanvasRenderingContext2D.prototype.getImageData = function(){
+              var im = origGetImageData.apply(this, arguments), d = im.data;
+              for (var i=0;i<d.length;i+=4){ var n=(rng()-0.5)*3; d[i]+=n; d[i+1]+=n; d[i+2]+=n; }
+              return im;
+            };
+          } catch(e){}
+        })();
+        """.trimIndent()
+    }
+}

@@ -25,3 +25,11 @@
 # minification — the framework invokes these methods on the registered
 # listener instance.
 -keep class com.click.browser.ui.screens.VoiceInputListener { *; }
+
+# V9 Shield VPN: the framework instantiates VpnService by name and calls its
+# lifecycle methods — keep the class and members unobfuscated.
+-keep class com.click.browser.engine.V9VpnService { *; }
+# V9 engine profiles are read by name nowhere, but keep the object reachable
+# from ClickApplication (called before anything else).
+-keep class com.click.browser.engine.V9Engine { *; }
+-keep class com.click.browser.ClickApplication { *; }
