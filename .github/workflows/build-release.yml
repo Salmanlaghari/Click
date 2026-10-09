@@ -1,4 +1,4 @@
-name: Build Release APK and AAB
+name: Build All Artifacts (Debug + Release APK/AAB)
 
 on:
   push:
@@ -8,7 +8,7 @@ on:
 
 jobs:
   build:
-    name: Build Release APK and AAB
+    name: Build Debug and Release APK + AAB
     runs-on: ubuntu-latest
 
     steps:
@@ -73,6 +73,16 @@ jobs:
       - name: Grant Gradle Permission
         run: chmod +x gradlew
 
+      - name: Build Debug APK
+        env:
+          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+        run: ./gradlew assembleDebug
+
+      - name: Build Debug AAB
+        env:
+          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+        run: ./gradlew bundleDebug
+
       - name: Build Release APK
         env:
           GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
@@ -83,11 +93,28 @@ jobs:
           GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
         run: ./gradlew bundleRelease
 
-      - name: Verify APK signature
+      - name: Verify signatures
         run: |
           APKSIGNER=$(echo "$ANDROID_HOME"/build-tools/*/apksigner | tr ' ' '\n' | sort -V | tail -1)
           echo "Using: $APKSIGNER"
+          echo "--- Release APK (expect Prince's release cert) ---"
           "$APKSIGNER" verify --print-certs app/build/outputs/apk/release/app-release.apk | grep -E "Signer #1|SHA-256"
+          echo "--- Debug APK (expect Android Debug cert) ---"
+          "$APKSIGNER" verify --print-certs app/build/outputs/apk/debug/app-debug.apk | grep -E "Signer #1" | head -2
+
+      - name: Upload Debug APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: Click-Browser-Debug-APK
+          path: app/build/outputs/apk/debug/app-debug.apk
+          retention-days: 30
+
+      - name: Upload Debug AAB
+        uses: actions/upload-artifact@v4
+        with:
+          name: Click-Browser-Debug-AAB
+          path: app/build/outputs/bundle/debug/app-debug.aab
+          retention-days: 30
 
       - name: Upload Release APK
         uses: actions/upload-artifact@v4
@@ -116,5 +143,7 @@ jobs:
             - Privacy guards, userscript extensions (.user.js)
             - Pull-to-refresh, fullscreen view, per-site desktop toggle
           files: |
+            app/build/outputs/apk/debug/app-debug.apk
+            app/build/outputs/bundle/debug/app-debug.aab
             app/build/outputs/apk/release/app-release.apk
             app/build/outputs/bundle/release/app-release.aab
