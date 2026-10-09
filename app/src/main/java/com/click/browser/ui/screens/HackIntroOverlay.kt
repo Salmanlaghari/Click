@@ -12,6 +12,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.*
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -28,6 +30,11 @@ import kotlin.random.Random
  *
  * Also used as the app-start intro (every cold start) with [title] =
  * "CLICK BROWSER" — Prince's request: 5s Markhor animation on app open.
+ *
+ * Headline design (Prince's direction): the title is NOT stark white — it
+ * uses a deep blood-red that melts into the black background, with a pulsing
+ * red glow halo and a subtle light-red highlight rim on each glyph. Premium,
+ * ember-like, no overlap.
  *
  * Pure vector/Compose — no video asset, no licensing issues, tiny footprint.
  * Tap anywhere to skip; auto-dismisses after [durationMs].
@@ -179,54 +186,96 @@ fun HackIntroOverlay(
             horn(1f); horn(-1f)
         }
 
-        // Glitching headline — title words stacked cleanly with proper line
-        // height (fixes "CLICK"/"BROWSER" overlap: 44sp + 6sp letter-spacing
-        // is too wide for one line, and default line height is too tight).
+        // Headline — Prince's design: deep blood-red glyphs that blend into the
+        // black background (no stark white), a pulsing red glow halo, and a
+        // subtle light-red highlight rim on top of each word. Words are stacked
+        // on separate lines with generous line height — no overlap, ever.
         Column(
             modifier = Modifier.align(Alignment.Center),
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
             val g = (glitchT * 997).toInt()
             val xOff = if (g % 11 < 2) ((g % 5) - 2) * 6f else 0f
+            val glowAlpha = 0.55f + 0.35f * pulse
+            // Hoisted out of the word loop (Kilo): headline style is remembered
+            // and only rebuilt when glowAlpha changes; subtitle style is a
+            // constant remember. Highlight offset is density-independent and
+            // remembered (Kilo suggestions).
+            val density = LocalDensity.current
+            val highlightRimPx = remember(density) { with(density) { 3.dp.toPx() } }
+            val headlineStyle = remember(glowAlpha) {
+                TextStyle(
+                    shadow = Shadow(
+                        color = Color(0xFFEF4444).copy(alpha = glowAlpha),
+                        offset = Offset(0f, 0f),
+                        blurRadius = 26f
+                    )
+                )
+            }
+            val subtitleStyle = remember {
+                TextStyle(
+                    shadow = Shadow(
+                        color = Color(0xFFEF4444).copy(alpha = 0.60f),
+                        offset = Offset(0f, 0f),
+                        blurRadius = 12f
+                    )
+                )
+            }
             val words = title.split(" ").filter { it.isNotBlank() }
-            if (words.size > 1) {
-                // Multi-word title: stack words on separate lines, no overlap.
-                words.forEachIndexed { i, word ->
+            words.forEachIndexed { i, word ->
+                Box {
+                    // Highlight rim: light-red copy of the word, nudged up a
+                    // few px and kept faint — reads as a top-light highlight.
                     Text(
                         text = word,
-                        color = Color.White,
+                        color = Color(0xFFFF9A9A).copy(alpha = 0.30f),
                         fontSize = 44.sp,
                         fontWeight = FontWeight.Black,
                         letterSpacing = 6.sp,
                         lineHeight = 54.sp,
+                        modifier = Modifier.graphicsLayer {
+                            translationX = xOff
+                            translationY = -highlightRimPx
+                        }
+                    )
+                    // Main glyph: deep red that melts into the background.
+                    Text(
+                        text = word,
+                        color = Color(0xFF8C1D1D),
+                        fontSize = 44.sp,
+                        fontWeight = FontWeight.Black,
+                        letterSpacing = 6.sp,
+                        lineHeight = 54.sp,
+                        style = headlineStyle,
                         modifier = Modifier.graphicsLayer { translationX = xOff }
                     )
-                    if (i < words.size - 1) Spacer(Modifier.height(2.dp))
                 }
-            } else {
-                Text(
-                    text = title,
-                    color = Color.White,
-                    fontSize = 44.sp,
-                    fontWeight = FontWeight.Black,
-                    letterSpacing = 6.sp,
-                    maxLines = 1,
-                    modifier = Modifier.graphicsLayer { translationX = xOff }
-                )
+                if (i < words.size - 1) Spacer(Modifier.height(2.dp))
             }
-            Spacer(Modifier.height(6.dp))
+            Spacer(Modifier.height(8.dp))
             Text(
                 text = subtitle,
                 color = Color(0xFFEF4444),
                 fontSize = 13.sp,
                 fontWeight = FontWeight.Bold,
-                letterSpacing = 4.sp
+                letterSpacing = 4.sp,
+                style = subtitleStyle
             )
         }
 
         // TEAM PK AI ERA mark at the bottom — hidden when the subtitle already
-        // says it (app-start intro), to avoid showing it twice.
+        // says it (app-start intro), to avoid showing it twice. Style is
+        // remembered inside the branch so it is only created when shown (Kilo).
         if (!subtitle.equals("TEAM PK AI ERA", ignoreCase = true)) {
+            val bottomMarkStyle = remember {
+                TextStyle(
+                    shadow = Shadow(
+                        color = Color(0xFFEF4444).copy(alpha = 0.70f),
+                        offset = Offset(0f, 0f),
+                        blurRadius = 18f
+                    )
+                )
+            }
             Column(
                 modifier = Modifier
                     .align(Alignment.BottomCenter)
@@ -235,17 +284,11 @@ fun HackIntroOverlay(
             ) {
                 Text(
                     text = "TEAM PK AI ERA",
-                    color = Color.White,
+                    color = Color(0xFF8C1D1D),
                     fontSize = 22.sp,
                     fontWeight = FontWeight.ExtraBold,
                     letterSpacing = 5.sp,
-                    style = androidx.compose.ui.text.TextStyle(
-                        shadow = Shadow(
-                            color = Color(0xFFEF4444),
-                            offset = Offset(0f, 0f),
-                            blurRadius = 18f
-                        )
-                    )
+                    style = bottomMarkStyle
                 )
                 Spacer(Modifier.height(4.dp))
                 Text(
