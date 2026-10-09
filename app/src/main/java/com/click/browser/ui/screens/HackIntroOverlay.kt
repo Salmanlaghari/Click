@@ -137,18 +137,6 @@ fun HackIntroOverlay(
         ) {
             val cx = size.width / 2f
             val baseY = size.height * 0.92f
-            val hornPaint = Paint().apply {
-                style = PaintingStyle.Stroke
-                strokeWidth = 26f
-                strokeCap = StrokeCap.Round
-                color = Color(0xFF1F1F23)
-            }
-            val rimPaint = Paint().apply {
-                style = PaintingStyle.Stroke
-                strokeWidth = 5f
-                strokeCap = StrokeCap.Round
-                color = Color(0xFFEF4444).copy(alpha = 0.9f)
-            }
             fun horn(mirror: Float) {
                 val path = Path().apply {
                     moveTo(cx + mirror * 40f, baseY)
@@ -159,8 +147,14 @@ fun HackIntroOverlay(
                         cx + mirror * 120f, baseY - 330f
                     )
                 }
-                drawPath(path, hornPaint)
-                drawPath(path, rimPaint)
+                drawPath(
+                    path, color = Color(0xFF1F1F23),
+                    style = Stroke(width = 26f, cap = StrokeCap.Round)
+                )
+                drawPath(
+                    path, color = Color(0xFFEF4444).copy(alpha = 0.9f),
+                    style = Stroke(width = 5f, cap = StrokeCap.Round)
+                )
                 // Ridges along the horn.
                 for (i in 1..4) {
                     val f = i / 5f

@@ -288,22 +288,29 @@ class V9VpnService : VpnService() {
         }
     } catch (_: Exception) { null }
 
-    private fun ipv6Bytes(ip: String): ByteArray? = try {
-        // Expand :: shorthand, then parse 8 hextets.
-        var s = ip
-        if (s.contains("::")) {
-            val parts = s.split("::")
-            val left = if (parts[0].isEmpty()) emptyList() else parts[0].split(":")
-            val right = if (parts.size < 2 || parts[1].isEmpty()) emptyList() else parts[1].split(":")
-            val missing = 8 - left.size - right.size
-            s = (left + List(missing) { "0" } + right).joinToString(":")
+    private fun ipv6Bytes(ip: String): ByteArray? {
+        return try {
+            // Expand :: shorthand, then parse 8 hextets.
+            var s = ip
+            if (s.contains("::")) {
+                val parts = s.split("::")
+                val left = if (parts[0].isEmpty()) emptyList() else parts[0].split(":")
+                val right = if (parts.size < 2 || parts[1].isEmpty()) emptyList() else parts[1].split(":")
+                val missing = 8 - left.size - right.size
+                s = (left + List(missing) { "0" } + right).joinToString(":")
+            }
+            val hextets = s.split(":")
+            if (hextets.size != 8) {
+                null
+            } else {
+                val b = ByteBuffer.allocate(16).order(ByteOrder.BIG_ENDIAN)
+                for (h in hextets) b.putShort(h.toInt(16).toShort())
+                b.array()
+            }
+        } catch (_: Exception) {
+            null
         }
-        val hextets = s.split(":")
-        if (hextets.size != 8) return null
-        val b = ByteBuffer.allocate(16).order(ByteOrder.BIG_ENDIAN)
-        for (h in hextets) b.putShort(h.toInt(16).toShort())
-        b.array()
-    } catch (_: Exception) { null }
+    }
 
     /** Wraps a DNS payload in UDP+IPv4, addressed back to the original sender. */
     private fun buildUdpIpPacket(dstIp: ByteArray, dstPort: Int, dns: ByteArray): ByteArray {
