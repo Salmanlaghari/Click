@@ -3,6 +3,8 @@ package com.click.browser.engine
 import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
+import android.net.ConnectivityManager
+import android.net.NetworkCapabilities
 import android.util.LruCache
 import android.util.Xml
 import kotlinx.coroutines.Dispatchers
@@ -23,8 +25,9 @@ import java.util.concurrent.TimeUnit
  *
  * No backend server: feeds are fetched directly from reputable publishers
  * with OkHttp, parsed with XmlPullParser, and cached (memory + disk).
- * Offline: returns the last cached articles, or an empty list with
- * [NewsResult.offline]=true so the UI can show a graceful message.
+ * Connectivity is verified via ConnectivityManager: genuinely offline ->
+ * [NewsStatus.OFFLINE]; online but all feeds failed -> [NewsStatus.ERROR]
+ * (never misreported as offline).
  */
 enum class NewsCategory(val label: String) {
     ALL("All"),
@@ -45,8 +48,16 @@ data class NewsArticle(
 
 data class NewsResult(
     val articles: List<NewsArticle>,
-    val offline: Boolean
+    val status: NewsStatus
 )
+
+/**
+ * News load outcome. OFFLINE means the device genuinely has no internet
+ * (verified via ConnectivityManager). ERROR means the device IS online but
+ * every feed fetch failed (server errors, timeouts, blocks) — the UI must
+ * NOT claim the user is offline in that case.
+ */
+enum class NewsStatus { OK, OFFLINE, ERROR }
 
 private data class FeedDef(
     val url: String,
@@ -76,18 +87,41 @@ object NewsFeed {
     private val memoryCache = mutableMapOf<NewsCategory, Pair<Long, List<NewsArticle>>>()
     private val cacheLock = Any()
 
+    /** Real connectivity check: any active network (Wi-Fi, mobile data, …) with internet capability. */
+    fun hasInternetConnection(context: Context): Boolean {
+        return try {
+            val cm = context.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
+            val network = cm.activeNetwork ?: return false
+            val caps = cm.getNetworkCapabilities(network) ?: return false
+            caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
+        } catch (_: Exception) {
+            // If we can't determine, assume online and let the fetch decide —
+            // never falsely claim "offline".
+            true
+        }
+    }
+
     suspend fun getArticles(context: Context, category: NewsCategory): NewsResult =
         withContext(Dispatchers.IO) {
             // 1. Memory cache
             synchronized(cacheLock) {
                 val cached = memoryCache[category]
                 if (cached != null && System.currentTimeMillis() - cached.first < CACHE_TTL_MS) {
-                    return@withContext NewsResult(cached.second, offline = false)
+                    return@withContext NewsResult(cached.second, NewsStatus.OK)
                 }
             }
             // 2. Disk cache (survives process death)
             val diskCached = readDiskCache(context, category)
-            // 3. Network
+
+            // 3. Genuine connectivity check BEFORE any network attempt.
+            if (!hasInternetConnection(context)) {
+                val fallback = diskCached?.takeIf {
+                    System.currentTimeMillis() - it.first < 24 * 60 * 60 * 1000L
+                }?.second.orEmpty()
+                return@withContext NewsResult(fallback, NewsStatus.OFFLINE)
+            }
+
+            // 4. Network (device is online — a total failure here is ERROR, not OFFLINE)
             val wanted = feeds.filter { category == NewsCategory.ALL || it.category == category }
             val fetched = try {
                 coroutineScope {
@@ -109,20 +143,26 @@ object NewsFeed {
                 val sorted = fetched.sortedByDescending { it.publishedAt }.take(20)
                 synchronized(cacheLock) { memoryCache[category] = System.currentTimeMillis() to sorted }
                 writeDiskCache(context, category, sorted)
-                NewsResult(sorted, offline = false)
+                NewsResult(sorted, NewsStatus.OK)
             } else {
-                // Offline or all feeds failed: fall back to disk cache if fresh enough (< 24h)
+                // Online, but every feed failed (server errors, timeouts, blocks):
+                // fall back to disk cache if fresh enough (< 24h), marked ERROR.
                 val fallback = diskCached?.takeIf {
                     System.currentTimeMillis() - it.first < 24 * 60 * 60 * 1000L
                 }?.second.orEmpty()
-                NewsResult(fallback, offline = true)
+                NewsResult(fallback, NewsStatus.ERROR)
             }
         }
+
+    /** Browser-like UA: some publishers (Cloudflare-protected) reject unknown
+     * bot-style agents such as "ClickBrowser/1.0". */
+    internal const val FEED_USER_AGENT =
+        "Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Mobile Safari/537.36"
 
     private fun fetchFeed(feed: FeedDef): List<NewsArticle> {
         val request = Request.Builder()
             .url(feed.url)
-            .header("User-Agent", "ClickBrowser/1.0 (Android)")
+            .header("User-Agent", FEED_USER_AGENT)
             .build()
         client.newCall(request).execute().use { resp ->
             if (!resp.isSuccessful) return emptyList()
@@ -309,7 +349,7 @@ object NewsImageCache {
         }
         try {
             val req = Request.Builder().url(url)
-                .header("User-Agent", "ClickBrowser/1.0 (Android)").build()
+                .header("User-Agent", NewsFeed.FEED_USER_AGENT).build()
             client.newCall(req).execute().use { resp ->
                 if (!resp.isSuccessful) return@withContext null
                 val bytes = resp.body?.bytes() ?: return@withContext null

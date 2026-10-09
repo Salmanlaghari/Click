@@ -112,6 +112,7 @@ import com.click.browser.engine.NewsCategory
 import com.click.browser.engine.NewsFeed
 import com.click.browser.engine.NewsImageCache
 import com.click.browser.engine.NewsResult
+import com.click.browser.engine.NewsStatus
 import java.util.Calendar
 
 /**
@@ -719,8 +720,11 @@ private fun NewsSection(
                         Text("📰", fontSize = 28.sp)
                         Spacer(modifier = Modifier.height(6.dp))
                         Text(
-                            if (result?.offline == true) "You're offline — news will appear when you're back online."
-                            else "Couldn't load news right now.",
+                            when (result?.status) {
+                                NewsStatus.OFFLINE -> "You're offline — news will appear when you're back online."
+                                NewsStatus.ERROR -> "Couldn't load news. Check your connection and tap Retry."
+                                else -> "Couldn't load news right now."
+                            },
                             color = theme.onSurface.copy(alpha = 0.7f),
                             fontSize = 12.5.sp
                         )
