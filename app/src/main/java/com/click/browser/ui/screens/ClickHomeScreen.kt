@@ -10,6 +10,7 @@ import android.speech.SpeechRecognizer
 import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.animateContentSize
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
@@ -83,6 +84,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
@@ -948,6 +950,9 @@ fun CompactBrowseBar(
             .padding(horizontal = 8.dp, vertical = 6.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
+        // Click "C" logo mark (per the 3-mode reference image).
+        ClickLogoMark(size = 30.dp, fontSize = 17)
+        Spacer(modifier = Modifier.width(8.dp))
         Surface(
             shape = RoundedCornerShape(22.dp),
             color = theme.surfaceVariant.copy(alpha = 0.55f),
@@ -1005,6 +1010,7 @@ fun PrivacyStrip(
         color = theme.topBarBg,
         modifier = modifier
             .fillMaxWidth()
+            .animateContentSize()
             .clickable(
                 interactionSource = remember { MutableInteractionSource() },
                 indication = null
@@ -1036,8 +1042,13 @@ fun PrivacyStrip(
 }
 
 /**
- * Floating glowing AI button (bottom-right) for the browsing surface.
- * Tap → popup: Ask Click AI · Summarize · Translate.
+ * Floating pill-shaped "✨ Ask AI" button (bottom-right) for the browsing surface,
+ * per the "Same Website. 3 Beautiful Modes." reference image.
+ *
+ * - Tap the pill → opens the AI chat (Ask Click AI).
+ * - Tap the chevron → quick popup: Ask Click AI · Summarize · Translate
+ *   (existing quick actions preserved).
+ * - Static glow (no continuous animation — battery-safe per Prince's requirement).
  */
 @Composable
 fun AiQuickFab(
@@ -1077,28 +1088,49 @@ fun AiQuickFab(
                 }
             }
         }
-        Box(
+        // Pill: ✨ Ask AI  | chevron
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
             modifier = Modifier
-                .size(56.dp)
                 .then(
-                    if (neon) Modifier.shadow(16.dp, CircleShape, spotColor = theme.glow)
-                    else Modifier.shadow(10.dp, CircleShape, spotColor = theme.primary)
+                    if (neon) Modifier.shadow(18.dp, RoundedCornerShape(28.dp), spotColor = theme.glow)
+                    else Modifier.shadow(10.dp, RoundedCornerShape(28.dp), spotColor = theme.primary)
                 )
-                .clip(CircleShape)
+                .clip(RoundedCornerShape(28.dp))
                 .background(Brush.linearGradient(listOf(Color(0xFF3B82F6), Color(0xFF8B5CF6))))
-                .border(1.5.dp, Color.White.copy(alpha = 0.35f), CircleShape)
+                .border(1.5.dp, Color.White.copy(alpha = 0.35f), RoundedCornerShape(28.dp))
                 .clickable(
                     interactionSource = remember { MutableInteractionSource() },
                     indication = null
-                ) { expanded = !expanded },
-            contentAlignment = Alignment.Center
+                ) { onAskAi() }
+                .padding(start = 16.dp, top = 12.dp, bottom = 12.dp, end = 8.dp)
         ) {
             Icon(
-                if (expanded) Icons.Default.Close else Icons.Default.AutoAwesome,
-                contentDescription = "AI quick actions",
+                Icons.Default.AutoAwesome,
+                contentDescription = null,
                 tint = Color.White,
-                modifier = Modifier.size(26.dp)
+                modifier = Modifier.size(20.dp)
             )
+            Spacer(modifier = Modifier.width(8.dp))
+            Text(
+                "Ask AI",
+                color = Color.White,
+                fontSize = 14.sp,
+                fontWeight = FontWeight.Bold
+            )
+            Spacer(modifier = Modifier.width(4.dp))
+            // Chevron opens the quick-actions popup (Ask · Summarize · Translate).
+            IconButton(
+                onClick = { expanded = !expanded },
+                modifier = Modifier.size(28.dp)
+            ) {
+                Icon(
+                    if (expanded) Icons.Default.ExpandMore else Icons.Default.ExpandLess,
+                    contentDescription = if (expanded) "Hide quick actions" else "Show quick actions",
+                    tint = Color.White.copy(alpha = 0.9f),
+                    modifier = Modifier.size(18.dp)
+                )
+            }
         }
     }
 }
@@ -1126,8 +1158,13 @@ private fun AiPopupItem(
 }
 
 /**
- * Bottom nav for the browsing surface: Back · Forward · Home · Tabs (badge) · Menu.
- * (No center AI tab here — AI lives in the floating button.)
+ * Bottom nav for the browsing surface: ☰ Menu(drawer) · ‹ Back · › Forward ·
+ * ⌂ Home · ▭ Tabs (live count badge) · ⋮ More.
+ * Per the "Same Website. 3 Beautiful Modes." reference image — compact icons +
+ * labels, mode-aware colors. (No center AI tab here — AI lives in the floating pill.)
+ *
+ * Battery-safe animations only: the tab-count badge does a one-shot spring "pop"
+ * when the count changes — no continuous animation.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -1136,6 +1173,7 @@ fun BrowseBottomNav(
     tabCount: Int,
     canGoBack: Boolean,
     canGoForward: Boolean,
+    onDrawerClick: () -> Unit,
     onBack: () -> Unit,
     onForward: () -> Unit,
     onHome: () -> Unit,
@@ -1144,6 +1182,25 @@ fun BrowseBottomNav(
     modifier: Modifier = Modifier
 ) {
     val neon = theme.mode == BrowserMode.HACK
+
+    // One-shot badge pop when the tab count changes (battery-safe: no loop).
+    val badgeScale = remember { androidx.compose.animation.core.Animatable(1f) }
+    var firstBadgeFrame by remember { mutableStateOf(true) }
+    LaunchedEffect(tabCount) {
+        if (firstBadgeFrame) {
+            firstBadgeFrame = false
+        } else {
+            badgeScale.snapTo(1.5f)
+            badgeScale.animateTo(
+                1f,
+                animationSpec = androidx.compose.animation.core.spring(
+                    dampingRatio = androidx.compose.animation.core.Spring.DampingRatioMediumBouncy,
+                    stiffness = androidx.compose.animation.core.Spring.StiffnessMedium
+                )
+            )
+        }
+    }
+
     Surface(
         color = if (neon) Color(0xFF000000) else theme.topBarBg,
         border = androidx.compose.foundation.BorderStroke(
@@ -1160,6 +1217,10 @@ fun BrowseBottomNav(
             verticalAlignment = Alignment.CenterVertically
         ) {
             BrowseNavButton(
+                icon = Icons.Default.Menu, label = "Menu",
+                enabled = true, theme = theme, onClick = onDrawerClick
+            )
+            BrowseNavButton(
                 icon = Icons.AutoMirrored.Filled.ArrowBack, label = "Back",
                 enabled = canGoBack, theme = theme, onClick = onBack
             )
@@ -1169,11 +1230,19 @@ fun BrowseBottomNav(
             )
             BrowseNavButton(
                 icon = Icons.Default.Home, label = "Home",
-                enabled = true, theme = theme, onClick = onHome
+                enabled = true, theme = theme, onClick = onHome,
+                highlight = true
             )
             BadgedBox(
                 badge = {
-                    Badge(containerColor = theme.primary, contentColor = Color.White) {
+                    Badge(
+                        containerColor = theme.primary,
+                        contentColor = Color.White,
+                        modifier = Modifier.graphicsLayer {
+                            scaleX = badgeScale.value
+                            scaleY = badgeScale.value
+                        }
+                    ) {
                         Text(tabCount.toString(), fontSize = 9.sp)
                     }
                 },
@@ -1185,7 +1254,7 @@ fun BrowseBottomNav(
                 BrowseNavContent(icon = Icons.Default.Tab, label = "Tabs", enabled = true, theme = theme)
             }
             BrowseNavButton(
-                icon = Icons.Default.Menu, label = "Menu",
+                icon = Icons.Default.MoreVert, label = "More",
                 enabled = true, theme = theme, onClick = onMenu
             )
         }
@@ -1198,7 +1267,8 @@ private fun BrowseNavButton(
     label: String,
     enabled: Boolean,
     theme: ModeTheme,
-    onClick: () -> Unit
+    onClick: () -> Unit,
+    highlight: Boolean = false
 ) {
     Column(
         horizontalAlignment = Alignment.CenterHorizontally,
@@ -1209,7 +1279,7 @@ private fun BrowseNavButton(
             ) { if (enabled) onClick() }
             .padding(4.dp)
     ) {
-        BrowseNavContent(icon = icon, label = label, enabled = enabled, theme = theme)
+        BrowseNavContent(icon = icon, label = label, enabled = enabled, theme = theme, highlight = highlight)
     }
 }
 
@@ -1218,11 +1288,20 @@ private fun BrowseNavContent(
     icon: androidx.compose.ui.graphics.vector.ImageVector,
     label: String,
     enabled: Boolean,
-    theme: ModeTheme
+    theme: ModeTheme,
+    highlight: Boolean = false
 ) {
-    val tint = if (enabled) theme.onSurface.copy(alpha = 0.85f) else theme.onSurface.copy(alpha = 0.3f)
+    // Home is highlighted in the active accent (per the 3-mode reference image).
+    val tint = when {
+        highlight -> theme.primary
+        enabled -> theme.onSurface.copy(alpha = 0.85f)
+        else -> theme.onSurface.copy(alpha = 0.3f)
+    }
     Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.padding(4.dp)) {
         Icon(icon, contentDescription = label, tint = tint, modifier = Modifier.size(23.dp))
-        Text(label, fontSize = 9.5.sp, color = tint, fontWeight = FontWeight.Bold)
+        Text(
+            label, fontSize = 9.5.sp, color = tint,
+            fontWeight = if (highlight) FontWeight.ExtraBold else FontWeight.Bold
+        )
     }
 }
