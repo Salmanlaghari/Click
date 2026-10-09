@@ -112,8 +112,6 @@ object V9DohResolver {
             .client(bootstrapClient)
             .url(url)
             .bootstrapDnsHosts(bootstrap)
-            .connectTimeout(8, TimeUnit.SECONDS)
-            .readTimeout(8, TimeUnit.SECONDS)
             .build()
         cachedDoh = doh
         cachedKey = key
