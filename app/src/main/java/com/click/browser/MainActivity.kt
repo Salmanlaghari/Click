@@ -835,18 +835,13 @@ class MainActivity : ComponentActivity() {
                 refreshUserscripts()
             }
 
-            // Settings Configurations
-            var currentSearchEngineSetting by remember { mutableStateOf("Google") }
+            // Settings Configurations — per-mode search engine, persisted per V9 engine.
+            var currentSearchEngineSetting by remember {
+                mutableStateOf(ModePersonalization.defaultSearchEngine(activeMode))
+            }
 
             LaunchedEffect(activeMode) {
-                val engines = when (activeMode) {
-                    BrowserMode.SIMPLE -> listOf("Google", "Yahoo", "Bing")
-                    BrowserMode.DEVELOPER -> listOf("Yandex", "DuckDuckGo", "Baidu")
-                    BrowserMode.HACK -> listOf("Ahmia Search", "Deep Search", "AI Search")
-                }
-                if (currentSearchEngineSetting !in engines) {
-                    currentSearchEngineSetting = engines.first()
-                }
+                currentSearchEngineSetting = ModePersonalization.getSearchEngine(this@MainActivity, activeMode)
             }
 
             // Back Press Handling
@@ -1545,7 +1540,7 @@ class MainActivity : ComponentActivity() {
                                             theme = theme,
                                             currentUrl = currentTab.url,
                                             onNavigate = { input ->
-                                                val destination = formatUrl(input, currentSearchEngineSetting, activeMode)
+                                                val destination = formatUrl(input, currentSearchEngineSetting)
                                                 currentTab.url = destination
                                                 currentTab.webView?.loadUrl(destination)
                                             },
@@ -1584,7 +1579,7 @@ class MainActivity : ComponentActivity() {
                                             adBlockerEnabled = adBlockerEnabled,
                                             blockedCount = blockedCount,
                                             onNavigate = { input ->
-                                                val destination = formatUrl(input, currentSearchEngineSetting, activeMode)
+                                                val destination = formatUrl(input, currentSearchEngineSetting)
                                                 currentTab.url = destination
                                                 currentTab.webView?.loadUrl(destination)
                                             },
@@ -2244,7 +2239,12 @@ class MainActivity : ComponentActivity() {
                                         }
                                     },
                                     currentSearchEngineSetting = currentSearchEngineSetting,
-                                    onSearchEngineChange = { currentSearchEngineSetting = it },
+                                    onSearchEngineChange = { engine ->
+                                        currentSearchEngineSetting = engine
+                                        scope.launch {
+                                            ModePersonalization.setSearchEngine(this@MainActivity, activeMode, engine)
+                                        }
+                                    },
                                     adBlockerEnabled = adBlockerEnabled,
                                     onToggleAdBlocker = { adBlockerEnabled = it },
                                     forceNightMode = forceNightModeWebsites,
@@ -2776,7 +2776,7 @@ class MainActivity : ComponentActivity() {
         return if (custom.isEmpty()) "about:blank" else custom
     }
 
-    private fun formatUrl(input: String, searchEngine: String, mode: BrowserMode): String {
+    private fun formatUrl(input: String, searchEngine: String): String {
         val trimmed = input.trim()
         // click:// internal pages (chrome://-style): pass through (normalized
         // to lowercase) so shouldOverrideUrlLoading can intercept them into
@@ -2792,29 +2792,9 @@ class MainActivity : ComponentActivity() {
         }
         val query = URLEncoder.encode(trimmed, "UTF-8")
 
-        return when (mode) {
-            BrowserMode.SIMPLE -> {
-                when (searchEngine) {
-                    "Yahoo" -> "https://search.yahoo.com/search?p=$query"
-                    "Bing" -> "https://www.bing.com/search?q=$query"
-                    else -> "https://www.google.com/search?q=$query"
-                }
-            }
-            BrowserMode.DEVELOPER -> {
-                when (searchEngine) {
-                    "DuckDuckGo" -> "https://duckduckgo.com/?q=$query"
-                    "Baidu" -> "https://www.baidu.com/s?wd=$query"
-                    else -> "https://yandex.com/search/?text=$query"
-                }
-            }
-            BrowserMode.HACK -> {
-                when (searchEngine) {
-                    "Deep Search" -> "https://www.startpage.com/sp/search?query=$query"
-                    "AI Search", "integrated AI search" -> "https://perplexity.ai/search?q=$query"
-                    else -> "https://ahmia.fi/search/?q=$query"
-                }
-            }
-        }
+        // Per-mode engine names resolve centrally (ModePersonalization.searchUrl),
+        // so each V9 engine keeps its own default search engine.
+        return ModePersonalization.searchUrl(searchEngine, query)
     }
 
     /**
