@@ -21,6 +21,7 @@ import androidx.core.app.ActivityCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
 import androidx.core.content.ContextCompat
+import androidx.lifecycle.Lifecycle
 import androidx.webkit.WebSettingsCompat
 import androidx.annotation.RequiresApi
 import androidx.webkit.WebViewFeature
@@ -1637,6 +1638,29 @@ class MainActivity : ComponentActivity() {
                             // New page → toolbar back.
                             LaunchedEffect(currentTab.url) { toolbarVisible = true }
 
+                            // Periodic privacy-status popup (replaces the persistent
+                            // strip): every ~18s a small glass card fades in for 2.5s
+                            // with the live blocked count, then fades out. Battery-safe:
+                            // one-shot show/hide, no loops; paused when the app is in
+                            // the background; only on the browsing surface.
+                            var showPrivacyPopup by remember { mutableStateOf(false) }
+                            val popupActivity = this@MainActivity
+                            LaunchedEffect(currentTab.url) {
+                                showPrivacyPopup = false
+                                if (currentTab.url == "about:blank") return@LaunchedEffect
+                                while (true) {
+                                    kotlinx.coroutines.delay(18_000)
+                                    val tab = currentTab
+                                    if (tab.url == "about:blank") break
+                                    if (!popupActivity.lifecycle.currentState
+                                            .isAtLeast(Lifecycle.State.RESUMED)
+                                    ) continue
+                                    showPrivacyPopup = true
+                                    kotlinx.coroutines.delay(2_500)
+                                    showPrivacyPopup = false
+                                }
+                            }
+
                             @Composable
                             fun BrowseTopBarBlock() {
                                 AnimatedVisibility(
@@ -1657,12 +1681,8 @@ class MainActivity : ComponentActivity() {
                                                 onReload = { currentTab.webView?.reload() },
                                                 onMenuClick = { showBrowserMenu = true }
                                             )
-                                            PrivacyStrip(
-                                                theme = themed,
-                                                adBlockerEnabled = adBlockerEnabled,
-                                                blockedCount = blockedCount,
-                                                onClick = { showPrivacyGuards = true }
-                                            )
+                                            // (Privacy strip removed — replaced by the periodic
+                                            // glass popup; more vertical space for the page.)
                                             // Thin page-load progress indicator.
                                             val progress = currentTab.loadProgress
                                             androidx.compose.animation.AnimatedVisibility(
@@ -2128,6 +2148,52 @@ class MainActivity : ComponentActivity() {
                                                 .align(Alignment.BottomEnd)
                                                 .padding(end = 16.dp, bottom = 16.dp)
                                         )
+                                    }
+
+                                    // Periodic privacy-status glass popup (top-center):
+                                    // "🛡️ Protected · N trackers blocked". One-shot
+                                    // fade in/out every ~18s; browsing surface only.
+                                    androidx.compose.animation.AnimatedVisibility(
+                                        visible = showPrivacyPopup && !immersiveMode && !showOverlays,
+                                        enter = androidx.compose.animation.fadeIn() +
+                                            androidx.compose.animation.slideInVertically { -it / 2 },
+                                        exit = androidx.compose.animation.fadeOut(),
+                                        modifier = Modifier
+                                            .align(Alignment.TopCenter)
+                                            .padding(top = 12.dp)
+                                    ) {
+                                        Surface(
+                                            shape = RoundedCornerShape(20.dp),
+                                            color = theme.surface.copy(alpha = 0.88f),
+                                            border = BorderStroke(
+                                                1.dp,
+                                                theme.primary.copy(alpha = 0.35f)
+                                            ),
+                                            shadowElevation = 8.dp
+                                        ) {
+                                            Row(
+                                                modifier = Modifier.padding(
+                                                    horizontal = 14.dp,
+                                                    vertical = 8.dp
+                                                ),
+                                                verticalAlignment = Alignment.CenterVertically
+                                            ) {
+                                                Icon(
+                                                    Icons.Default.Shield,
+                                                    contentDescription = null,
+                                                    tint = Color(0xFF22C55E),
+                                                    modifier = Modifier.size(15.dp)
+                                                )
+                                                Spacer(modifier = Modifier.width(6.dp))
+                                                Text(
+                                                    if (adBlockerEnabled) "Protected · $blockedCount trackers blocked"
+                                                    else "AdBlock off",
+                                                    color = theme.onSurface,
+                                                    fontSize = 12.sp,
+                                                    fontWeight = FontWeight.SemiBold
+                                                )
+                                            }
+                                        }
                                     }
 
                                     // 6. FLOATING HACK VIDEO GRABBER TRIGGER

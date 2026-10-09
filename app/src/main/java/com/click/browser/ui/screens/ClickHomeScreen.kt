@@ -1391,7 +1391,7 @@ fun BrowseBottomNav(
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 4.dp, vertical = 6.dp),
+                .padding(horizontal = 2.dp, vertical = 3.dp),
             horizontalArrangement = Arrangement.SpaceEvenly,
             verticalAlignment = Alignment.CenterVertically
         ) {
@@ -1456,7 +1456,7 @@ private fun BrowseNavButton(
                 interactionSource = remember { MutableInteractionSource() },
                 indication = null
             ) { if (enabled) onClick() }
-            .padding(4.dp)
+            .padding(2.dp)
     ) {
         BrowseNavContent(icon = icon, label = label, enabled = enabled, theme = theme, highlight = highlight)
     }
@@ -1476,10 +1476,10 @@ private fun BrowseNavContent(
         enabled -> theme.onSurface.copy(alpha = 0.85f)
         else -> theme.onSurface.copy(alpha = 0.3f)
     }
-    Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.padding(4.dp)) {
-        Icon(icon, contentDescription = label, tint = tint, modifier = Modifier.size(23.dp))
+    Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.padding(2.dp)) {
+        Icon(icon, contentDescription = label, tint = tint, modifier = Modifier.size(19.dp))
         Text(
-            label, fontSize = 9.5.sp, color = tint,
+            label, fontSize = 8.5.sp, color = tint,
             fontWeight = if (highlight) FontWeight.ExtraBold else FontWeight.Bold
         )
     }
