@@ -113,6 +113,34 @@ class TabItem(
     var loadProgress by mutableStateOf(0)
 }
 
+/**
+ * Page transition wrapper — subtle fade + slide on every navigation start.
+ * Extracted to a top-level composable because [androidx.compose.animation.AnimatedVisibility]
+ * can't be called by implicit receiver inside a ColumnScope (ambiguous with
+ * ColumnScope.AnimatedVisibility). Purely visual: the WebView keeps loading
+ * underneath, navigation is never blocked. Durations collapse to 0 when
+ * [animationsEnabled] is false.
+ */
+@Composable
+private fun PageTransitionWrapper(
+    tick: Int,
+    animationsEnabled: Boolean,
+    content: @Composable () -> Unit
+) {
+    val pageAnimMs = if (animationsEnabled) 220 else 0
+    val pageTransitionState = remember(tick) {
+        MutableTransitionState(false).apply { targetState = true }
+    }
+    AnimatedVisibility(
+        visibleState = pageTransitionState,
+        enter = fadeIn(tween(pageAnimMs)) +
+                slideInHorizontally(tween(pageAnimMs)) { it / 14 },
+        modifier = Modifier.fillMaxSize()
+    ) {
+        content()
+    }
+}
+
 class MainActivity : ComponentActivity() {
 
     private lateinit var modeManager: ModeManager
@@ -790,6 +818,10 @@ class MainActivity : ComponentActivity() {
                     }
             }
             var adBlockerEnabled by remember { mutableStateOf(true) }
+            // Page transition animation: bumped on every main-frame navigation
+            // start; drives a subtle fade+slide over the WebView (never blocks
+            // loading, purely visual). Disabled via the Settings toggle.
+            var pageTransitionTick by remember { mutableStateOf(0) }
             // Real session count of blocked tracker/ad requests (home privacy pill).
             val blockedCount by AdBlocker.blockedCountFlow.collectAsState()
             // V9 Shield VPN running state (for the home shield card).
@@ -2199,6 +2231,12 @@ class MainActivity : ComponentActivity() {
                                             else -> Modifier.fillMaxSize()
                                         }
 
+                                        // Page transition: subtle fade + slide on every
+                                        // navigation start (see PageTransitionWrapper).
+                                        PageTransitionWrapper(
+                                            tick = pageTransitionTick,
+                                            animationsEnabled = flagsUi.tabAnimations
+                                        ) {
                                         Box(
                                             modifier = Modifier.fillMaxSize(),
                                             contentAlignment = Alignment.Center
@@ -2314,6 +2352,9 @@ class MainActivity : ComponentActivity() {
                                                                 super.onPageStarted(view, url, favicon)
                                                                 currentTab.url = url ?: ""
                                                                 lastPageStart = System.currentTimeMillis()
+                                                                // Page transition animation trigger (main-frame
+                                                                // navigations only — subframes don't call this).
+                                                                pageTransitionTick++
 
                                                                 // Clear stats
                                                                 networkRequests.clear()
@@ -2690,7 +2731,8 @@ class MainActivity : ComponentActivity() {
                                                 )
                                             }
                                         }
-                                    }
+                                        }
+                                        } // PageTransitionWrapper
 
                                     // 5. FLOATING DEV DEBUG STATUS OVERLAY + DevTools toggle
                                     // DevTools icon sits at the TOP-RIGHT corner (Prince's
@@ -3298,6 +3340,16 @@ class MainActivity : ComponentActivity() {
                                     onToggleJs = { javaScriptEnabledGlobal = it },
                                     dataSaver = dataSaverEnabled,
                                     onToggleDataSaver = { dataSaverEnabled = it },
+                                    animationsEnabled = flagsUi.tabAnimations,
+                                    onToggleAnimations = { enabled ->
+                                        scope.launch {
+                                            dataStore.edit { prefs ->
+                                                prefs[ExperimentalFlags.K_TAB_ANIMATIONS] = enabled
+                                            }
+                                            liveFlags = liveFlags.copy(tabAnimations = enabled)
+                                            flagsUi = liveFlags
+                                        }
+                                    },
                                     onClearHistoryForMode = { mode ->
                                         scope.launch {
                                             repository.clearHistoryFor(mode)

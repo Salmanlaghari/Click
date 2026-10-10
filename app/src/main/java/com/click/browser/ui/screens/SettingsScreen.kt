@@ -83,6 +83,9 @@ fun SettingsScreen(
     // --- Per-mode themes ---
     perModeDark: Map<BrowserMode, Boolean?>,
     onPerModeThemeChange: (BrowserMode, Boolean?) -> Unit,
+    // --- UI animations ---
+    animationsEnabled: Boolean,
+    onToggleAnimations: (Boolean) -> Unit,
     // --- AI Assistant ---
     aiApiKey: String,
     onAiApiKeyChange: (String) -> Unit,
@@ -125,7 +128,7 @@ fun SettingsScreen(
         theme, currentThemeSetting, wallpaperUri, activeMode,
         currentSearchEngineSetting, adBlockerEnabled, forceNightMode,
         httpsOnlyMode, jsEnabled, dataSaver, perModeDark, historyModeTarget,
-        aiApiKey, aiProvider, aiModel, showAiKey
+        aiApiKey, aiProvider, aiModel, showAiKey, animationsEnabled
     ) {
         buildList {
             // ================= GENERAL =================
@@ -209,6 +212,15 @@ fun SettingsScreen(
                             Text(engine, color = theme.onSurface, fontSize = 14.sp)
                         }
                     }
+                }
+            })
+            add(Row(null) {
+                CardRow(theme) {
+                    ToggleRow(
+                        "UI Animations",
+                        "Tab close & page transition effects",
+                        animationsEnabled, onToggleAnimations, theme
+                    )
                 }
             })
             // ---- AI Assistant (kept from the old settings) ----
