@@ -831,8 +831,13 @@ class MainActivity : ComponentActivity() {
             var longPressImageUrl by remember { mutableStateOf<String?>(null) }
             var showLongPressMenu by remember { mutableStateOf(false) }
 
-            // DevTools panel tab (0=Elements, 1=Console, 2=Network, 3=Sources)
+            // DevTools panel tab (0=Elements, 1=Console, 2=Network, 3=Sources, 4=Device)
             var devToolsTab by remember { mutableStateOf(0) }
+            // DevTools bottom sheet visibility — the panel is a dismissible sheet
+            // so the website stays visible (never a fixed top overlay).
+            var showDevToolsSheet by remember { mutableStateOf(false) }
+            // Live viewport/device facts for the DevTools Device tab.
+            var devToolsDeviceInfo by remember { mutableStateOf<DeviceInfo?>(null) }
 
             // Full-view / immersive browsing: MANUAL fullscreen toggle only.
             // (Prince: no auto-hide on scroll — user control via the drawer toggle.)
@@ -858,12 +863,17 @@ class MainActivity : ComponentActivity() {
                     FeatureId.COOKIES -> showCookieManager = true
                     FeatureId.TOOLS -> showExtensionsManager = true
                     FeatureId.DEVTOOLS -> {
-                        showDebugOverlay = !showDebugOverlay
-                        Toast.makeText(
-                            this@MainActivity,
-                            if (showDebugOverlay) "DevTools overlay ON" else "DevTools overlay OFF",
-                            Toast.LENGTH_SHORT
-                        ).show()
+                        // Opens the DevTools bottom sheet (website stays visible).
+                        // The FPS diagnostics overlay has its own drawer toggle.
+                        if (activeMode == BrowserMode.DEVELOPER && currentTab.url != "about:blank") {
+                            showDevToolsSheet = true
+                        } else {
+                            Toast.makeText(
+                                this@MainActivity,
+                                "DevTools needs Developer mode with a page loaded.",
+                                Toast.LENGTH_SHORT
+                            ).show()
+                        }
                     }
                     FeatureId.DOWNLOADS -> {
                         this@MainActivity.requestStoragePermissions()
@@ -1160,9 +1170,10 @@ class MainActivity : ComponentActivity() {
             // Drawer Navigation State (Simple, Dev, Power and shortcuts inside the hamburger menu)
             val drawerState = rememberDrawerState(initialValue = DrawerValue.Closed)
 
-            // Opens the real DevTools bottom panel on the requested tab (0=Elements,
-            // 1=Console, 2=Network, 3=Sources), switching to Developer mode if needed.
-            // Declared after drawerState so the drawer can be closed from it.
+            // Opens the real DevTools bottom sheet on the requested tab (0=Elements,
+            // 1=Console, 2=Network, 3=Sources, 4=Device), switching to Developer
+            // mode if needed. Declared after drawerState so the drawer can be
+            // closed from it.
             fun openDevToolsTab(tab: Int) {
                 scope.launch {
                     drawerState.close()
@@ -1176,6 +1187,58 @@ class MainActivity : ComponentActivity() {
                         if (!restarting) currentTab.webView?.reload()
                     }
                     devToolsTab = tab
+                    // Refresh device facts when the Device tab is requested.
+                    if (tab == 4) refreshDevToolsDeviceInfo()
+                    showDevToolsSheet = true
+                }
+            }
+
+            /**
+             * Reads live viewport/device facts from the current page via JS.
+             * Updates [devToolsDeviceInfo]; safe to call when no page is loaded
+             * (clears the info instead of crashing).
+             */
+            fun refreshDevToolsDeviceInfo() {
+                val wv = currentTab.webView
+                if (wv == null || currentTab.url == "about:blank") {
+                    devToolsDeviceInfo = null
+                    return
+                }
+                wv.evaluateJavascript(
+                    """(function(){
+                        try {
+                            return JSON.stringify({
+                                viewport: window.innerWidth + 'x' + window.innerHeight,
+                                dpr: String(window.devicePixelRatio || '?'),
+                                ua: navigator.userAgent || '',
+                                screen: screen.width + 'x' + screen.height,
+                                platform: navigator.platform || '',
+                                lang: navigator.language || '',
+                                touch: ('ontouchstart' in window) ? 'yes' : 'no',
+                                cookies: navigator.cookieEnabled ? 'yes' : 'no'
+                            });
+                        } catch(e) { return '{}'; }
+                    })()"""
+                ) { result ->
+                    devToolsDeviceInfo = try {
+                        // evaluateJavascript returns the JS string as a JSON string
+                        // literal (quoted + escaped). Decode via a JSON array wrapper.
+                        val inner = if (result.isNullOrBlank() || result == "null") "{}"
+                        else org.json.JSONArray("[$result]").optString(0, "{}")
+                        val json = org.json.JSONObject(inner)
+                        DeviceInfo(
+                            viewport = json.optString("viewport"),
+                            devicePixelRatio = json.optString("dpr"),
+                            userAgent = json.optString("ua"),
+                            screenSize = json.optString("screen"),
+                            platform = json.optString("platform"),
+                            language = json.optString("lang"),
+                            touchSupport = json.optString("touch"),
+                            cookiesEnabled = json.optString("cookies")
+                        )
+                    } catch (_: Exception) {
+                        null
+                    }
                 }
             }
 
@@ -1694,7 +1757,18 @@ class MainActivity : ComponentActivity() {
                                         scope.launch {
                                             drawerState.close()
                                             elementInspectorEnabled = !elementInspectorEnabled
-                                            Toast.makeText(this@MainActivity, "Page Inspector: Click elements to view tag details", Toast.LENGTH_SHORT).show()
+                                            val wv = currentTab.webView
+                                            if (elementInspectorEnabled) {
+                                                wv?.evaluateJavascript(
+                                                    DevToolsInjections.ELEMENT_INSPECTOR_ENABLE, null
+                                                )
+                                                Toast.makeText(this@MainActivity, "Page Inspector: Click elements to view tag details", Toast.LENGTH_SHORT).show()
+                                            } else {
+                                                wv?.evaluateJavascript(
+                                                    DevToolsInjections.ELEMENT_INSPECTOR_DISABLE, null
+                                                )
+                                                Toast.makeText(this@MainActivity, "Page Inspector OFF", Toast.LENGTH_SHORT).show()
+                                            }
                                         }
                                     }
                                 }
@@ -2470,14 +2544,46 @@ class MainActivity : ComponentActivity() {
                                         }
                                     }
 
-                                    // 5. FLOATING DEV DEBUG STATUS OVERLAY
-                                    if (activeMode == BrowserMode.DEVELOPER && showDebugOverlay && currentTab.url != "about:blank") {
-                                        FloatingDebugOverlay(
-                                            pageLoadTime = pageLoadTime,
+                                    // 5. FLOATING DEV DEBUG STATUS OVERLAY + DevTools toggle
+                                    // DevTools icon sits at the TOP-RIGHT corner (Prince's
+                                    // request); the diagnostics overlay hangs below it.
+                                    if (activeMode == BrowserMode.DEVELOPER && currentTab.url != "about:blank") {
+                                        Column(
                                             modifier = Modifier
                                                 .align(Alignment.TopEnd)
-                                                .padding(16.dp)
-                                        )
+                                                .padding(12.dp),
+                                            horizontalAlignment = Alignment.End
+                                        ) {
+                                            // DevTools panel toggle — top-right corner.
+                                            IconButton(
+                                                onClick = {
+                                                    if (!showDevToolsSheet && devToolsTab == 4) {
+                                                        refreshDevToolsDeviceInfo()
+                                                    }
+                                                    showDevToolsSheet = !showDevToolsSheet
+                                                },
+                                                modifier = Modifier
+                                                    .size(44.dp)
+                                                    .background(
+                                                        if (showDevToolsSheet) Color(0xFF7B1FA2)
+                                                        else Color(0xCC1A1A2E),
+                                                        shape = RoundedCornerShape(12.dp)
+                                                    )
+                                            ) {
+                                                Icon(
+                                                    Icons.Default.Code,
+                                                    contentDescription = "DevTools",
+                                                    tint = Color.White,
+                                                    modifier = Modifier.size(22.dp)
+                                                )
+                                            }
+                                            if (showDebugOverlay) {
+                                                Spacer(modifier = Modifier.height(8.dp))
+                                                FloatingDebugOverlay(
+                                                    pageLoadTime = pageLoadTime
+                                                )
+                                            }
+                                        }
                                     }
 
                                     // Browsing surface: floating glowing AI button (bottom-right)
@@ -2559,21 +2665,9 @@ class MainActivity : ComponentActivity() {
                                     }
                                 }
 
-                                // 7. DETAILED BOTTOM PANELS (DevTools console)
-                                if (activeMode == BrowserMode.DEVELOPER && currentTab.url != "about:blank") {
-                                    DevToolsPanel(
-                                        logs = logs,
-                                        networkRequests = networkRequests,
-                                        domHtml = domHtml,
-                                        sourcesList = sourcesList,
-                                        selectedTab = devToolsTab,
-                                        onTabSelected = { devToolsTab = it },
-                                        onClearLogs = { logs.clear() },
-                                        onEvalJs = { code ->
-                                            currentTab.webView?.evaluateJavascript(code, null)
-                                        }
-                                    )
-                                }
+                                // 7. DevTools lives in a dismissible bottom sheet now
+                                // (see overlay screens below) — the website is never
+                                // covered by a fixed panel.
                             }
                             }
 
@@ -2719,6 +2813,60 @@ class MainActivity : ComponentActivity() {
                                     repository = repository,
                                     onClose = { showDownloads = false }
                                 )
+                            }
+
+                            // DevTools bottom sheet (Developer mode): dismissible,
+                            // partially-expanded by default so the website stays
+                            // visible above it. Opened via the top-right corner
+                            // icon, the drawer DevTools entries, or the FAB menu.
+                            if (showDevToolsSheet && activeMode == BrowserMode.DEVELOPER) {
+                                val devToolsSheetState = rememberModalBottomSheetState(
+                                    skipPartiallyExpanded = false
+                                )
+                                ModalBottomSheet(
+                                    onDismissRequest = { showDevToolsSheet = false },
+                                    sheetState = devToolsSheetState,
+                                    dragHandle = { BottomSheetDefaults.DragHandle() },
+                                    containerColor = MaterialTheme.colorScheme.surface
+                                ) {
+                                    DevToolsPanel(
+                                        logs = logs,
+                                        networkRequests = networkRequests,
+                                        domHtml = domHtml,
+                                        sourcesList = sourcesList,
+                                        selectedTab = devToolsTab,
+                                        onTabSelected = {
+                                            devToolsTab = it
+                                            if (it == 4) refreshDevToolsDeviceInfo()
+                                        },
+                                        onClearLogs = { logs.clear() },
+                                        onClearNetwork = { networkRequests.clear() },
+                                        onEvalJs = { code ->
+                                            currentTab.webView?.evaluateJavascript(code, null)
+                                        },
+                                        inspectorEnabled = elementInspectorEnabled,
+                                        onToggleInspector = {
+                                            elementInspectorEnabled = !elementInspectorEnabled
+                                            val wv = currentTab.webView
+                                            if (elementInspectorEnabled) {
+                                                wv?.evaluateJavascript(
+                                                    DevToolsInjections.ELEMENT_INSPECTOR_ENABLE, null
+                                                )
+                                                Toast.makeText(
+                                                    this@MainActivity,
+                                                    "Inspector ON — tap any page element.",
+                                                    Toast.LENGTH_SHORT
+                                                ).show()
+                                            } else {
+                                                wv?.evaluateJavascript(
+                                                    DevToolsInjections.ELEMENT_INSPECTOR_DISABLE, null
+                                                )
+                                            }
+                                        },
+                                        deviceInfo = devToolsDeviceInfo,
+                                        onRefreshDeviceInfo = { refreshDevToolsDeviceInfo() }
+                                    )
+                                }
                             }
 
                             // click:// internal pages (chrome://-style) full-screen overlay.
