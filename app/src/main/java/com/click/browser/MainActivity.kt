@@ -3404,16 +3404,6 @@ class MainActivity : ComponentActivity() {
                                     onToggleJs = { javaScriptEnabledGlobal = it },
                                     dataSaver = dataSaverEnabled,
                                     onToggleDataSaver = { dataSaverEnabled = it },
-                                    animationsEnabled = flagsUi.tabAnimations,
-                                    onToggleAnimations = { enabled ->
-                                        scope.launch {
-                                            dataStore.edit { prefs ->
-                                                prefs[ExperimentalFlags.K_TAB_ANIMATIONS] = enabled
-                                            }
-                                            liveFlags = liveFlags.copy(tabAnimations = enabled)
-                                            flagsUi = liveFlags
-                                        }
-                                    },
                                     // Brave-inspired privacy quick wins (persisted to DataStore).
                                     stripTrackingParams = stripTrackingParams,
                                     onToggleStripTrackingParams = { v ->
@@ -3434,6 +3424,16 @@ class MainActivity : ComponentActivity() {
                                     onForgetfulExceptionsChange = { v ->
                                         forgetfulExceptions = v
                                         scope.launch { dataStore.edit { prefs -> prefs[AppSettings.FORGETFUL_BROWSING_EXCEPTIONS] = v } }
+                                    },
+                                    animationsEnabled = flagsUi.tabAnimations,
+                                    onToggleAnimations = { enabled ->
+                                        scope.launch {
+                                            dataStore.edit { prefs ->
+                                                prefs[ExperimentalFlags.K_TAB_ANIMATIONS] = enabled
+                                            }
+                                            liveFlags = liveFlags.copy(tabAnimations = enabled)
+                                            flagsUi = liveFlags
+                                        }
                                     },
                                     onClearHistoryForMode = { mode ->
                                         scope.launch {

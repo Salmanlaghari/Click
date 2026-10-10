@@ -307,15 +307,6 @@ fun SettingsScreen(
                     HorizontalDivider(color = theme.onSurface.copy(alpha = 0.1f))
                     ToggleRow("Data Saver", "Reduce web resource overhead", dataSaver, onToggleDataSaver, theme)
                     HorizontalDivider(color = theme.onSurface.copy(alpha = 0.1f))
-                    // LocationGuard: hide/spoof browser geolocation.
-                    ActionRow(
-                        "Location",
-                        "Websites will see: $locationSummary",
-                        Icons.Default.LocationOn,
-                        theme,
-                        onOpenLocationSettings
-                    )
-                    HorizontalDivider(color = theme.onSurface.copy(alpha = 0.1f))
                     ToggleRow(
                         "Strip Tracking Links",
                         "Auto-remove utm_*, gclid, fbclid & other trackers from URLs",
@@ -339,6 +330,15 @@ fun SettingsScreen(
                         "Block Cookie Banners",
                         "Auto-hide cookie-consent / GDPR popups",
                         blockConsentBanners, onToggleBlockConsentBanners, theme
+                    )
+                    HorizontalDivider(color = theme.onSurface.copy(alpha = 0.1f))
+                    // LocationGuard: hide/spoof browser geolocation.
+                    ActionRow(
+                        "Location",
+                        "Websites will see: $locationSummary",
+                        Icons.Default.LocationOn,
+                        theme,
+                        onOpenLocationSettings
                     )
                 }
             })

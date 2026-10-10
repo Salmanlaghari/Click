@@ -48,14 +48,6 @@ object AppSettings {
     val DOH_CUSTOM_URL = stringPreferencesKey("doh_custom_url")
     val V9_VPN_ENABLED = booleanPreferencesKey("v9_vpn_enabled")
 
-    // LocationGuard: hide/spoof browser geolocation.
-    // LOCATION_MODE: "ask" | "block" | "spoof" (default "ask").
-    val LOCATION_MODE = stringPreferencesKey("location_mode")
-    // Spoof target stored as strings (DataStore has no double key).
-    val LOCATION_SPOOF_LAT = stringPreferencesKey("location_spoof_lat")
-    val LOCATION_SPOOF_LNG = stringPreferencesKey("location_spoof_lng")
-    val LOCATION_SPOOF_LABEL = stringPreferencesKey("location_spoof_label")
-
     // Brave-inspired privacy quick wins.
     /** Strip tracking query params (utm_*, gclid, fbclid, ...) on navigation. Default ON. */
     val STRIP_TRACKING_PARAMS = booleanPreferencesKey("strip_tracking_params")
@@ -65,6 +57,14 @@ object AppSettings {
     val FORGETFUL_BROWSING_EXCEPTIONS = stringSetPreferencesKey("forgetful_browsing_exceptions")
     /** Auto-hide cookie-consent / GDPR banners. Default ON. */
     val BLOCK_CONSENT_BANNERS = booleanPreferencesKey("block_consent_banners")
+
+    // LocationGuard: hide/spoof browser geolocation.
+    // LOCATION_MODE: "ask" | "block" | "spoof" (default "ask").
+    val LOCATION_MODE = stringPreferencesKey("location_mode")
+    // Spoof target stored as strings (DataStore has no double key).
+    val LOCATION_SPOOF_LAT = stringPreferencesKey("location_spoof_lat")
+    val LOCATION_SPOOF_LNG = stringPreferencesKey("location_spoof_lng")
+    val LOCATION_SPOOF_LABEL = stringPreferencesKey("location_spoof_label")
 
     data class CustomHeader(val name: String, val value: String)
 
