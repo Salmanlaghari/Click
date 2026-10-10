@@ -161,6 +161,8 @@ class MainActivity : FragmentActivity() {
     private var liveAntiDetection = true
     private var liveNightMode = false
     private var liveDataSaver = false
+    // Advance Mode intro animation toggle (Settings; default ON).
+    private var liveAdvanceIntroEnabled = true
     // Live copies for the privacy-guard features (see PrivacyGuards).
     private var liveHeaderSpoof = false
     // Fingerprint mode: "off" | "standard" | "strict" (Brave-hardening).
@@ -1078,6 +1080,8 @@ class MainActivity : FragmentActivity() {
             var httpsStrictExceptions by remember { mutableStateOf(emptyList<String>()) }
             var javaScriptEnabledGlobal by remember { mutableStateOf(true) }
             var dataSaverEnabled by remember { mutableStateOf(false) }
+            // Advance Mode 5s intro animation on engine boot (default ON).
+            var advanceIntroEnabled by remember { mutableStateOf(true) }
             // Brave-inspired privacy quick wins (DataStore-persisted below).
             var stripTrackingParams by remember { mutableStateOf(true) }
             var forgetfulBrowsing by remember { mutableStateOf(false) }
@@ -1138,7 +1142,7 @@ class MainActivity : FragmentActivity() {
             var showHackIntro by remember {
                 mutableStateOf(intent.getBooleanExtra(V9Engine.EXTRA_HACK_INTRO, false))
             }
-            // Advance Mode signature moment: full-screen 5s blue-light intro
+            // Advance Mode signature moment: full-screen 5s teal intro
             // after an Advance engine boot. Tap to skip.
             var showAdvanceIntro by remember {
                 mutableStateOf(intent.getBooleanExtra(V9Engine.EXTRA_ADVANCE_INTRO, false))
@@ -1424,6 +1428,7 @@ class MainActivity : FragmentActivity() {
             LaunchedEffect(gpcEnabled) { liveGpcEnabled = gpcEnabled }
             LaunchedEffect(forceNightModeWebsites) { liveNightMode = forceNightModeWebsites }
             LaunchedEffect(dataSaverEnabled) { liveDataSaver = dataSaverEnabled }
+            LaunchedEffect(advanceIntroEnabled) { liveAdvanceIntroEnabled = advanceIntroEnabled }
             LaunchedEffect(headerSpoofEnabled) { liveHeaderSpoof = headerSpoofEnabled }
             LaunchedEffect(fingerprintMode) { liveFingerprintMode = fingerprintMode }
             // Privacy quick wins: keep WebViewClient-safe live copies in sync.
@@ -1537,6 +1542,7 @@ class MainActivity : FragmentActivity() {
                         ?: LocationGuard.DEFAULT_PRESET.label
                     customHeaders = AppSettings.parseHeaders(prefs[AppSettings.CUSTOM_HEADERS_JSON])
                     backgroundAudioEnabled = prefs[AppSettings.BACKGROUND_AUDIO_ENABLED] == true
+                    advanceIntroEnabled = prefs[AppSettings.ADVANCE_INTRO_ENABLED] ?: true
                     // Brave-inspired privacy quick wins.
                     stripTrackingParams = prefs[AppSettings.STRIP_TRACKING_PARAMS] ?: true
                     forgetfulBrowsing = prefs[AppSettings.FORGETFUL_BROWSING] == true
@@ -3899,6 +3905,11 @@ class MainActivity : FragmentActivity() {
                                             flagsUi = liveFlags
                                         }
                                     },
+                                    advanceIntroEnabled = advanceIntroEnabled,
+                                    onToggleAdvanceIntro = { v ->
+                                        advanceIntroEnabled = v
+                                        scope.launch { dataStore.edit { prefs -> prefs[AppSettings.ADVANCE_INTRO_ENABLED] = v } }
+                                    },
                                     onClearHistoryForMode = { mode ->
                                         scope.launch {
                                             repository.clearHistoryFor(mode)
@@ -4080,7 +4091,7 @@ class MainActivity : FragmentActivity() {
                                 HackIntroOverlay(onDone = { showHackIntro = false })
                             }
                             // V9: Advance Mode signature moment — full-screen 5s
-                            // blue-light intro after an Advance engine boot. Tap to skip.
+                            // teal intro after an Advance engine boot. Tap to skip.
                             if (showAdvanceIntro) {
                                 AdvanceIntroOverlay(onDone = { showAdvanceIntro = false })
                             }
@@ -5023,7 +5034,7 @@ class MainActivity : FragmentActivity() {
         val restarted = V9Engine.restartForEngineSwitch(
             this, modeManager, mode,
             hackIntro = (mode == BrowserMode.HACK),
-            advanceIntro = (mode == BrowserMode.ADVANCED)
+            advanceIntro = (mode == BrowserMode.ADVANCED) && liveAdvanceIntroEnabled
         )
         if (!restarted) {
             // Restart wasn't possible (alarm unavailable etc.) — apply the

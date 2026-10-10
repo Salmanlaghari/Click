@@ -239,7 +239,7 @@ object V9Engine {
      * @param hackIntro when true, the relaunched process shows the Hack Mode
      *   Markhor intro animation once (see HackIntroOverlay).
      * @param advanceIntro when true, the relaunched process shows the Advance
-     *   Mode blue-light intro animation once (see AdvanceIntroOverlay).
+     *   Mode teal intro animation once (see AdvanceIntroOverlay).
      * @return true if a restart was triggered; false if we stayed alive
      *   (caller should apply the mode in-place without engine isolation).
      */

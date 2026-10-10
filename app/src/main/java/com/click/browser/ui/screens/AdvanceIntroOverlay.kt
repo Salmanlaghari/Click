@@ -48,15 +48,16 @@ import kotlin.random.Random
  * Click Advance signature moment: full-screen 5-second intro shown when the
  * user enters Advance mode (a new V9 engine boot into the isolated space).
  *
- * Deep-space BLUE-LIGHT identity — deliberately distinct from Hack Mode's
- * blood-red ember look: twinkling starfield, glowing blue grid, rising
- * "CLICK" letters with a blue halo, "ADVANCE" condensing in, tagline
- * "ISOLATED · FAST · FRESH SPACE", and a shield checkmark drawing itself.
+ * Deep-space TEAL identity — deliberately distinct from the app splash's
+ * blue/purple look and Hack Mode's blood-red ember look: twinkling starfield
+ * (~18% teal-tinted), glowing teal grid, rising "CLICK" letters with a teal
+ * halo, "ADVANCE" condensing in, tagline "ISOLATED · FAST · FRESH SPACE",
+ * and a shield checkmark drawing itself.
  *
  * Pure vector/Compose — no video asset, tiny APK footprint, crisp on every
  * screen. Tap anywhere to skip; auto-dismisses after [durationMs].
  *
- * Mirrors the approved HTML mockup
+ * Mirrors the Prince-approved HTML mockup
  * (~/workspace/click-program/advance-intro-mockup.html).
  */
 @Composable
@@ -84,26 +85,34 @@ fun AdvanceIntroOverlay(
         label = "twinkle"
     )
 
-    // Deterministic starfield (same stars every run).
+    // Deterministic starfield (same stars every run): 130 stars, ~18% teal-tinted.
     val stars = remember {
-        List(90) { i ->
+        List(130) { i ->
             val r = Random(i * 4051 + 17)
-            Star(r.nextFloat(), r.nextFloat(), 0.6f + r.nextFloat() * 1.8f, r.nextFloat() * 6.28f)
+            Star(
+                r.nextFloat(), r.nextFloat(),
+                0.6f + r.nextFloat() * 1.8f, r.nextFloat() * 6.28f,
+                teal = r.nextFloat() < 0.18f
+            )
         }
     }
 
     val density = LocalDensity.current
-    val blue = Color(0xFF38BDF8)      // blue-light primary
-    val blueDeep = Color(0xFF0EA5E9)  // deeper blue
+    // Teal identity from the approved mockup (#14b8a6 / #5eead4) — distinct
+    // from the app splash's blue/purple and Hack's ember red.
+    val teal = Color(0xFF14B8A6)      // teal primary
+    val tealDeep = Color(0xFF0D9488)  // deeper teal
+    val tealLight = Color(0xFF5EEAD4) // light teal (check mark, progress)
     val iceWhite = Color(0xFFE8F4FF)
+    val bg = Color(0xFF02040A)
 
     // ---- Timeline keyframes (fractions of 5s, from the mockup) ----
     fun seg(start: Float, end: Float): Float =
         ((t - start) / (end - start)).coerceIn(0f, 1f)
 
-    val starsA = seg(0f, 0.06f)
+    val starsA = seg(0f, 0.20f)
     val gridA = seg(0.06f, 0.30f)
-    val advSpacing = 0.62f - 0.47f * seg(0.34f, 0.56f) // 0.62em -> 0.15em
+    val advSpacing = 1.31f - 0.93f * seg(0.34f, 0.56f) // 1.31em -> 0.38em
     val advA = seg(0.34f, 0.52f)
     val tagA = seg(0.58f, 0.74f)
     val tagDy = (1f - seg(0.58f, 0.74f)) * 14f
@@ -114,11 +123,11 @@ fun AdvanceIntroOverlay(
     Box(
         modifier = Modifier
             .fillMaxSize()
-            .background(Color(0xFF02040A))
+            .background(bg)
             .alpha(1f - fadeOut)
             .clickable { finish() }
     ) {
-        // ---- Starfield + blue nebula glow + grid ----
+        // ---- Starfield + teal nebula glow + grid (radially masked) ----
         Canvas(modifier = Modifier.fillMaxSize().alpha(starsA)) {
             val w = size.width
             val h = size.height
@@ -126,8 +135,8 @@ fun AdvanceIntroOverlay(
             drawCircle(
                 brush = Brush.radialGradient(
                     colors = listOf(
-                        blueDeep.copy(alpha = 0.35f),
-                        blueDeep.copy(alpha = 0.10f),
+                        tealDeep.copy(alpha = 0.35f),
+                        tealDeep.copy(alpha = 0.10f),
                         Color.Transparent
                     ),
                     center = Offset(w / 2f, h * 0.40f),
@@ -136,19 +145,21 @@ fun AdvanceIntroOverlay(
                 radius = w * 0.75f,
                 center = Offset(w / 2f, h * 0.40f)
             )
-            // Stars with twinkle.
+            // Stars with twinkle; ~18% glow teal like the mockup.
             for (s in stars) {
                 val a = (0.35f + 0.65f * (0.5f + 0.5f * sin(twinkle + s.phase))).coerceIn(0f, 1f)
+                val c = if (s.teal) tealLight else iceWhite
                 drawCircle(
-                    color = iceWhite.copy(alpha = a * 0.9f),
+                    color = c.copy(alpha = a * 0.9f),
                     radius = s.size,
                     center = Offset(s.x * w, s.y * h)
                 )
             }
-            // Faint blue grid, masked toward the center by the nebula.
+            // Faint teal grid, radially masked toward the center (mockup's
+            // CSS mask-image equivalent): overlay a transparent->bg gradient.
             if (gridA > 0f) {
                 val step = 44.dp.toPx()
-                val gridColor = blue.copy(alpha = 0.13f * gridA)
+                val gridColor = teal.copy(alpha = 0.13f * gridA)
                 var x = 0f
                 while (x <= w) {
                     drawLine(gridColor, Offset(x, 0f), Offset(x, h), strokeWidth = 1f)
@@ -159,6 +170,14 @@ fun AdvanceIntroOverlay(
                     drawLine(gridColor, Offset(0f, y), Offset(w, y), strokeWidth = 1f)
                     y += step
                 }
+                drawRect(
+                    brush = Brush.radialGradient(
+                        colors = listOf(Color.Transparent, bg),
+                        center = Offset(w / 2f, h * 0.45f),
+                        radius = w * 0.55f
+                    ),
+                    size = size
+                )
             }
             // Vignette.
             drawRect(
@@ -179,7 +198,7 @@ fun AdvanceIntroOverlay(
             // "CLICK" — letters rise in staggered (mockup 0.7s–1.9s).
             Row {
                 "CLICK".forEachIndexed { i, ch ->
-                    val lp = seg(0.14f + i * 0.024f, 0.26f + i * 0.024f)
+                    val lp = seg(0.14f + i * 0.024f, 0.28f + i * 0.024f)
                     val dy = with(density) { ((1f - lp) * 34).dp }
                     Text(
                         text = ch.toString(),
@@ -188,7 +207,7 @@ fun AdvanceIntroOverlay(
                         fontWeight = FontWeight.ExtraBold,
                         style = TextStyle(
                             shadow = androidx.compose.ui.graphics.Shadow(
-                                color = blue.copy(alpha = 0.9f * lp),
+                                color = teal.copy(alpha = 0.9f * lp),
                                 offset = Offset(0f, 0f),
                                 blurRadius = 24f * lp
                             )
@@ -200,7 +219,7 @@ fun AdvanceIntroOverlay(
             // "ADVANCE" — letter-spacing condenses (mockup 1.7s–2.8s).
             Text(
                 text = "ADVANCE",
-                color = blue.copy(alpha = advA),
+                color = teal.copy(alpha = advA),
                 fontSize = 26.sp,
                 fontWeight = FontWeight.Light,
                 style = TextStyle(letterSpacing = advSpacing.em),
@@ -211,7 +230,7 @@ fun AdvanceIntroOverlay(
                 text = "ISOLATED  ·  FAST  ·  FRESH SPACE",
                 color = Color(0xFF9FB3C8).copy(alpha = tagA),
                 fontSize = 11.sp,
-                letterSpacing = 0.25.em,
+                letterSpacing = 0.36.em,
                 textAlign = TextAlign.Center,
                 modifier = Modifier
                     .offset(y = with(density) { tagDy.dp })
@@ -246,13 +265,13 @@ fun AdvanceIntroOverlay(
                 pm.setPath(shield, false)
                 val segPath = Path()
                 pm.getSegment(0f, pm.length * shieldP, segPath, true)
-                drawPath(segPath, blueDeep, style = stroke)
+                drawPath(segPath, tealDeep, style = stroke)
                 if (shieldP > 0.55f) {
                     val cp = ((shieldP - 0.55f) / 0.45f).coerceIn(0f, 1f)
                     pm.setPath(check, false)
                     val cseg = Path()
                     pm.getSegment(0f, pm.length * cp, cseg, true)
-                    drawPath(cseg, Color(0xFF7DD3FC), style = stroke)
+                    drawPath(cseg, tealLight, style = stroke)
                 }
             }
         }
@@ -271,7 +290,7 @@ fun AdvanceIntroOverlay(
         Canvas(modifier = Modifier.fillMaxSize()) {
             val w = size.width * t
             drawRect(
-                brush = Brush.horizontalGradient(listOf(blueDeep, blue)),
+                brush = Brush.horizontalGradient(listOf(tealDeep, tealLight)),
                 topLeft = Offset(0f, size.height - 3.dp.toPx()),
                 size = androidx.compose.ui.geometry.Size(w, 3.dp.toPx())
             )
@@ -279,4 +298,7 @@ fun AdvanceIntroOverlay(
     }
 }
 
-private data class Star(val x: Float, val y: Float, val size: Float, val phase: Float)
+private data class Star(
+    val x: Float, val y: Float, val size: Float, val phase: Float,
+    val teal: Boolean = false
+)
