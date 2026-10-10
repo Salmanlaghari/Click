@@ -58,6 +58,10 @@ import com.click.browser.engine.AppSettings
  *   current tab and lists the IPs a site could see. It is a test, not a
  *   blocker — WebView has no API to disable WebRTC (STUN is UDP), so a
  *   system VPN remains the real mitigation; the UI says so.
+ * - WebRTC Leak Guard: OPT-IN bundled userscript that stops page scripts
+ *   from creating RTCPeerConnection and enumerating cameras/mics. Off by
+ *   default because it breaks legitimate video calls. Reduces page-JS
+ *   fingerprinting only — never presented as 100% leak-proof.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -75,6 +79,9 @@ fun PrivacyGuardsScreen(
     webrtcIps: List<String>?,
     webrtcTested: Boolean,
     onRunWebrtcTest: () -> Unit,
+    webrtcGuardEnabled: Boolean,
+    webrtcGuardApplies: Boolean,
+    onToggleWebrtcGuard: (Boolean) -> Unit,
     onClose: () -> Unit
 ) {
     var newHeaderName by remember { mutableStateOf("") }
@@ -196,6 +203,30 @@ fun PrivacyGuardsScreen(
                 )
             }
 
+            // ---- WebRTC Leak Guard (opt-in bundled userscript) ----
+            // Userscripts only inject in Developer/Hack modes; in Simple
+            // mode the toggle is shown disabled so it never implies
+            // protection that isn't happening.
+            item {
+                GuardToggleRow(
+                    title = "WebRTC Leak Guard (opt-in)",
+                    subtitle = if (webrtcGuardApplies)
+                        "Stops page scripts from creating RTCPeerConnection " +
+                            "and from enumerating cameras/microphones. May break " +
+                            "legitimate video calls on pages where enabled. Reduces " +
+                            "page-JS fingerprinting only — not 100% leak-proof; a " +
+                            "system-wide VPN remains the real mitigation. Verify " +
+                            "with the leak test below."
+                    else
+                        "Userscript extensions only run in Developer and Hack " +
+                            "modes — switch modes to use this guard. It stays " +
+                            "installed but inactive in Simple mode.",
+                    checked = webrtcGuardEnabled && webrtcGuardApplies,
+                    enabled = webrtcGuardApplies,
+                    onCheckedChange = onToggleWebrtcGuard
+                )
+            }
+
             // ---- WebRTC Leak Test ----
             item {
                 Card(
@@ -273,6 +304,7 @@ private fun GuardToggleRow(
     title: String,
     subtitle: String,
     checked: Boolean,
+    enabled: Boolean = true,
     onCheckedChange: (Boolean) -> Unit
 ) {
     Row(
@@ -285,6 +317,6 @@ private fun GuardToggleRow(
             Text(subtitle, fontSize = 11.sp, color = Color.Gray)
         }
         Spacer(modifier = Modifier.width(8.dp))
-        Switch(checked = checked, onCheckedChange = onCheckedChange)
+        Switch(checked = checked, onCheckedChange = onCheckedChange, enabled = enabled)
     }
 }
