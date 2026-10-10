@@ -51,6 +51,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.*
 import androidx.compose.material.icons.filled.*
+import androidx.compose.material.icons.outlined.*
 import androidx.compose.material3.*
 import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.runtime.*
@@ -915,6 +916,13 @@ class MainActivity : ComponentActivity() {
             var showHackIntro by remember {
                 mutableStateOf(intent.getBooleanExtra(V9Engine.EXTRA_HACK_INTRO, false))
             }
+            // Advance Mode signature moment: full-screen 5s blue-light intro
+            // after an Advance engine boot. Tap to skip.
+            var showAdvanceIntro by remember {
+                mutableStateOf(intent.getBooleanExtra(V9Engine.EXTRA_ADVANCE_INTRO, false))
+            }
+            // "About Advance Mode" specifications sheet.
+            var showAdvanceSpecs by remember { mutableStateOf(false) }
             // Password manager: save-offer dialog state.
             var showPasswordSaveDialog by remember { mutableStateOf(false) }
             var pendingPasswordSave by remember {
@@ -1543,7 +1551,8 @@ class MainActivity : ComponentActivity() {
                                     DrawerItem(
                                         label = BrowserMode.ADVANCED.display().title,
                                         subtitle = BrowserMode.ADVANCED.display().tagline,
-                                        icon = Icons.Default.Filter4, color = Color(0xFF06B6D4)
+                                        icon = Icons.Default.Filter4, color = Color(0xFF06B6D4),
+                                        onInfoClick = { showAdvanceSpecs = true }
                                     ) {
                                         scope.launch {
                                             drawerState.close()
@@ -3565,6 +3574,27 @@ class MainActivity : ComponentActivity() {
                             if (showHackIntro) {
                                 HackIntroOverlay(onDone = { showHackIntro = false })
                             }
+                            // V9: Advance Mode signature moment — full-screen 5s
+                            // blue-light intro after an Advance engine boot. Tap to skip.
+                            if (showAdvanceIntro) {
+                                AdvanceIntroOverlay(onDone = { showAdvanceIntro = false })
+                            }
+                            // "About Advance Mode" specifications sheet.
+                            if (showAdvanceSpecs) {
+                                AdvanceSpecsSheet(
+                                    onClose = { showAdvanceSpecs = false },
+                                    onEnterAdvance = {
+                                        showAdvanceSpecs = false
+                                        scope.launch {
+                                            drawerState.close()
+                                            // Same feedback contract as the drawer's Advance entry:
+                                            // if the engine restart wasn't possible, say so.
+                                            val restarting = v9SwitchMode(BrowserMode.ADVANCED, currentTab.webView, forceDesktopMode)
+                                            if (!restarting) Toast.makeText(this@MainActivity, "Advance Mode Activated — fresh isolated space", Toast.LENGTH_SHORT).show()
+                                        }
+                                    }
+                                )
+                            }
                             // ---- Built-in engines ----
                             // Safe Browsing interstitial (premium-styled, theme-aware).
                             val sbHit = safeBrowsingHit
@@ -4369,7 +4399,8 @@ class MainActivity : ComponentActivity() {
         SessionRestore.markCleanExit(this, sourceMode, true)
         val restarted = V9Engine.restartForEngineSwitch(
             this, modeManager, mode,
-            hackIntro = (mode == BrowserMode.HACK)
+            hackIntro = (mode == BrowserMode.HACK),
+            advanceIntro = (mode == BrowserMode.ADVANCED)
         )
         if (!restarted) {
             // Restart wasn't possible (alarm unavailable etc.) — apply the
@@ -4503,6 +4534,7 @@ fun DrawerItem(
     icon: ImageVector,
     color: Color,
     subtitle: String? = null,
+    onInfoClick: (() -> Unit)? = null,
     onClick: () -> Unit = {}
 ) {
     var pressed by remember { mutableStateOf(false) }
@@ -4558,6 +4590,18 @@ fun DrawerItem(
                         fontSize = 9.sp,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis
+                    )
+                }
+            }
+            // Optional trailing info button (used by the Advance mode entry
+            // to open the "About Advance Mode" specifications sheet).
+            if (onInfoClick != null) {
+                IconButton(onClick = onInfoClick) {
+                    Icon(
+                        Icons.Outlined.Info,
+                        contentDescription = "About $label",
+                        tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.55f),
+                        modifier = Modifier.size(18.dp)
                     )
                 }
             }
