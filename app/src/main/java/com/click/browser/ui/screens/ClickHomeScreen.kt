@@ -1130,7 +1130,7 @@ fun ClickBottomNav(
             BadgedBox(
                 badge = {
                     Badge(containerColor = theme.primary, contentColor = Color.White) {
-                        Text(tabCount.toString(), fontSize = 9.sp)
+                        Text(tabBadgeText(tabCount), fontSize = 9.sp)
                     }
                 },
                 modifier = Modifier.clickable(
@@ -1233,6 +1233,10 @@ fun homeGreeting(): String {
  *
  * The URL field is directly editable (tap, type, Go).
  */
+/** Kilo: single source of truth for tab-count badge text — "99+" past 99. */
+internal fun tabBadgeText(count: Int): String =
+    if (count > 99) "99+" else count.coerceAtLeast(0).toString()
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun CompactBrowseBar(
@@ -1242,9 +1246,11 @@ fun CompactBrowseBar(
     onReload: () -> Unit,
     onMenuClick: () -> Unit,
     onSiteSettingsClick: () -> Unit = {},
-    onDrawerClick: () -> Unit = {},
-    tabCount: Int = 1,
-    onTabsClick: () -> Unit = {},
+    // Kilo: these are required (no defaults) so missing wiring fails at
+    // compile time instead of silently doing nothing.
+    onDrawerClick: () -> Unit,
+    tabCount: Int,
+    onTabsClick: () -> Unit,
     modifier: Modifier = Modifier,
     // LocationGuard indicator: null = no indicator; otherwise the effective
     // mode for the current site (BLOCK/Spoof shown, ASK hidden).
@@ -1331,14 +1337,20 @@ fun CompactBrowseBar(
                             color = theme.onSurface
                         ),
                         keyboardOptions = KeyboardOptions(imeAction = ImeAction.Go),
-                        keyboardActions = KeyboardActions(onGo = { onNavigate(textInput) }),
+                        keyboardActions = KeyboardActions(
+                            onGo = { onNavigate(textInput) },
+                            onSearch = { onNavigate(textInput) },
+                            onDone = { onNavigate(textInput) }
+                        ),
                         cursorBrush = androidx.compose.ui.graphics.SolidColor(theme.primary),
                         modifier = Modifier
                             .weight(1f)
                             .padding(horizontal = 8.dp, vertical = 12.dp)
                     )
-                    // Clear button when there's text (2026 UX pattern).
-                    if (textInput.isNotEmpty() && textInput != currentUrl) {
+                    // Clear button whenever there's text (2026 UX pattern).
+                    // Kilo: shown even when text matches the URL so the user
+                    // can always clear the field to type a fresh address.
+                    if (textInput.isNotEmpty()) {
                         IconButton(
                             onClick = { textInput = "" },
                             modifier = Modifier.size(32.dp)
@@ -1355,10 +1367,9 @@ fun CompactBrowseBar(
             }
             Spacer(modifier = Modifier.width(4.dp))
             // Reload button.
-            IconButton(onClick = {
-                textInput = currentUrl
-                onReload()
-            }, modifier = Modifier.size(40.dp)) {
+            // Kilo: never wipes what the user typed — the field resets via
+            // remember(currentUrl) when the URL actually changes.
+            IconButton(onClick = onReload, modifier = Modifier.size(40.dp)) {
                 Icon(
                     Icons.Default.Refresh,
                     contentDescription = "Reload",
@@ -1376,7 +1387,7 @@ fun CompactBrowseBar(
                             modifier = Modifier.offset(x = 6.dp, y = (-6).dp)
                         ) {
                             Text(
-                                tabCount.coerceAtMost(99).toString(),
+                                tabBadgeText(tabCount),
                                 fontSize = 9.sp,
                                 fontWeight = FontWeight.Bold
                             )
@@ -1650,7 +1661,7 @@ fun BrowseBottomNav(
                             scaleY = badgeScale.value
                         }
                     ) {
-                        Text(tabCount.toString(), fontSize = 9.sp)
+                        Text(tabBadgeText(tabCount), fontSize = 9.sp)
                     }
                 },
                 modifier = Modifier.clickable(
