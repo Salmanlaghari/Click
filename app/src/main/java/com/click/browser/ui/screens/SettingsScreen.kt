@@ -65,8 +65,11 @@ fun SettingsScreen(
     onToggleAdBlocker: (Boolean) -> Unit,
     forceNightMode: Boolean,
     onToggleNightMode: (Boolean) -> Unit,
-    httpsOnlyMode: Boolean,
-    onToggleHttpsOnly: (Boolean) -> Unit,
+    httpsMode: String,
+    onHttpsModeChange: (String) -> Unit,
+    httpsStrictExceptions: List<String>,
+    onAddHttpsException: (String) -> Unit,
+    onRemoveHttpsException: (String) -> Unit,
     jsEnabled: Boolean,
     onToggleJs: (Boolean) -> Unit,
     dataSaver: Boolean,
@@ -136,7 +139,7 @@ fun SettingsScreen(
     val rows = remember(
         theme, currentThemeSetting, wallpaperUri, activeMode,
         currentSearchEngineSetting, adBlockerEnabled, forceNightMode,
-        httpsOnlyMode, jsEnabled, dataSaver, perModeDark, historyModeTarget,
+        httpsMode, httpsStrictExceptions, jsEnabled, dataSaver, perModeDark, historyModeTarget,
         aiApiKey, aiProvider, aiModel, showAiKey, animationsEnabled
     ) {
         buildList {
@@ -301,7 +304,82 @@ fun SettingsScreen(
                     HorizontalDivider(color = theme.onSurface.copy(alpha = 0.1f))
                     ToggleRow("Force Night Mode", "Inject night theme on web pages", forceNightMode, onToggleNightMode, theme)
                     HorizontalDivider(color = theme.onSurface.copy(alpha = 0.1f))
-                    ToggleRow("HTTPS-Only Mode", "Require secure TLS connections", httpsOnlyMode, onToggleHttpsOnly, theme)
+                    // ---- HTTPS mode: Off / Standard / Strict ----
+                    Text(
+                        "HTTPS Mode",
+                        color = theme.onSurface, fontWeight = FontWeight.SemiBold, fontSize = 14.sp
+                    )
+                    Text(
+                        "Standard upgrades http to https. Strict BLOCKS plain-http pages " +
+                            "(per-site exceptions below). Off allows http.",
+                        fontSize = 11.sp, color = theme.onSurface.copy(alpha = 0.6f)
+                    )
+                    Spacer(Modifier.height(8.dp))
+                    ModeOptionRow("off", "Off", "Allow plain-http pages (least safe)",
+                        selected = httpsMode == "off",
+                        onSelect = { onHttpsModeChange("off") }, theme)
+                    ModeOptionRow("standard", "Standard", "Upgrade http to https automatically",
+                        selected = httpsMode == "standard",
+                        onSelect = { onHttpsModeChange("standard") }, theme)
+                    ModeOptionRow("strict", "Strict", "Block plain-http pages entirely",
+                        selected = httpsMode == "strict",
+                        onSelect = { onHttpsModeChange("strict") }, theme)
+                    // ---- HTTPS-Strict per-site exceptions ----
+                    if (httpsMode == "strict") {
+                        Spacer(Modifier.height(8.dp))
+                        Text(
+                            "Strict exceptions",
+                            color = theme.onSurface, fontWeight = FontWeight.SemiBold, fontSize = 13.sp
+                        )
+                        Text(
+                            "These sites may load over plain http even in Strict mode.",
+                            fontSize = 11.sp, color = theme.onSurface.copy(alpha = 0.6f)
+                        )
+                        Spacer(Modifier.height(4.dp))
+                        var newException by remember { mutableStateOf("") }
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            OutlinedTextField(
+                                value = newException,
+                                onValueChange = { newException = it },
+                                placeholder = { Text("example.com", fontSize = 13.sp) },
+                                singleLine = true,
+                                modifier = Modifier.weight(1f),
+                                textStyle = LocalTextStyle.current.copy(fontSize = 13.sp)
+                            )
+                            Button(onClick = {
+                                onAddHttpsException(newException)
+                                newException = ""
+                            }) { Text("Add") }
+                        }
+                        Spacer(Modifier.height(4.dp))
+                        if (httpsStrictExceptions.isEmpty()) {
+                            Text(
+                                "No exceptions yet.",
+                                fontSize = 12.sp, color = theme.onSurface.copy(alpha = 0.5f)
+                            )
+                        } else {
+                            httpsStrictExceptions.forEach { host ->
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(vertical = 2.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Text(
+                                        host, fontSize = 13.sp,
+                                        color = theme.onSurface, modifier = Modifier.weight(1f)
+                                    )
+                                    TextButton(onClick = { onRemoveHttpsException(host) }) {
+                                        Text("Remove", fontSize = 12.sp)
+                                    }
+                                }
+                            }
+                        }
+                    }
                     HorizontalDivider(color = theme.onSurface.copy(alpha = 0.1f))
                     ToggleRow("JavaScript", "Enable core scripting execution", jsEnabled, onToggleJs, theme)
                     HorizontalDivider(color = theme.onSurface.copy(alpha = 0.1f))
@@ -596,6 +674,31 @@ private fun CardRow(theme: ModeTheme, content: @Composable ColumnScope.() -> Uni
         modifier = Modifier.fillMaxWidth()
     ) {
         Column(Modifier.padding(14.dp), content = content)
+    }
+}
+
+@Composable
+private fun ModeOptionRow(
+    value: String,
+    title: String,
+    desc: String,
+    selected: Boolean,
+    onSelect: () -> Unit,
+    theme: ModeTheme
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onSelect)
+            .padding(vertical = 6.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        RadioButton(selected = selected, onClick = onSelect)
+        Spacer(Modifier.width(8.dp))
+        Column(Modifier.weight(1f)) {
+            Text(title, fontSize = 14.sp, color = theme.onSurface, fontWeight = FontWeight.Medium)
+            Text(desc, fontSize = 11.sp, color = theme.onSurface.copy(alpha = 0.6f))
+        }
     }
 }
 
