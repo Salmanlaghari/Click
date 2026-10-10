@@ -3,6 +3,7 @@ package com.click.browser.engine
 import android.util.Log
 import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.booleanPreferencesKey
+import androidx.datastore.preferences.core.intPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import org.json.JSONArray
 import org.json.JSONException
@@ -26,6 +27,16 @@ object AppSettings {
     val SECURE_DNS_ENABLED = booleanPreferencesKey("secure_dns_enabled")
     val UI_DARK_MODE = booleanPreferencesKey("ui_dark_mode")
     val WALLPAPER_URI = stringPreferencesKey("wallpaper_uri")
+
+    // Biometric private-tab lock: when ON, private/incognito tabs re-lock
+    // with the device biometric (or device PIN/pattern fallback) every time
+    // the app goes to background and returns.
+    val BIOMETRIC_TAB_LOCK = booleanPreferencesKey("biometric_tab_lock")
+
+    // Text scaling: global default percent (50..300) + per-host overrides
+    // stored as a JSON object { "example.com": 125 }.
+    val TEXT_SCALE_GLOBAL = intPreferencesKey("text_scale_global")
+    val TEXT_SCALE_HOSTS_JSON = stringPreferencesKey("text_scale_hosts_json")
 
     /**
      * Per-mode Day/Night override key. Absent = the mode follows the global

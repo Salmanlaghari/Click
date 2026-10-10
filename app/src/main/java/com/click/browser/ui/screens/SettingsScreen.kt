@@ -71,6 +71,13 @@ fun SettingsScreen(
     onToggleJs: (Boolean) -> Unit,
     dataSaver: Boolean,
     onToggleDataSaver: (Boolean) -> Unit,
+    // --- Biometric private-tab lock ---
+    biometricLockEnabled: Boolean,
+    onToggleBiometricLock: (Boolean) -> Unit,
+    biometricStatusText: String,
+    // --- Text scaling (accessibility) ---
+    globalTextScale: Int,
+    onGlobalTextScaleChange: (Int) -> Unit,
     // --- Clear browsing data ---
     onClearHistoryForMode: (BrowserMode) -> Unit,
     onClearCookies: () -> Unit,
@@ -147,6 +154,35 @@ fun SettingsScreen(
                             selected = currentThemeSetting == "Dark",
                             onClick = { onThemeChange("Dark") },
                             label = { Text("🌙 Dark") }
+                        )
+                    }
+                }
+            })
+            add(Row(null) {
+                CardRow(theme) {
+                    Text("Text Size (Global Default)", color = theme.onSurface, fontWeight = FontWeight.SemiBold, fontSize = 14.sp)
+                    Text(
+                        "Default text size for every website — override per site from the Text Size menu. Applies on next page load.",
+                        fontSize = 11.sp, color = theme.onSurface.copy(alpha = 0.6f)
+                    )
+                    Spacer(Modifier.height(4.dp))
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Text(
+                            "$globalTextScale%",
+                            color = theme.onSurface,
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 16.sp,
+                            modifier = Modifier.width(64.dp)
+                        )
+                        Slider(
+                            value = globalTextScale.toFloat(),
+                            onValueChange = { onGlobalTextScaleChange(it.toInt()) },
+                            valueRange = 50f..300f,
+                            steps = 24,
+                            modifier = Modifier.weight(1f)
                         )
                     }
                 }
@@ -282,6 +318,8 @@ fun SettingsScreen(
                     ToggleRow("JavaScript", "Enable core scripting execution", jsEnabled, onToggleJs, theme)
                     HorizontalDivider(color = theme.onSurface.copy(alpha = 0.1f))
                     ToggleRow("Data Saver", "Reduce web resource overhead", dataSaver, onToggleDataSaver, theme)
+                    HorizontalDivider(color = theme.onSurface.copy(alpha = 0.1f))
+                    ToggleRow("Lock Private Tabs", biometricStatusText, biometricLockEnabled, onToggleBiometricLock, theme)
                 }
             })
             add(Row(null) {

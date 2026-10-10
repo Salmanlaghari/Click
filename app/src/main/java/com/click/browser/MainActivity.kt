@@ -13,7 +13,9 @@ import android.webkit.WebSettings
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import android.widget.Toast
-import androidx.activity.ComponentActivity
+import androidx.biometric.BiometricPrompt
+import androidx.core.content.ContextCompat
+import androidx.fragment.app.FragmentActivity
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
@@ -112,7 +114,7 @@ class TabItem(
     var loadProgress by mutableStateOf(0)
 }
 
-class MainActivity : ComponentActivity() {
+class MainActivity : FragmentActivity() {
 
     private lateinit var modeManager: ModeManager
     private lateinit var repository: BrowserRepository
@@ -133,6 +135,14 @@ class MainActivity : ComponentActivity() {
     private var liveDesktopHosts: Set<String> = emptySet()
     // Live copy of experimental flags (click://flags) for WebViewClient callbacks.
     private var liveFlags = ExperimentalFlags()
+    // Biometric private-tab lock: live copies for onPause(), which runs
+    // outside compose scope.
+    private var liveBiometricLockEnabled = false
+    private var liveHasIncognitoTabs = false
+    private val privateLockedFlow = kotlinx.coroutines.flow.MutableStateFlow(false)
+    // Text scaling live copies for WebViewClient callbacks (per-host map).
+    private var liveGlobalTextScale = com.click.browser.engine.TextScaleStore.DEFAULT
+    private var liveHostTextScales: Map<String, Int> = emptyMap()
     // Crash-restore: latest restorable-tab snapshot for this boot mode, kept
     // outside composable scope so onDestroy() and v9SwitchMode() can persist
     // it and mark clean exits without touching UI state. The mirror is
@@ -532,6 +542,56 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    /**
+     * Biometric private-tab lock: whenever the app goes to background while
+     * the lock is enabled and at least one incognito tab exists, the private
+     * tabs re-lock. The overlay + BiometricPrompt handle the unlock on return.
+     */
+    override fun onPause() {
+        super.onPause()
+        if (liveBiometricLockEnabled && liveHasIncognitoTabs) {
+            privateLockedFlow.value = true
+        }
+    }
+
+    /** Shows the AndroidX BiometricPrompt to unlock private tabs. */
+    fun promptUnlockPrivateTabs() {
+        val executor = ContextCompat.getMainExecutor(this)
+        val prompt = BiometricPrompt(
+            this,
+            executor,
+            object : BiometricPrompt.AuthenticationCallback() {
+                override fun onAuthenticationSucceeded(result: BiometricPrompt.AuthenticationResult) {
+                    super.onAuthenticationSucceeded(result)
+                    privateLockedFlow.value = false
+                }
+
+                override fun onAuthenticationError(errorCode: Int, errString: CharSequence) {
+                    super.onAuthenticationError(errorCode, errString)
+                    // Stay locked — the user can tap Unlock to retry. No-op
+                    // on user-cancel so we don't nag.
+                }
+            }
+        )
+        val infoBuilder = BiometricPrompt.PromptInfo.Builder()
+            .setTitle("Unlock private tabs")
+            .setSubtitle("Authenticate to view your private tabs")
+        if (android.os.Build.VERSION.SDK_INT >= 30) {
+            infoBuilder.setAllowedAuthenticators(com.click.browser.engine.PrivateTabLock.AUTHENTICATORS)
+        } else {
+            // API 29 and below: combined authenticators aren't supported —
+            // fall back to the device-credential-allowed prompt.
+            @Suppress("DEPRECATION")
+            infoBuilder.setDeviceCredentialAllowed(true)
+        }
+        val info = infoBuilder.build()
+        try {
+            prompt.authenticate(info)
+        } catch (_: Exception) {
+            // Biometric stack hiccup — stay locked; retry via the button.
+        }
+    }
+
     @OptIn(ExperimentalMaterial3Api::class)
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -702,6 +762,8 @@ class MainActivity : ComponentActivity() {
                         val (snapshot, active) = buildRestorableSnapshot(tabStates, activeIdx)
                         liveRestoreTabs = snapshot
                         liveRestoreActiveIndex = active
+                        // Biometric lock bookkeeping: does an incognito tab exist right now?
+                        liveHasIncognitoTabs = tabStates.any { it.third }
                         delay(1000) // trailing-edge debounce: rapid edits collapse into one write
                         val bootMode = V9Engine.bootMode
                         if (liveFlags.clearOnExit) {
@@ -793,6 +855,14 @@ class MainActivity : ComponentActivity() {
             var headerSpoofEnabled by remember { mutableStateOf(false) }
             var fingerprintProtection by remember { mutableStateOf(true) }
             var secureDnsEnabled by remember { mutableStateOf(false) }
+            // Biometric private-tab lock + text scaling (accessibility).
+            var biometricLockEnabled by remember { mutableStateOf(false) }
+            var hasStrongBiometric by remember { mutableStateOf(false) }
+            var globalTextScale by remember { mutableStateOf(com.click.browser.engine.TextScaleStore.DEFAULT) }
+            var hostTextScales by remember { mutableStateOf<Map<String, Int>>(emptyMap()) }
+            var showTextScaleSheet by remember { mutableStateOf(false) }
+            var sheetScale by remember { mutableStateOf(com.click.browser.engine.TextScaleStore.DEFAULT) }
+            val privateLocked by privateLockedFlow.collectAsState()
             var customHeaders by remember { mutableStateOf(listOf<AppSettings.CustomHeader>()) }
             var webrtcTestRunning by remember { mutableStateOf(false) }
             var webrtcTested by remember { mutableStateOf(false) }
@@ -981,10 +1051,12 @@ class MainActivity : ComponentActivity() {
                     }
                     FeatureId.FULLSCREEN -> immersiveMode = !immersiveMode
                     FeatureId.TEXT_SIZE -> {
-                        val currentZoom = currentTab.webView?.settings?.textZoom ?: 100
-                        val newZoom = if (currentZoom >= 180) 100 else currentZoom + 20
-                        currentTab.webView?.settings?.textZoom = newZoom
-                        Toast.makeText(this@MainActivity, "Text zoom $newZoom%", Toast.LENGTH_SHORT).show()
+                        // Open the text-size sheet: live slider + optional
+                        // per-site persistence (accessibility).
+                        sheetScale = com.click.browser.engine.TextScaleStore.clamp(
+                            currentTab.webView?.settings?.textZoom ?: liveGlobalTextScale
+                        )
+                        showTextScaleSheet = true
                     }
                     FeatureId.NIGHT_MODE -> {
                         forceNightModeWebsites = !forceNightModeWebsites
@@ -1100,6 +1172,15 @@ class MainActivity : ComponentActivity() {
                         prefs[AppSettings.darkModeKey(mode)]
                     }
                     wallpaperUri = prefs[AppSettings.WALLPAPER_URI]
+                    // Biometric private-tab lock + text scaling.
+                    biometricLockEnabled = prefs[AppSettings.BIOMETRIC_TAB_LOCK] == true
+                    liveBiometricLockEnabled = biometricLockEnabled
+                    hasStrongBiometric = com.click.browser.engine.PrivateTabLock.hasStrongBiometric(this@MainActivity)
+                    val (gScale, hScales) = com.click.browser.engine.TextScaleStore.snapshot(this@MainActivity)
+                    globalTextScale = gScale
+                    hostTextScales = hScales
+                    liveGlobalTextScale = gScale
+                    liveHostTextScales = hScales
                     // Experimental flags (click://flags).
                     liveFlags = ExperimentalFlags.load(prefs)
                     // Signal the crash-restore saver/check: clearOnExit is
@@ -1668,13 +1749,13 @@ class MainActivity : ComponentActivity() {
                                     }
                                 }
                                 item {
-                                    DrawerItem(label = "Font Size: Increase Zoom", icon = Icons.Default.ZoomIn, color = Color(0xFFA78BFA)) {
+                                    DrawerItem(label = "Font Size: Text Size", icon = Icons.Default.ZoomIn, color = Color(0xFFA78BFA)) {
                                         scope.launch {
                                             drawerState.close()
-                                            val currentZoom = currentTab.webView?.settings?.textZoom ?: 100
-                                            val newZoom = if (currentZoom >= 180) 100 else currentZoom + 20
-                                            currentTab.webView?.settings?.textZoom = newZoom
-                                            Toast.makeText(this@MainActivity, "Text zoom scaled to $newZoom%", Toast.LENGTH_SHORT).show()
+                                            sheetScale = com.click.browser.engine.TextScaleStore.clamp(
+                                                currentTab.webView?.settings?.textZoom ?: liveGlobalTextScale
+                                            )
+                                            showTextScaleSheet = true
                                         }
                                     }
                                 }
@@ -2202,6 +2283,16 @@ class MainActivity : ComponentActivity() {
                                                                     scope.launch {
                                                                         repository.addHistoryItem(HistoryItem(currentTab.title, url, System.currentTimeMillis()))
                                                                     }
+                                                                }
+
+                                                                // Text scaling (accessibility): apply the per-host
+                                                                // override for this host, else the global default.
+                                                                view?.let { wv ->
+                                                                    val host = try {
+                                                                        android.net.Uri.parse(url.orEmpty()).host.orEmpty().lowercase()
+                                                                    } catch (_: Exception) { "" }
+                                                                    wv.settings.textZoom =
+                                                                        liveHostTextScales[host] ?: liveGlobalTextScale
                                                                 }
 
                                                                 // Visual tab switcher thumbnails: capture the visible
@@ -2903,6 +2994,45 @@ class MainActivity : ComponentActivity() {
                                     onToggleJs = { javaScriptEnabledGlobal = it },
                                     dataSaver = dataSaverEnabled,
                                     onToggleDataSaver = { dataSaverEnabled = it },
+                                    biometricLockEnabled = biometricLockEnabled,
+                                    onToggleBiometricLock = { v ->
+                                        if (v && !com.click.browser.engine.PrivateTabLock.canLock(this@MainActivity)) {
+                                            // Graceful fallback: no biometric/PIN enrolled —
+                                            // explain instead of enabling a dead toggle.
+                                            Toast.makeText(
+                                                this@MainActivity,
+                                                com.click.browser.engine.PrivateTabLock.unavailableReason(this@MainActivity),
+                                                Toast.LENGTH_LONG
+                                            ).show()
+                                        } else {
+                                            biometricLockEnabled = v
+                                            liveBiometricLockEnabled = v
+                                            scope.launch {
+                                                dataStore.edit { prefs ->
+                                                    prefs[AppSettings.BIOMETRIC_TAB_LOCK] = v
+                                                }
+                                            }
+                                            if (v) Toast.makeText(
+                                                this@MainActivity,
+                                                if (hasStrongBiometric) "Private tabs will lock behind biometrics"
+                                                else "Private tabs will lock behind your device PIN",
+                                                Toast.LENGTH_SHORT
+                                            ).show()
+                                        }
+                                    },
+                                    biometricStatusText = if (com.click.browser.engine.PrivateTabLock.canLock(this@MainActivity))
+                                        if (hasStrongBiometric) "Re-lock private tabs behind fingerprint/face when the app backgrounds"
+                                        else "Re-lock private tabs behind your device PIN when the app backgrounds"
+                                    else com.click.browser.engine.PrivateTabLock.unavailableReason(this@MainActivity),
+                                    globalTextScale = globalTextScale,
+                                    onGlobalTextScaleChange = { v ->
+                                        val clamped = com.click.browser.engine.TextScaleStore.clamp(v)
+                                        globalTextScale = clamped
+                                        liveGlobalTextScale = clamped
+                                        scope.launch {
+                                            com.click.browser.engine.TextScaleStore.setGlobal(this@MainActivity, clamped)
+                                        }
+                                    },
                                     onClearHistoryForMode = { mode ->
                                         scope.launch {
                                             repository.clearHistoryFor(mode)
@@ -3682,6 +3812,72 @@ class MainActivity : ComponentActivity() {
                                             Text("Close")
                                         }
                                     }
+                                )
+                            }
+
+                            // Text scaling (accessibility): live slider + optional
+                            // per-site persistence. Applies instantly to the
+                            // current tab via WebView textZoom.
+                            if (showTextScaleSheet) {
+                                val sheetHost = try {
+                                    android.net.Uri.parse(currentTab.url).host?.lowercase().orEmpty()
+                                } catch (_: Exception) { "" }
+                                val hostOverride = sheetHost.isNotEmpty() && hostTextScales.containsKey(sheetHost)
+                                com.click.browser.ui.screens.TextScaleSheet(
+                                    theme = theme,
+                                    host = sheetHost,
+                                    currentScale = sheetScale,
+                                    globalScale = globalTextScale,
+                                    hostHasOverride = hostOverride,
+                                    onScaleChange = { v ->
+                                        val clamped = com.click.browser.engine.TextScaleStore.clamp(v)
+                                        sheetScale = clamped
+                                        currentTab.webView?.settings?.textZoom = clamped
+                                    },
+                                    onSaveForSite = { save ->
+                                        scope.launch {
+                                            if (sheetHost.isNotEmpty()) {
+                                                if (save) {
+                                                    com.click.browser.engine.TextScaleStore.setHostScale(
+                                                        this@MainActivity, sheetHost, sheetScale
+                                                    )
+                                                    hostTextScales = hostTextScales + (sheetHost to sheetScale)
+                                                } else {
+                                                    com.click.browser.engine.TextScaleStore.clearHostScale(
+                                                        this@MainActivity, sheetHost
+                                                    )
+                                                    hostTextScales = hostTextScales - sheetHost
+                                                }
+                                                liveHostTextScales = hostTextScales
+                                            }
+                                        }
+                                    },
+                                    onResetGlobal = {
+                                        scope.launch {
+                                            if (sheetHost.isNotEmpty()) {
+                                                com.click.browser.engine.TextScaleStore.clearHostScale(
+                                                    this@MainActivity, sheetHost
+                                                )
+                                                hostTextScales = hostTextScales - sheetHost
+                                                liveHostTextScales = hostTextScales
+                                            }
+                                            sheetScale = globalTextScale
+                                            currentTab.webView?.settings?.textZoom = globalTextScale
+                                        }
+                                    },
+                                    onDismiss = { showTextScaleSheet = false }
+                                )
+                            }
+
+                            // Biometric private-tab lock overlay — above
+                            // everything except the cold-start splash. Auto-
+                            // prompts for authentication when it appears.
+                            if (privateLocked) {
+                                LaunchedEffect(Unit) { promptUnlockPrivateTabs() }
+                                com.click.browser.ui.screens.PrivateTabLockOverlay(
+                                    theme = theme,
+                                    useBiometricLabel = hasStrongBiometric,
+                                    onUnlock = { promptUnlockPrivateTabs() }
                                 )
                             }
 

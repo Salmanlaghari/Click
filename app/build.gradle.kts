@@ -148,6 +148,8 @@ dependencies {
     implementation(libs.mlkit.translate)
     // Google AdMob for news-feed monetization (banner + native ads).
     implementation(libs.play.services.ads)
+    // AndroidX BiometricPrompt for the private-tab lock (no custom crypto).
+    implementation(libs.androidx.biometric)
 
     testImplementation(libs.junit)
     androidTestImplementation(libs.androidx.junit)
