@@ -6,6 +6,7 @@ import android.graphics.Bitmap
 import android.os.Bundle
 import android.speech.tts.TextToSpeech
 import android.webkit.WebChromeClient
+import android.webkit.GeolocationPermissions
 import android.webkit.WebResourceError
 import android.webkit.WebResourceRequest
 import android.webkit.WebResourceResponse
@@ -131,6 +132,13 @@ class MainActivity : ComponentActivity() {
     private var liveCustomHeaders: Map<String, String> = emptyMap()
     // Live copy of per-site desktop hosts (persisted per host via BrowserRepository).
     private var liveDesktopHosts: Set<String> = emptySet()
+    // LocationGuard live copies (WebViewClient/WebChromeClient run off the UI
+    // thread and can't read composable state — same pattern as above).
+    private var liveLocationMode: LocationGuard.LocationMode = LocationGuard.LocationMode.ASK
+    private var liveLocationSpoofLat: Double = LocationGuard.DEFAULT_PRESET.lat
+    private var liveLocationSpoofLng: Double = LocationGuard.DEFAULT_PRESET.lng
+    private var liveLocationSpoofLabel: String = LocationGuard.DEFAULT_PRESET.label
+    private var liveLocationSiteModes: Map<String, String> = emptyMap()
     // Live copy of experimental flags (click://flags) for WebViewClient callbacks.
     private var liveFlags = ExperimentalFlags()
     // Crash-restore: latest restorable-tab snapshot for this boot mode, kept
@@ -486,6 +494,70 @@ class MainActivity : ComponentActivity() {
         modeManager.applyDesktopOverride(webView, liveMode, desktop)
     }
 
+    /**
+     * LocationGuard: resolves the effective location mode for a URL —
+     * per-site override wins, else the global mode. Matches subdomains too
+     * (same rule as per-site desktop).
+     */
+    private fun effectiveLocationMode(url: String?): LocationGuard.LocationMode {
+        val host = LocationGuard.hostFromUrl(url).orEmpty()
+        if (host.isNotEmpty()) {
+            val override = liveLocationSiteModes[host]
+                ?: liveLocationSiteModes.entries.firstOrNull { (h, _) ->
+                    host == h || host.endsWith(".$h")
+                }?.value
+            if (!override.isNullOrBlank()) return LocationGuard.LocationMode.fromKey(override)
+        }
+        return liveLocationMode
+    }
+
+    /**
+     * LocationGuard: handles a WebView geolocation permission request.
+     * Must be called on the UI thread (WebChromeClient callbacks are).
+     *
+     * - BLOCK → deny immediately (website gets PERMISSION_DENIED).
+     * - SPOOF → inject the JS override, then grant (the page's
+     *   navigator.geolocation now returns spoofed coordinates; the native
+     *   prompt path is bypassed). No Android location permission is used.
+     * - ASK → stash the callback and show the in-app dialog (handled by the
+     *   composable via showLocationPrompt state).
+     */
+    private fun handleGeolocationPrompt(
+        origin: String?,
+        callback: GeolocationPermissions.Callback?,
+        onAsk: (origin: String, host: String?, callback: GeolocationPermissions.Callback) -> Unit
+    ) {
+        if (callback == null) return
+        // The requesting page's URL gives us the host for per-site lookup.
+        // WebChromeClient doesn't hand us the WebView here, so callers pass
+        // the current tab URL via onAsk; for BLOCK/SPOOF we resolve from origin.
+        val host = try {
+            android.net.Uri.parse(origin ?: "").host?.lowercase()
+        } catch (_: Exception) {
+            null
+        }
+        val mode = if (!host.isNullOrEmpty()) {
+            val override = liveLocationSiteModes[host]
+                ?: liveLocationSiteModes.entries.firstOrNull { (h, _) ->
+                    host == h || host.endsWith(".$h")
+                }?.value
+            if (!override.isNullOrBlank()) LocationGuard.LocationMode.fromKey(override)
+            else liveLocationMode
+        } else {
+            liveLocationMode
+        }
+        when (mode) {
+            LocationGuard.LocationMode.BLOCK -> callback.invoke(origin, false, false)
+            LocationGuard.LocationMode.SPOOF -> {
+                // Best-effort: the page-start injection usually already
+                // replaced navigator.geolocation; granting here keeps the
+                // WebView contract satisfied for any late requests.
+                callback.invoke(origin, true, false)
+            }
+            LocationGuard.LocationMode.ASK -> onAsk(origin ?: "", host, callback)
+        }
+    }
+
     /** Shared pretty error page used by both onReceivedError variants. */
     private fun showBrowserErrorPage(view: WebView?, description: String?) {
         val safeDesc = description?.take(200) ?: "Unknown error"
@@ -726,6 +798,19 @@ class MainActivity : ComponentActivity() {
             var httpsOnlyMode by remember { mutableStateOf(true) }
             var javaScriptEnabledGlobal by remember { mutableStateOf(true) }
             var dataSaverEnabled by remember { mutableStateOf(false) }
+
+            // LocationGuard: hide/spoof browser geolocation (Prince request).
+            var locationMode by remember { mutableStateOf(LocationGuard.LocationMode.ASK) }
+            var locationSpoofLat by remember { mutableStateOf(LocationGuard.DEFAULT_PRESET.lat) }
+            var locationSpoofLng by remember { mutableStateOf(LocationGuard.DEFAULT_PRESET.lng) }
+            var locationSpoofLabel by remember { mutableStateOf(LocationGuard.DEFAULT_PRESET.label) }
+            val locationSiteModes by repository.locationModeHostsFlow.collectAsState(initial = emptyMap())
+            // Pending geolocation permission request (ASK mode dialog).
+            var locationPromptOrigin by remember { mutableStateOf<String?>(null) }
+            var locationPromptCallback by remember { mutableStateOf<GeolocationPermissions.Callback?>(null) }
+            var locationPromptHost by remember { mutableStateOf<String?>(null) }
+            var showLocationPrompt by remember { mutableStateOf(false) }
+            var showLocationSettings by remember { mutableStateOf(false) }
 
             // Common overlays
             var showBookmarks by remember { mutableStateOf(false) }
@@ -1016,6 +1101,11 @@ class MainActivity : ComponentActivity() {
             LaunchedEffect(secureDnsEnabled) { liveSecureDns = secureDnsEnabled }
             LaunchedEffect(customHeaders) { liveCustomHeaders = customHeaders.associate { it.name to it.value } }
             LaunchedEffect(desktopHosts) { liveDesktopHosts = desktopHosts }
+            LaunchedEffect(locationMode) { liveLocationMode = locationMode }
+            LaunchedEffect(locationSpoofLat) { liveLocationSpoofLat = locationSpoofLat }
+            LaunchedEffect(locationSpoofLng) { liveLocationSpoofLng = locationSpoofLng }
+            LaunchedEffect(locationSpoofLabel) { liveLocationSpoofLabel = locationSpoofLabel }
+            LaunchedEffect(locationSiteModes) { liveLocationSiteModes = locationSiteModes }
 
             // Reloads the userscript list + code cache (DataStore + files).
             fun refreshUserscripts() {
@@ -1093,6 +1183,14 @@ class MainActivity : ComponentActivity() {
                     headerSpoofEnabled = prefs[AppSettings.HEADER_SPOOF_ENABLED] == true
                     fingerprintProtection = prefs[AppSettings.FINGERPRINT_PROTECTION] ?: true
                     secureDnsEnabled = prefs[AppSettings.SECURE_DNS_ENABLED] == true
+                    // LocationGuard: hide/spoof browser geolocation.
+                    locationMode = LocationGuard.LocationMode.fromKey(prefs[AppSettings.LOCATION_MODE])
+                    locationSpoofLat = prefs[AppSettings.LOCATION_SPOOF_LAT]?.toDoubleOrNull()
+                        ?: LocationGuard.DEFAULT_PRESET.lat
+                    locationSpoofLng = prefs[AppSettings.LOCATION_SPOOF_LNG]?.toDoubleOrNull()
+                        ?: LocationGuard.DEFAULT_PRESET.lng
+                    locationSpoofLabel = prefs[AppSettings.LOCATION_SPOOF_LABEL]
+                        ?: LocationGuard.DEFAULT_PRESET.label
                     customHeaders = AppSettings.parseHeaders(prefs[AppSettings.CUSTOM_HEADERS_JSON])
                     currentThemeSetting = if (prefs[AppSettings.UI_DARK_MODE] == false) "Light" else "Dark"
                     // Per-mode Day/Night overrides (missing key = follow global).
@@ -1918,7 +2016,15 @@ class MainActivity : ComponentActivity() {
                                                     currentTab.webView?.loadUrl(destination)
                                                 },
                                                 onReload = { currentTab.webView?.reload() },
-                                                onMenuClick = { showBrowserMenu = true }
+                                                onMenuClick = { showBrowserMenu = true },
+                                                // LocationGuard indicator: show when this site's
+                                                // location is blocked or spoofed.
+                                                locationMode = run {
+                                                    val m = effectiveLocationMode(currentTab.url)
+                                                    if (m == LocationGuard.LocationMode.ASK) null else m
+                                                },
+                                                locationSpoofLabel = locationSpoofLabel,
+                                                onLocationClick = { showLocationSettings = true }
                                             )
                                             // Thin page-load progress indicator.
                                             val progress = currentTab.loadProgress
@@ -2152,6 +2258,21 @@ class MainActivity : ComponentActivity() {
                                                                     )
                                                                 }
 
+                                                                // LocationGuard: when the effective mode for this
+                                                                // page is SPOOF, replace navigator.geolocation
+                                                                // BEFORE page scripts run, so getCurrentPosition /
+                                                                // watchPosition return the spoofed coordinates and
+                                                                // the native permission prompt never fires.
+                                                                if (effectiveLocationMode(url) == LocationGuard.LocationMode.SPOOF) {
+                                                                    view?.evaluateJavascript(
+                                                                        LocationGuard.geolocationSpoofJs(
+                                                                            liveLocationSpoofLat,
+                                                                            liveLocationSpoofLng
+                                                                        ),
+                                                                        null
+                                                                    )
+                                                                }
+
                                                                 // V9: per-engine fingerprint for ALL modes — each engine
                                                                 // presents a distinct device/browser identity (navigator,
                                                                 // screen, WebGL vendor/renderer, seeded canvas noise)
@@ -2310,6 +2431,32 @@ class MainActivity : ComponentActivity() {
                                                             override fun onProgressChanged(view: WebView?, newProgress: Int) {
                                                                 super.onProgressChanged(view, newProgress)
                                                                 tabs.firstOrNull { it.webView === view }?.loadProgress = newProgress
+                                                            }
+
+                                                            // LocationGuard: intercept browser geolocation
+                                                            // requests. BLOCK denies, SPOOF grants (the JS
+                                                            // override injected at page start returns spoofed
+                                                            // coordinates), ASK shows the in-app dialog.
+                                                            override fun onGeolocationPermissionsShowPrompt(
+                                                                origin: String?,
+                                                                callback: GeolocationPermissions.Callback?
+                                                            ) {
+                                                                if (callback == null) {
+                                                                    super.onGeolocationPermissionsShowPrompt(origin, callback)
+                                                                    return
+                                                                }
+                                                                handleGeolocationPrompt(origin, callback) { o, h, cb ->
+                                                                    locationPromptOrigin = o
+                                                                    locationPromptHost = h
+                                                                    locationPromptCallback = cb
+                                                                    showLocationPrompt = true
+                                                                }
+                                                            }
+
+                                                            override fun onGeolocationPermissionsHidePrompt() {
+                                                                super.onGeolocationPermissionsHidePrompt()
+                                                                showLocationPrompt = false
+                                                                locationPromptCallback = null
                                                             }
                                                         }
 
@@ -2808,6 +2955,105 @@ class MainActivity : ComponentActivity() {
                                 )
                             }
 
+                            // LocationGuard: ASK-mode dialog — a website wants geolocation.
+                            if (showLocationPrompt && locationPromptCallback != null) {
+                                LocationPromptDialog(
+                                    origin = locationPromptOrigin.orEmpty(),
+                                    host = locationPromptHost,
+                                    spoofLabel = locationSpoofLabel,
+                                    onBlock = { rememberForSite ->
+                                        locationPromptCallback?.invoke(locationPromptOrigin, false, false)
+                                        if (rememberForSite && locationPromptHost != null) {
+                                            scope.launch {
+                                                repository.setLocationModeHost(
+                                                    locationPromptHost!!,
+                                                    LocationGuard.LocationMode.BLOCK.key
+                                                )
+                                            }
+                                        }
+                                        showLocationPrompt = false
+                                        locationPromptCallback = null
+                                    },
+                                    onSpoof = { rememberForSite ->
+                                        // Inject the spoof JS now (page-start injection may
+                                        // have missed if the prompt fired first), then grant.
+                                        currentTab.webView?.evaluateJavascript(
+                                            LocationGuard.geolocationSpoofJs(
+                                                locationSpoofLat, locationSpoofLng
+                                            ),
+                                            null
+                                        )
+                                        locationPromptCallback?.invoke(locationPromptOrigin, true, false)
+                                        if (rememberForSite && locationPromptHost != null) {
+                                            scope.launch {
+                                                repository.setLocationModeHost(
+                                                    locationPromptHost!!,
+                                                    LocationGuard.LocationMode.SPOOF.key
+                                                )
+                                            }
+                                        }
+                                        showLocationPrompt = false
+                                        locationPromptCallback = null
+                                    },
+                                    onDismiss = {
+                                        // "Not now" = deny this request without remembering.
+                                        locationPromptCallback?.invoke(locationPromptOrigin, false, false)
+                                        showLocationPrompt = false
+                                        locationPromptCallback = null
+                                    }
+                                )
+                            }
+
+                            // LocationGuard: full settings sheet.
+                            if (showLocationSettings) {
+                                LocationSettingsSheet(
+                                    theme = theme,
+                                    mode = locationMode,
+                                    onModeChange = { m ->
+                                        locationMode = m
+                                        scope.launch {
+                                            dataStore.edit { prefs ->
+                                                prefs[AppSettings.LOCATION_MODE] = m.key
+                                            }
+                                        }
+                                    },
+                                    spoofLat = locationSpoofLat,
+                                    spoofLng = locationSpoofLng,
+                                    spoofLabel = locationSpoofLabel,
+                                    onSpoofPreset = { preset ->
+                                        locationSpoofLat = preset.lat
+                                        locationSpoofLng = preset.lng
+                                        locationSpoofLabel = preset.label
+                                        scope.launch {
+                                            dataStore.edit { prefs ->
+                                                prefs[AppSettings.LOCATION_SPOOF_LAT] = preset.lat.toString()
+                                                prefs[AppSettings.LOCATION_SPOOF_LNG] = preset.lng.toString()
+                                                prefs[AppSettings.LOCATION_SPOOF_LABEL] = preset.label
+                                            }
+                                        }
+                                    },
+                                    onCustomSpoof = { lat, lng, label ->
+                                        locationSpoofLat = lat
+                                        locationSpoofLng = lng
+                                        locationSpoofLabel = label
+                                        scope.launch {
+                                            dataStore.edit { prefs ->
+                                                prefs[AppSettings.LOCATION_SPOOF_LAT] = lat.toString()
+                                                prefs[AppSettings.LOCATION_SPOOF_LNG] = lng.toString()
+                                                prefs[AppSettings.LOCATION_SPOOF_LABEL] = label
+                                            }
+                                        }
+                                    },
+                                    siteModes = locationSiteModes,
+                                    onClearSiteMode = { host ->
+                                        scope.launch {
+                                            repository.setLocationModeHost(host, null)
+                                        }
+                                    },
+                                    onClose = { showLocationSettings = false }
+                                )
+                            }
+
                             // Crash-restore offer: the previous run for this mode died
                             // uncleanly (crash / force-close / system kill).
                             // Gated on !showSplash so it pops right after the
@@ -2931,6 +3177,8 @@ class MainActivity : ComponentActivity() {
                                         Toast.makeText(this@MainActivity, "All browsing data cleared (current mode)", Toast.LENGTH_SHORT).show()
                                     },
                                     onOpenCookieManager = { showSettings = false; showCookieManager = true },
+                                    locationSummary = LocationGuard.websitesWillSee(locationMode, locationSpoofLabel),
+                                    onOpenLocationSettings = { showLocationSettings = true },
                                     perModeDark = perModeDark,
                                     onPerModeThemeChange = { mode, dark ->
                                         val updated = perModeDark.toMutableMap()
