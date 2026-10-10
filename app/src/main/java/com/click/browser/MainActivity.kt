@@ -112,6 +112,34 @@ class TabItem(
     var loadProgress by mutableStateOf(0)
 }
 
+/**
+ * Page transition wrapper — subtle fade + slide on every navigation start.
+ * Extracted to a top-level composable because [androidx.compose.animation.AnimatedVisibility]
+ * can't be called by implicit receiver inside a ColumnScope (ambiguous with
+ * ColumnScope.AnimatedVisibility). Purely visual: the WebView keeps loading
+ * underneath, navigation is never blocked. Durations collapse to 0 when
+ * [animationsEnabled] is false.
+ */
+@Composable
+private fun PageTransitionWrapper(
+    tick: Int,
+    animationsEnabled: Boolean,
+    content: @Composable () -> Unit
+) {
+    val pageAnimMs = if (animationsEnabled) 220 else 0
+    val pageTransitionState = remember(tick) {
+        MutableTransitionState(false).apply { targetState = true }
+    }
+    AnimatedVisibility(
+        visibleState = pageTransitionState,
+        enter = fadeIn(tween(pageAnimMs)) +
+                slideInHorizontally(tween(pageAnimMs)) { it / 14 },
+        modifier = Modifier.fillMaxSize()
+    ) {
+        content()
+    }
+}
+
 class MainActivity : ComponentActivity() {
 
     private lateinit var modeManager: ModeManager
@@ -2023,18 +2051,10 @@ class MainActivity : ComponentActivity() {
                                         }
 
                                         // Page transition: subtle fade + slide on every
-                                        // navigation start. Purely visual — the WebView
-                                        // keeps loading underneath, nothing is blocked.
-                                        // Durations collapse to 0 when animations are off.
-                                        val pageAnimMs = if (flagsUi.tabAnimations) 220 else 0
-                                        val pageTransitionState = remember(pageTransitionTick) {
-                                            MutableTransitionState(false).apply { targetState = true }
-                                        }
-                                        AnimatedVisibility(
-                                            visibleState = pageTransitionState,
-                                            enter = fadeIn(tween(pageAnimMs)) +
-                                                    slideInHorizontally(tween(pageAnimMs)) { it / 14 },
-                                            modifier = Modifier.fillMaxSize()
+                                        // navigation start (see PageTransitionWrapper).
+                                        PageTransitionWrapper(
+                                            tick = pageTransitionTick,
+                                            animationsEnabled = flagsUi.tabAnimations
                                         ) {
                                         Box(
                                             modifier = Modifier.fillMaxSize(),
@@ -2490,7 +2510,7 @@ class MainActivity : ComponentActivity() {
                                             }
                                         }
                                         }
-                                        } // AnimatedVisibility: page transition wrapper
+                                        } // PageTransitionWrapper
 
                                     // 5. FLOATING DEV DEBUG STATUS OVERLAY
                                     if (activeMode == BrowserMode.DEVELOPER && showDebugOverlay && currentTab.url != "about:blank") {
