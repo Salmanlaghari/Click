@@ -2915,6 +2915,10 @@ class MainActivity : ComponentActivity() {
                                     webrtcGuardEnabled = userscripts.any {
                                         it.meta.name == UserscriptManager.WEBRTC_GUARD_NAME && it.enabled
                                     },
+                                    // Userscripts inject in Developer/Hack modes only —
+                                    // never imply protection in Simple mode.
+                                    webrtcGuardApplies = activeMode == BrowserMode.DEVELOPER ||
+                                        activeMode == BrowserMode.HACK,
                                     onToggleWebrtcGuard = { v ->
                                         scope.launch(Dispatchers.IO) {
                                             userscriptManager.setWebrtcGuardEnabled(v)

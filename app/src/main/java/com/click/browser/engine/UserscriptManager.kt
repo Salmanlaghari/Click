@@ -167,19 +167,21 @@ class UserscriptManager(private val context: Context) {
      * from the bundled asset. The script seeds disabled and is only ever
      * enabled through this explicit user action.
      *
-     * @return whether the guard is enabled after the call.
+     * @return whether the guard is actually enabled in stored state after
+     * the call (re-read from the index — never assumed from the request).
      */
     suspend fun setWebrtcGuardEnabled(enabled: Boolean): Boolean = withContext(Dispatchers.IO) {
         val existing = listScripts().find { it.meta.name == WEBRTC_GUARD_NAME }
         if (existing != null) {
             setEnabled(existing.id, enabled)
-            return@withContext enabled
+            return@withContext listScripts().find { it.id == existing.id }?.enabled == true
         }
         if (!enabled) return@withContext false
         return@withContext try {
             val source = context.assets.open("userscripts/$WEBRTC_GUARD_ASSET")
                 .bufferedReader().use { it.readText() }
-            install(source, enabled = true).isSuccess
+            if (!install(source, enabled = true).isSuccess) return@withContext false
+            listScripts().find { it.meta.name == WEBRTC_GUARD_NAME }?.enabled == true
         } catch (_: Exception) {
             false
         }
