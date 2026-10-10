@@ -4,6 +4,7 @@ import android.content.Context
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.stringPreferencesKey
 import com.click.browser.engine.BrowserMode
+import com.click.browser.engine.SiteSettings
 import com.click.browser.engine.profileDataStore
 import com.click.browser.engine.profileDataStoreFor
 import kotlinx.coroutines.flow.Flow
@@ -22,6 +23,7 @@ class BrowserRepository(private val context: Context) {
         private val HISTORY_KEY = stringPreferencesKey("history")
         private val DOWNLOADS_KEY = stringPreferencesKey("downloads")
         private val DESKTOP_HOSTS_KEY = stringPreferencesKey("desktop_hosts")
+        private val SITE_SETTINGS_KEY = stringPreferencesKey("site_settings")
     }
 
     // --- Bookmarks ---
@@ -223,6 +225,35 @@ class BrowserRepository(private val context: Context) {
             val obj = JSONObject(jsonStr)
             if (desktop) obj.put(host, true) else obj.remove(host)
             preferences[DESKTOP_HOSTS_KEY] = obj.toString()
+        }
+    }
+
+    // --- Per-site settings (host -> SiteSettings JSON) ---
+    //
+    // Stored in the per-profile DataStore, same as desktop_hosts: each engine
+    // mode keeps its own per-site choices (per-mode isolation). Empty
+    // settings are pruned so the map never grows with no-op entries.
+    val siteSettingsFlow: Flow<Map<String, SiteSettings>> =
+        context.profileDataStore.data.map { preferences ->
+            val jsonStr = preferences[SITE_SETTINGS_KEY] ?: "{}"
+            SiteSettings.mapFromJson(jsonStr)
+        }
+
+    suspend fun setSiteSettings(host: String, settings: SiteSettings) {
+        context.profileDataStore.edit { preferences ->
+            val jsonStr = preferences[SITE_SETTINGS_KEY] ?: "{}"
+            val map = SiteSettings.mapFromJson(jsonStr).toMutableMap()
+            if (settings.isEmpty()) map.remove(host) else map[host] = settings
+            preferences[SITE_SETTINGS_KEY] = SiteSettings.mapToJson(map)
+        }
+    }
+
+    suspend fun clearSiteSettings(host: String) {
+        context.profileDataStore.edit { preferences ->
+            val jsonStr = preferences[SITE_SETTINGS_KEY] ?: "{}"
+            val map = SiteSettings.mapFromJson(jsonStr).toMutableMap()
+            map.remove(host)
+            preferences[SITE_SETTINGS_KEY] = SiteSettings.mapToJson(map)
         }
     }
 }
