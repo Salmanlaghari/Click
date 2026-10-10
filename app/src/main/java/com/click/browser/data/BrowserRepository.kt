@@ -3,7 +3,9 @@ package com.click.browser.data
 import android.content.Context
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.stringPreferencesKey
+import com.click.browser.engine.BrowserMode
 import com.click.browser.engine.profileDataStore
+import com.click.browser.engine.profileDataStoreFor
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
 import org.json.JSONArray
@@ -150,6 +152,18 @@ class BrowserRepository(private val context: Context) {
 
     suspend fun clearHistory() {
         context.profileDataStore.edit { preferences ->
+            preferences[HISTORY_KEY] = "[]"
+        }
+    }
+
+    /**
+     * Clears the history of ANY mode's isolated profile store — no mode
+     * switch or app restart needed (history lives in DataStore, not the
+     * WebView data directory). Respects 4-mode isolation: only the chosen
+     * mode's history is touched.
+     */
+    suspend fun clearHistoryFor(mode: BrowserMode) {
+        context.profileDataStoreFor(mode).edit { preferences ->
             preferences[HISTORY_KEY] = "[]"
         }
     }

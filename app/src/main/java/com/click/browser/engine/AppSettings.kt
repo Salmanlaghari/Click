@@ -1,6 +1,7 @@
 package com.click.browser.engine
 
 import android.util.Log
+import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import org.json.JSONArray
@@ -25,6 +26,20 @@ object AppSettings {
     val SECURE_DNS_ENABLED = booleanPreferencesKey("secure_dns_enabled")
     val UI_DARK_MODE = booleanPreferencesKey("ui_dark_mode")
     val WALLPAPER_URI = stringPreferencesKey("wallpaper_uri")
+
+    /**
+     * Per-mode Day/Night override key. Absent = the mode follows the global
+     * [UI_DARK_MODE] toggle (see [effectiveDarkMode]).
+     */
+    fun darkModeKey(mode: BrowserMode): Preferences.Key<Boolean> =
+        booleanPreferencesKey("ui_dark_mode_${mode.name.lowercase()}")
+
+    /**
+     * Effective dark-mode flag for [mode]: per-mode override if set, else the
+     * global [UI_DARK_MODE] toggle, else Dark (the historical default).
+     */
+    fun effectiveDarkMode(prefs: Preferences, mode: BrowserMode): Boolean =
+        prefs[darkModeKey(mode)] ?: (prefs[UI_DARK_MODE] ?: true)
 
     // V9 Shield: DNS-over-HTTPS provider + VPN toggle.
     // "cloudflare" | "google" | "custom" (see V9DohResolver).
