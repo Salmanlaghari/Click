@@ -73,6 +73,40 @@ class BrowserRepository(private val context: Context) {
         }
     }
 
+    data class ImportResult(val added: Int, val skippedExisting: Int)
+
+    /**
+     * Bulk-imports bookmarks in a single atomic DataStore edit. Bookmarks whose
+     * URL already exists in the user's bookmarks are skipped gracefully.
+     */
+    suspend fun importBookmarks(newBookmarks: List<Bookmark>): ImportResult {
+        var added = 0
+        var skippedExisting = 0
+        context.profileDataStore.edit { preferences ->
+            val jsonStr = preferences[BOOKMARKS_KEY] ?: "[]"
+            val array = JSONArray(jsonStr)
+
+            val existingUrls = mutableSetOf<String>()
+            for (i in 0 until array.length()) {
+                existingUrls.add(array.getJSONObject(i).optString("url"))
+            }
+
+            for (bookmark in newBookmarks) {
+                if (!existingUrls.add(bookmark.url)) {
+                    skippedExisting++
+                    continue
+                }
+                val newObj = JSONObject()
+                newObj.put("title", bookmark.title)
+                newObj.put("url", bookmark.url)
+                array.put(newObj)
+                added++
+            }
+            preferences[BOOKMARKS_KEY] = array.toString()
+        }
+        return ImportResult(added = added, skippedExisting = skippedExisting)
+    }
+
     // --- History ---
     val historyFlow: Flow<List<HistoryItem>> = context.profileDataStore.data.map { preferences ->
         val jsonStr = preferences[HISTORY_KEY] ?: "[]"
