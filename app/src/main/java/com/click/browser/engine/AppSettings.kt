@@ -4,6 +4,7 @@ import android.util.Log
 import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
+import androidx.datastore.preferences.core.stringSetPreferencesKey
 import org.json.JSONArray
 import org.json.JSONException
 import org.json.JSONObject
@@ -46,6 +47,16 @@ object AppSettings {
     val DOH_PROVIDER = stringPreferencesKey("doh_provider")
     val DOH_CUSTOM_URL = stringPreferencesKey("doh_custom_url")
     val V9_VPN_ENABLED = booleanPreferencesKey("v9_vpn_enabled")
+
+    // Brave-inspired privacy quick wins.
+    /** Strip tracking query params (utm_*, gclid, fbclid, ...) on navigation. Default ON. */
+    val STRIP_TRACKING_PARAMS = booleanPreferencesKey("strip_tracking_params")
+    /** Forgetful Browsing: wipe a site's cookies+storage when its last tab closes. Opt-in. */
+    val FORGETFUL_BROWSING = booleanPreferencesKey("forgetful_browsing")
+    /** Hosts exempted from Forgetful Browsing (kept data). */
+    val FORGETFUL_BROWSING_EXCEPTIONS = stringSetPreferencesKey("forgetful_browsing_exceptions")
+    /** Auto-hide cookie-consent / GDPR banners. Default ON. */
+    val BLOCK_CONSENT_BANNERS = booleanPreferencesKey("block_consent_banners")
 
     // LocationGuard: hide/spoof browser geolocation.
     // LOCATION_MODE: "ask" | "block" | "spoof" (default "ask").

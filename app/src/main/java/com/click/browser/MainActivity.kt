@@ -158,6 +158,11 @@ class MainActivity : ComponentActivity() {
     private var liveFingerprintProtection = true
     private var liveSecureDns = false
     private var liveCustomHeaders: Map<String, String> = emptyMap()
+    // Brave-inspired privacy quick wins (live copies for WebViewClient callbacks).
+    private var liveStripTrackingParams = true
+    private var liveForgetfulBrowsing = false
+    private var liveForgetfulExceptions: Set<String> = emptySet()
+    private var liveBlockConsentBanners = true
     // Live copy of per-site desktop hosts (persisted per host via BrowserRepository).
     private var liveDesktopHosts: Set<String> = emptySet()
     // LocationGuard live copies (WebViewClient/WebChromeClient run off the UI
@@ -456,6 +461,16 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    /**
+     * Query-param stripping (Brave-style): removes tracking params from a
+     * navigation URL when the toggle is on. Returns the original URL when
+     * stripping is off or nothing was stripped.
+     */
+    private fun cleanTrackingUrl(url: String): String {
+        if (!liveStripTrackingParams) return url
+        return QueryParamStripper.strip(url) ?: url
+    }
+
 
     /**
      * Applies the experimental flags (click://flags) to a WebView's settings.
@@ -733,6 +748,17 @@ class MainActivity : ComponentActivity() {
                     tabs[0] = TabItem(url = homeUrl(), title = "New Tab")
                     activeTabIndex = 0
                 }
+                // Forgetful Browsing: if the closed tab was the last one
+                // showing its site (non-incognito), the site's cookies and
+                // web storage are wiped — unless the user undoes the close.
+                val closedHost = ForgetfulBrowsing.hostOf(closed.url)
+                val forgetCandidate = !closed.isIncognito &&
+                    ForgetfulBrowsing.shouldForget(
+                        liveForgetfulBrowsing,
+                        liveForgetfulExceptions,
+                        closedHost,
+                        tabs.map { ForgetfulBrowsing.hostOf(it.url) }
+                    )
                 // Premium UI v2: "Tab closed" snackbar with UNDO (4s).
                 if (undoInfo != null) {
                     lastClosedTab = undoInfo
@@ -750,6 +776,10 @@ class MainActivity : ComponentActivity() {
                                 activeTabIndex = insertAt
                             }
                             lastClosedTab = null
+                        } else if (forgetCandidate && closedHost != null) {
+                            // Snackbar dismissed / timed out without UNDO:
+                            // the site is truly gone — forget it now.
+                            ForgetfulBrowsing.forgetHost(closedHost)
                         }
                     }
                 }
@@ -830,6 +860,11 @@ class MainActivity : ComponentActivity() {
             var httpsOnlyMode by remember { mutableStateOf(true) }
             var javaScriptEnabledGlobal by remember { mutableStateOf(true) }
             var dataSaverEnabled by remember { mutableStateOf(false) }
+            // Brave-inspired privacy quick wins (DataStore-persisted below).
+            var stripTrackingParams by remember { mutableStateOf(true) }
+            var forgetfulBrowsing by remember { mutableStateOf(false) }
+            var forgetfulExceptions by remember { mutableStateOf(setOf<String>()) }
+            var blockConsentBanners by remember { mutableStateOf(true) }
 
             // LocationGuard: hide/spoof browser geolocation (Prince request).
             var locationMode by remember { mutableStateOf(LocationGuard.LocationMode.ASK) }
@@ -1140,6 +1175,11 @@ class MainActivity : ComponentActivity() {
             LaunchedEffect(dataSaverEnabled) { liveDataSaver = dataSaverEnabled }
             LaunchedEffect(headerSpoofEnabled) { liveHeaderSpoof = headerSpoofEnabled }
             LaunchedEffect(fingerprintProtection) { liveFingerprintProtection = fingerprintProtection }
+            // Privacy quick wins: keep WebViewClient-safe live copies in sync.
+            LaunchedEffect(stripTrackingParams) { liveStripTrackingParams = stripTrackingParams }
+            LaunchedEffect(forgetfulBrowsing) { liveForgetfulBrowsing = forgetfulBrowsing }
+            LaunchedEffect(forgetfulExceptions) { liveForgetfulExceptions = forgetfulExceptions }
+            LaunchedEffect(blockConsentBanners) { liveBlockConsentBanners = blockConsentBanners }
             LaunchedEffect(secureDnsEnabled) { liveSecureDns = secureDnsEnabled }
             LaunchedEffect(customHeaders) { liveCustomHeaders = customHeaders.associate { it.name to it.value } }
             LaunchedEffect(desktopHosts) { liveDesktopHosts = desktopHosts }
@@ -1234,6 +1274,11 @@ class MainActivity : ComponentActivity() {
                     locationSpoofLabel = prefs[AppSettings.LOCATION_SPOOF_LABEL]
                         ?: LocationGuard.DEFAULT_PRESET.label
                     customHeaders = AppSettings.parseHeaders(prefs[AppSettings.CUSTOM_HEADERS_JSON])
+                    // Brave-inspired privacy quick wins.
+                    stripTrackingParams = prefs[AppSettings.STRIP_TRACKING_PARAMS] ?: true
+                    forgetfulBrowsing = prefs[AppSettings.FORGETFUL_BROWSING] == true
+                    forgetfulExceptions = prefs[AppSettings.FORGETFUL_BROWSING_EXCEPTIONS] ?: emptySet()
+                    blockConsentBanners = prefs[AppSettings.BLOCK_CONSENT_BANNERS] ?: true
                     currentThemeSetting = if (prefs[AppSettings.UI_DARK_MODE] == false) "Light" else "Dark"
                     // Per-mode Day/Night overrides (missing key = follow global).
                     perModeDark = BrowserMode.values().associateWith { mode ->
@@ -2118,7 +2163,7 @@ class MainActivity : ComponentActivity() {
                                                 theme = themed,
                                                 currentUrl = currentTab.url,
                                                 onNavigate = { input ->
-                                                    val destination = formatUrl(input, currentSearchEngineSetting, activeMode)
+                                                    val destination = cleanTrackingUrl(formatUrl(input, currentSearchEngineSetting, activeMode))
                                                     currentTab.url = destination
                                                     currentTab.webView?.loadUrl(destination)
                                                 },
@@ -2185,7 +2230,7 @@ class MainActivity : ComponentActivity() {
                                             onV9ShieldClick = { showV9Shield = true },
                                             onGamesClick = { showClickPage = "games" },
                                             onNavigate = { input ->
-                                                val destination = formatUrl(input, currentSearchEngineSetting, activeMode)
+                                                val destination = cleanTrackingUrl(formatUrl(input, currentSearchEngineSetting, activeMode))
                                                 currentTab.url = destination
                                                 currentTab.webView?.loadUrl(destination)
                                             },
@@ -2274,6 +2319,9 @@ class MainActivity : ComponentActivity() {
                                                                         // (reload loops reset scroll position — page feels unscrollable).
                                                                         if (request != null && !request.isForMainFrame) return false
                                                                         var urlStr = request?.url?.toString() ?: ""
+                                                                        // Query-param stripping (Brave-style): drop tracking
+                                                                        // params before anything else touches the URL.
+                                                                        urlStr = cleanTrackingUrl(urlStr)
                                                                         // PDF: offer in-app viewing instead of navigating.
                                                                         if (isPdfUrl(urlStr)) {
                                                                             pdfOfferUrl = urlStr
@@ -2316,6 +2364,8 @@ class MainActivity : ComponentActivity() {
                                                                     @Suppress("Deprecated")
                                                                     override fun shouldOverrideUrlLoading(view: WebView?, url: String?): Boolean {
                                                                         var urlStr = url ?: ""
+                                                                        // Query-param stripping (Brave-style).
+                                                                        urlStr = cleanTrackingUrl(urlStr)
                                                                         // HTTPS-Only upgrade FIRST (see above).
                                                                         // PDF: offer in-app viewing instead of navigating.
                                                                         if (isPdfUrl(urlStr)) {
@@ -2408,6 +2458,18 @@ class MainActivity : ComponentActivity() {
                                                                 pageLoadTime = System.currentTimeMillis() - lastPageStart
                                                                 // Pull-to-refresh completes when the page finishes loading.
                                                                 if (isRefreshing) isRefreshing = false
+
+                                                                // Cookie-consent banner blocking (Brave-style): hide
+                                                                // GDPR/consent banners via cosmetic selectors.
+                                                                if (liveBlockConsentBanners) {
+                                                                    try {
+                                                                        ConsentBannerBlocker.buildScript(
+                                                                            FilterListManager.currentConsentSelectors()
+                                                                        )?.let { script ->
+                                                                            view?.evaluateJavascript(script, null)
+                                                                        }
+                                                                    } catch (_: Exception) { /* non-fatal */ }
+                                                                }
 
                                                                 // Password manager: inject form detection + auto-fill
                                                                 // saved credentials for this host (if any).
@@ -2979,8 +3041,9 @@ class MainActivity : ComponentActivity() {
                                 BookmarksScreen(
                                     repository = repository,
                                     onNavigate = { url ->
-                                        currentTab.url = url
-                                        currentTab.webView?.loadUrl(url)
+                                        val clean = cleanTrackingUrl(url)
+                                        currentTab.url = clean
+                                        currentTab.webView?.loadUrl(clean)
                                     },
                                     onClose = { showBookmarks = false }
                                 )
@@ -2991,8 +3054,9 @@ class MainActivity : ComponentActivity() {
                                     repository = repository,
                                     theme = theme,
                                     onNavigate = { url ->
-                                        currentTab.url = url
-                                        currentTab.webView?.loadUrl(url)
+                                        val clean = cleanTrackingUrl(url)
+                                        currentTab.url = clean
+                                        currentTab.webView?.loadUrl(clean)
                                     },
                                     onClose = { showHistory = false }
                                 )
@@ -3340,6 +3404,27 @@ class MainActivity : ComponentActivity() {
                                     onToggleJs = { javaScriptEnabledGlobal = it },
                                     dataSaver = dataSaverEnabled,
                                     onToggleDataSaver = { dataSaverEnabled = it },
+                                    // Brave-inspired privacy quick wins (persisted to DataStore).
+                                    stripTrackingParams = stripTrackingParams,
+                                    onToggleStripTrackingParams = { v ->
+                                        stripTrackingParams = v
+                                        scope.launch { dataStore.edit { prefs -> prefs[AppSettings.STRIP_TRACKING_PARAMS] = v } }
+                                    },
+                                    forgetfulBrowsing = forgetfulBrowsing,
+                                    onToggleForgetfulBrowsing = { v ->
+                                        forgetfulBrowsing = v
+                                        scope.launch { dataStore.edit { prefs -> prefs[AppSettings.FORGETFUL_BROWSING] = v } }
+                                    },
+                                    blockConsentBanners = blockConsentBanners,
+                                    onToggleBlockConsentBanners = { v ->
+                                        blockConsentBanners = v
+                                        scope.launch { dataStore.edit { prefs -> prefs[AppSettings.BLOCK_CONSENT_BANNERS] = v } }
+                                    },
+                                    forgetfulExceptions = forgetfulExceptions,
+                                    onForgetfulExceptionsChange = { v ->
+                                        forgetfulExceptions = v
+                                        scope.launch { dataStore.edit { prefs -> prefs[AppSettings.FORGETFUL_BROWSING_EXCEPTIONS] = v } }
+                                    },
                                     animationsEnabled = flagsUi.tabAnimations,
                                     onToggleAnimations = { enabled ->
                                         scope.launch {
