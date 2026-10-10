@@ -238,6 +238,8 @@ object V9Engine {
      *
      * @param hackIntro when true, the relaunched process shows the Hack Mode
      *   Markhor intro animation once (see HackIntroOverlay).
+     * @param advanceIntro when true, the relaunched process shows the Advance
+     *   Mode blue-light intro animation once (see AdvanceIntroOverlay).
      * @return true if a restart was triggered; false if we stayed alive
      *   (caller should apply the mode in-place without engine isolation).
      */
@@ -246,6 +248,7 @@ object V9Engine {
         modeManager: ModeManager,
         mode: BrowserMode,
         hackIntro: Boolean = false,
+        advanceIntro: Boolean = false,
     ): Boolean {
         modeManager.setMode(mode)
 
@@ -255,7 +258,10 @@ object V9Engine {
             context.packageManager
                 .getLaunchIntentForPackage(context.packageName)
                 ?.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK)
-                ?.also { if (hackIntro) it.putExtra(EXTRA_HACK_INTRO, true) }
+                ?.also {
+                    if (hackIntro) it.putExtra(EXTRA_HACK_INTRO, true)
+                    if (advanceIntro) it.putExtra(EXTRA_ADVANCE_INTRO, true)
+                }
         } catch (t: Throwable) {
             Log.e(TAG, "V9: cannot build relaunch intent", t)
             null
@@ -323,6 +329,9 @@ object V9Engine {
 
     /** Intent extra: show the Hack Mode intro animation on launch. */
     const val EXTRA_HACK_INTRO = "v9_hack_intro"
+
+    /** Intent extra: show the Advance Mode intro animation on launch. */
+    const val EXTRA_ADVANCE_INTRO = "v9_advance_intro"
 
     private const val RESTART_REQUEST_CODE = 9001
     private const val RESTART_DELAY_MS = 1000L

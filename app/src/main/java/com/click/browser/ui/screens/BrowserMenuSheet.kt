@@ -34,22 +34,28 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.click.browser.engine.ClosedTab
+import com.click.browser.engine.MenuCustomization
 import com.click.browser.engine.ModeTheme
 
 /**
  * Chrome/Mises-style browser menu (bottom sheet).
  *
- * Every item actually works — no dead buttons:
- * New tab / New private tab / Tabs (visual switcher) / History /
- * Delete browsing data / Downloads / Bookmarks / Games / Recent tabs /
- * Extensions (userscripts) / Share / Find in page / Translate /
- * Desktop site toggle / Settings.
+ * Every item actually works — no dead buttons.
+ *
+ * Menu contents come from [visibleItems] (user-customizable order +
+ * visibility via "Customize menu" in Settings). Callbacks stay 1:1 with
+ * the menu items so nothing ever renders without a working action.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun BrowserMenuSheet(
     theme: ModeTheme,
     isDesktopForSite: Boolean,
+    visibleItems: List<MenuCustomization.MenuItemId> =
+        MenuCustomization.effectiveVisibleItems(
+            MenuCustomization.DEFAULT_ORDER,
+            emptySet()
+        ),
     onNewTab: () -> Unit,
     onNewPrivateTab: () -> Unit,
     onOpenTabSwitcher: () -> Unit,
@@ -65,6 +71,7 @@ fun BrowserMenuSheet(
     onTranslate: () -> Unit,
     onToggleDesktopSite: () -> Unit,
     onSettings: () -> Unit,
+    onCustomizeMenu: () -> Unit,
     onDismiss: () -> Unit
 ) {
     ModalBottomSheet(
@@ -78,134 +85,101 @@ fun BrowserMenuSheet(
                 .fillMaxWidth()
                 .padding(bottom = 24.dp)
         ) {
-            item {
-                MenuRow(
-                    theme = theme,
-                    icon = Icons.Default.Add,
-                    label = "New tab",
-                    onClick = onNewTab
-                )
-            }
-            item {
-                MenuRow(
-                    theme = theme,
-                    icon = Icons.Default.Security,
-                    label = "New Private tab",
-                    onClick = onNewPrivateTab
-                )
-            }
-            item {
-                MenuRow(
-                    theme = theme,
-                    icon = Icons.Default.FilterNone,
-                    label = "Tabs",
-                    onClick = onOpenTabSwitcher
-                )
-            }
-            item { MenuDivider(theme) }
-            item {
-                MenuRow(
-                    theme = theme,
-                    icon = Icons.Default.History,
-                    label = "History",
-                    onClick = onHistory
-                )
-            }
-            item {
-                MenuRow(
-                    theme = theme,
-                    icon = Icons.Default.Delete,
-                    label = "Delete browsing data",
-                    onClick = onDeleteBrowsingData
-                )
-            }
-            item { MenuDivider(theme) }
-            item {
-                MenuRow(
-                    theme = theme,
-                    icon = Icons.Default.Download,
-                    label = "Downloads",
-                    onClick = onDownloads
-                )
-            }
-            item {
-                MenuRow(
-                    theme = theme,
-                    icon = Icons.Default.Bookmark,
-                    label = "Bookmarks",
-                    onClick = onBookmarks
-                )
-            }
-            item {
-                MenuRow(
-                    theme = theme,
-                    icon = Icons.Default.SportsEsports,
-                    label = "Games",
-                    onClick = onGames
-                )
-            }
-            item {
-                MenuRow(
-                    theme = theme,
-                    icon = Icons.Default.Restore,
-                    label = "Recent tabs",
-                    onClick = onRecentTabs
-                )
-            }
-            item {
-                MenuRow(
-                    theme = theme,
-                    icon = Icons.Default.Extension,
-                    label = "Extensions",
-                    onClick = onExtensions
-                )
-            }
-            item { MenuDivider(theme) }
-            item {
-                MenuRow(
-                    theme = theme,
-                    icon = Icons.Default.Share,
-                    label = "Share…",
-                    onClick = onShare
-                )
-            }
-            item {
-                MenuRow(
-                    theme = theme,
-                    icon = Icons.Default.Search,
-                    label = "Find in page",
-                    onClick = onFindInPage
-                )
-            }
-            item {
-                MenuRow(
-                    theme = theme,
-                    icon = Icons.Default.Translate,
-                    label = "Translate",
-                    onClick = onTranslate
-                )
-            }
-            item {
-                MenuRow(
-                    theme = theme,
-                    icon = Icons.Default.DesktopWindows,
-                    label = "Desktop site",
-                    trailing = {
-                        Switch(
-                            checked = isDesktopForSite,
-                            onCheckedChange = null,
-                            colors = SwitchDefaults.colors(checkedThumbColor = theme.primary)
+            val items = visibleItems.ifEmpty { MenuCustomization.DEFAULT_ORDER }
+            items.forEach { id ->
+                item(key = id.name) {
+                    when (id) {
+                        MenuCustomization.MenuItemId.NEW_TAB -> MenuRow(
+                            theme = theme, icon = Icons.Default.Add,
+                            label = "New tab", onClick = onNewTab
                         )
-                    },
-                    onClick = onToggleDesktopSite
-                )
+                        MenuCustomization.MenuItemId.NEW_PRIVATE_TAB -> MenuRow(
+                            theme = theme, icon = Icons.Default.Security,
+                            label = "New Private tab", onClick = onNewPrivateTab
+                        )
+                        MenuCustomization.MenuItemId.TABS -> MenuRow(
+                            theme = theme, icon = Icons.Default.FilterNone,
+                            label = "Tabs", onClick = onOpenTabSwitcher
+                        )
+                        MenuCustomization.MenuItemId.HISTORY -> {
+                            MenuDivider(theme)
+                            MenuRow(
+                                theme = theme, icon = Icons.Default.History,
+                                label = "History", onClick = onHistory
+                            )
+                        }
+                        MenuCustomization.MenuItemId.DELETE_DATA -> MenuRow(
+                            theme = theme, icon = Icons.Default.Delete,
+                            label = "Delete browsing data", onClick = onDeleteBrowsingData
+                        )
+                        MenuCustomization.MenuItemId.DOWNLOADS -> {
+                            MenuDivider(theme)
+                            MenuRow(
+                                theme = theme, icon = Icons.Default.Download,
+                                label = "Downloads", onClick = onDownloads
+                            )
+                        }
+                        MenuCustomization.MenuItemId.BOOKMARKS -> MenuRow(
+                            theme = theme, icon = Icons.Default.Bookmark,
+                            label = "Bookmarks", onClick = onBookmarks
+                        )
+                        MenuCustomization.MenuItemId.GAMES -> MenuRow(
+                            theme = theme, icon = Icons.Default.SportsEsports,
+                            label = "Games", onClick = onGames
+                        )
+                        MenuCustomization.MenuItemId.RECENT_TABS -> MenuRow(
+                            theme = theme, icon = Icons.Default.Restore,
+                            label = "Recent tabs", onClick = onRecentTabs
+                        )
+                        MenuCustomization.MenuItemId.EXTENSIONS -> MenuRow(
+                            theme = theme, icon = Icons.Default.Extension,
+                            label = "Extensions", onClick = onExtensions
+                        )
+                        MenuCustomization.MenuItemId.SHARE -> {
+                            MenuDivider(theme)
+                            MenuRow(
+                                theme = theme, icon = Icons.Default.Share,
+                                label = "Share…", onClick = onShare
+                            )
+                        }
+                        MenuCustomization.MenuItemId.FIND_IN_PAGE -> MenuRow(
+                            theme = theme, icon = Icons.Default.Search,
+                            label = "Find in page", onClick = onFindInPage
+                        )
+                        MenuCustomization.MenuItemId.TRANSLATE -> MenuRow(
+                            theme = theme, icon = Icons.Default.Translate,
+                            label = "Translate", onClick = onTranslate
+                        )
+                        MenuCustomization.MenuItemId.DESKTOP_SITE -> MenuRow(
+                            theme = theme, icon = Icons.Default.DesktopWindows,
+                            label = "Desktop site",
+                            trailing = {
+                                Switch(
+                                    checked = isDesktopForSite,
+                                    onCheckedChange = null,
+                                    colors = SwitchDefaults.colors(checkedThumbColor = theme.primary)
+                                )
+                            },
+                            onClick = onToggleDesktopSite
+                        )
+                        MenuCustomization.MenuItemId.SETTINGS -> {
+                            MenuDivider(theme)
+                            MenuRow(
+                                theme = theme, icon = Icons.Default.Settings,
+                                label = "Settings", onClick = onSettings
+                            )
+                        }
+                    }
+                }
             }
-            item {
+            // "Customize menu" entry — always present at the end.
+            item(key = "customize_menu") {
+                MenuDivider(theme)
                 MenuRow(
                     theme = theme,
-                    icon = Icons.Default.Settings,
-                    label = "Settings",
-                    onClick = onSettings
+                    icon = Icons.Default.Tune,
+                    label = "Customize menu",
+                    onClick = onCustomizeMenu
                 )
             }
         }
