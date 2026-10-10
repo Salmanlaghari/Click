@@ -77,6 +77,9 @@ fun SettingsScreen(
     onClearCache: () -> Unit,
     onClearAllCurrentMode: () -> Unit,
     onOpenCookieManager: () -> Unit,
+    // --- LocationGuard ---
+    locationSummary: String,
+    onOpenLocationSettings: () -> Unit,
     // --- Per-mode themes ---
     perModeDark: Map<BrowserMode, Boolean?>,
     onPerModeThemeChange: (BrowserMode, Boolean?) -> Unit,
@@ -282,6 +285,15 @@ fun SettingsScreen(
                     ToggleRow("JavaScript", "Enable core scripting execution", jsEnabled, onToggleJs, theme)
                     HorizontalDivider(color = theme.onSurface.copy(alpha = 0.1f))
                     ToggleRow("Data Saver", "Reduce web resource overhead", dataSaver, onToggleDataSaver, theme)
+                    HorizontalDivider(color = theme.onSurface.copy(alpha = 0.1f))
+                    // LocationGuard: hide/spoof browser geolocation.
+                    ActionRow(
+                        "Location",
+                        "Websites will see: $locationSummary",
+                        Icons.Default.LocationOn,
+                        theme,
+                        onOpenLocationSettings
+                    )
                 }
             })
             add(Row(null) {
