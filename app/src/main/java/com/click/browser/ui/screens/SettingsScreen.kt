@@ -79,6 +79,8 @@ fun SettingsScreen(
     onToggleJs: (Boolean) -> Unit,
     dataSaver: Boolean,
     onToggleDataSaver: (Boolean) -> Unit,
+    backgroundAudioEnabled: Boolean,
+    onToggleBackgroundAudio: (Boolean) -> Unit,
     // --- Biometric private-tab lock ---
     biometricLockEnabled: Boolean,
     onToggleBiometricLock: (Boolean) -> Unit,
@@ -463,6 +465,12 @@ fun SettingsScreen(
                     ToggleRow("Data Saver", "Reduce web resource overhead", dataSaver, onToggleDataSaver, theme)
                     HorizontalDivider(color = theme.onSurface.copy(alpha = 0.1f))
                     ToggleRow("Lock Private Tabs", biometricStatusText, biometricLockEnabled, onToggleBiometricLock, theme)
+                    HorizontalDivider(color = theme.onSurface.copy(alpha = 0.1f))
+                    ToggleRow(
+                        "Background audio",
+                        "Let web-page audio keep playing when the app is in the background",
+                        backgroundAudioEnabled, onToggleBackgroundAudio, theme
+                    )
                     HorizontalDivider(color = theme.onSurface.copy(alpha = 0.1f))
                     ToggleRow(
                         "Strip Tracking Links",
