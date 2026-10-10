@@ -1133,6 +1133,8 @@ class MainActivity : FragmentActivity() {
             // V9: Shield screen (VPN + DNS + engines) and the Hack Mode
             // Markhor intro animation (shown once after a Hack engine boot).
             var showV9Shield by remember { mutableStateOf(false) }
+            // Click VPN screen (full IP tunnel via sing-box).
+            var showVpn by remember { mutableStateOf(false) }
             // Help & Feedback screen.
             var showHelp by remember { mutableStateOf(false) }
             var showHackIntro by remember {
@@ -4002,6 +4004,11 @@ class MainActivity : FragmentActivity() {
                             if (showV9Shield) {
                                 V9ShieldScreen(onClose = { showV9Shield = false })
                             }
+                            // Click VPN screen (full IP tunnel via sing-box).
+                            if (showVpn) {
+                                com.click.browser.ui.screens.VpnScreen(
+                                    onClose = { showVpn = false })
+                            }
                             // Help & Feedback (FAQ + email to Prince).
                             if (showHelp) {
                                 com.click.browser.ui.screens.HelpFeedbackScreen(
@@ -4620,6 +4627,7 @@ class MainActivity : FragmentActivity() {
                                         }
                                     },
                                     onSettings = { showBrowserMenu = false; showSettings = true },
+                                    onVpn = { showBrowserMenu = false; showVpn = true },
                                     visibleItems = MenuCustomization.effectiveVisibleItems(menuOrder, menuHidden),
                                     onCustomizeMenu = { showBrowserMenu = false; showMenuCustomize = true },
                                     onDismiss = { showBrowserMenu = false }

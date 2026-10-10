@@ -56,6 +56,20 @@
                 android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
                 android:value="Encrypted DNS and DNS-based threat blocking (V9 Shield)" />
         </service>
+
+        <!-- Click VPN service (full IP tunnel via sing-box/libbox). -->
+        <service
+            android:name=".engine.vpn.SingBoxVpnService"
+            android:permission="android.permission.BIND_VPN_SERVICE"
+            android:foregroundServiceType="specialUse"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="android.net.VpnService" />
+            </intent-filter>
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="Encrypted VPN tunnel routing all device traffic through the selected server (Cloudflare WARP or custom)" />
+        </service>
     </application>
 
 </manifest>
