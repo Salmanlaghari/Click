@@ -300,7 +300,7 @@ fun FeatureMenuFabOverlay(
                 tonalElevation = 8.dp
             ) {
                 Column(modifier = Modifier.padding(12.dp)) {
-                    // Mode chips (official display names per the 3-mode reference)
+                    // Mode chips (official display names per the 4-mode reference)
                     Row(
                         horizontalArrangement = Arrangement.spacedBy(8.dp),
                         verticalAlignment = Alignment.CenterVertically
@@ -313,6 +313,9 @@ fun FeatureMenuFabOverlay(
                         }
                         ModeChip("Hack", activeMode == BrowserMode.HACK, accent, theme) {
                             onModeChange(BrowserMode.HACK)
+                        }
+                        ModeChip("Advance", activeMode == BrowserMode.ADVANCED, accent, theme) {
+                            onModeChange(BrowserMode.ADVANCED)
                         }
                     }
                     // Active mode tagline (e.g. "Simple — Clean · Fresh · Easy on Eyes")

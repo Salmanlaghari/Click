@@ -21,10 +21,12 @@ class ModeManager(private val context: Context) {
         val MODE_KEY = stringPreferencesKey("browser_mode")
 
         // V9 per-engine User-Agents — deliberately distinct devices/browsers so
-        // websites (e.g. Google) see three different browsers, one per engine.
+        // websites (e.g. Google) see four different browsers, one per engine.
         const val UA_SIMPLE = "Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Mobile Safari/537.36"
         const val UA_DEVELOPER = "Mozilla/5.0 (Linux; Android 14; SM-S921B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Mobile Safari/537.36"
         const val UA_HACK = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36"
+        // Advance: desktop-class like Hack but a distinct, newer Chrome build.
+        const val UA_ADVANCED = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"
     }
 
     val modeFlow: Flow<BrowserMode> = context.dataStore.data.map { preferences ->
@@ -44,9 +46,9 @@ class ModeManager(private val context: Context) {
 
     /**
      * UA POLICY (Prince's requirement — no mid-load flip):
-     * - HACK mode  → DESKTOP (PC) UA, always. Hack mode is the power-user
-     *   desktop-class mode; sites (e.g. YouTube) render the desktop layout
-     *   steadily, from the very first request.
+     * - HACK / ADVANCED → DESKTOP (PC) UA, always. These are the desktop-class
+     *   modes; sites (e.g. YouTube) render the desktop layout steadily, from
+     *   the very first request.
      * - SIMPLE / DEVELOPER → MOBILE UA, always.
      * - Desktop UA for other modes comes ONLY from the per-site "Desktop
      *   site" toggle ([applyDesktopOverride]).
@@ -90,6 +92,25 @@ class ModeManager(private val context: Context) {
                 settings.useWideViewPort = true
                 settings.loadWithOverviewMode = true
                 // Hack mode viewport specs (1920x1080) can also be controlled on layout / JS injection side
+            }
+            // Click Advance: desktop-class profile with "fast track" tuning.
+            // HONEST SCOPE: these are real WebSettings knobs (explicit cache
+            // policy, full image loading, DOM storage) — the gains are
+            // incremental. The renderer is still the system WebView; there is
+            // no separate engine, and nothing here swaps the JS engine.
+            BrowserMode.ADVANCED -> {
+                settings.userAgentString = UA_ADVANCED
+                settings.useWideViewPort = true
+                settings.loadWithOverviewMode = true
+                settings.layoutAlgorithm = WebSettings.LayoutAlgorithm.NORMAL
+                // Fast track: explicit default cache policy (HTTP cache +
+                // app cache), images always on for full-fidelity loads
+                // (the data-saver image block stays available as a toggle),
+                // DOM storage for modern web apps.
+                settings.cacheMode = WebSettings.LOAD_DEFAULT
+                settings.loadsImagesAutomatically = true
+                settings.blockNetworkImage = false
+                settings.domStorageEnabled = true
             }
         }
     }

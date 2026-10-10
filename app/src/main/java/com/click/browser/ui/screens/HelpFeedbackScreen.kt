@@ -34,17 +34,19 @@ private data class Faq(val q: String, val a: String)
 
 private val FAQS = listOf(
     Faq(
-        "What are the 3 modes (Simple / Developer / Hack)?",
-        "Click is 1 browser with 3 isolated engines. Simple is the everyday " +
+        "What are the 4 modes (Simple / Developer / Hack / Advance)?",
+        "Click is 1 browser with 4 isolated engines. Simple is the everyday " +
             "light mode (Google search). Developer is the dark-glass mode for " +
             "coders (DuckDuckGo search, dev tools). Hack is the OLED-neon " +
-            "desktop-class mode (Brave search, desktop sites). Each engine has " +
-            "separate cookies, cache, and presents a different device identity " +
-            "to websites."
+            "desktop-class mode (Brave search, desktop sites). Advance is a " +
+            "fresh isolated space — its own cookies, history, bookmarks, " +
+            "passwords and userscripts that start empty, so nothing carries " +
+            "over from the other modes. Each engine has separate cookies, " +
+            "cache, and presents a different device identity to websites."
     ),
     Faq(
         "How do I switch modes?",
-        "Open the menu (☰) and tap Simple, Developer, or Hack. The app " +
+        "Open the menu (☰) and tap Simple, Developer, Hack, or Advance. The app " +
             "restarts into the new engine — your logins stay separate per mode."
     ),
     Faq(

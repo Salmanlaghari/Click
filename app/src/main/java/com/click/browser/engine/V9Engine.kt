@@ -11,16 +11,21 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
 
 /**
- * V9 — "1 Browser, 3 Engines".
+ * V9 — "1 Browser, 4 Engines".
  *
- * Prince's signature feature: one Click Browser app that behaves as three
- * completely separate browsers (Simple / Developer / Hack). Each engine has:
+ * Prince's signature feature: one Click Browser app that behaves as four
+ * completely separate browsers (Simple / Developer / Hack / Advance). Each
+ * engine has:
  *  - its own WebView data directory (separate cookies, cache, localStorage,
  *    history, permissions) via [WebView.setDataDirectorySuffix]
+ *  - its own app-data profile (bookmarks, history, passwords, userscripts —
+ *    see [profileDataStore]; Advance starts empty by design)
  *  - its own User-Agent + JS fingerprint profile, so websites (e.g. Google)
- *    see three different browsers/devices
+ *    see four different browsers/devices
  *
- * HONEST LIMIT: OS-level identifiers (ANDROID_ID, ro.build.fingerprint)
+ * HONEST LIMIT: the renderer in every mode is the system WebView (Chromium).
+ * "Advance" is an isolated, performance-tuned profile — not a new engine
+ * technology. OS-level identifiers (ANDROID_ID, ro.build.fingerprint)
  * cannot be spoofed per-mode without root. Websites identify browsers via
  * cookies + User-Agent + JS fingerprint — all three ARE fully distinct
  * per engine here, which achieves the goal.
@@ -33,7 +38,7 @@ object V9Engine {
 
     private const val TAG = "V9Engine"
     const val VERSION = "V9"
-    const val BRAND_LINE = "V9 · 1 Browser · 3 Engines"
+    const val BRAND_LINE = "V9 · 1 Browser · 4 Engines"
     const val TAGLINE = "First time in the World We Present A Superior Testing Future"
 
     /** The engine this process booted with (set in [applyDataDirectorySuffix]). */
@@ -122,6 +127,30 @@ object V9Engine {
             deviceLabel = "Windows 11 · Chrome Desktop",
             timezone = "America/Los_Angeles",
             timezoneOffsetMinutes = 480,
+        )
+        // Click Advance: desktop-class like Hack, but a DISTINCT identity
+        // (newer Chrome build, different GPU/timezone/seed) so sites see a
+        // fourth, separate browser. Performance-tuned profile — the renderer
+        // is still the system WebView; this is isolation + tuning, not a new
+        // engine.
+        BrowserMode.ADVANCED -> EngineProfile(
+            mode = mode,
+            userAgent = ModeManager.UA_ADVANCED,
+            platform = "Win32",
+            vendor = "Google Inc.",
+            languages = listOf("en-US", "en"),
+            hardwareConcurrency = 12,
+            deviceMemory = 16,
+            screenW = 1920,
+            screenH = 1080,
+            devicePixelRatio = 1.0,
+            maxTouchPoints = 0,
+            webglVendor = "Google Inc. (AMD)",
+            webglRenderer = "ANGLE (AMD, AMD Radeon RX 7800 XT Direct3D11 vs_5_0 ps_5_0, D3D11)",
+            canvasSeed = 77120408L,
+            deviceLabel = "Click Advance · Desktop-class isolated profile",
+            timezone = "Asia/Dubai",
+            timezoneOffsetMinutes = -240,
         )
     }
 

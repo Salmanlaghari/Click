@@ -939,6 +939,7 @@ class MainActivity : ComponentActivity() {
                     BrowserMode.SIMPLE -> listOf("Google", "Yahoo", "Bing")
                     BrowserMode.DEVELOPER -> listOf("Yandex", "DuckDuckGo", "Baidu")
                     BrowserMode.HACK -> listOf("Ahmia Search", "Deep Search", "AI Search")
+                    BrowserMode.ADVANCED -> listOf("Google", "Brave Search", "DuckDuckGo")
                 }
                 if (currentSearchEngineSetting !in engines) {
                     currentSearchEngineSetting = engines.first()
@@ -1106,6 +1107,21 @@ class MainActivity : ComponentActivity() {
                                             // V9: engine switch (restarts when the engine changes).
                                             val restarting = v9SwitchMode(BrowserMode.HACK, currentTab.webView, forceDesktopMode)
                                             if (!restarting) Toast.makeText(this@MainActivity, "Hack Mode Activated", Toast.LENGTH_SHORT).show()                                        }
+                                    }
+                                }
+                                item {
+                                    DrawerItem(
+                                        label = BrowserMode.ADVANCED.display().title,
+                                        subtitle = BrowserMode.ADVANCED.display().tagline,
+                                        icon = Icons.Default.Filter4, color = Color(0xFF06B6D4)
+                                    ) {
+                                        scope.launch {
+                                            drawerState.close()
+                                            // V9: engine switch (restarts when the engine changes).
+                                            // Advance enters a fresh isolated space — nothing
+                                            // carries over from the other modes.
+                                            val restarting = v9SwitchMode(BrowserMode.ADVANCED, currentTab.webView, forceDesktopMode)
+                                            if (!restarting) Toast.makeText(this@MainActivity, "Advance Mode Activated — fresh isolated space", Toast.LENGTH_SHORT).show()                                        }
                                     }
                                 }
 
@@ -1538,8 +1554,10 @@ class MainActivity : ComponentActivity() {
                                         }
                                     }
                                 }
-                                // Userscript extensions — HACK and DEVELOPER modes.
-                                if (activeMode == BrowserMode.HACK || activeMode == BrowserMode.DEVELOPER) {
+                                // Userscript extensions — HACK, DEVELOPER and ADVANCE
+                                // modes (Advance keeps its own script folder).
+                                if (activeMode == BrowserMode.HACK || activeMode == BrowserMode.DEVELOPER ||
+                                    activeMode == BrowserMode.ADVANCED) {
                                     item {
                                         DrawerItem(label = "Userscript Extensions", icon = Icons.Default.Extension, color = Color(0xFF39FF14)) {
                                             scope.launch { drawerState.close(); showUserscripts = true }
@@ -2038,13 +2056,15 @@ class MainActivity : ComponentActivity() {
                                                                     view?.evaluateJavascript(this@MainActivity.fingerprintScript, null)
                                                                 }
 
-                                                                // Userscript extensions (HACK + DEVELOPER modes): inject every
-                                                                // enabled script whose @match/@include fits this URL.
+                                                                // Userscript extensions (HACK + DEVELOPER + ADVANCE modes):
+                                                                // inject every enabled script whose @match/@include
+                                                                // fits this URL. Advance uses its own script folder.
                                                                 // NOTE: WebView has no true document-start hook, so
                                                                 // @run-at document-start scripts also run here at
                                                                 // page finish — the earliest reliable point. The UI
                                                                 // states this plainly.
-                                                                if (liveMode == BrowserMode.HACK || liveMode == BrowserMode.DEVELOPER) {
+                                                                if (liveMode == BrowserMode.HACK || liveMode == BrowserMode.DEVELOPER ||
+                                                                    liveMode == BrowserMode.ADVANCED) {
                                                                     val pageUrl = url.orEmpty()
                                                                     liveUserscripts.forEach { script ->
                                                                         if (script.enabled && UserscriptEngine.matchesUrl(script.meta, pageUrl)) {
@@ -2376,7 +2396,8 @@ class MainActivity : ComponentActivity() {
                                                 val label = when (mode) {
                                                     BrowserMode.SIMPLE -> "Simple"
                                                     BrowserMode.DEVELOPER -> "Developer"
-                                                    else -> "Hack"
+                                                    BrowserMode.HACK -> "Hack"
+                                                    BrowserMode.ADVANCED -> "Advance"
                                                 }
                                                 Toast.makeText(
                                                     this@MainActivity, "$label Mode Activated",
@@ -2930,7 +2951,8 @@ class MainActivity : ComponentActivity() {
                                     // Userscripts inject in Developer/Hack modes only —
                                     // never imply protection in Simple mode.
                                     webrtcGuardApplies = activeMode == BrowserMode.DEVELOPER ||
-                                        activeMode == BrowserMode.HACK,
+                                        activeMode == BrowserMode.HACK ||
+                                        activeMode == BrowserMode.ADVANCED,
                                     onToggleWebrtcGuard = { v ->
                                         scope.launch(Dispatchers.IO) {
                                             userscriptManager.setWebrtcGuardEnabled(v)
@@ -3362,14 +3384,24 @@ class MainActivity : ComponentActivity() {
                     else -> "https://ahmia.fi/search/?q=$query"
                 }
             }
+            BrowserMode.ADVANCED -> {
+                when (searchEngine) {
+                    "Brave Search" -> "https://search.brave.com/search?q=$query"
+                    "DuckDuckGo" -> "https://duckduckgo.com/?q=$query"
+                    "Startpage" -> "https://www.startpage.com/sp/search?query=$query"
+                    else -> "https://www.google.com/search?q=$query"
+                }
+            }
         }
     }
 
     /**
      * V9: switching modes = switching engines. Each engine (Simple / Developer
-     * / Hack) owns an isolated WebView data directory, so when the selected
-     * mode differs from the engine this process booted with, the mode is
-     * persisted and the process restarts into the new engine.
+     * / Hack / Advance) owns an isolated WebView data directory, so when the
+     * selected mode differs from the engine this process booted with, the mode
+     * is persisted and the process restarts into the new engine. Advance
+     * additionally owns an isolated app-data profile that starts empty —
+     * nothing carries over from the other modes.
      *
      * @return true if a restart was triggered (the process is dying).
      */
@@ -3382,8 +3414,14 @@ class MainActivity : ComponentActivity() {
             webView?.let { modeManager.applySettings(it, mode, forceDesktop) }
             return false
         }
+        val toastMsg = if (mode == BrowserMode.ADVANCED) {
+            // Honest copy: a fresh isolated space, not a new engine.
+            "Entering Click Advance — fresh isolated space, restarting…"
+        } else {
+            "Switching V9 engine — restarting…"
+        }
         android.widget.Toast.makeText(
-            this, "Switching V9 engine — restarting…", android.widget.Toast.LENGTH_LONG
+            this, toastMsg, android.widget.Toast.LENGTH_LONG
         ).show()
         val restarted = V9Engine.restartForEngineSwitch(
             this, modeManager, mode,

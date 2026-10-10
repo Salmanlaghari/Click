@@ -13,8 +13,10 @@ import java.util.UUID
 
 /**
  * Install / list / enable / delete lifecycle for userscript extensions.
- * Scripts are stored as files under filesDir/userscripts/<id>.user.js;
- * the index (metadata + enabled flags) lives in DataStore.
+ * Scripts are stored as files under filesDir/userscripts/<id>.user.js
+ * (filesDir/userscripts_advanced for the Advance profile — see
+ * [profileDataStore]); the index (metadata + enabled flags) lives in the
+ * profile's DataStore.
  */
 class UserscriptManager(private val context: Context) {
 
@@ -34,10 +36,17 @@ class UserscriptManager(private val context: Context) {
     private val indexKey = stringPreferencesKey("userscripts_index")
 
     private val dir: File
-        get() = File(context.filesDir, "userscripts").apply { mkdirs() }
+        get() {
+            // Click Advance keeps its own script folder: nothing installed on
+            // the other modes is visible here, and vice versa.
+            val name =
+                if (V9Engine.bootMode == BrowserMode.ADVANCED) "userscripts_advanced"
+                else "userscripts"
+            return File(context.filesDir, name).apply { mkdirs() }
+        }
 
     suspend fun listScripts(): List<UserscriptInfo> = withContext(Dispatchers.IO) {
-        val json = context.dataStore.data.first()[indexKey].orEmpty()
+        val json = context.profileDataStore.data.first()[indexKey].orEmpty()
         if (json.isBlank()) return@withContext emptyList()
         try {
             val arr = JSONArray(json)
@@ -111,7 +120,7 @@ class UserscriptManager(private val context: Context) {
                     .put("enabled", s.enabled)
             )
         }
-        context.dataStore.edit { it[indexKey] = arr.toString() }
+        context.profileDataStore.edit { it[indexKey] = arr.toString() }
     }
 
     private fun jsonArrayToList(arr: JSONArray?): List<String> {
@@ -133,7 +142,7 @@ class UserscriptManager(private val context: Context) {
      */
     suspend fun seedBundledScripts(): Int = withContext(Dispatchers.IO) {
         val seededKey = stringPreferencesKey("userscripts_bundled_seeded_v2")
-        if (context.dataStore.data.first()[seededKey] == "1") return@withContext 0
+        if (context.profileDataStore.data.first()[seededKey] == "1") return@withContext 0
         var count = 0
         try {
             val existingNames = listScripts().map { it.meta.name }.toSet()
@@ -157,7 +166,7 @@ class UserscriptManager(private val context: Context) {
         } catch (_: Exception) {
             // Missing assets folder — nothing to seed.
         }
-        context.dataStore.edit { it[seededKey] = "1" }
+        context.profileDataStore.edit { it[seededKey] = "1" }
         count
     }
 

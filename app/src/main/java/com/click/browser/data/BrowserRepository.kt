@@ -3,7 +3,7 @@ package com.click.browser.data
 import android.content.Context
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.stringPreferencesKey
-import com.click.browser.engine.dataStore
+import com.click.browser.engine.profileDataStore
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
 import org.json.JSONArray
@@ -23,7 +23,7 @@ class BrowserRepository(private val context: Context) {
     }
 
     // --- Bookmarks ---
-    val bookmarksFlow: Flow<List<Bookmark>> = context.dataStore.data.map { preferences ->
+    val bookmarksFlow: Flow<List<Bookmark>> = context.profileDataStore.data.map { preferences ->
         val jsonStr = preferences[BOOKMARKS_KEY] ?: "[]"
         val list = mutableListOf<Bookmark>()
         val array = JSONArray(jsonStr)
@@ -35,7 +35,7 @@ class BrowserRepository(private val context: Context) {
     }
 
     suspend fun addBookmark(bookmark: Bookmark) {
-        context.dataStore.edit { preferences ->
+        context.profileDataStore.edit { preferences ->
             val jsonStr = preferences[BOOKMARKS_KEY] ?: "[]"
             val array = JSONArray(jsonStr)
 
@@ -59,7 +59,7 @@ class BrowserRepository(private val context: Context) {
     }
 
     suspend fun deleteBookmark(url: String) {
-        context.dataStore.edit { preferences ->
+        context.profileDataStore.edit { preferences ->
             val jsonStr = preferences[BOOKMARKS_KEY] ?: "[]"
             val array = JSONArray(jsonStr)
             val newArray = JSONArray()
@@ -74,7 +74,7 @@ class BrowserRepository(private val context: Context) {
     }
 
     // --- History ---
-    val historyFlow: Flow<List<HistoryItem>> = context.dataStore.data.map { preferences ->
+    val historyFlow: Flow<List<HistoryItem>> = context.profileDataStore.data.map { preferences ->
         val jsonStr = preferences[HISTORY_KEY] ?: "[]"
         val list = mutableListOf<HistoryItem>()
         val array = JSONArray(jsonStr)
@@ -86,7 +86,7 @@ class BrowserRepository(private val context: Context) {
     }
 
     suspend fun addHistoryItem(item: HistoryItem) {
-        context.dataStore.edit { preferences ->
+        context.profileDataStore.edit { preferences ->
             val jsonStr = preferences[HISTORY_KEY] ?: "[]"
             val array = JSONArray(jsonStr)
 
@@ -115,13 +115,13 @@ class BrowserRepository(private val context: Context) {
     }
 
     suspend fun clearHistory() {
-        context.dataStore.edit { preferences ->
+        context.profileDataStore.edit { preferences ->
             preferences[HISTORY_KEY] = "[]"
         }
     }
 
     // --- Downloads ---
-    val downloadsFlow: Flow<List<DownloadItem>> = context.dataStore.data.map { preferences ->
+    val downloadsFlow: Flow<List<DownloadItem>> = context.profileDataStore.data.map { preferences ->
         val jsonStr = preferences[DOWNLOADS_KEY] ?: "[]"
         val list = mutableListOf<DownloadItem>()
         val array = JSONArray(jsonStr)
@@ -133,7 +133,7 @@ class BrowserRepository(private val context: Context) {
     }
 
     suspend fun addDownloadItem(item: DownloadItem) {
-        context.dataStore.edit { preferences ->
+        context.profileDataStore.edit { preferences ->
             val jsonStr = preferences[DOWNLOADS_KEY] ?: "[]"
             val array = JSONArray(jsonStr)
             val newObj = JSONObject().apply {
@@ -148,7 +148,7 @@ class BrowserRepository(private val context: Context) {
     }
 
     // --- Per-site Desktop/Mobile preference (host -> true = always desktop) ---
-    val desktopHostsFlow: Flow<Set<String>> = context.dataStore.data.map { preferences ->
+    val desktopHostsFlow: Flow<Set<String>> = context.profileDataStore.data.map { preferences ->
         val jsonStr = preferences[DESKTOP_HOSTS_KEY] ?: "{}"
         val obj = JSONObject(jsonStr)
         val set = mutableSetOf<String>()
@@ -161,7 +161,7 @@ class BrowserRepository(private val context: Context) {
     }
 
     suspend fun setDesktopHost(host: String, desktop: Boolean) {
-        context.dataStore.edit { preferences ->
+        context.profileDataStore.edit { preferences ->
             val jsonStr = preferences[DESKTOP_HOSTS_KEY] ?: "{}"
             val obj = JSONObject(jsonStr)
             if (desktop) obj.put(host, true) else obj.remove(host)
