@@ -2,6 +2,7 @@ package com.click.browser
 
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.graphics.Bitmap
 import android.os.Bundle
 import android.speech.tts.TextToSpeech
@@ -17,8 +18,10 @@ import android.widget.Toast
 import androidx.biometric.BiometricPrompt
 import androidx.fragment.app.FragmentActivity
 import androidx.activity.compose.BackHandler
+import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.core.app.ActivityCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
@@ -154,6 +157,11 @@ class MainActivity : FragmentActivity() {
     // Cached copy of the "background audio" setting for onPause/onResume,
     // which run outside composition. Synced from the composable state.
     @Volatile private var backgroundAudioEnabledCached: Boolean = false
+
+    // Deep-link URL from a news notification tap (NewsNotifications.EXTRA_OPEN_URL).
+    // Set from onCreate (cold start) or onNewIntent (warm, singleTask); consumed
+    // once by the composable, which opens it in a new tab.
+    private val notificationOpenUrl = mutableStateOf<String?>(null)
 
     // Live copies of composable state for use inside WebViewClient callbacks,
     // which are created once and would otherwise capture stale values.
@@ -341,6 +349,30 @@ class MainActivity : FragmentActivity() {
             try { wv.onResume() } catch (_: Exception) { }
             try { wv.resumeTimers() } catch (_: Exception) { }
         }
+    }
+
+    /**
+     * Warm-path news notification tap: singleTask delivers the deep link
+     * here instead of creating a second MainActivity. The URL is consumed
+     * once into [notificationOpenUrl]; the composable opens it in a new tab.
+     */
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        consumeNotificationUrl(intent)
+    }
+
+    /**
+     * Pulls [NewsNotifications.EXTRA_OPEN_URL] out of [intent] (once) into
+     * [notificationOpenUrl]. Only http(s) URLs are accepted — the extra
+     * comes from our own notification, but intents are an exposed surface.
+     */
+    private fun consumeNotificationUrl(intent: Intent) {
+        val url = intent.getStringExtra(NewsNotifications.EXTRA_OPEN_URL)
+            ?.takeIf { it.startsWith("http://") || it.startsWith("https://") }
+            ?: return
+        intent.removeExtra(NewsNotifications.EXTRA_OPEN_URL)
+        notificationOpenUrl.value = url
     }
 
     override fun onDestroy() {
@@ -859,6 +891,14 @@ class MainActivity : FragmentActivity() {
         // WindowInsets in Compose so no chrome is hidden behind system bars.
         enableEdgeToEdge()
 
+        // News notification deep link (cold start): consume the article URL
+        // once so the composable below opens it in a new tab. Skipped on
+        // recreation (rotation / process death) — the URL was already
+        // consumed or is preserved by the tab-restore path.
+        if (savedInstanceState == null) {
+            consumeNotificationUrl(intent)
+        }
+
         modeManager = ModeManager(this)
         repository = BrowserRepository(this)
         playlistManager = PlaylistManager(this)
@@ -1106,6 +1146,85 @@ class MainActivity : FragmentActivity() {
             var playlistSeedUrl by remember { mutableStateOf<String?>(null) }
             // Generic "background audio for web pages" setting (default off).
             var backgroundAudioEnabled by remember { mutableStateOf(false) }
+            // Background news notifications: opt-in (default OFF). When the
+            // user enables them we schedule the battery-friendly WorkManager
+            // check; disabling cancels it.
+            var newsNotificationsEnabled by remember { mutableStateOf(false) }
+            var newsTopics by remember { mutableStateOf(NewsNotifications.DEFAULT_TOPICS) }
+            /**
+             * Persists the opt-in and schedules the periodic news check.
+             * Shared by the permission-grant callback and the pre-granted path.
+             */
+            fun enableNewsNotifications() {
+                newsNotificationsEnabled = true
+                scope.launch {
+                    dataStore.edit { prefs ->
+                        prefs[AppSettings.NEWS_NOTIFICATIONS_ENABLED] = true
+                    }
+                    NewsNotificationScheduler.schedule(this@MainActivity)
+                }
+                Toast.makeText(
+                    this@MainActivity,
+                    "News alerts on — you'll be notified about fresh stories",
+                    Toast.LENGTH_SHORT
+                ).show()
+            }
+            // Android 13+ runtime grant for POST_NOTIFICATIONS, requested only
+            // when the user opts in to news alerts (never at startup).
+            val newsPermissionLauncher = rememberLauncherForActivityResult(
+                ActivityResultContracts.RequestPermission()
+            ) { granted ->
+                if (granted) {
+                    enableNewsNotifications()
+                } else {
+                    // Honest: without the grant there are no alerts — the
+                    // toggle stays off and nothing is scheduled.
+                    Toast.makeText(
+                        this@MainActivity,
+                        "Notifications need permission — allow them in App info → Notifications to get news alerts.",
+                        Toast.LENGTH_LONG
+                    ).show()
+                }
+            }
+            /**
+             * Settings toggle handler: enabling on Android 13+ goes through
+             * the runtime permission first (the toggle only flips once the
+             * grant lands); disabling cancels the scheduled work.
+             */
+            fun setNewsNotificationsEnabled(wantOn: Boolean) {
+                if (wantOn == newsNotificationsEnabled) return
+                if (!wantOn) {
+                    newsNotificationsEnabled = false
+                    scope.launch {
+                        dataStore.edit { prefs ->
+                            prefs[AppSettings.NEWS_NOTIFICATIONS_ENABLED] = false
+                        }
+                        NewsNotificationScheduler.cancel(this@MainActivity)
+                    }
+                    return
+                }
+                val needsGrant = android.os.Build.VERSION.SDK_INT >=
+                    android.os.Build.VERSION_CODES.TIRAMISU &&
+                    ContextCompat.checkSelfPermission(
+                        this@MainActivity,
+                        android.Manifest.permission.POST_NOTIFICATIONS
+                    ) != PackageManager.PERMISSION_GRANTED
+                if (needsGrant) {
+                    newsPermissionLauncher.launch(android.Manifest.permission.POST_NOTIFICATIONS)
+                } else {
+                    enableNewsNotifications()
+                }
+            }
+            // News notification deep link: open the tapped article's URL in a
+            // new tab (cold start via onCreate, warm via onNewIntent).
+            val pendingNewsUrl = notificationOpenUrl.value
+            LaunchedEffect(pendingNewsUrl) {
+                if (pendingNewsUrl != null) {
+                    notificationOpenUrl.value = null
+                    tabs.add(TabItem(url = pendingNewsUrl, title = "New Tab"))
+                    activeTabIndex = tabs.size - 1
+                }
+            }
             var showSettings by remember { mutableStateOf(false) }
             var showFindInPageDialog by remember { mutableStateOf(false) }
             var findQuery by remember { mutableStateOf("") }
@@ -1537,6 +1656,11 @@ class MainActivity : FragmentActivity() {
                         ?: LocationGuard.DEFAULT_PRESET.label
                     customHeaders = AppSettings.parseHeaders(prefs[AppSettings.CUSTOM_HEADERS_JSON])
                     backgroundAudioEnabled = prefs[AppSettings.BACKGROUND_AUDIO_ENABLED] == true
+                    // Background news notifications (opt-in, default OFF).
+                    newsNotificationsEnabled = prefs[AppSettings.NEWS_NOTIFICATIONS_ENABLED] == true
+                    newsTopics = prefs[AppSettings.NEWS_NOTIFICATION_TOPICS]
+                        ?.takeIf { it.isNotEmpty() }
+                        ?: NewsNotifications.DEFAULT_TOPICS
                     // Brave-inspired privacy quick wins.
                     stripTrackingParams = prefs[AppSettings.STRIP_TRACKING_PARAMS] ?: true
                     forgetfulBrowsing = prefs[AppSettings.FORGETFUL_BROWSING] == true
@@ -3826,6 +3950,18 @@ class MainActivity : FragmentActivity() {
                                         scope.launch {
                                             dataStore.edit { prefs ->
                                                 prefs[AppSettings.BACKGROUND_AUDIO_ENABLED] = v
+                                            }
+                                        }
+                                    },
+                                    // Background news notifications (opt-in).
+                                    newsNotificationsEnabled = newsNotificationsEnabled,
+                                    onToggleNewsNotifications = { setNewsNotificationsEnabled(it) },
+                                    newsTopics = newsTopics,
+                                    onNewsTopicsChange = { topics ->
+                                        newsTopics = topics
+                                        scope.launch {
+                                            dataStore.edit { prefs ->
+                                                prefs[AppSettings.NEWS_NOTIFICATION_TOPICS] = topics
                                             }
                                         }
                                     },

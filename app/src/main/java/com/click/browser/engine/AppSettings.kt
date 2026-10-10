@@ -4,6 +4,7 @@ import android.util.Log
 import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.intPreferencesKey
+import androidx.datastore.preferences.core.longPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.core.stringSetPreferencesKey
 import org.json.JSONArray
@@ -99,6 +100,21 @@ object AppSettings {
     val LOCATION_SPOOF_LAT = stringPreferencesKey("location_spoof_lat")
     val LOCATION_SPOOF_LNG = stringPreferencesKey("location_spoof_lng")
     val LOCATION_SPOOF_LABEL = stringPreferencesKey("location_spoof_label")
+
+    // ---- Background news notifications (WhatsApp-style alerts) ----
+    // Opt-in, default OFF (Play-policy friendly): the user enables them in
+    // Settings → General → News Notifications and picks topics. A
+    // battery-friendly WorkManager job checks the RSS feeds every ~2 hours
+    // (network-connected + battery-not-low constraints) and posts a system
+    // notification for fresh articles. Tapping opens the article in a new tab.
+    /** Master switch for news notifications. Default OFF — user must opt in. */
+    val NEWS_NOTIFICATIONS_ENABLED = booleanPreferencesKey("news_notifications_enabled")
+    /** Enabled topics as NewsCategory names (e.g. "NEWS", "TECH"). Default: NEWS + TECH. */
+    val NEWS_NOTIFICATION_TOPICS = stringSetPreferencesKey("news_notification_topics")
+    /** JSON array of recently-notified article links (dedup, capped at ~100). */
+    val NEWS_SEEN_LINKS_JSON = stringPreferencesKey("news_seen_links_json")
+    /** Wall-clock ms of the last successful news check. */
+    val NEWS_LAST_CHECK_MS = longPreferencesKey("news_last_check_ms")
 
     data class CustomHeader(val name: String, val value: String)
 
