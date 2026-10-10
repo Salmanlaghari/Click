@@ -1170,33 +1170,11 @@ class MainActivity : ComponentActivity() {
             // Drawer Navigation State (Simple, Dev, Power and shortcuts inside the hamburger menu)
             val drawerState = rememberDrawerState(initialValue = DrawerValue.Closed)
 
-            // Opens the real DevTools bottom sheet on the requested tab (0=Elements,
-            // 1=Console, 2=Network, 3=Sources, 4=Device), switching to Developer
-            // mode if needed. Declared after drawerState so the drawer can be
-            // closed from it.
-            fun openDevToolsTab(tab: Int) {
-                scope.launch {
-                    drawerState.close()
-                    if (currentTab.url == "about:blank") {
-                        Toast.makeText(this@MainActivity, "Load a web page first.", Toast.LENGTH_SHORT).show()
-                        return@launch
-                    }
-                    if (activeMode != BrowserMode.DEVELOPER) {
-                        // V9: DevTools runs in the Developer engine.
-                        val restarting = v9SwitchMode(BrowserMode.DEVELOPER, currentTab.webView, forceDesktopMode)
-                        if (!restarting) currentTab.webView?.reload()
-                    }
-                    devToolsTab = tab
-                    // Refresh device facts when the Device tab is requested.
-                    if (tab == 4) refreshDevToolsDeviceInfo()
-                    showDevToolsSheet = true
-                }
-            }
-
             /**
              * Reads live viewport/device facts from the current page via JS.
              * Updates [devToolsDeviceInfo]; safe to call when no page is loaded
-             * (clears the info instead of crashing).
+             * (clears the info instead of crashing). Declared before
+             * [openDevToolsTab] (Kotlin local funs need declaration-before-use).
              */
             fun refreshDevToolsDeviceInfo() {
                 val wv = currentTab.webView
@@ -1239,6 +1217,29 @@ class MainActivity : ComponentActivity() {
                     } catch (_: Exception) {
                         null
                     }
+                }
+            }
+
+            // Opens the real DevTools bottom sheet on the requested tab (0=Elements,
+            // 1=Console, 2=Network, 3=Sources, 4=Device), switching to Developer
+            // mode if needed. Declared after drawerState so the drawer can be
+            // closed from it.
+            fun openDevToolsTab(tab: Int) {
+                scope.launch {
+                    drawerState.close()
+                    if (currentTab.url == "about:blank") {
+                        Toast.makeText(this@MainActivity, "Load a web page first.", Toast.LENGTH_SHORT).show()
+                        return@launch
+                    }
+                    if (activeMode != BrowserMode.DEVELOPER) {
+                        // V9: DevTools runs in the Developer engine.
+                        val restarting = v9SwitchMode(BrowserMode.DEVELOPER, currentTab.webView, forceDesktopMode)
+                        if (!restarting) currentTab.webView?.reload()
+                    }
+                    devToolsTab = tab
+                    // Refresh device facts when the Device tab is requested.
+                    if (tab == 4) refreshDevToolsDeviceInfo()
+                    showDevToolsSheet = true
                 }
             }
 
