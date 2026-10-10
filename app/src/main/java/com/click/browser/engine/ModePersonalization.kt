@@ -10,12 +10,17 @@ import org.json.JSONArray
 import org.json.JSONObject
 
 /**
- * Per-mode personalization (V9 "1 Browser, 3 Engines" identity).
+ * Per-mode personalization (V9 "1 Browser, 4 Engines" identity).
  *
  * Each browsing mode feels like a DIFFERENT browser:
  * - its own home quick-sites (Simple = everyday sites, Developer = dev tools,
- *   Hack = ethical-hacking learning platforms — legitimate educational sites only)
+ *   Hack = ethical-hacking learning platforms — legitimate educational sites only,
+ *   Advance = minimal fresh-space starter set)
  * - its own default search engine (user-changeable per mode)
+ *
+ * Storage is per-profile (see [profileDataStoreFor]): Simple / Developer /
+ * Hack share the legacy store keyed by mode, Advance has its own store that
+ * starts from these defaults.
  *
  * Quick sites are fully user-customizable (add / edit / remove); the stored
  * list is seeded from the per-mode defaults on first run.
@@ -39,6 +44,7 @@ object ModePersonalization {
         BrowserMode.SIMPLE -> "Google"
         BrowserMode.DEVELOPER -> "DuckDuckGo"
         BrowserMode.HACK -> "Brave Search"
+        BrowserMode.ADVANCED -> "Google"
     }
 
     /** Engines offered per mode in Settings (default first). */
@@ -46,6 +52,7 @@ object ModePersonalization {
         BrowserMode.SIMPLE -> listOf("Google", "Bing", "Yahoo", "DuckDuckGo")
         BrowserMode.DEVELOPER -> listOf("DuckDuckGo", "Google", "Bing", "Yandex")
         BrowserMode.HACK -> listOf("Brave Search", "Startpage", "Ahmia", "Perplexity")
+        BrowserMode.ADVANCED -> listOf("Google", "Brave Search", "DuckDuckGo", "Startpage")
     }
 
     /**
@@ -100,6 +107,13 @@ object ModePersonalization {
             QuickSiteDef("PicoCTF", "https://picoctf.org", 0xFF4B2E83, "C", 0xFFFFFFFF),
             QuickSiteDef("Cybrary", "https://www.cybrary.it", 0xFF0056D2, "C", 0xFFFFFFFF)
         )
+        // Click Advance: minimal fresh-space starter set.
+        BrowserMode.ADVANCED -> listOf(
+            QuickSiteDef("Google", "https://google.com", 0xFF4285F4, "G", 0xFFFFFFFF),
+            QuickSiteDef("YouTube", "https://youtube.com", 0xFFFF0000, "▶", 0xFFFFFFFF),
+            QuickSiteDef("GitHub", "https://github.com", 0xFF24292F, "G", 0xFFFFFFFF),
+            QuickSiteDef("Wikipedia", "https://wikipedia.org", 0xFFF5F5F5, "W", 0xFF333333)
+        )
     }
 
     // ------------------------------------------------------------------
@@ -148,16 +162,16 @@ object ModePersonalization {
 
     /** Reactive per-mode quick sites (seeded from defaults on first run). */
     fun quickSitesFlow(context: Context, mode: BrowserMode): Flow<List<QuickSiteDef>> =
-        context.dataStore.data.map { prefs ->
+        context.profileDataStoreFor(mode).data.map { prefs ->
             decode(prefs[sitesKey(mode)]) ?: defaultQuickSites(mode)
         }
 
     private suspend fun saveSites(context: Context, mode: BrowserMode, sites: List<QuickSiteDef>) {
-        context.dataStore.edit { prefs -> prefs[sitesKey(mode)] = encode(sites) }
+        context.profileDataStoreFor(mode).edit { prefs -> prefs[sitesKey(mode)] = encode(sites) }
     }
 
     private suspend fun currentSites(context: Context, mode: BrowserMode): List<QuickSiteDef> =
-        decode(context.dataStore.data.first()[sitesKey(mode)]) ?: defaultQuickSites(mode)
+        decode(context.profileDataStoreFor(mode).data.first()[sitesKey(mode)]) ?: defaultQuickSites(mode)
 
     suspend fun addQuickSite(context: Context, mode: BrowserMode, site: QuickSiteDef) {
         val sites = currentSites(context, mode).toMutableList()
@@ -179,7 +193,7 @@ object ModePersonalization {
 
     /** Reactive per-mode search engine. */
     fun searchEngineFlow(context: Context, mode: BrowserMode): Flow<String> =
-        context.dataStore.data.map { prefs ->
+        context.profileDataStoreFor(mode).data.map { prefs ->
             val saved = prefs[engineKey(mode)]
             val offered = searchEngines(mode)
             if (saved != null && offered.contains(saved)) saved else defaultSearchEngine(mode)
@@ -189,6 +203,6 @@ object ModePersonalization {
         searchEngineFlow(context, mode).first()
 
     suspend fun setSearchEngine(context: Context, mode: BrowserMode, engine: String) {
-        context.dataStore.edit { prefs -> prefs[engineKey(mode)] = engine }
+        context.profileDataStoreFor(mode).edit { prefs -> prefs[engineKey(mode)] = engine }
     }
 }

@@ -19,12 +19,13 @@ import androidx.compose.ui.unit.sp
 import com.click.browser.engine.BrowserMode
 
 /**
- * Browse-surface polish (Prince's "Same Website. 3 Beautiful Modes." reference).
+ * Browse-surface polish (Prince's "Same Website. 4 Beautiful Modes." reference).
  *
  * Official per-mode display names + taglines, used by every mode switcher:
  * - Simple — Clean · Fresh · Easy on Eyes
  * - Developer — Modern · Stylish · Premium
  * - Hack — Pure Black · Neon Glow · Next Level
+ * - Advance — Isolated · Fast · Fresh Space (own data profile, starts empty)
  */
 data class ModeDisplay(val title: String, val tagline: String)
 
@@ -40,6 +41,11 @@ fun BrowserMode.display(): ModeDisplay = when (this) {
     BrowserMode.HACK -> ModeDisplay(
         "Hack",
         "Pure Black · Neon Glow · Next Level"
+    )
+    // Honest wording: an isolated, performance-tuned profile — not a new engine.
+    BrowserMode.ADVANCED -> ModeDisplay(
+        "Advance",
+        "Isolated · Fast · Fresh Space"
     )
 }
 

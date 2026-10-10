@@ -814,7 +814,7 @@ fun AboutAppDialog(onClose: () -> Unit) {
                 Spacer(modifier = Modifier.height(12.dp))
                 // V9 — Prince's signature feature.
                 Text(
-                    "V9 — 1 Browser, 3 Engines",
+                    "V9 — 1 Browser, 4 Engines",
                     fontSize = 13.sp,
                     fontWeight = FontWeight.ExtraBold,
                     color = MaterialTheme.colorScheme.primary

@@ -7,6 +7,7 @@ import androidx.compose.ui.graphics.Color
  * - SIMPLE: clean white + royal blue
  * - DEVELOPER: dark + electric purple DevTools
  * - HACK: matrix cyber black + neon red/green HUD
+ * - ADVANCE: deep-space teal/cyan "fresh space" identity
  *
  * Every mode has a light and a dark variant; the global Day/Night toggle
  * in Settings picks the variant.
@@ -33,6 +34,7 @@ object ModeThemes {
         BrowserMode.SIMPLE -> if (dark) simpleDark() else simpleLight()
         BrowserMode.DEVELOPER -> if (dark) developerDark() else developerLight()
         BrowserMode.HACK -> if (dark) hackDark() else hackLight()
+        BrowserMode.ADVANCED -> if (dark) advanceDark() else advanceLight()
     }
 
     private fun simpleLight() = ModeTheme(
@@ -123,5 +125,36 @@ object ModeThemes {
         onTopBar = Color(0xFFDC2626),
         glow = Color(0xFF16A34A),
         modePillText = "HACK MODE • ACTIVE"
+    )
+
+    // Click Advance: deep-space teal/cyan "fresh space" identity.
+    private fun advanceLight() = ModeTheme(
+        mode = BrowserMode.ADVANCED, dark = false,
+        background = Color(0xFFF5FEFF),
+        surface = Color(0xFFFFFFFF),
+        surfaceVariant = Color(0xFFE6FAFA),
+        primary = Color(0xFF0E7490),
+        secondary = Color(0xFF06B6D4),
+        onBackground = Color(0xFF0C2E35),
+        onSurface = Color(0xFF134E5E),
+        topBarBg = Color(0xFFFFFFFF),
+        onTopBar = Color(0xFF0E7490),
+        glow = Color(0xFF06B6D4),
+        modePillText = "ADVANCE MODE"
+    )
+
+    private fun advanceDark() = ModeTheme(
+        mode = BrowserMode.ADVANCED, dark = true,
+        background = Color(0xFF04141A),
+        surface = Color(0xFF0A2230),
+        surfaceVariant = Color(0xFF103646),
+        primary = Color(0xFF22D3EE),
+        secondary = Color(0xFF06B6D4),
+        onBackground = Color(0xFFE6FAFA),
+        onSurface = Color(0xFFD0F0F7),
+        topBarBg = Color(0xFF04141A),
+        onTopBar = Color(0xFFFFFFFF),
+        glow = Color(0xFF22D3EE),
+        modePillText = "ADVANCE MODE • ACTIVE"
     )
 }

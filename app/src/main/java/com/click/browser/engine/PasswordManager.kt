@@ -81,16 +81,16 @@ object PasswordManager {
     }
 
     suspend fun isEnabled(context: Context): Boolean {
-        return context.dataStore.data.map { it[ENABLED_KEY] ?: true }.first()
+        return context.profileDataStore.data.map { it[ENABLED_KEY] ?: true }.first()
     }
 
     suspend fun setEnabled(context: Context, enabled: Boolean) {
-        context.dataStore.edit { it[ENABLED_KEY] = enabled }
+        context.profileDataStore.edit { it[ENABLED_KEY] = enabled }
     }
 
     suspend fun getAll(context: Context): List<SavedPassword> {
         return try {
-            val json = context.dataStore.data.map { it[PASSWORDS_KEY].orEmpty() }.first()
+            val json = context.profileDataStore.data.map { it[PASSWORDS_KEY].orEmpty() }.first()
             if (json.isBlank()) return emptyList()
             val arr = JSONArray(json)
             (0 until arr.length()).mapNotNull { i ->
@@ -126,7 +126,7 @@ object PasswordManager {
                 put("t", s.savedAt)
             })
         }
-        context.dataStore.edit { it[PASSWORDS_KEY] = arr.toString() }
+        context.profileDataStore.edit { it[PASSWORDS_KEY] = arr.toString() }
     }
 
     suspend fun delete(context: Context, host: String, username: String) {
@@ -142,10 +142,10 @@ object PasswordManager {
                 put("t", s.savedAt)
             })
         }
-        context.dataStore.edit { it[PASSWORDS_KEY] = arr.toString() }
+        context.profileDataStore.edit { it[PASSWORDS_KEY] = arr.toString() }
     }
 
     suspend fun clearAll(context: Context) {
-        context.dataStore.edit { it.remove(PASSWORDS_KEY) }
+        context.profileDataStore.edit { it.remove(PASSWORDS_KEY) }
     }
 }

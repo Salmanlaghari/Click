@@ -201,7 +201,7 @@ fun V9ShieldScreen(onClose: () -> Unit) {
             )
 
             Spacer(Modifier.height(20.dp))
-            Text("V9 Engines — 1 Browser, 3 Engines", fontWeight = FontWeight.Bold, color = Color.White, fontSize = 14.sp)
+            Text("V9 Engines — 1 Browser, 4 Engines", fontWeight = FontWeight.Bold, color = Color.White, fontSize = 14.sp)
             Spacer(Modifier.height(8.dp))
             BrowserMode.values().forEach { mode ->
                 val p = V9Engine.profileFor(mode)
