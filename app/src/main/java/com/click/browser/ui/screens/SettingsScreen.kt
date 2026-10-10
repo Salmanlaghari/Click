@@ -60,17 +60,34 @@ fun SettingsScreen(
     onModeChange: (BrowserMode) -> Unit,
     currentSearchEngineSetting: String,
     onSearchEngineChange: (String) -> Unit,
+    // --- Address bar position ---
+    addressBarPosition: String, // "top" | "bottom"
+    onAddressBarPositionChange: (String) -> Unit,
+    // --- Customizable menu ---
+    onCustomizeMenu: () -> Unit,
     // --- Privacy toggles ---
     adBlockerEnabled: Boolean,
     onToggleAdBlocker: (Boolean) -> Unit,
     forceNightMode: Boolean,
     onToggleNightMode: (Boolean) -> Unit,
-    httpsOnlyMode: Boolean,
-    onToggleHttpsOnly: (Boolean) -> Unit,
+    httpsMode: String,
+    onHttpsModeChange: (String) -> Unit,
+    httpsStrictExceptions: List<String>,
+    onAddHttpsException: (String) -> Unit,
+    onRemoveHttpsException: (String) -> Unit,
     jsEnabled: Boolean,
     onToggleJs: (Boolean) -> Unit,
     dataSaver: Boolean,
     onToggleDataSaver: (Boolean) -> Unit,
+    // --- Brave-inspired privacy quick wins ---
+    stripTrackingParams: Boolean,
+    onToggleStripTrackingParams: (Boolean) -> Unit,
+    forgetfulBrowsing: Boolean,
+    onToggleForgetfulBrowsing: (Boolean) -> Unit,
+    blockConsentBanners: Boolean,
+    onToggleBlockConsentBanners: (Boolean) -> Unit,
+    forgetfulExceptions: Set<String>,
+    onForgetfulExceptionsChange: (Set<String>) -> Unit,
     // --- Clear browsing data ---
     onClearHistoryForMode: (BrowserMode) -> Unit,
     onClearCookies: () -> Unit,
@@ -126,8 +143,9 @@ fun SettingsScreen(
     data class Row(val section: String?, val content: @Composable () -> Unit)
     val rows = remember(
         theme, currentThemeSetting, wallpaperUri, activeMode,
-        currentSearchEngineSetting, adBlockerEnabled, forceNightMode,
-        httpsOnlyMode, jsEnabled, dataSaver, perModeDark, historyModeTarget,
+        currentSearchEngineSetting, addressBarPosition,
+        adBlockerEnabled, forceNightMode,
+        httpsMode, httpsStrictExceptions, jsEnabled, dataSaver, perModeDark, historyModeTarget,
         aiApiKey, aiProvider, aiModel, showAiKey, animationsEnabled
     ) {
         buildList {
@@ -223,6 +241,41 @@ fun SettingsScreen(
                     )
                 }
             })
+            // ---- Address bar position (Brave/Chrome style) ----
+            add(Row(null) {
+                CardRow(theme) {
+                    Text("Address Bar Position", color = theme.onSurface, fontWeight = FontWeight.SemiBold, fontSize = 14.sp)
+                    Text(
+                        "Move the URL bar to the top or bottom of the screen — works in all 4 modes.",
+                        fontSize = 11.sp, color = theme.onSurface.copy(alpha = 0.6f)
+                    )
+                    Spacer(Modifier.height(8.dp))
+                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        FilterChip(
+                            selected = addressBarPosition == "top",
+                            onClick = { onAddressBarPositionChange("top") },
+                            label = { Text("⬆️ Top") }
+                        )
+                        FilterChip(
+                            selected = addressBarPosition == "bottom",
+                            onClick = { onAddressBarPositionChange("bottom") },
+                            label = { Text("⬇️ Bottom") }
+                        )
+                    }
+                }
+            })
+            // ---- Customize browser menu ----
+            add(Row(null) {
+                CardRow(theme) {
+                    ActionRow(
+                        "Customize Menu",
+                        "Reorder & hide items in the browser menu",
+                        Icons.Default.Tune,
+                        theme,
+                        onCustomizeMenu
+                    )
+                }
+            })
             // ---- AI Assistant (kept from the old settings) ----
             add(Row(null) {
                 CardRow(theme) {
@@ -292,11 +345,111 @@ fun SettingsScreen(
                     HorizontalDivider(color = theme.onSurface.copy(alpha = 0.1f))
                     ToggleRow("Force Night Mode", "Inject night theme on web pages", forceNightMode, onToggleNightMode, theme)
                     HorizontalDivider(color = theme.onSurface.copy(alpha = 0.1f))
-                    ToggleRow("HTTPS-Only Mode", "Require secure TLS connections", httpsOnlyMode, onToggleHttpsOnly, theme)
+                    // ---- HTTPS mode: Off / Standard / Strict ----
+                    Text(
+                        "HTTPS Mode",
+                        color = theme.onSurface, fontWeight = FontWeight.SemiBold, fontSize = 14.sp
+                    )
+                    Text(
+                        "Standard upgrades http to https. Strict BLOCKS plain-http pages " +
+                            "(per-site exceptions below). Off allows http.",
+                        fontSize = 11.sp, color = theme.onSurface.copy(alpha = 0.6f)
+                    )
+                    Spacer(Modifier.height(8.dp))
+                    ModeOptionRow("off", "Off", "Allow plain-http pages (least safe)",
+                        selected = httpsMode == "off",
+                        onSelect = { onHttpsModeChange("off") }, theme)
+                    ModeOptionRow("standard", "Standard", "Upgrade http to https automatically",
+                        selected = httpsMode == "standard",
+                        onSelect = { onHttpsModeChange("standard") }, theme)
+                    ModeOptionRow("strict", "Strict", "Block plain-http pages entirely",
+                        selected = httpsMode == "strict",
+                        onSelect = { onHttpsModeChange("strict") }, theme)
+                    // ---- HTTPS-Strict per-site exceptions ----
+                    if (httpsMode == "strict") {
+                        Spacer(Modifier.height(8.dp))
+                        Text(
+                            "Strict exceptions",
+                            color = theme.onSurface, fontWeight = FontWeight.SemiBold, fontSize = 13.sp
+                        )
+                        Text(
+                            "These sites may load over plain http even in Strict mode.",
+                            fontSize = 11.sp, color = theme.onSurface.copy(alpha = 0.6f)
+                        )
+                        Spacer(Modifier.height(4.dp))
+                        var newException by remember { mutableStateOf("") }
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            OutlinedTextField(
+                                value = newException,
+                                onValueChange = { newException = it },
+                                placeholder = { Text("example.com", fontSize = 13.sp) },
+                                singleLine = true,
+                                modifier = Modifier.weight(1f),
+                                textStyle = LocalTextStyle.current.copy(fontSize = 13.sp)
+                            )
+                            Button(onClick = {
+                                onAddHttpsException(newException)
+                                newException = ""
+                            }) { Text("Add") }
+                        }
+                        Spacer(Modifier.height(4.dp))
+                        if (httpsStrictExceptions.isEmpty()) {
+                            Text(
+                                "No exceptions yet.",
+                                fontSize = 12.sp, color = theme.onSurface.copy(alpha = 0.5f)
+                            )
+                        } else {
+                            httpsStrictExceptions.forEach { host ->
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(vertical = 2.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Text(
+                                        host, fontSize = 13.sp,
+                                        color = theme.onSurface, modifier = Modifier.weight(1f)
+                                    )
+                                    TextButton(onClick = { onRemoveHttpsException(host) }) {
+                                        Text("Remove", fontSize = 12.sp)
+                                    }
+                                }
+                            }
+                        }
+                    }
                     HorizontalDivider(color = theme.onSurface.copy(alpha = 0.1f))
                     ToggleRow("JavaScript", "Enable core scripting execution", jsEnabled, onToggleJs, theme)
                     HorizontalDivider(color = theme.onSurface.copy(alpha = 0.1f))
                     ToggleRow("Data Saver", "Reduce web resource overhead", dataSaver, onToggleDataSaver, theme)
+                    HorizontalDivider(color = theme.onSurface.copy(alpha = 0.1f))
+                    ToggleRow(
+                        "Strip Tracking Links",
+                        "Auto-remove utm_*, gclid, fbclid & other trackers from URLs",
+                        stripTrackingParams, onToggleStripTrackingParams, theme
+                    )
+                    HorizontalDivider(color = theme.onSurface.copy(alpha = 0.1f))
+                    ToggleRow(
+                        "Forgetful Browsing",
+                        "Wipe a site's cookies & data when its last tab closes",
+                        forgetfulBrowsing, onToggleForgetfulBrowsing, theme
+                    )
+                    if (forgetfulBrowsing) {
+                        ForgetfulExceptionsRow(
+                            exceptions = forgetfulExceptions,
+                            onExceptionsChange = onForgetfulExceptionsChange,
+                            theme = theme
+                        )
+                    }
+                    HorizontalDivider(color = theme.onSurface.copy(alpha = 0.1f))
+                    ToggleRow(
+                        "Block Cookie Banners",
+                        "Auto-hide cookie-consent / GDPR popups",
+                        blockConsentBanners, onToggleBlockConsentBanners, theme
+                    )
                     HorizontalDivider(color = theme.onSurface.copy(alpha = 0.1f))
                     // LocationGuard: hide/spoof browser geolocation.
                     ActionRow(
@@ -566,6 +719,31 @@ private fun CardRow(theme: ModeTheme, content: @Composable ColumnScope.() -> Uni
 }
 
 @Composable
+private fun ModeOptionRow(
+    value: String,
+    title: String,
+    desc: String,
+    selected: Boolean,
+    onSelect: () -> Unit,
+    theme: ModeTheme
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onSelect)
+            .padding(vertical = 6.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        RadioButton(selected = selected, onClick = onSelect)
+        Spacer(Modifier.width(8.dp))
+        Column(Modifier.weight(1f)) {
+            Text(title, fontSize = 14.sp, color = theme.onSurface, fontWeight = FontWeight.Medium)
+            Text(desc, fontSize = 11.sp, color = theme.onSurface.copy(alpha = 0.6f))
+        }
+    }
+}
+
+@Composable
 private fun ToggleRow(
     title: String,
     desc: String,
@@ -619,5 +797,97 @@ private fun InfoLine(label: String, value: String, theme: ModeTheme) {
     ) {
         Text(label, color = theme.onSurface.copy(alpha = 0.6f), fontSize = 13.sp)
         Text(value, color = theme.onSurface, fontWeight = FontWeight.SemiBold, fontSize = 13.sp)
+    }
+}
+
+/**
+ * Forgetful Browsing per-site exceptions: sites whose cookies/data are kept
+ * even when their last tab closes. Add/remove hosts; input is normalized
+ * ("https://Example.com/" -> "example.com") and invalid hosts are rejected.
+ */
+@Composable
+private fun ForgetfulExceptionsRow(
+    exceptions: Set<String>,
+    onExceptionsChange: (Set<String>) -> Unit,
+    theme: ModeTheme
+) {
+    var showDialog by remember { mutableStateOf(false) }
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable { showDialog = true }
+            .padding(vertical = 10.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Icon(Icons.Default.Shield, contentDescription = null, tint = theme.primary, modifier = Modifier.size(22.dp))
+        Spacer(Modifier.width(12.dp))
+        Column(Modifier.weight(1f)) {
+            Text("Forgetful exceptions", color = theme.onSurface, fontWeight = FontWeight.SemiBold, fontSize = 14.sp)
+            Text(
+                if (exceptions.isEmpty()) "No exceptions — every site is forgotten"
+                else "${exceptions.size} site(s) always remembered",
+                fontSize = 11.sp, color = theme.onSurface.copy(alpha = 0.6f)
+            )
+        }
+        Icon(Icons.AutoMirrored.Filled.ArrowForward, contentDescription = null, tint = Color.Gray, modifier = Modifier.size(18.dp))
+    }
+    if (showDialog) {
+        var input by remember { mutableStateOf("") }
+        var error by remember { mutableStateOf<String?>(null) }
+        AlertDialog(
+            onDismissRequest = { showDialog = false },
+            title = { Text("Remember these sites", color = theme.onSurface) },
+            text = {
+                Column {
+                    Text(
+                        "Excepted sites keep their cookies & data when tabs close.",
+                        fontSize = 12.sp, color = theme.onSurface.copy(alpha = 0.6f)
+                    )
+                    Spacer(Modifier.height(8.dp))
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        OutlinedTextField(
+                            value = input,
+                            onValueChange = { input = it; error = null },
+                            label = { Text("example.com") },
+                            singleLine = true,
+                            isError = error != null,
+                            modifier = Modifier.weight(1f)
+                        )
+                        Spacer(Modifier.width(8.dp))
+                        Button(onClick = {
+                            val host = com.click.browser.engine.ForgetfulBrowsing.normalizeException(input)
+                            if (host == null) {
+                                error = "Not a valid host"
+                            } else {
+                                onExceptionsChange(exceptions + host)
+                                input = ""
+                            }
+                        }) { Text("Add") }
+                    }
+                    if (error != null) {
+                        Text(error!!, color = MaterialTheme.colorScheme.error, fontSize = 12.sp)
+                    }
+                    Spacer(Modifier.height(8.dp))
+                    if (exceptions.isEmpty()) {
+                        Text("No exceptions yet.", fontSize = 12.sp, color = theme.onSurface.copy(alpha = 0.6f))
+                    } else {
+                        exceptions.sorted().forEach { host ->
+                            Row(
+                                modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text(host, modifier = Modifier.weight(1f), fontSize = 14.sp, color = theme.onSurface)
+                                IconButton(onClick = { onExceptionsChange(exceptions - host) }) {
+                                    Icon(Icons.Default.Delete, contentDescription = "Remove $host", tint = MaterialTheme.colorScheme.error)
+                                }
+                            }
+                        }
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { showDialog = false }) { Text("Done") }
+            }
+        )
     }
 }

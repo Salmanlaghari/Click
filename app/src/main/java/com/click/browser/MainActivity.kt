@@ -51,6 +51,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.*
 import androidx.compose.material.icons.filled.*
+import androidx.compose.material.icons.outlined.*
 import androidx.compose.material3.*
 import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.runtime.*
@@ -150,14 +151,25 @@ class MainActivity : ComponentActivity() {
     // which are created once and would otherwise capture stale values.
     private var liveMode: BrowserMode = BrowserMode.SIMPLE
     private var liveAntiDetection = true
-    private var liveHttpsOnly = true
     private var liveNightMode = false
     private var liveDataSaver = false
     // Live copies for the privacy-guard features (see PrivacyGuards).
     private var liveHeaderSpoof = false
-    private var liveFingerprintProtection = true
+    // Fingerprint mode: "off" | "standard" | "strict" (Brave-hardening).
+    private var liveFingerprintMode = "standard"
     private var liveSecureDns = false
     private var liveCustomHeaders: Map<String, String> = emptyMap()
+    // Brave-inspired privacy quick wins (live copies for WebViewClient callbacks).
+    private var liveStripTrackingParams = true
+    private var liveForgetfulBrowsing = false
+    private var liveForgetfulExceptions: Set<String> = emptySet()
+    private var liveBlockConsentBanners = true
+    // HTTPS mode: "off" | "standard" | "strict" + per-site Strict exceptions.
+    private var liveHttpsMode = "standard"
+    private var liveHttpsStrictExceptions: Set<String> = emptySet()
+    // DNT + GPC privacy signals (opt-in, default off).
+    private var liveDntEnabled = false
+    private var liveGpcEnabled = false
     // Live copy of per-site desktop hosts (persisted per host via BrowserRepository).
     private var liveDesktopHosts: Set<String> = emptySet()
     // Live copy of per-site settings (JS / adblock / location / cookies / zoom),
@@ -206,7 +218,9 @@ class MainActivity : ComponentActivity() {
     // Generated once per app launch: noise is stable within a session but
     // differs on every launch, so hashes can't be correlated across sessions.
     private val sessionSalt: String = java.util.UUID.randomUUID().toString()
-    private val fingerprintScript: String by lazy { PrivacyGuards.buildFingerprintScript(sessionSalt) }
+    /** Fingerprint-protection script for the current mode (strict adds extra hooks). */
+    private fun fingerprintScript(strict: Boolean): String =
+        PrivacyGuards.buildFingerprintScript(sessionSalt, strict)
 
     // Userscript extensions (HACK mode). Live caches are refreshed whenever
     // the script list changes so WebViewClient always sees current data.
@@ -260,6 +274,9 @@ class MainActivity : ComponentActivity() {
         return try {
             val req = Request.Builder().url(url).apply {
                 liveCustomHeaders.forEach { (name, value) -> header(name, value) }
+                // Privacy signals ride on re-fetched subresources too.
+                if (liveFlags.dntHeader || liveDntEnabled) header("DNT", "1")
+                if (liveGpcEnabled) header("Sec-GPC", "1")
             }.build()
             val resp = getHeaderFetchClient().newCall(req).execute()
             val body = resp.body ?: return null
@@ -439,15 +456,16 @@ class MainActivity : ComponentActivity() {
 
     /** Applies the privacy toggles to a WebView's settings. Idempotent. */    private fun applyPrivacyToggles(
         webView: WebView,
-        httpsOnly: Boolean = liveHttpsOnly,
+        httpsMode: String = liveHttpsMode,
         nightMode: Boolean = liveNightMode,
         dataSaver: Boolean = liveDataSaver
     ) {
         val s = webView.settings
-        s.mixedContentMode = if (httpsOnly) {
-            WebSettings.MIXED_CONTENT_NEVER_ALLOW
-        } else {
+        // Standard + Strict both forbid mixed content; Off allows compat mode.
+        s.mixedContentMode = if (httpsMode == "off") {
             WebSettings.MIXED_CONTENT_COMPATIBILITY_MODE
+        } else {
+            WebSettings.MIXED_CONTENT_NEVER_ALLOW
         }
         s.blockNetworkImage = dataSaver
         s.loadsImagesAutomatically = !dataSaver
@@ -459,6 +477,16 @@ class MainActivity : ComponentActivity() {
         if (WebViewFeature.isFeatureSupported(WebViewFeature.SAFE_BROWSING_ENABLE)) {
             WebSettingsCompat.setSafeBrowsingEnabled(s, true)
         }
+    }
+
+    /**
+     * Query-param stripping (Brave-style): removes tracking params from a
+     * navigation URL when the toggle is on. Returns the original URL when
+     * stripping is off or nothing was stripped.
+     */
+    private fun cleanTrackingUrl(url: String): String {
+        if (!liveStripTrackingParams) return url
+        return QueryParamStripper.strip(url) ?: url
     }
 
 
@@ -589,7 +617,7 @@ class MainActivity : ComponentActivity() {
         return liveSiteSettings.forHost(host.lowercase())?.location
     }
 
-
+    /**
      * LocationGuard: resolves the effective location mode for a URL —
      * per-site override wins, else the global mode. Matches subdomains too
      * (same rule as per-site desktop).
@@ -654,6 +682,48 @@ class MainActivity : ComponentActivity() {
     }
 
     /** Shared pretty error page used by both onReceivedError variants. */
+    /** Extracts the lowercase host from a URL ("" on failure). */
+    private fun hostOfUrl(url: String): String = try {
+        android.net.Uri.parse(url).host?.lowercase().orEmpty()
+    } catch (_: Exception) {
+        ""
+    }
+
+    /**
+     * HTTPS-Strict block page: shown instead of loading a plain-http URL
+     * when HTTPS mode is Strict and the host has no exception. Offers a
+     * one-tap HTTPS retry and points at the per-site exception list in
+     * Settings → Privacy & Security.
+     */
+    private fun showHttpsBlockedPage(view: WebView?, blockedUrl: String, host: String) {
+        val safeUrl = blockedUrl.take(300).replace("<", "&lt;").replace(">", "&gt;")
+        val safeHost = host.take(120).replace("<", "&lt;").replace(">", "&gt;")
+        val httpsTry = ("https://" + blockedUrl.removePrefix("http://")).replace("'", "%27")
+        val customHtml = """
+            <html>
+            <head>
+                <meta name="viewport" content="width=device-width, initial-scale=1">
+                <style>
+                    body { background-color: #0f172a; color: #f8fafc; font-family: sans-serif; text-align: center; padding: 50px 24px; }
+                    h1 { color: #f59e0b; font-size: 22px; }
+                    p { color: #94a3b8; font-size: 15px; line-height: 1.5; }
+                    code { color: #f8fafc; font-size: 13px; word-break: break-all; }
+                    .btn { background-color: #3b82f6; border: none; color: white; padding: 12px 24px; border-radius: 8px; font-weight: bold; cursor: pointer; margin-top: 16px; font-size: 15px; }
+                    .note { margin-top: 24px; font-size: 13px; color: #64748b; }
+                </style>
+            </head>
+            <body>
+                <h1>🔒 Blocked: insecure connection</h1>
+                <p>HTTPS Strict mode blocked this page because it uses plain <b>http</b> (not encrypted).</p>
+                <p><code>$safeUrl</code></p>
+                <button class="btn" onclick="location.href='$httpsTry'">Try HTTPS anyway</button>
+                <p class="note">Trust this site over http? Add <b>$safeHost</b> to the HTTPS-Strict exception list in Settings → Privacy &amp; Security.</p>
+            </body>
+            </html>
+        """.trimIndent()
+        view?.loadDataWithBaseURL(null, customHtml, "text/html", "UTF-8", null)
+    }
+
     private fun showBrowserErrorPage(view: WebView?, description: String?) {
         val safeDesc = description?.take(200) ?: "Unknown error"
         val customHtml = """
@@ -762,6 +832,14 @@ class MainActivity : ComponentActivity() {
             // Chrome/Mises-style browser menu (bottom sheet) + recent tabs +
             // delete-browsing-data confirmation.
             var showBrowserMenu by remember { mutableStateOf(false) }
+            // Customizable menu: user-defined order + hidden items.
+            var menuOrder by remember {
+                mutableStateOf(MenuCustomization.DEFAULT_ORDER)
+            }
+            var menuHidden by remember {
+                mutableStateOf(setOf<MenuCustomization.MenuItemId>())
+            }
+            var showMenuCustomize by remember { mutableStateOf(false) }
             // Premium UI v2: bottom-left FAB feature menu (always visible).
             var showFeatureMenu by remember { mutableStateOf(false) }
             // Tab-close snackbar with UNDO (Premium UI v2).
@@ -800,6 +878,17 @@ class MainActivity : ComponentActivity() {
                     tabs[0] = TabItem(url = homeUrl(), title = "New Tab")
                     activeTabIndex = 0
                 }
+                // Forgetful Browsing: if the closed tab was the last one
+                // showing its site (non-incognito), the site's cookies and
+                // web storage are wiped — unless the user undoes the close.
+                val closedHost = ForgetfulBrowsing.hostOf(closed.url)
+                val forgetCandidate = !closed.isIncognito &&
+                    ForgetfulBrowsing.shouldForget(
+                        liveForgetfulBrowsing,
+                        liveForgetfulExceptions,
+                        closedHost,
+                        tabs.map { ForgetfulBrowsing.hostOf(it.url) }
+                    )
                 // Premium UI v2: "Tab closed" snackbar with UNDO (4s).
                 if (undoInfo != null) {
                     lastClosedTab = undoInfo
@@ -817,6 +906,10 @@ class MainActivity : ComponentActivity() {
                                 activeTabIndex = insertAt
                             }
                             lastClosedTab = null
+                        } else if (forgetCandidate && closedHost != null) {
+                            // Snackbar dismissed / timed out without UNDO:
+                            // the site is truly gone — forget it now.
+                            ForgetfulBrowsing.forgetHost(closedHost)
                         }
                     }
                 }
@@ -894,9 +987,16 @@ class MainActivity : ComponentActivity() {
             // V9 Shield VPN running state (for the home shield card).
             val shieldActive by com.click.browser.engine.V9VpnController.isRunning.collectAsState()
             var forceNightModeWebsites by remember { mutableStateOf(false) }
-            var httpsOnlyMode by remember { mutableStateOf(true) }
+            // HTTPS mode: "off" | "standard" | "strict" (Brave-hardening).
+            var httpsMode by remember { mutableStateOf("standard") }
+            var httpsStrictExceptions by remember { mutableStateOf(emptyList<String>()) }
             var javaScriptEnabledGlobal by remember { mutableStateOf(true) }
             var dataSaverEnabled by remember { mutableStateOf(false) }
+            // Brave-inspired privacy quick wins (DataStore-persisted below).
+            var stripTrackingParams by remember { mutableStateOf(true) }
+            var forgetfulBrowsing by remember { mutableStateOf(false) }
+            var forgetfulExceptions by remember { mutableStateOf(setOf<String>()) }
+            var blockConsentBanners by remember { mutableStateOf(true) }
 
             // LocationGuard: hide/spoof browser geolocation (Prince request).
             var locationMode by remember { mutableStateOf(LocationGuard.LocationMode.ASK) }
@@ -947,6 +1047,13 @@ class MainActivity : ComponentActivity() {
             var showHackIntro by remember {
                 mutableStateOf(intent.getBooleanExtra(V9Engine.EXTRA_HACK_INTRO, false))
             }
+            // Advance Mode signature moment: full-screen 5s blue-light intro
+            // after an Advance engine boot. Tap to skip.
+            var showAdvanceIntro by remember {
+                mutableStateOf(intent.getBooleanExtra(V9Engine.EXTRA_ADVANCE_INTRO, false))
+            }
+            // "About Advance Mode" specifications sheet.
+            var showAdvanceSpecs by remember { mutableStateOf(false) }
             // Password manager: save-offer dialog state.
             var showPasswordSaveDialog by remember { mutableStateOf(false) }
             var pendingPasswordSave by remember {
@@ -977,7 +1084,11 @@ class MainActivity : ComponentActivity() {
             var aiProvider by remember { mutableStateOf("groq") }
             var aiModel by remember { mutableStateOf("") }
             var headerSpoofEnabled by remember { mutableStateOf(false) }
-            var fingerprintProtection by remember { mutableStateOf(true) }
+            // Fingerprint mode: "off" | "standard" | "strict" (Brave-hardening).
+            var fingerprintMode by remember { mutableStateOf("standard") }
+            // DNT + GPC privacy signals (opt-in, default off).
+            var dntEnabled by remember { mutableStateOf(false) }
+            var gpcEnabled by remember { mutableStateOf(false) }
             var secureDnsEnabled by remember { mutableStateOf(false) }
             var customHeaders by remember { mutableStateOf(listOf<AppSettings.CustomHeader>()) }
             var webrtcTestRunning by remember { mutableStateOf(false) }
@@ -1206,11 +1317,19 @@ class MainActivity : ComponentActivity() {
             // Keep the WebViewClient-safe live copies in sync with composable state
             LaunchedEffect(activeMode) { liveMode = activeMode }
             LaunchedEffect(antiDetectionEnabled) { liveAntiDetection = antiDetectionEnabled }
-            LaunchedEffect(httpsOnlyMode) { liveHttpsOnly = httpsOnlyMode }
+            LaunchedEffect(httpsMode) { liveHttpsMode = httpsMode }
+            LaunchedEffect(httpsStrictExceptions) { liveHttpsStrictExceptions = httpsStrictExceptions.toSet() }
+            LaunchedEffect(dntEnabled) { liveDntEnabled = dntEnabled }
+            LaunchedEffect(gpcEnabled) { liveGpcEnabled = gpcEnabled }
             LaunchedEffect(forceNightModeWebsites) { liveNightMode = forceNightModeWebsites }
             LaunchedEffect(dataSaverEnabled) { liveDataSaver = dataSaverEnabled }
             LaunchedEffect(headerSpoofEnabled) { liveHeaderSpoof = headerSpoofEnabled }
-            LaunchedEffect(fingerprintProtection) { liveFingerprintProtection = fingerprintProtection }
+            LaunchedEffect(fingerprintMode) { liveFingerprintMode = fingerprintMode }
+            // Privacy quick wins: keep WebViewClient-safe live copies in sync.
+            LaunchedEffect(stripTrackingParams) { liveStripTrackingParams = stripTrackingParams }
+            LaunchedEffect(forgetfulBrowsing) { liveForgetfulBrowsing = forgetfulBrowsing }
+            LaunchedEffect(forgetfulExceptions) { liveForgetfulExceptions = forgetfulExceptions }
+            LaunchedEffect(blockConsentBanners) { liveBlockConsentBanners = blockConsentBanners }
             LaunchedEffect(secureDnsEnabled) { liveSecureDns = secureDnsEnabled }
             LaunchedEffect(customHeaders) { liveCustomHeaders = customHeaders.associate { it.name to it.value } }
             LaunchedEffect(desktopHosts) { liveDesktopHosts = desktopHosts }
@@ -1296,7 +1415,16 @@ class MainActivity : ComponentActivity() {
                     aiProvider = prefs[AppSettings.AI_PROVIDER] ?: "groq"
                     aiModel = prefs[AppSettings.AI_MODEL].orEmpty()
                     headerSpoofEnabled = prefs[AppSettings.HEADER_SPOOF_ENABLED] == true
-                    fingerprintProtection = prefs[AppSettings.FINGERPRINT_PROTECTION] ?: true
+                    // Fingerprint mode: migrate the legacy boolean (true->standard, false->off).
+                    fingerprintMode = AppSettings.normalizeMode(
+                        prefs[AppSettings.FINGERPRINT_MODE]
+                            ?: if (prefs[AppSettings.FINGERPRINT_PROTECTION] == false) "off" else "standard"
+                    )
+                    // HTTPS mode (default "standard" = historical HTTPS-Only upgrade behavior).
+                    httpsMode = AppSettings.normalizeMode(prefs[AppSettings.HTTPS_MODE])
+                    httpsStrictExceptions = AppSettings.parseHostList(prefs[AppSettings.HTTPS_STRICT_EXCEPTIONS])
+                    dntEnabled = prefs[AppSettings.DNT_ENABLED] == true || prefs[ExperimentalFlags.K_DNT_HEADER] == true
+                    gpcEnabled = prefs[AppSettings.GPC_ENABLED] == true
                     secureDnsEnabled = prefs[AppSettings.SECURE_DNS_ENABLED] == true
                     // LocationGuard: hide/spoof browser geolocation.
                     locationMode = LocationGuard.LocationMode.fromKey(prefs[AppSettings.LOCATION_MODE])
@@ -1307,12 +1435,20 @@ class MainActivity : ComponentActivity() {
                     locationSpoofLabel = prefs[AppSettings.LOCATION_SPOOF_LABEL]
                         ?: LocationGuard.DEFAULT_PRESET.label
                     customHeaders = AppSettings.parseHeaders(prefs[AppSettings.CUSTOM_HEADERS_JSON])
+                    // Brave-inspired privacy quick wins.
+                    stripTrackingParams = prefs[AppSettings.STRIP_TRACKING_PARAMS] ?: true
+                    forgetfulBrowsing = prefs[AppSettings.FORGETFUL_BROWSING] == true
+                    forgetfulExceptions = prefs[AppSettings.FORGETFUL_BROWSING_EXCEPTIONS] ?: emptySet()
+                    blockConsentBanners = prefs[AppSettings.BLOCK_CONSENT_BANNERS] ?: true
                     currentThemeSetting = if (prefs[AppSettings.UI_DARK_MODE] == false) "Light" else "Dark"
                     // Per-mode Day/Night overrides (missing key = follow global).
                     perModeDark = BrowserMode.values().associateWith { mode ->
                         prefs[AppSettings.darkModeKey(mode)]
                     }
                     wallpaperUri = prefs[AppSettings.WALLPAPER_URI]
+                    // Customizable browser menu: order + hidden items.
+                    menuOrder = MenuCustomization.loadOrder(prefs[MenuCustomization.MENU_ORDER_JSON])
+                    menuHidden = MenuCustomization.loadHidden(prefs[MenuCustomization.MENU_HIDDEN_JSON])
                     // Experimental flags (click://flags).
                     liveFlags = ExperimentalFlags.load(prefs)
                     // Signal the crash-restore saver/check: clearOnExit is
@@ -1571,7 +1707,8 @@ class MainActivity : ComponentActivity() {
                                     DrawerItem(
                                         label = BrowserMode.ADVANCED.display().title,
                                         subtitle = BrowserMode.ADVANCED.display().tagline,
-                                        icon = Icons.Default.Filter4, color = Color(0xFF06B6D4)
+                                        icon = Icons.Default.Filter4, color = Color(0xFF06B6D4),
+                                        onInfoClick = { showAdvanceSpecs = true }
                                     ) {
                                         scope.launch {
                                             drawerState.close()
@@ -1896,21 +2033,39 @@ class MainActivity : ComponentActivity() {
                                             drawerState.close()
                                             forceNightModeWebsites = !forceNightModeWebsites
                                             currentTab.webView?.let {
-                                                applyPrivacyToggles(it, httpsOnlyMode, forceNightModeWebsites, dataSaverEnabled)
+                                                applyPrivacyToggles(it, httpsMode, forceNightModeWebsites, dataSaverEnabled)
                                             }
                                             Toast.makeText(this@MainActivity, "Dark Mode Force is " + (if(forceNightModeWebsites) "ENABLED" else "DISABLED"), Toast.LENGTH_SHORT).show()
                                         }
                                     }
                                 }
                                 item {
-                                    DrawerItem(label = "Toggle HTTPS-Only Mode", icon = Icons.Default.Lock, color = Color(0xFF34D399)) {
+                                    DrawerItem(
+                                        label = "HTTPS Mode: ${httpsMode.replaceFirstChar { it.uppercase() }}",
+                                        icon = Icons.Default.Lock, color = Color(0xFF34D399)
+                                    ) {
                                         scope.launch {
                                             drawerState.close()
-                                            httpsOnlyMode = !httpsOnlyMode
-                                            currentTab.webView?.let {
-                                                applyPrivacyToggles(it, httpsOnlyMode, forceNightModeWebsites, dataSaverEnabled)
+                                            // Cycle Off -> Standard -> Strict -> Off.
+                                            httpsMode = when (httpsMode) {
+                                                "standard" -> "strict"
+                                                "strict" -> "off"
+                                                else -> "standard"
                                             }
-                                            Toast.makeText(this@MainActivity, "HTTPS-Only Mode is " + (if(httpsOnlyMode) "ENABLED" else "DISABLED"), Toast.LENGTH_SHORT).show()
+                                            dataStore.edit { prefs -> prefs[AppSettings.HTTPS_MODE] = httpsMode }
+                                            currentTab.webView?.let {
+                                                applyPrivacyToggles(it, httpsMode, forceNightModeWebsites, dataSaverEnabled)
+                                            }
+                                            val hint = when (httpsMode) {
+                                                "strict" -> " — plain-http pages are BLOCKED"
+                                                "off" -> " — http allowed"
+                                                else -> " — http upgrades to https"
+                                            }
+                                            Toast.makeText(
+                                                this@MainActivity,
+                                                "HTTPS Mode: ${httpsMode.uppercase()}$hint",
+                                                Toast.LENGTH_SHORT
+                                            ).show()
                                         }
                                     }
                                 }
@@ -2191,7 +2346,7 @@ class MainActivity : ComponentActivity() {
                                                 theme = themed,
                                                 currentUrl = currentTab.url,
                                                 onNavigate = { input ->
-                                                    val destination = formatUrl(input, currentSearchEngineSetting, activeMode)
+                                                    val destination = cleanTrackingUrl(formatUrl(input, currentSearchEngineSetting, activeMode))
                                                     currentTab.url = destination
                                                     currentTab.webView?.loadUrl(destination)
                                                 },
@@ -2259,7 +2414,7 @@ class MainActivity : ComponentActivity() {
                                             onV9ShieldClick = { showV9Shield = true },
                                             onGamesClick = { showClickPage = "games" },
                                             onNavigate = { input ->
-                                                val destination = formatUrl(input, currentSearchEngineSetting, activeMode)
+                                                val destination = cleanTrackingUrl(formatUrl(input, currentSearchEngineSetting, activeMode))
                                                 currentTab.url = destination
                                                 currentTab.webView?.loadUrl(destination)
                                             },
@@ -2348,16 +2503,32 @@ class MainActivity : ComponentActivity() {
                                                                         // (reload loops reset scroll position — page feels unscrollable).
                                                                         if (request != null && !request.isForMainFrame) return false
                                                                         var urlStr = request?.url?.toString() ?: ""
+                                                                        // Query-param stripping (Brave-style): drop tracking
+                                                                        // params before anything else touches the URL.
+                                                                        urlStr = cleanTrackingUrl(urlStr)
                                                                         // PDF: offer in-app viewing instead of navigating.
                                                                         if (isPdfUrl(urlStr)) {
                                                                             pdfOfferUrl = urlStr
                                                                             return true
                                                                         }
                                                                         if (request != null && request.isRedirect) return false
-                                                                        // HTTPS-Only: upgrade plain http navigations FIRST
-                                                                        // (so http://click://flags can't bypass the upgrade).
-                                                                        if (liveHttpsOnly && urlStr.startsWith("http://")) {
-                                                                            urlStr = "https://" + urlStr.removePrefix("http://")
+                                                                        // HTTPS mode handling FIRST (so http://click://
+                                                                        // can't bypass it). Standard upgrades http->https;
+                                                                        // Strict BLOCKS plain-http unless the host is
+                                                                        // in the per-site exception list; Off allows it.
+                                                                        if (urlStr.startsWith("http://")) {
+                                                                            when (liveHttpsMode) {
+                                                                                "strict" -> {
+                                                                                    val host = hostOfUrl(urlStr)
+                                                                                    if (!liveHttpsStrictExceptions.contains(host)) {
+                                                                                        showHttpsBlockedPage(view, urlStr, host)
+                                                                                        return true
+                                                                                    }
+                                                                                }
+                                                                                "standard" -> {
+                                                                                    urlStr = "https://" + urlStr.removePrefix("http://")
+                                                                                }
+                                                                            }
                                                                         }
                                                                         // HACK mode desktop persistence: sites like YouTube
                                                                         // redirect to their mobile domain (m.youtube.com)
@@ -2375,10 +2546,14 @@ class MainActivity : ComponentActivity() {
                                                                             // Per-site desktop override BEFORE loading (UA must be set first).
                                                                             if (view != null) this@MainActivity.applyPerSiteDesktop(view, urlStr)
                                                                             if (view != null) this@MainActivity.applyPerSiteSettings(view, urlStr)
-                                                                            // Header spoofing + DNT flag: navigations carry the custom headers.
+                                                                            // Privacy signals + header spoofing: navigations
+                                                                            // carry DNT/GPC whenever enabled (not gated
+                                                                            // on the header-spoof toggle — the toggles
+                                                                            // must measurably change behavior).
                                                                             val navHeaders = liveCustomHeaders.toMutableMap()
-                                                                            if (liveFlags.dntHeader) navHeaders["DNT"] = "1"
-                                                                            if (liveHeaderSpoof && navHeaders.isNotEmpty()) {
+                                                                            if (liveFlags.dntHeader || liveDntEnabled) navHeaders["DNT"] = "1"
+                                                                            if (liveGpcEnabled) navHeaders["Sec-GPC"] = "1"
+                                                                            if (navHeaders.isNotEmpty()) {
                                                                                 view?.loadUrl(urlStr, navHeaders)
                                                                             } else {
                                                                                 view?.loadUrl(urlStr)
@@ -2391,14 +2566,27 @@ class MainActivity : ComponentActivity() {
                                                                     @Suppress("Deprecated")
                                                                     override fun shouldOverrideUrlLoading(view: WebView?, url: String?): Boolean {
                                                                         var urlStr = url ?: ""
-                                                                        // HTTPS-Only upgrade FIRST (see above).
+                                                                        // Query-param stripping (Brave-style).
+                                                                        urlStr = cleanTrackingUrl(urlStr)
+                                                                        // HTTPS mode handling FIRST (see above).
                                                                         // PDF: offer in-app viewing instead of navigating.
                                                                         if (isPdfUrl(urlStr)) {
                                                                             pdfOfferUrl = urlStr
                                                                             return true
                                                                         }
-                                                                        if (liveHttpsOnly && urlStr.startsWith("http://")) {
-                                                                            urlStr = "https://" + urlStr.removePrefix("http://")
+                                                                        if (urlStr.startsWith("http://")) {
+                                                                            when (liveHttpsMode) {
+                                                                                "strict" -> {
+                                                                                    val host = hostOfUrl(urlStr)
+                                                                                    if (!liveHttpsStrictExceptions.contains(host)) {
+                                                                                        showHttpsBlockedPage(view, urlStr, host)
+                                                                                        return true
+                                                                                    }
+                                                                                }
+                                                                                "standard" -> {
+                                                                                    urlStr = "https://" + urlStr.removePrefix("http://")
+                                                                                }
+                                                                            }
                                                                         }
                                                                         // HACK mode desktop persistence (see above).
                                                                         if (liveMode == BrowserMode.HACK) {
@@ -2412,9 +2600,12 @@ class MainActivity : ComponentActivity() {
                                                                         if (urlStr.startsWith("http://") || urlStr.startsWith("https://")) {
                                                                             if (view != null) this@MainActivity.applyPerSiteDesktop(view, urlStr)
                                                                             if (view != null) this@MainActivity.applyPerSiteSettings(view, urlStr)
+                                                                            // Privacy signals: DNT/GPC ride on navigations
+                                                                            // whenever enabled (not gated on header-spoof).
                                                                             val navHeaders = liveCustomHeaders.toMutableMap()
-                                                                            if (liveFlags.dntHeader) navHeaders["DNT"] = "1"
-                                                                            if (liveHeaderSpoof && navHeaders.isNotEmpty()) {
+                                                                            if (liveFlags.dntHeader || liveDntEnabled) navHeaders["DNT"] = "1"
+                                                                            if (liveGpcEnabled) navHeaders["Sec-GPC"] = "1"
+                                                                            if (navHeaders.isNotEmpty()) {
                                                                                 view?.loadUrl(urlStr, navHeaders)
                                                                             } else {
                                                                                 view?.loadUrl(urlStr)
@@ -2484,6 +2675,18 @@ class MainActivity : ComponentActivity() {
                                                                 pageLoadTime = System.currentTimeMillis() - lastPageStart
                                                                 // Pull-to-refresh completes when the page finishes loading.
                                                                 if (isRefreshing) isRefreshing = false
+
+                                                                // Cookie-consent banner blocking (Brave-style): hide
+                                                                // GDPR/consent banners via cosmetic selectors.
+                                                                if (liveBlockConsentBanners) {
+                                                                    try {
+                                                                        ConsentBannerBlocker.buildScript(
+                                                                            FilterListManager.currentConsentSelectors()
+                                                                        )?.let { script ->
+                                                                            view?.evaluateJavascript(script, null)
+                                                                        }
+                                                                    } catch (_: Exception) { /* non-fatal */ }
+                                                                }
 
                                                                 // Password manager: inject form detection + auto-fill
                                                                 // saved credentials for this host (if any).
@@ -2556,9 +2759,15 @@ class MainActivity : ComponentActivity() {
                                                                 }
 
                                                                 // Fingerprint Protection: session-randomized canvas/audio
-                                                                // noise in EVERY mode (see PrivacyGuards).
-                                                                if (liveFingerprintProtection) {
-                                                                    view?.evaluateJavascript(this@MainActivity.fingerprintScript, null)
+                                                                // noise in EVERY mode (see PrivacyGuards). Strict mode
+                                                                // adds font/toBlob/audio-data hooks + stronger noise.
+                                                                if (liveFingerprintMode != "off") {
+                                                                    view?.evaluateJavascript(
+                                                                        this@MainActivity.fingerprintScript(
+                                                                            liveFingerprintMode == "strict"
+                                                                        ),
+                                                                        null
+                                                                    )
                                                                 }
 
                                                                 // Userscript extensions (HACK + DEVELOPER + ADVANCE modes):
@@ -2814,7 +3023,7 @@ class MainActivity : ComponentActivity() {
                                                         // Re-apply privacy toggles with the freshest state on every recomposition
                                                         this@MainActivity.applyPrivacyToggles(
                                                             webView,
-                                                            httpsOnlyMode,
+                                                            httpsMode,
                                                             forceNightModeWebsites,
                                                             dataSaverEnabled
                                                         )
@@ -2974,8 +3183,13 @@ class MainActivity : ComponentActivity() {
                             // › Forward · ⌂ Home · ▭ Tabs (count badge) · ⋮ More.
                             // (No center AI tab here — AI lives in the floating pill.)
                             // Polish: one-shot theme crossfade (battery-safe).
-                            // Bottom-address-bar flag: bar renders below the page.
-                            if (flagsUi.bottomAddressBar) BrowseTopBarBlock()
+                            // Bottom-address-bar option: bar renders below the page,
+                            // padded above the overlaid bottom nav so they never overlap.
+                            if (flagsUi.bottomAddressBar) {
+                                Box(modifier = Modifier.padding(bottom = 76.dp)) {
+                                    BrowseTopBarBlock()
+                                }
+                            }
                             if (!showOverlays && !immersiveMode) {
                                 Crossfade(
                                     targetState = theme,
@@ -3072,8 +3286,9 @@ class MainActivity : ComponentActivity() {
                                 BookmarksScreen(
                                     repository = repository,
                                     onNavigate = { url ->
-                                        currentTab.url = url
-                                        currentTab.webView?.loadUrl(url)
+                                        val clean = cleanTrackingUrl(url)
+                                        currentTab.url = clean
+                                        currentTab.webView?.loadUrl(clean)
                                     },
                                     onClose = { showBookmarks = false }
                                 )
@@ -3084,8 +3299,9 @@ class MainActivity : ComponentActivity() {
                                     repository = repository,
                                     theme = theme,
                                     onNavigate = { url ->
-                                        currentTab.url = url
-                                        currentTab.webView?.loadUrl(url)
+                                        val clean = cleanTrackingUrl(url)
+                                        currentTab.url = clean
+                                        currentTab.webView?.loadUrl(clean)
                                     },
                                     onClose = { showHistory = false }
                                 )
@@ -3423,16 +3639,74 @@ class MainActivity : ComponentActivity() {
                                     },
                                     currentSearchEngineSetting = currentSearchEngineSetting,
                                     onSearchEngineChange = { currentSearchEngineSetting = it },
+                                    addressBarPosition = if (flagsUi.bottomAddressBar) "bottom" else "top",
+                                    onAddressBarPositionChange = { pos ->
+                                        val bottom = pos == "bottom"
+                                        scope.launch {
+                                            dataStore.edit { prefs ->
+                                                prefs[ExperimentalFlags.K_BOTTOM_ADDRESS_BAR] = bottom
+                                            }
+                                            liveFlags = liveFlags.copy(bottomAddressBar = bottom)
+                                            flagsUi = liveFlags
+                                        }
+                                    },
+                                    onCustomizeMenu = { showSettings = false; showMenuCustomize = true },
                                     adBlockerEnabled = adBlockerEnabled,
                                     onToggleAdBlocker = { adBlockerEnabled = it },
                                     forceNightMode = forceNightModeWebsites,
                                     onToggleNightMode = { forceNightModeWebsites = it },
-                                    httpsOnlyMode = httpsOnlyMode,
-                                    onToggleHttpsOnly = { httpsOnlyMode = it },
+                                    httpsMode = httpsMode,
+                                    onHttpsModeChange = { mode ->
+                                        httpsMode = AppSettings.normalizeMode(mode)
+                                        scope.launch { dataStore.edit { prefs -> prefs[AppSettings.HTTPS_MODE] = httpsMode } }
+                                    },
+                                    httpsStrictExceptions = httpsStrictExceptions,
+                                    onAddHttpsException = { host ->
+                                        val clean = host.trim().lowercase().removePrefix("http://").removePrefix("https://").substringBefore("/")
+                                        if (clean.isNotEmpty() && !httpsStrictExceptions.contains(clean)) {
+                                            httpsStrictExceptions = httpsStrictExceptions + clean
+                                            scope.launch {
+                                                dataStore.edit { prefs ->
+                                                    prefs[AppSettings.HTTPS_STRICT_EXCEPTIONS] =
+                                                        AppSettings.hostsToJson(httpsStrictExceptions)
+                                                }
+                                            }
+                                        }
+                                    },
+                                    onRemoveHttpsException = { host ->
+                                        httpsStrictExceptions = httpsStrictExceptions - host
+                                        scope.launch {
+                                            dataStore.edit { prefs ->
+                                                prefs[AppSettings.HTTPS_STRICT_EXCEPTIONS] =
+                                                    AppSettings.hostsToJson(httpsStrictExceptions)
+                                            }
+                                        }
+                                    },
                                     jsEnabled = javaScriptEnabledGlobal,
                                     onToggleJs = { javaScriptEnabledGlobal = it },
                                     dataSaver = dataSaverEnabled,
                                     onToggleDataSaver = { dataSaverEnabled = it },
+                                    // Brave-inspired privacy quick wins (persisted to DataStore).
+                                    stripTrackingParams = stripTrackingParams,
+                                    onToggleStripTrackingParams = { v ->
+                                        stripTrackingParams = v
+                                        scope.launch { dataStore.edit { prefs -> prefs[AppSettings.STRIP_TRACKING_PARAMS] = v } }
+                                    },
+                                    forgetfulBrowsing = forgetfulBrowsing,
+                                    onToggleForgetfulBrowsing = { v ->
+                                        forgetfulBrowsing = v
+                                        scope.launch { dataStore.edit { prefs -> prefs[AppSettings.FORGETFUL_BROWSING] = v } }
+                                    },
+                                    blockConsentBanners = blockConsentBanners,
+                                    onToggleBlockConsentBanners = { v ->
+                                        blockConsentBanners = v
+                                        scope.launch { dataStore.edit { prefs -> prefs[AppSettings.BLOCK_CONSENT_BANNERS] = v } }
+                                    },
+                                    forgetfulExceptions = forgetfulExceptions,
+                                    onForgetfulExceptionsChange = { v ->
+                                        forgetfulExceptions = v
+                                        scope.launch { dataStore.edit { prefs -> prefs[AppSettings.FORGETFUL_BROWSING_EXCEPTIONS] = v } }
+                                    },
                                     animationsEnabled = flagsUi.tabAnimations,
                                     onToggleAnimations = { enabled ->
                                         scope.launch {
@@ -3622,6 +3896,27 @@ class MainActivity : ComponentActivity() {
                             // Markhor intro after a Hack engine boot. Tap to skip.
                             if (showHackIntro) {
                                 HackIntroOverlay(onDone = { showHackIntro = false })
+                            }
+                            // V9: Advance Mode signature moment — full-screen 5s
+                            // blue-light intro after an Advance engine boot. Tap to skip.
+                            if (showAdvanceIntro) {
+                                AdvanceIntroOverlay(onDone = { showAdvanceIntro = false })
+                            }
+                            // "About Advance Mode" specifications sheet.
+                            if (showAdvanceSpecs) {
+                                AdvanceSpecsSheet(
+                                    onClose = { showAdvanceSpecs = false },
+                                    onEnterAdvance = {
+                                        showAdvanceSpecs = false
+                                        scope.launch {
+                                            drawerState.close()
+                                            // Same feedback contract as the drawer's Advance entry:
+                                            // if the engine restart wasn't possible, say so.
+                                            val restarting = v9SwitchMode(BrowserMode.ADVANCED, currentTab.webView, forceDesktopMode)
+                                            if (!restarting) Toast.makeText(this@MainActivity, "Advance Mode Activated — fresh isolated space", Toast.LENGTH_SHORT).show()
+                                        }
+                                    }
+                                )
                             }
                             // ---- Built-in engines ----
                             // Safe Browsing interstitial (premium-styled, theme-aware).
@@ -3922,10 +4217,20 @@ class MainActivity : ComponentActivity() {
                                             }
                                         }
                                     },
-                                    fingerprintProtection = fingerprintProtection,
-                                    onToggleFingerprint = { v ->
-                                        fingerprintProtection = v
-                                        scope.launch { dataStore.edit { prefs -> prefs[AppSettings.FINGERPRINT_PROTECTION] = v } }
+                                    fingerprintMode = fingerprintMode,
+                                    onFingerprintModeChange = { mode ->
+                                        fingerprintMode = AppSettings.normalizeMode(mode)
+                                        scope.launch { dataStore.edit { prefs -> prefs[AppSettings.FINGERPRINT_MODE] = fingerprintMode } }
+                                    },
+                                    dntEnabled = dntEnabled,
+                                    onToggleDnt = { v ->
+                                        dntEnabled = v
+                                        scope.launch { dataStore.edit { prefs -> prefs[AppSettings.DNT_ENABLED] = v } }
+                                    },
+                                    gpcEnabled = gpcEnabled,
+                                    onToggleGpc = { v ->
+                                        gpcEnabled = v
+                                        scope.launch { dataStore.edit { prefs -> prefs[AppSettings.GPC_ENABLED] = v } }
                                     },
                                     secureDns = secureDnsEnabled,
                                     onToggleSecureDns = { v ->
@@ -4115,7 +4420,31 @@ class MainActivity : ComponentActivity() {
                                         }
                                     },
                                     onSettings = { showBrowserMenu = false; showSettings = true },
+                                    visibleItems = MenuCustomization.effectiveVisibleItems(menuOrder, menuHidden),
+                                    onCustomizeMenu = { showBrowserMenu = false; showMenuCustomize = true },
                                     onDismiss = { showBrowserMenu = false }
+                                )
+                            }
+
+                            // "Customize menu" sheet (reorder + hide menu items).
+                            if (showMenuCustomize) {
+                                MenuCustomizeSheet(
+                                    theme = theme,
+                                    initialOrder = menuOrder,
+                                    initialHidden = menuHidden,
+                                    onSave = { order, hidden ->
+                                        menuOrder = order
+                                        menuHidden = hidden
+                                        scope.launch {
+                                            dataStore.edit { prefs ->
+                                                prefs[MenuCustomization.MENU_ORDER_JSON] =
+                                                    MenuCustomization.orderToJson(order)
+                                                prefs[MenuCustomization.MENU_HIDDEN_JSON] =
+                                                    MenuCustomization.hiddenToJson(hidden)
+                                            }
+                                        }
+                                    },
+                                    onDismiss = { showMenuCustomize = false }
                                 )
                             }
 
@@ -4427,7 +4756,8 @@ class MainActivity : ComponentActivity() {
         SessionRestore.markCleanExit(this, sourceMode, true)
         val restarted = V9Engine.restartForEngineSwitch(
             this, modeManager, mode,
-            hackIntro = (mode == BrowserMode.HACK)
+            hackIntro = (mode == BrowserMode.HACK),
+            advanceIntro = (mode == BrowserMode.ADVANCED)
         )
         if (!restarted) {
             // Restart wasn't possible (alarm unavailable etc.) — apply the
@@ -4561,6 +4891,7 @@ fun DrawerItem(
     icon: ImageVector,
     color: Color,
     subtitle: String? = null,
+    onInfoClick: (() -> Unit)? = null,
     onClick: () -> Unit = {}
 ) {
     var pressed by remember { mutableStateOf(false) }
@@ -4616,6 +4947,18 @@ fun DrawerItem(
                         fontSize = 9.sp,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis
+                    )
+                }
+            }
+            // Optional trailing info button (used by the Advance mode entry
+            // to open the "About Advance Mode" specifications sheet).
+            if (onInfoClick != null) {
+                IconButton(onClick = onInfoClick) {
+                    Icon(
+                        Icons.Outlined.Info,
+                        contentDescription = "About $label",
+                        tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.55f),
+                        modifier = Modifier.size(18.dp)
                     )
                 }
             }
@@ -4945,8 +5288,8 @@ fun PremiumHomeScreen(
     onToggleAdBlocker: (Boolean) -> Unit,
     forceNightMode: Boolean,
     onToggleNightMode: (Boolean) -> Unit,
-    httpsOnlyMode: Boolean,
-    onToggleHttpsOnly: (Boolean) -> Unit,
+    httpsMode: String,
+    onHttpsModeChange: (String) -> Unit,
     jsEnabled: Boolean,
     onToggleJs: (Boolean) -> Unit,
     dataSaver: Boolean,
@@ -5318,10 +5661,29 @@ fun PremiumHomeScreen(
                                 Text("🌙 Force Night Mode Website", color = theme.onBackground, fontSize = 11.sp)
                                 Switch(checked = forceNightMode, onCheckedChange = onToggleNightMode, modifier = Modifier.scale(0.8f))
                             }
-                            // HTTPS only
-                            Row(modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp), horizontalArrangement = Arrangement.SpaceBetween) {
-                                Text("🔒 HTTPS Only Mode", color = theme.onBackground, fontSize = 11.sp)
-                                Switch(checked = httpsOnlyMode, onCheckedChange = onToggleHttpsOnly, modifier = Modifier.scale(0.8f))
+                            // HTTPS mode (tap to cycle Off -> Standard -> Strict)
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(vertical = 4.dp)
+                                    .clickable {
+                                        onHttpsModeChange(
+                                            when (httpsMode) {
+                                                "standard" -> "strict"
+                                                "strict" -> "off"
+                                                else -> "standard"
+                                            }
+                                        )
+                                    },
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text("🔒 HTTPS Mode", color = theme.onBackground, fontSize = 11.sp)
+                                Text(
+                                    httpsMode.replaceFirstChar { it.uppercase() },
+                                    color = theme.onBackground, fontSize = 11.sp,
+                                    fontWeight = FontWeight.Bold
+                                )
                             }
                             // JS
                             Row(modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp), horizontalArrangement = Arrangement.SpaceBetween) {
