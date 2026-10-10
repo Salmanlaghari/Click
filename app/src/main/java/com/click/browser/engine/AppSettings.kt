@@ -92,6 +92,10 @@ object AppSettings {
     /** Auto-hide cookie-consent / GDPR banners. Default ON. */
     val BLOCK_CONSENT_BANNERS = booleanPreferencesKey("block_consent_banners")
 
+    // Default-browser prompt: true once the one-time "Make Click your
+    // default browser?" prompt has been shown (or acted on), so it never nags.
+    val DEFAULT_BROWSER_PROMPT_SHOWN = booleanPreferencesKey("default_browser_prompt_shown")
+
     // LocationGuard: hide/spoof browser geolocation.
     // LOCATION_MODE: "ask" | "block" | "spoof" (default "ask").
     val LOCATION_MODE = stringPreferencesKey("location_mode")

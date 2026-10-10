@@ -18,6 +18,8 @@ import androidx.biometric.BiometricPrompt
 import androidx.fragment.app.FragmentActivity
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
+import androidx.activity.result.ActivityResultLauncher
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.enableEdgeToEdge
 import androidx.core.app.ActivityCompat
 import androidx.core.view.WindowInsetsCompat
@@ -93,6 +95,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
@@ -199,6 +202,19 @@ class MainActivity : FragmentActivity() {
     private var liveBiometricLockEnabled = false
     private var liveHasIncognitoTabs = false
     private val privateLockedFlow = kotlinx.coroutines.flow.MutableStateFlow(false)
+    // Default-browser flow: pending external link from an ACTION_VIEW intent
+    // (drained into a new tab by the composable) + the current
+    // default-browser status shown in Settings and used for the one-time
+    // first-launch prompt.
+    private val pendingExternalUrl = MutableStateFlow<String?>(null)
+    private val isDefaultBrowserState = MutableStateFlow(false)
+    private val defaultBrowserLauncher: ActivityResultLauncher<Intent> =
+        registerForActivityResult(ActivityResultContracts.StartActivityForResult()) {
+            // The system role dialog closed (granted, denied or dismissed):
+            // re-check the truth rather than trusting the result code.
+            isDefaultBrowserState.value =
+                DefaultBrowserHelper.isDefaultBrowser(this)
+        }
     // Text scaling live copies for WebViewClient callbacks (per-host map).
     private var liveGlobalTextScale = com.click.browser.engine.TextScaleStore.DEFAULT
     private var liveHostTextScales: Map<String, Int> = emptyMap()
@@ -862,6 +878,10 @@ class MainActivity : FragmentActivity() {
         modeManager = ModeManager(this)
         repository = BrowserRepository(this)
         playlistManager = PlaylistManager(this)
+        // Launched from another app's link (Click is / was picked as default
+        // browser): use the link as the first tab's URL so the user lands on
+        // it instead of the homepage.
+        val startViewUrl = externalViewUrl(intent)
         // Bundled ad/tracker filter lists (assets) + weekly remote updates.
         com.click.browser.engine.FilterListManager.init(this)
         // Translate language list (asset-overridable, built-in fallback).
@@ -908,7 +928,8 @@ class MainActivity : FragmentActivity() {
             }
 
             // Browser Premium Feature States
-            val tabs = remember { mutableStateListOf<TabItem>(TabItem(url = homeUrl(), title = "New Tab")) }
+            // Cold start with an external link: it becomes the first tab.
+            val tabs = remember { mutableStateListOf<TabItem>(TabItem(url = startViewUrl ?: homeUrl(), title = "New Tab")) }
             var activeTabIndex by remember { mutableStateOf(0) }
             val currentTab = tabs.getOrNull(activeTabIndex) ?: TabItem(url = "about:blank")
 
@@ -3741,6 +3762,100 @@ class MainActivity : FragmentActivity() {
                                 )
                             }
 
+                            // ---- Default browser: one-time first-launch prompt ----
+                            // State + actions live here (after the restore dialog)
+                            // so both this dialog and Settings can use them.
+                            val isDefaultBrowser by isDefaultBrowserState.collectAsState()
+                            var showDefaultBrowserPrompt by remember { mutableStateOf(false) }
+
+                            /**
+                             * Marks the first-launch prompt as shown so it
+                             * never nags again (every exit path does this).
+                             */
+                            fun dismissDefaultBrowserPrompt() {
+                                showDefaultBrowserPrompt = false
+                                scope.launch {
+                                    dataStore.edit { prefs ->
+                                        prefs[AppSettings.DEFAULT_BROWSER_PROMPT_SHOWN] = true
+                                    }
+                                }
+                            }
+
+                            /**
+                             * Launches the system "set Click as default
+                             * browser" flow: the RoleManager role request on
+                             * API 29+, else the system's Default-Apps page.
+                             * Both paths are real — no dead button.
+                             */
+                            fun requestDefaultBrowser() {
+                                if (DefaultBrowserHelper.canRequestRole(this@MainActivity)) {
+                                    val roleIntent =
+                                        DefaultBrowserHelper.requestRoleIntent(this@MainActivity)
+                                    if (roleIntent != null) {
+                                        defaultBrowserLauncher.launch(roleIntent)
+                                        return
+                                    }
+                                }
+                                DefaultBrowserHelper.openDefaultAppsSettings(this@MainActivity)
+                            }
+
+                            // External links arriving while the app is already
+                            // running (onNewIntent): open each in a new
+                            // foreground tab.
+                            LaunchedEffect(Unit) {
+                                pendingExternalUrl.collect { url ->
+                                    if (url != null) {
+                                        tabs.add(TabItem(url = url, title = "New Tab"))
+                                        activeTabIndex = tabs.size - 1
+                                        pendingExternalUrl.value = null
+                                    }
+                                }
+                            }
+
+                            // One-time prompt, shown right after the splash —
+                            // same !showSplash gating as the restore dialog so
+                            // it never hides beneath the intro animation.
+                            LaunchedEffect(showSplash) {
+                                if (!showSplash) {
+                                    isDefaultBrowserState.value =
+                                        DefaultBrowserHelper.isDefaultBrowser(this@MainActivity)
+                                    val shown =
+                                        dataStore.data.first()[AppSettings.DEFAULT_BROWSER_PROMPT_SHOWN] == true
+                                    if (!shown && !isDefaultBrowserState.value) {
+                                        showDefaultBrowserPrompt = true
+                                    }
+                                }
+                            }
+
+                            if (showDefaultBrowserPrompt) {
+                                androidx.compose.material3.AlertDialog(
+                                    onDismissRequest = { dismissDefaultBrowserPrompt() },
+                                    title = {
+                                        androidx.compose.material3.Text("Make Click your default browser?")
+                                    },
+                                    text = {
+                                        androidx.compose.material3.Text(
+                                            "Links you tap in other apps will open right here in Click."
+                                        )
+                                    },
+                                    confirmButton = {
+                                        androidx.compose.material3.TextButton(onClick = {
+                                            dismissDefaultBrowserPrompt()
+                                            requestDefaultBrowser()
+                                        }) {
+                                            androidx.compose.material3.Text("Set as default")
+                                        }
+                                    },
+                                    dismissButton = {
+                                        androidx.compose.material3.TextButton(onClick = {
+                                            dismissDefaultBrowserPrompt()
+                                        }) {
+                                            androidx.compose.material3.Text("Not now")
+                                        }
+                                    }
+                                )
+                            }
+
                             if (showSettings) {
                                 SettingsScreen(
                                     theme = theme,
@@ -3785,6 +3900,10 @@ class MainActivity : FragmentActivity() {
                                         }
                                     },
                                     onCustomizeMenu = { showSettings = false; showMenuCustomize = true },
+                                    // Default browser: live status + the same
+                                    // system flow as the first-launch prompt.
+                                    isDefaultBrowser = isDefaultBrowser,
+                                    onSetDefaultBrowser = { requestDefaultBrowser() },
                                     adBlockerEnabled = adBlockerEnabled,
                                     onToggleAdBlocker = { adBlockerEnabled = it },
                                     forceNightMode = forceNightModeWebsites,
@@ -4894,6 +5013,28 @@ class MainActivity : FragmentActivity() {
                 }
             }
         }
+    }
+
+    /**
+     * Extracts an http(s) URL from an incoming ACTION_VIEW intent (e.g. a
+     * link tapped in another app when Click is the default browser).
+     * Returns null for anything else — only web links are ever opened.
+     */
+    private fun externalViewUrl(intent: Intent?): String? {
+        if (intent?.action != Intent.ACTION_VIEW) return null
+        val url = intent.dataString?.trim().orEmpty()
+        return url.takeIf {
+            it.startsWith("http://", ignoreCase = true) ||
+                it.startsWith("https://", ignoreCase = true)
+        }
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        // Link delivered to the already-running instance: open it in a new
+        // foreground tab via the pending-URL flow.
+        externalViewUrl(intent)?.let { pendingExternalUrl.value = it }
     }
 
     /** New-tab URL: custom homepage flag or the premium home (about:blank). */

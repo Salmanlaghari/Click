@@ -65,6 +65,9 @@ fun SettingsScreen(
     onAddressBarPositionChange: (String) -> Unit,
     // --- Customizable menu ---
     onCustomizeMenu: () -> Unit,
+    // --- Default browser ---
+    isDefaultBrowser: Boolean,
+    onSetDefaultBrowser: () -> Unit,
     // --- Privacy toggles ---
     adBlockerEnabled: Boolean,
     onToggleAdBlocker: (Boolean) -> Unit,
@@ -155,7 +158,7 @@ fun SettingsScreen(
         currentSearchEngineSetting, addressBarPosition,
         adBlockerEnabled, forceNightMode,
         httpsMode, httpsStrictExceptions, jsEnabled, dataSaver, perModeDark, historyModeTarget,
-        aiApiKey, aiProvider, aiModel, showAiKey, animationsEnabled
+        aiApiKey, aiProvider, aiModel, showAiKey, animationsEnabled, isDefaultBrowser
     ) {
         buildList {
             // ================= GENERAL =================
@@ -312,6 +315,30 @@ fun SettingsScreen(
                         theme,
                         onCustomizeMenu
                     )
+                }
+            })
+            // ---- Default browser ----
+            add(Row(null) {
+                CardRow(theme) {
+                    Text("Default Browser", color = theme.onSurface, fontWeight = FontWeight.SemiBold, fontSize = 14.sp)
+                    Text(
+                        if (isDefaultBrowser) "Click is your default browser ✓ — links from other apps open here."
+                        else "Click is not your default browser — links from other apps open elsewhere.",
+                        fontSize = 11.sp, color = theme.onSurface.copy(alpha = 0.6f)
+                    )
+                    // No button when already default: a button here would be a
+                    // dead control. The status text above is the truth.
+                    if (!isDefaultBrowser) {
+                        Spacer(Modifier.height(8.dp))
+                        Button(
+                            onClick = onSetDefaultBrowser,
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Icon(Icons.Default.OpenInBrowser, contentDescription = null, modifier = Modifier.size(18.dp))
+                            Spacer(Modifier.width(4.dp))
+                            Text("Set as default")
+                        }
+                    }
                 }
             })
             // ---- AI Assistant (kept from the old settings) ----
