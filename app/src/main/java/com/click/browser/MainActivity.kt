@@ -718,6 +718,10 @@ class MainActivity : ComponentActivity() {
                     }
             }
             var adBlockerEnabled by remember { mutableStateOf(true) }
+            // Page transition animation: bumped on every main-frame navigation
+            // start; drives a subtle fade+slide over the WebView (never blocks
+            // loading, purely visual). Disabled via the Settings toggle.
+            var pageTransitionTick by remember { mutableStateOf(0) }
             // Real session count of blocked tracker/ad requests (home privacy pill).
             val blockedCount by AdBlocker.blockedCountFlow.collectAsState()
             // V9 Shield VPN running state (for the home shield card).
@@ -2018,6 +2022,20 @@ class MainActivity : ComponentActivity() {
                                             else -> Modifier.fillMaxSize()
                                         }
 
+                                        // Page transition: subtle fade + slide on every
+                                        // navigation start. Purely visual — the WebView
+                                        // keeps loading underneath, nothing is blocked.
+                                        // Durations collapse to 0 when animations are off.
+                                        val pageAnimMs = if (flagsUi.tabAnimations) 220 else 0
+                                        val pageTransitionState = remember(pageTransitionTick) {
+                                            MutableTransitionState(false).apply { targetState = true }
+                                        }
+                                        AnimatedVisibility(
+                                            visibleState = pageTransitionState,
+                                            enter = fadeIn(tween(pageAnimMs)) +
+                                                    slideInHorizontally(tween(pageAnimMs)) { it / 14 },
+                                            modifier = Modifier.fillMaxSize()
+                                        ) {
                                         Box(
                                             modifier = Modifier.fillMaxSize(),
                                             contentAlignment = Alignment.Center
@@ -2133,6 +2151,9 @@ class MainActivity : ComponentActivity() {
                                                                 super.onPageStarted(view, url, favicon)
                                                                 currentTab.url = url ?: ""
                                                                 lastPageStart = System.currentTimeMillis()
+                                                                // Page transition animation trigger (main-frame
+                                                                // navigations only — subframes don't call this).
+                                                                pageTransitionTick++
 
                                                                 // Clear stats
                                                                 networkRequests.clear()
@@ -2468,7 +2489,8 @@ class MainActivity : ComponentActivity() {
                                                 )
                                             }
                                         }
-                                    }
+                                        }
+                                        } // AnimatedVisibility: page transition wrapper
 
                                     // 5. FLOATING DEV DEBUG STATUS OVERLAY
                                     if (activeMode == BrowserMode.DEVELOPER && showDebugOverlay && currentTab.url != "about:blank") {
@@ -2903,6 +2925,16 @@ class MainActivity : ComponentActivity() {
                                     onToggleJs = { javaScriptEnabledGlobal = it },
                                     dataSaver = dataSaverEnabled,
                                     onToggleDataSaver = { dataSaverEnabled = it },
+                                    animationsEnabled = flagsUi.tabAnimations,
+                                    onToggleAnimations = { enabled ->
+                                        scope.launch {
+                                            dataStore.edit { prefs ->
+                                                prefs[ExperimentalFlags.K_TAB_ANIMATIONS] = enabled
+                                            }
+                                            liveFlags = liveFlags.copy(tabAnimations = enabled)
+                                            flagsUi = liveFlags
+                                        }
+                                    },
                                     onClearHistoryForMode = { mode ->
                                         scope.launch {
                                             repository.clearHistoryFor(mode)
