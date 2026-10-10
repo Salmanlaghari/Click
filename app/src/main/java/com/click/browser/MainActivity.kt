@@ -133,6 +133,11 @@ class MainActivity : ComponentActivity() {
     private var liveDesktopHosts: Set<String> = emptySet()
     // Live copy of experimental flags (click://flags) for WebViewClient callbacks.
     private var liveFlags = ExperimentalFlags()
+    // Crash-restore: latest restorable-tab snapshot for this boot mode, kept
+    // outside composable scope so onDestroy() and v9SwitchMode() can persist
+    // it and mark clean exits without touching UI state.
+    private var liveRestoreTabs: List<SavedTab> = emptyList()
+    private var liveRestoreActiveIndex: Int = 0
     // Registry of live WebViews for flag-driven cleanup (clear-on-exit).
     private val liveWebViews = mutableListOf<android.webkit.WebView>()
 
@@ -229,6 +234,17 @@ class MainActivity : ComponentActivity() {
             kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.IO).launch {
                 try { repository.clearHistory() } catch (_: Exception) { }
             }
+        }
+        // Crash-restore: an explicit finish() (Exit menu / back-out) is a
+        // clean exit — no restore prompt next launch. Rotation and other
+        // config changes have isFinishing=false, so they stay "unclean"
+        // and correctly keep their snapshot for a later crash.
+        if (isFinishing) {
+            try {
+                kotlinx.coroutines.runBlocking {
+                    SessionRestore.markCleanExit(this@MainActivity, V9Engine.bootMode, true)
+                }
+            } catch (_: Exception) { }
         }
         super.onDestroy()
     }
@@ -547,6 +563,53 @@ class MainActivity : ComponentActivity() {
             }
 
             var isIncognitoMode by remember { mutableStateOf(false) }
+            // Crash / force-close session restore state.
+            var showRestoreDialog by remember { mutableStateOf(false) }
+            var crashedTabs by remember { mutableStateOf<List<SavedTab>>(emptyList()) }
+            var crashedActiveIndex by remember { mutableStateOf(0) }
+
+            // Crash-restore startup check: if the previous run for THIS boot
+            // mode did not exit cleanly and a tab snapshot exists, offer to
+            // restore it. Never crosses modes — each mode keeps its own
+            // snapshot in its own profile store (isolation is a feature).
+            LaunchedEffect(Unit) {
+                val bootMode = V9Engine.bootMode
+                val clean = SessionRestore.wasCleanExit(this@MainActivity, bootMode)
+                val (saved, savedActive) = SessionRestore.loadSession(this@MainActivity, bootMode)
+                // From here on, assume this run may die uncleanly.
+                SessionRestore.markCleanExit(this@MainActivity, bootMode, false)
+                if (!clean && saved.isNotEmpty() && !liveFlags.clearOnExit) {
+                    crashedTabs = saved
+                    crashedActiveIndex = savedActive
+                    showRestoreDialog = true
+                }
+            }
+
+            // Keeps the crash-restore snapshot fresh: debounced write of the
+            // open restorable tabs (non-incognito, http/https only) into this
+            // boot mode's profile store. With "clear data on exit" on, no
+            // snapshot is kept at all (privacy first).
+            LaunchedEffect(Unit) {
+                snapshotFlow { tabs.map { Triple(it.url, it.title, it.isIncognito) } to activeTabIndex }
+                    .collect { (tabStates, activeIdx) ->
+                        delay(1000) // trailing-edge debounce: rapid edits collapse into one write
+                        val bootMode = V9Engine.bootMode
+                        if (liveFlags.clearOnExit) {
+                            SessionRestore.clearSession(this@MainActivity, bootMode)
+                            liveRestoreTabs = emptyList()
+                            liveRestoreActiveIndex = 0
+                        } else {
+                            val snapshot = tabStates
+                                .filter { (url, _, incognito) ->
+                                    !incognito && SessionRestore.isRestorableUrl(url)
+                                }
+                                .map { (url, title, _) -> SavedTab(url, title.ifBlank { url }) }
+                            SessionRestore.saveSession(this@MainActivity, bootMode, snapshot, activeIdx)
+                            liveRestoreTabs = snapshot
+                            liveRestoreActiveIndex = activeIdx
+                        }
+                    }
+            }
             var adBlockerEnabled by remember { mutableStateOf(true) }
             // Real session count of blocked tracker/ad requests (home privacy pill).
             val blockedCount by AdBlocker.blockedCountFlow.collectAsState()
@@ -2551,6 +2614,59 @@ class MainActivity : ComponentActivity() {
                                 )
                             }
 
+                            // Crash-restore offer: the previous run for this mode died
+                            // uncleanly (crash / force-close / system kill).
+                            // Gated on !showSplash so it pops right after the
+                            // 5s Markhor intro instead of hiding beneath it.
+                            if (showRestoreDialog && !showSplash) {
+                                androidx.compose.material3.AlertDialog(
+                                    onDismissRequest = {
+                                        showRestoreDialog = false
+                                        scope.launch {
+                                            SessionRestore.clearSession(
+                                                this@MainActivity, V9Engine.bootMode
+                                            )
+                                        }
+                                    },
+                                    title = {
+                                        androidx.compose.material3.Text("Restore previous session?")
+                                    },
+                                    text = {
+                                        androidx.compose.material3.Text(
+                                            "Click didn't close properly last time. " +
+                                                "Restore your ${crashedTabs.size} open " +
+                                                (if (crashedTabs.size == 1) "tab?" else "tabs?")
+                                        )
+                                    },
+                                    confirmButton = {
+                                        androidx.compose.material3.TextButton(onClick = {
+                                            showRestoreDialog = false
+                                            tabs.clear()
+                                            tabs.addAll(crashedTabs.map { saved ->
+                                                TabItem(url = saved.url, title = saved.title)
+                                            })
+                                            activeTabIndex = crashedActiveIndex.coerceIn(
+                                                0, (tabs.size - 1).coerceAtLeast(0)
+                                            )
+                                        }) {
+                                            androidx.compose.material3.Text("Restore")
+                                        }
+                                    },
+                                    dismissButton = {
+                                        androidx.compose.material3.TextButton(onClick = {
+                                            showRestoreDialog = false
+                                            scope.launch {
+                                                SessionRestore.clearSession(
+                                                    this@MainActivity, V9Engine.bootMode
+                                                )
+                                            }
+                                        }) {
+                                            androidx.compose.material3.Text("Start fresh")
+                                        }
+                                    }
+                                )
+                            }
+
                             if (showSettings) {
                                 PremiumSettingsScreen(
                                     currentThemeSetting = currentThemeSetting,
@@ -3424,6 +3540,13 @@ class MainActivity : ComponentActivity() {
         android.widget.Toast.makeText(
             this, toastMsg, android.widget.Toast.LENGTH_LONG
         ).show()
+        // Crash-restore: an intentional engine switch is a CLEAN exit of the
+        // source mode — persist its final tab snapshot and mark it clean so
+        // switching Simple→Hack→Simple restores Simple's tabs instead of
+        // offering a phantom "crash" restore. Per-mode keys keep isolation.
+        val sourceMode = V9Engine.bootMode
+        SessionRestore.saveSession(this, sourceMode, liveRestoreTabs, liveRestoreActiveIndex)
+        SessionRestore.markCleanExit(this, sourceMode, true)
         val restarted = V9Engine.restartForEngineSwitch(
             this, modeManager, mode,
             hackIntro = (mode == BrowserMode.HACK)
