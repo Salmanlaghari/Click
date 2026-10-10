@@ -452,9 +452,12 @@ class MainActivity : ComponentActivity() {
             // Each browsing mode has its own premium light/dark theme
             // (see ModeThemes — adapted from the approved design references).
             var currentThemeSetting by remember { mutableStateOf("Dark") }
+            // Per-mode Day/Night overrides (null = follow the global toggle).
+            var perModeDark by remember { mutableStateOf<Map<BrowserMode, Boolean?>>(emptyMap()) }
             var wallpaperUri by remember { mutableStateOf<String?>(null) }
-            val theme = remember(activeMode, currentThemeSetting) {
-                ModeThemes.forMode(activeMode, currentThemeSetting == "Dark")
+            val theme = remember(activeMode, currentThemeSetting, perModeDark) {
+                val dark = perModeDark[activeMode] ?: (currentThemeSetting == "Dark")
+                ModeThemes.forMode(activeMode, dark)
             }
 
             val themeColors = if (theme.dark) {
@@ -916,6 +919,10 @@ class MainActivity : ComponentActivity() {
                     secureDnsEnabled = prefs[AppSettings.SECURE_DNS_ENABLED] == true
                     customHeaders = AppSettings.parseHeaders(prefs[AppSettings.CUSTOM_HEADERS_JSON])
                     currentThemeSetting = if (prefs[AppSettings.UI_DARK_MODE] == false) "Light" else "Dark"
+                    // Per-mode Day/Night overrides (missing key = follow global).
+                    perModeDark = BrowserMode.values().associateWith { mode ->
+                        prefs[AppSettings.darkModeKey(mode)]
+                    }
                     wallpaperUri = prefs[AppSettings.WALLPAPER_URI]
                     // Experimental flags (click://flags).
                     liveFlags = ExperimentalFlags.load(prefs)
@@ -2552,7 +2559,8 @@ class MainActivity : ComponentActivity() {
                             }
 
                             if (showSettings) {
-                                PremiumSettingsScreen(
+                                SettingsScreen(
+                                    theme = theme,
                                     currentThemeSetting = currentThemeSetting,
                                     onThemeChange = {
                                         currentThemeSetting = it
@@ -2592,6 +2600,46 @@ class MainActivity : ComponentActivity() {
                                     onToggleJs = { javaScriptEnabledGlobal = it },
                                     dataSaver = dataSaverEnabled,
                                     onToggleDataSaver = { dataSaverEnabled = it },
+                                    onClearHistoryForMode = { mode ->
+                                        scope.launch {
+                                            repository.clearHistoryFor(mode)
+                                            Toast.makeText(
+                                                this@MainActivity,
+                                                "${mode.name.lowercase().replaceFirstChar { it.uppercase() }} history cleared",
+                                                Toast.LENGTH_SHORT
+                                            ).show()
+                                        }
+                                    },
+                                    onClearCookies = {
+                                        // CookieManager is pinned to the current engine's data
+                                        // directory — this clears the CURRENT mode's cookies only.
+                                        CookieStore.clearAll {
+                                            Toast.makeText(this@MainActivity, "Cookies cleared (current mode)", Toast.LENGTH_SHORT).show()
+                                        }
+                                    },
+                                    onClearCache = {
+                                        currentTab.webView?.clearCache(true)
+                                        Toast.makeText(this@MainActivity, "Cache cleared (current mode)", Toast.LENGTH_SHORT).show()
+                                    },
+                                    onClearAllCurrentMode = {
+                                        scope.launch { repository.clearHistory() }
+                                        CookieStore.clearAll()
+                                        currentTab.webView?.clearCache(true)
+                                        Toast.makeText(this@MainActivity, "All browsing data cleared (current mode)", Toast.LENGTH_SHORT).show()
+                                    },
+                                    onOpenCookieManager = { showSettings = false; showCookieManager = true },
+                                    perModeDark = perModeDark,
+                                    onPerModeThemeChange = { mode, dark ->
+                                        val updated = perModeDark.toMutableMap()
+                                        if (dark == null) updated.remove(mode) else updated[mode] = dark
+                                        perModeDark = updated
+                                        scope.launch {
+                                            dataStore.edit { prefs ->
+                                                if (dark == null) prefs.remove(AppSettings.darkModeKey(mode))
+                                                else prefs[AppSettings.darkModeKey(mode)] = dark
+                                            }
+                                        }
+                                    },
                                     aiApiKey = aiApiKey,
                                     builtInKeyActive = BuildConfig.GROQ_API_KEY_OBF.isNotBlank(),
                                     onAiApiKeyChange = { v ->
@@ -2615,12 +2663,8 @@ class MainActivity : ComponentActivity() {
                                         aiModel = v
                                         scope.launch { dataStore.edit { prefs -> prefs[AppSettings.AI_MODEL] = v } }
                                     },
-                                    onClearData = {
-                                        scope.launch {
-                                            repository.clearHistory()
-                                            Toast.makeText(this@MainActivity, "Data Cleared Successfully", Toast.LENGTH_SHORT).show()
-                                        }
-                                    },
+                                    onOpenPrivacyPolicy = { showSettings = false; showPrivacyPolicy = true },
+                                    onOpenHelpFeedback = { showSettings = false; showHelp = true },
                                     onClose = { showSettings = false }
                                 )
                             }
