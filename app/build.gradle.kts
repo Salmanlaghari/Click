@@ -150,6 +150,9 @@ dependencies {
     implementation(libs.play.services.ads)
     // AndroidX BiometricPrompt for the private-tab lock (no custom crypto).
     implementation(libs.androidx.biometric)
+    // WorkManager for battery-friendly background news checks (no exact
+    // alarms, no foreground service — periodic work with constraints).
+    implementation(libs.androidx.work.runtime.ktx)
 
     testImplementation(libs.junit)
     androidTestImplementation(libs.androidx.junit)

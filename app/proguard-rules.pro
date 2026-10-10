@@ -38,6 +38,14 @@
 # (ML Kit ships its own consumer rules for internals). Narrowed per review —
 # the old blanket keeps blocked obfuscation of whole packages.
 -keep class com.google.mlkit.nl.translate.Translation { *; }
+
+# Background news alerts: WorkManager instantiates NewsNotificationWorker by
+# class name via reflection when the periodic work fires. WorkManager ships
+# consumer rules for Worker subclasses, but keep ours explicitly so a
+# library-rules change can never silently break scheduled alerts.
+-keep class com.click.browser.engine.NewsNotificationWorker {
+    public <init>(android.content.Context, androidx.work.WorkerParameters);
+}
 -keep class com.google.mlkit.nl.translate.Translator { *; }
 -keep class com.google.mlkit.nl.translate.TranslatorOptions { *; }
 -keep class com.google.mlkit.nl.translate.TranslatorOptions$Builder { *; }

@@ -12,6 +12,10 @@
     <!-- AI chat voice input: requested at runtime with a rationale dialog. -->
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
 
+    <!-- News alerts: runtime permission (POST_NOTIFICATIONS), requested only
+         when the user opts in to news notifications in Settings. -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+
     <!-- V9 Shield (built-in VPN): packet tunnel + foreground service. -->
     <uses-permission android:name="android.permission.BIND_VPN_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
@@ -30,11 +34,22 @@
         <activity
             android:name=".MainActivity"
             android:exported="true"
+            android:launchMode="singleTask"
             android:configChanges="orientation|screenSize|keyboardHidden"
             android:theme="@style/Theme.ClickBrowser">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+            <!-- Lets Android offer Click as a default browser (and receive
+                 links opened from other apps). Required for the RoleManager
+                 BROWSER role request to work. -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="http" />
+                <data android:scheme="https" />
             </intent-filter>
         </activity>
 

@@ -2,6 +2,7 @@ package com.click.browser
 
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.graphics.Bitmap
 import android.os.Bundle
 import android.speech.tts.TextToSpeech
@@ -17,8 +18,12 @@ import android.widget.Toast
 import androidx.biometric.BiometricPrompt
 import androidx.fragment.app.FragmentActivity
 import androidx.activity.compose.BackHandler
+import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
+import androidx.activity.result.ActivityResultLauncher
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.enableEdgeToEdge
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.core.app.ActivityCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
@@ -93,6 +98,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
@@ -155,6 +161,11 @@ class MainActivity : FragmentActivity() {
     // which run outside composition. Synced from the composable state.
     @Volatile private var backgroundAudioEnabledCached: Boolean = false
 
+    // Deep-link URL from a news notification tap (NewsNotifications.EXTRA_OPEN_URL).
+    // Set from onCreate (cold start) or onNewIntent (warm, singleTask); consumed
+    // once by the composable, which opens it in a new tab.
+    private val notificationOpenUrl = mutableStateOf<String?>(null)
+
     // Live copies of composable state for use inside WebViewClient callbacks,
     // which are created once and would otherwise capture stale values.
     private var liveMode: BrowserMode = BrowserMode.SIMPLE
@@ -199,6 +210,19 @@ class MainActivity : FragmentActivity() {
     private var liveBiometricLockEnabled = false
     private var liveHasIncognitoTabs = false
     private val privateLockedFlow = kotlinx.coroutines.flow.MutableStateFlow(false)
+    // Default-browser flow: pending external link from an ACTION_VIEW intent
+    // (drained into a new tab by the composable) + the current
+    // default-browser status shown in Settings and used for the one-time
+    // first-launch prompt.
+    private val pendingExternalUrl = MutableStateFlow<String?>(null)
+    private val isDefaultBrowserState = MutableStateFlow(false)
+    private val defaultBrowserLauncher: ActivityResultLauncher<Intent> =
+        registerForActivityResult(ActivityResultContracts.StartActivityForResult()) {
+            // The system role dialog closed (granted, denied or dismissed):
+            // re-check the truth rather than trusting the result code.
+            isDefaultBrowserState.value =
+                DefaultBrowserHelper.isDefaultBrowser(this)
+        }
     // Text scaling live copies for WebViewClient callbacks (per-host map).
     private var liveGlobalTextScale = com.click.browser.engine.TextScaleStore.DEFAULT
     private var liveHostTextScales: Map<String, Int> = emptyMap()
@@ -341,6 +365,30 @@ class MainActivity : FragmentActivity() {
             try { wv.onResume() } catch (_: Exception) { }
             try { wv.resumeTimers() } catch (_: Exception) { }
         }
+    }
+
+    /**
+     * Warm-path news notification tap: singleTask delivers the deep link
+     * here instead of creating a second MainActivity. The URL is consumed
+     * once into [notificationOpenUrl]; the composable opens it in a new tab.
+     */
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        consumeNotificationUrl(intent)
+    }
+
+    /**
+     * Pulls [NewsNotifications.EXTRA_OPEN_URL] out of [intent] (once) into
+     * [notificationOpenUrl]. Only http(s) URLs are accepted — the extra
+     * comes from our own notification, but intents are an exposed surface.
+     */
+    private fun consumeNotificationUrl(intent: Intent) {
+        val url = intent.getStringExtra(NewsNotifications.EXTRA_OPEN_URL)
+            ?.takeIf { it.startsWith("http://") || it.startsWith("https://") }
+            ?: return
+        intent.removeExtra(NewsNotifications.EXTRA_OPEN_URL)
+        notificationOpenUrl.value = url
     }
 
     override fun onDestroy() {
@@ -859,9 +907,21 @@ class MainActivity : FragmentActivity() {
         // WindowInsets in Compose so no chrome is hidden behind system bars.
         enableEdgeToEdge()
 
+        // News notification deep link (cold start): consume the article URL
+        // once so the composable below opens it in a new tab. Skipped on
+        // recreation (rotation / process death) — the URL was already
+        // consumed or is preserved by the tab-restore path.
+        if (savedInstanceState == null) {
+            consumeNotificationUrl(intent)
+        }
+
         modeManager = ModeManager(this)
         repository = BrowserRepository(this)
         playlistManager = PlaylistManager(this)
+        // Launched from another app's link (Click is / was picked as default
+        // browser): use the link as the first tab's URL so the user lands on
+        // it instead of the homepage.
+        val startViewUrl = externalViewUrl(intent)
         // Bundled ad/tracker filter lists (assets) + weekly remote updates.
         com.click.browser.engine.FilterListManager.init(this)
         // Translate language list (asset-overridable, built-in fallback).
@@ -908,7 +968,8 @@ class MainActivity : FragmentActivity() {
             }
 
             // Browser Premium Feature States
-            val tabs = remember { mutableStateListOf<TabItem>(TabItem(url = homeUrl(), title = "New Tab")) }
+            // Cold start with an external link: it becomes the first tab.
+            val tabs = remember { mutableStateListOf<TabItem>(TabItem(url = startViewUrl ?: homeUrl(), title = "New Tab")) }
             var activeTabIndex by remember { mutableStateOf(0) }
             val currentTab = tabs.getOrNull(activeTabIndex) ?: TabItem(url = "about:blank")
 
@@ -1106,6 +1167,85 @@ class MainActivity : FragmentActivity() {
             var playlistSeedUrl by remember { mutableStateOf<String?>(null) }
             // Generic "background audio for web pages" setting (default off).
             var backgroundAudioEnabled by remember { mutableStateOf(false) }
+            // Background news notifications: opt-in (default OFF). When the
+            // user enables them we schedule the battery-friendly WorkManager
+            // check; disabling cancels it.
+            var newsNotificationsEnabled by remember { mutableStateOf(false) }
+            var newsTopics by remember { mutableStateOf(NewsNotifications.DEFAULT_TOPICS) }
+            /**
+             * Persists the opt-in and schedules the periodic news check.
+             * Shared by the permission-grant callback and the pre-granted path.
+             */
+            fun enableNewsNotifications() {
+                newsNotificationsEnabled = true
+                scope.launch {
+                    dataStore.edit { prefs ->
+                        prefs[AppSettings.NEWS_NOTIFICATIONS_ENABLED] = true
+                    }
+                    NewsNotificationScheduler.schedule(this@MainActivity)
+                }
+                Toast.makeText(
+                    this@MainActivity,
+                    "News alerts on — you'll be notified about fresh stories",
+                    Toast.LENGTH_SHORT
+                ).show()
+            }
+            // Android 13+ runtime grant for POST_NOTIFICATIONS, requested only
+            // when the user opts in to news alerts (never at startup).
+            val newsPermissionLauncher = rememberLauncherForActivityResult(
+                ActivityResultContracts.RequestPermission()
+            ) { granted ->
+                if (granted) {
+                    enableNewsNotifications()
+                } else {
+                    // Honest: without the grant there are no alerts — the
+                    // toggle stays off and nothing is scheduled.
+                    Toast.makeText(
+                        this@MainActivity,
+                        "Notifications need permission — allow them in App info → Notifications to get news alerts.",
+                        Toast.LENGTH_LONG
+                    ).show()
+                }
+            }
+            /**
+             * Settings toggle handler: enabling on Android 13+ goes through
+             * the runtime permission first (the toggle only flips once the
+             * grant lands); disabling cancels the scheduled work.
+             */
+            fun setNewsNotificationsEnabled(wantOn: Boolean) {
+                if (wantOn == newsNotificationsEnabled) return
+                if (!wantOn) {
+                    newsNotificationsEnabled = false
+                    scope.launch {
+                        dataStore.edit { prefs ->
+                            prefs[AppSettings.NEWS_NOTIFICATIONS_ENABLED] = false
+                        }
+                        NewsNotificationScheduler.cancel(this@MainActivity)
+                    }
+                    return
+                }
+                val needsGrant = android.os.Build.VERSION.SDK_INT >=
+                    android.os.Build.VERSION_CODES.TIRAMISU &&
+                    ContextCompat.checkSelfPermission(
+                        this@MainActivity,
+                        android.Manifest.permission.POST_NOTIFICATIONS
+                    ) != PackageManager.PERMISSION_GRANTED
+                if (needsGrant) {
+                    newsPermissionLauncher.launch(android.Manifest.permission.POST_NOTIFICATIONS)
+                } else {
+                    enableNewsNotifications()
+                }
+            }
+            // News notification deep link: open the tapped article's URL in a
+            // new tab (cold start via onCreate, warm via onNewIntent).
+            val pendingNewsUrl = notificationOpenUrl.value
+            LaunchedEffect(pendingNewsUrl) {
+                if (pendingNewsUrl != null) {
+                    notificationOpenUrl.value = null
+                    tabs.add(TabItem(url = pendingNewsUrl, title = "New Tab"))
+                    activeTabIndex = tabs.size - 1
+                }
+            }
             var showSettings by remember { mutableStateOf(false) }
             var showFindInPageDialog by remember { mutableStateOf(false) }
             var findQuery by remember { mutableStateOf("") }
@@ -1537,6 +1677,11 @@ class MainActivity : FragmentActivity() {
                         ?: LocationGuard.DEFAULT_PRESET.label
                     customHeaders = AppSettings.parseHeaders(prefs[AppSettings.CUSTOM_HEADERS_JSON])
                     backgroundAudioEnabled = prefs[AppSettings.BACKGROUND_AUDIO_ENABLED] == true
+                    // Background news notifications (opt-in, default OFF).
+                    newsNotificationsEnabled = prefs[AppSettings.NEWS_NOTIFICATIONS_ENABLED] == true
+                    newsTopics = prefs[AppSettings.NEWS_NOTIFICATION_TOPICS]
+                        ?.takeIf { it.isNotEmpty() }
+                        ?: NewsNotifications.DEFAULT_TOPICS
                     // Brave-inspired privacy quick wins.
                     stripTrackingParams = prefs[AppSettings.STRIP_TRACKING_PARAMS] ?: true
                     forgetfulBrowsing = prefs[AppSettings.FORGETFUL_BROWSING] == true
@@ -3741,6 +3886,100 @@ class MainActivity : FragmentActivity() {
                                 )
                             }
 
+                            // ---- Default browser: one-time first-launch prompt ----
+                            // State + actions live here (after the restore dialog)
+                            // so both this dialog and Settings can use them.
+                            val isDefaultBrowser by isDefaultBrowserState.collectAsState()
+                            var showDefaultBrowserPrompt by remember { mutableStateOf(false) }
+
+                            /**
+                             * Marks the first-launch prompt as shown so it
+                             * never nags again (every exit path does this).
+                             */
+                            fun dismissDefaultBrowserPrompt() {
+                                showDefaultBrowserPrompt = false
+                                scope.launch {
+                                    dataStore.edit { prefs ->
+                                        prefs[AppSettings.DEFAULT_BROWSER_PROMPT_SHOWN] = true
+                                    }
+                                }
+                            }
+
+                            /**
+                             * Launches the system "set Click as default
+                             * browser" flow: the RoleManager role request on
+                             * API 29+, else the system's Default-Apps page.
+                             * Both paths are real — no dead button.
+                             */
+                            fun requestDefaultBrowser() {
+                                if (DefaultBrowserHelper.canRequestRole(this@MainActivity)) {
+                                    val roleIntent =
+                                        DefaultBrowserHelper.requestRoleIntent(this@MainActivity)
+                                    if (roleIntent != null) {
+                                        defaultBrowserLauncher.launch(roleIntent)
+                                        return
+                                    }
+                                }
+                                DefaultBrowserHelper.openDefaultAppsSettings(this@MainActivity)
+                            }
+
+                            // External links arriving while the app is already
+                            // running (onNewIntent): open each in a new
+                            // foreground tab.
+                            LaunchedEffect(Unit) {
+                                pendingExternalUrl.collect { url ->
+                                    if (url != null) {
+                                        tabs.add(TabItem(url = url, title = "New Tab"))
+                                        activeTabIndex = tabs.size - 1
+                                        pendingExternalUrl.value = null
+                                    }
+                                }
+                            }
+
+                            // One-time prompt, shown right after the splash —
+                            // same !showSplash gating as the restore dialog so
+                            // it never hides beneath the intro animation.
+                            LaunchedEffect(showSplash) {
+                                if (!showSplash) {
+                                    isDefaultBrowserState.value =
+                                        DefaultBrowserHelper.isDefaultBrowser(this@MainActivity)
+                                    val shown =
+                                        dataStore.data.first()[AppSettings.DEFAULT_BROWSER_PROMPT_SHOWN] == true
+                                    if (!shown && !isDefaultBrowserState.value) {
+                                        showDefaultBrowserPrompt = true
+                                    }
+                                }
+                            }
+
+                            if (showDefaultBrowserPrompt) {
+                                androidx.compose.material3.AlertDialog(
+                                    onDismissRequest = { dismissDefaultBrowserPrompt() },
+                                    title = {
+                                        androidx.compose.material3.Text("Make Click your default browser?")
+                                    },
+                                    text = {
+                                        androidx.compose.material3.Text(
+                                            "Links you tap in other apps will open right here in Click."
+                                        )
+                                    },
+                                    confirmButton = {
+                                        androidx.compose.material3.TextButton(onClick = {
+                                            dismissDefaultBrowserPrompt()
+                                            requestDefaultBrowser()
+                                        }) {
+                                            androidx.compose.material3.Text("Set as default")
+                                        }
+                                    },
+                                    dismissButton = {
+                                        androidx.compose.material3.TextButton(onClick = {
+                                            dismissDefaultBrowserPrompt()
+                                        }) {
+                                            androidx.compose.material3.Text("Not now")
+                                        }
+                                    }
+                                )
+                            }
+
                             if (showSettings) {
                                 SettingsScreen(
                                     theme = theme,
@@ -3785,6 +4024,10 @@ class MainActivity : FragmentActivity() {
                                         }
                                     },
                                     onCustomizeMenu = { showSettings = false; showMenuCustomize = true },
+                                    // Default browser: live status + the same
+                                    // system flow as the first-launch prompt.
+                                    isDefaultBrowser = isDefaultBrowser,
+                                    onSetDefaultBrowser = { requestDefaultBrowser() },
                                     adBlockerEnabled = adBlockerEnabled,
                                     onToggleAdBlocker = { adBlockerEnabled = it },
                                     forceNightMode = forceNightModeWebsites,
@@ -3826,6 +4069,18 @@ class MainActivity : FragmentActivity() {
                                         scope.launch {
                                             dataStore.edit { prefs ->
                                                 prefs[AppSettings.BACKGROUND_AUDIO_ENABLED] = v
+                                            }
+                                        }
+                                    },
+                                    // Background news notifications (opt-in).
+                                    newsNotificationsEnabled = newsNotificationsEnabled,
+                                    onToggleNewsNotifications = { setNewsNotificationsEnabled(it) },
+                                    newsTopics = newsTopics,
+                                    onNewsTopicsChange = { topics ->
+                                        newsTopics = topics
+                                        scope.launch {
+                                            dataStore.edit { prefs ->
+                                                prefs[AppSettings.NEWS_NOTIFICATION_TOPICS] = topics
                                             }
                                         }
                                     },
@@ -4894,6 +5149,28 @@ class MainActivity : FragmentActivity() {
                 }
             }
         }
+    }
+
+    /**
+     * Extracts an http(s) URL from an incoming ACTION_VIEW intent (e.g. a
+     * link tapped in another app when Click is the default browser).
+     * Returns null for anything else — only web links are ever opened.
+     */
+    private fun externalViewUrl(intent: Intent?): String? {
+        if (intent?.action != Intent.ACTION_VIEW) return null
+        val url = intent.dataString?.trim().orEmpty()
+        return url.takeIf {
+            it.startsWith("http://", ignoreCase = true) ||
+                it.startsWith("https://", ignoreCase = true)
+        }
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        // Link delivered to the already-running instance: open it in a new
+        // foreground tab via the pending-URL flow.
+        externalViewUrl(intent)?.let { pendingExternalUrl.value = it }
     }
 
     /** New-tab URL: custom homepage flag or the premium home (about:blank). */

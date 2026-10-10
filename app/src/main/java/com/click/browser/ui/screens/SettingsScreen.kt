@@ -31,6 +31,7 @@ import com.click.browser.engine.BrowserMode
 import com.click.browser.engine.ClickInternalPages
 import com.click.browser.engine.ModePersonalization
 import com.click.browser.engine.ModeTheme
+import com.click.browser.engine.NewsNotifications
 import kotlinx.coroutines.launch
 
 private const val PLAY_STORE_PACKAGE = "com.teampkai.clickbrowser"
@@ -65,6 +66,9 @@ fun SettingsScreen(
     onAddressBarPositionChange: (String) -> Unit,
     // --- Customizable menu ---
     onCustomizeMenu: () -> Unit,
+    // --- Default browser ---
+    isDefaultBrowser: Boolean,
+    onSetDefaultBrowser: () -> Unit,
     // --- Privacy toggles ---
     adBlockerEnabled: Boolean,
     onToggleAdBlocker: (Boolean) -> Unit,
@@ -120,6 +124,11 @@ fun SettingsScreen(
     onAiProviderChange: (String) -> Unit,
     aiModel: String,
     onAiModelChange: (String) -> Unit,
+    // --- News notifications (background alerts, opt-in) ---
+    newsNotificationsEnabled: Boolean,
+    onToggleNewsNotifications: (Boolean) -> Unit,
+    newsTopics: Set<String>,
+    onNewsTopicsChange: (Set<String>) -> Unit,
     // --- About ---
     onOpenPrivacyPolicy: () -> Unit,
     onOpenHelpFeedback: () -> Unit,
@@ -155,7 +164,8 @@ fun SettingsScreen(
         currentSearchEngineSetting, addressBarPosition,
         adBlockerEnabled, forceNightMode,
         httpsMode, httpsStrictExceptions, jsEnabled, dataSaver, perModeDark, historyModeTarget,
-        aiApiKey, aiProvider, aiModel, showAiKey, animationsEnabled
+        aiApiKey, aiProvider, aiModel, showAiKey, animationsEnabled, isDefaultBrowser,
+        newsNotificationsEnabled, newsTopics
     ) {
         buildList {
             // ================= GENERAL =================
@@ -314,6 +324,30 @@ fun SettingsScreen(
                     )
                 }
             })
+            // ---- Default browser ----
+            add(Row(null) {
+                CardRow(theme) {
+                    Text("Default Browser", color = theme.onSurface, fontWeight = FontWeight.SemiBold, fontSize = 14.sp)
+                    Text(
+                        if (isDefaultBrowser) "Click is your default browser ✓ — links from other apps open here."
+                        else "Click is not your default browser — links from other apps open elsewhere.",
+                        fontSize = 11.sp, color = theme.onSurface.copy(alpha = 0.6f)
+                    )
+                    // No button when already default: a button here would be a
+                    // dead control. The status text above is the truth.
+                    if (!isDefaultBrowser) {
+                        Spacer(Modifier.height(8.dp))
+                        Button(
+                            onClick = onSetDefaultBrowser,
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Icon(Icons.Default.OpenInBrowser, contentDescription = null, modifier = Modifier.size(18.dp))
+                            Spacer(Modifier.width(4.dp))
+                            Text("Set as default")
+                        }
+                    }
+                }
+            })
             // ---- AI Assistant (kept from the old settings) ----
             add(Row(null) {
                 CardRow(theme) {
@@ -369,6 +403,51 @@ fun SettingsScreen(
                         label = { Text("Model (blank = ${providerInfo.defaultModel})") },
                         modifier = Modifier.fillMaxWidth(),
                         singleLine = true
+                    )
+                }
+            })
+
+            // ---- News Notifications (background alerts, opt-in) ----
+            add(Row(null) {
+                CardRow(theme) {
+                    Text("News Notifications", color = theme.onSurface, fontWeight = FontWeight.SemiBold, fontSize = 14.sp)
+                    Text(
+                        "WhatsApp-style alerts for fresh stories in your topics — even with the browser closed. Tapping an alert opens the article in a new tab.",
+                        fontSize = 11.sp, color = theme.onSurface.copy(alpha = 0.6f)
+                    )
+                    Spacer(Modifier.height(4.dp))
+                    ToggleRow(
+                        "Breaking news alerts",
+                        "Off by default — enable to opt in",
+                        newsNotificationsEnabled,
+                        onToggleNewsNotifications,
+                        theme
+                    )
+                    Spacer(Modifier.height(4.dp))
+                    Text("Topics", color = theme.onSurface, fontWeight = FontWeight.SemiBold, fontSize = 13.sp)
+                    Spacer(Modifier.height(4.dp))
+                    // Multi-select topic chips (same FilterChip pattern as the theme picker).
+                    @OptIn(ExperimentalLayoutApi::class)
+                    FlowRow(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalArrangement = Arrangement.spacedBy(4.dp)
+                    ) {
+                        NewsNotifications.TOPIC_CHOICES.forEach { (name, label) ->
+                            FilterChip(
+                                selected = newsTopics.contains(name),
+                                onClick = {
+                                    val updated = if (newsTopics.contains(name)) newsTopics - name else newsTopics + name
+                                    onNewsTopicsChange(updated)
+                                },
+                                label = { Text(label) }
+                            )
+                        }
+                    }
+                    Spacer(Modifier.height(8.dp))
+                    Text(
+                        "Checks every ~2 hours on Wi-Fi/mobile data. Battery-friendly: no exact alarms, no background service — checks are skipped when the battery is low.",
+                        fontSize = 11.sp, color = theme.onSurface.copy(alpha = 0.6f)
                     )
                 }
             })
