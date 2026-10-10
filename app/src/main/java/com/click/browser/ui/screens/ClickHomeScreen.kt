@@ -1344,7 +1344,7 @@ fun CompactBrowseBar(
                             modifier = Modifier.size(32.dp)
                         ) {
                             Icon(
-                                Icons.Default.Clear,
+                                Icons.Default.Close,
                                 contentDescription = "Clear",
                                 tint = theme.onSurface.copy(alpha = 0.5f),
                                 modifier = Modifier.size(16.dp)
@@ -1384,7 +1384,7 @@ fun CompactBrowseBar(
                     }
                 ) {
                     Icon(
-                        Icons.Default.FilterNone,
+                        Icons.Default.Tab,
                         contentDescription = "Tabs ($tabCount)",
                         tint = theme.onTopBar,
                         modifier = Modifier.size(22.dp)
