@@ -144,6 +144,7 @@ fun ClickHomeScreen(
     onQrClick: () -> Unit,
     onProfileClick: () -> Unit,
     onV9ShieldClick: () -> Unit = {},
+    onGamesClick: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val isHackNeon = activeMode == BrowserMode.HACK
@@ -241,6 +242,13 @@ fun ClickHomeScreen(
             cardBorder = cardBorder,
             onSurface = theme.onSurface,
             onNavigate = onNavigate
+        )
+
+        TodayUpdateCard(
+            theme = theme,
+            cardBg = cardBg,
+            cardBorder = cardBorder,
+            onGamesClick = onGamesClick
         )
 
         NewsSection(

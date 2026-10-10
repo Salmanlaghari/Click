@@ -55,6 +55,7 @@ fun ClickPageHost(
     onStringFlag: (androidx.datastore.preferences.core.Preferences.Key<String>, String) -> Unit,
     onOpenPage: (String) -> Unit,
     onClose: () -> Unit,
+    onPlayGame: (String) -> Unit = {},
 ) {
     Column(
         modifier = Modifier
@@ -83,6 +84,7 @@ fun ClickPageHost(
         when (pageKey) {
             "flags" -> FlagsScreen(theme, flags, onFlagToggle, onStringFlag)
             "version" -> VersionScreen(theme, versionName, versionCode, onOpenPage)
+            "games" -> GamesHubScreen(theme, onPlayGame = onPlayGame)
             "unknown" -> UnknownClickPage(theme, onOpenPage)
             else -> UnknownClickPage(theme, onOpenPage)
         }

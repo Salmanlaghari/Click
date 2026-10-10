@@ -1,0 +1,69 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+<title>Tic Tac Toe — Click Games</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+body{background:#0b1020;color:#fff;font-family:system-ui,sans-serif;display:flex;flex-direction:column;align-items:center;min-height:100vh;user-select:none}
+#hud{width:100%;max-width:380px;display:flex;justify-content:space-around;padding:16px;font-weight:800;font-size:15px}
+#hud .you{color:#3b82f6}#hud .ai{color:#ef4444}#hud .draw{color:#8b93b8}
+#grid{display:grid;grid-template-columns:repeat(3,110px);grid-template-rows:repeat(3,110px);gap:10px}
+.cell{background:#1d2745;border:1px solid #2e3a63;border-radius:16px;font-size:56px;display:flex;align-items:center;justify-content:center;cursor:pointer}
+.cell:active{background:#2e3a63}
+.cell.x{color:#3b82f6}.cell.o{color:#ef4444}
+#msg{margin-top:18px;font-size:17px;font-weight:700;min-height:26px}
+#reset{margin-top:10px;background:#3b82f6;border:none;color:#fff;font-weight:800;font-size:15px;padding:12px 40px;border-radius:12px}
+</style>
+</head>
+<body>
+<div id="hud"><div class="you">You (X): <span id="sx">0</span></div><div class="draw">Draws: <span id="sd">0</span></div><div class="ai">AI (O): <span id="so">0</span></div></div>
+<div id="grid"></div>
+<div id="msg">Your move!</div>
+<button id="reset">New Game</button>
+<script>
+const grid=document.getElementById('grid'),msg=document.getElementById('msg');
+const WINS=[[0,1,2],[3,4,5],[6,7,8],[0,3,6],[1,4,7],[2,5,8],[0,4,8],[2,4,6]];
+let b,over,sx=0,so=0,sd=0;
+function build(){
+  b=Array(9).fill('');over=false;msg.textContent='Your move!';grid.innerHTML='';
+  b.forEach((_,i)=>{const d=document.createElement('div');d.className='cell';d.addEventListener('click',()=>play(i,d));grid.appendChild(d);});
+}
+function play(i,d){
+  if(over||b[i])return;
+  b[i]='X';d.textContent='✕';d.classList.add('x');
+  if(endCheck('X'))return;
+  setTimeout(ai,350);
+}
+function ai(){
+  if(over)return;
+  let m=findWin('O')??findWin('X');
+  if(m==null){const e=b.map((v,i)=>v?null:i).filter(v=>v!=null);m=e[Math.floor(Math.random()*e.length)];}
+  b[m]='O';const d=grid.children[m];d.textContent='◯';d.classList.add('o');
+  endCheck('O');
+}
+function findWin(p){
+  for(const w of WINS){const c=w.filter(i=>b[i]===p),e=w.filter(i=>!b[i]);
+    if(c.length===2&&e.length===1)return e[0];}
+  return null;
+}
+function endCheck(p){
+  for(const w of WINS)if(w.every(i=>b[i]===p)){
+    over=true;
+    if(p==='X'){sx++;msg.textContent='🎉 You win!';}else{so++;msg.textContent='🤖 AI wins!';}
+    tally();return true;
+  }
+  if(b.every(v=>v)){over=true;sd++;msg.textContent="It's a draw!";tally();return true;}
+  return false;
+}
+function tally(){
+  document.getElementById('sx').textContent=sx;
+  document.getElementById('so').textContent=so;
+  document.getElementById('sd').textContent=sd;
+}
+document.getElementById('reset').addEventListener('click',build);
+build();
+</script>
+</body>
+</html>

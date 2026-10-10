@@ -579,6 +579,8 @@ class MainActivity : ComponentActivity() {
             var showPrivacyGuards by remember { mutableStateOf(false) }
             // click:// internal pages (chrome://-style). Holds the page key or null.
             var showClickPage by remember { mutableStateOf<String?>(null) }
+            // Games: full-screen player for a bundled offline mini-game (game id or null).
+            var showGamePlayer by remember { mutableStateOf<String?>(null) }
             // Experimental flags (click://flags) — UI mirror of liveFlags.
             var flagsUi by remember { mutableStateOf(ExperimentalFlags()) }
             // Confirm-exit dialog (flag).
@@ -820,6 +822,7 @@ class MainActivity : ComponentActivity() {
                     FeatureId.ABOUT -> showAboutApp = true
                     FeatureId.FLAGS -> showClickPage = "flags"
                     FeatureId.VERSION -> showClickPage = "version"
+                    FeatureId.GAMES -> showClickPage = "games"
                 }
             }
 
@@ -959,6 +962,11 @@ class MainActivity : ComponentActivity() {
             // click:// page open: back closes the native page first.
             BackHandler(enabled = showClickPage != null) {
                 showClickPage = null
+            }
+
+            // Game player open: back closes the player first.
+            BackHandler(enabled = showGamePlayer != null) {
+                showGamePlayer = null
             }
 
             // Confirm-exit flag: ask before closing the browser from home.
@@ -1779,6 +1787,7 @@ class MainActivity : ComponentActivity() {
                                             wallpaperUri = wallpaperUri,
                                             shieldActive = shieldActive,
                                             onV9ShieldClick = { showV9Shield = true },
+                                            onGamesClick = { showClickPage = "games" },
                                             onNavigate = { input ->
                                                 val destination = formatUrl(input, currentSearchEngineSetting, activeMode)
                                                 currentTab.url = destination
@@ -2529,7 +2538,20 @@ class MainActivity : ComponentActivity() {
                                             else -> showClickPage = key
                                         }
                                     },
-                                    onClose = { showClickPage = null }
+                                    onClose = { showClickPage = null },
+                                    onPlayGame = { gameId ->
+                                        showClickPage = null
+                                        showGamePlayer = gameId
+                                    }
+                                )
+                            }
+
+                            // Games: full-screen offline mini-game player.
+                            if (showGamePlayer != null) {
+                                GamePlayerScreen(
+                                    gameId = showGamePlayer!!,
+                                    theme = theme,
+                                    onClose = { showGamePlayer = null }
                                 )
                             }
 
@@ -3071,6 +3093,7 @@ class MainActivity : ComponentActivity() {
                                         showDownloads = true
                                     },
                                     onBookmarks = { showBrowserMenu = false; showBookmarks = true },
+                                    onGames = { showBrowserMenu = false; showClickPage = "games" },
                                     onRecentTabs = { showBrowserMenu = false; showRecentTabs = true },
                                     onExtensions = { showBrowserMenu = false; showUserscripts = true },
                                     onShare = {

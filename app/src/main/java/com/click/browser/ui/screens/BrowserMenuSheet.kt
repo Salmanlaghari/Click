@@ -41,7 +41,7 @@ import com.click.browser.engine.ModeTheme
  *
  * Every item actually works — no dead buttons:
  * New tab / New private tab / Tabs (visual switcher) / History /
- * Delete browsing data / Downloads / Bookmarks / Recent tabs /
+ * Delete browsing data / Downloads / Bookmarks / Games / Recent tabs /
  * Extensions (userscripts) / Share / Find in page / Translate /
  * Desktop site toggle / Settings.
  */
@@ -57,6 +57,7 @@ fun BrowserMenuSheet(
     onDeleteBrowsingData: () -> Unit,
     onDownloads: () -> Unit,
     onBookmarks: () -> Unit,
+    onGames: () -> Unit,
     onRecentTabs: () -> Unit,
     onExtensions: () -> Unit,
     onShare: () -> Unit,
@@ -133,6 +134,14 @@ fun BrowserMenuSheet(
                     icon = Icons.Default.Bookmark,
                     label = "Bookmarks",
                     onClick = onBookmarks
+                )
+            }
+            item {
+                MenuRow(
+                    theme = theme,
+                    icon = Icons.Default.SportsEsports,
+                    label = "Games",
+                    onClick = onGames
                 )
             }
             item {
