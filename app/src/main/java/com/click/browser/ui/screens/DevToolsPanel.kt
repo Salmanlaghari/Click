@@ -22,6 +22,21 @@ import androidx.compose.ui.unit.sp
 import com.click.browser.engine.LogEntry
 import com.click.browser.engine.NetworkRequest
 
+/**
+ * Viewport / device facts gathered from the live page via JS.
+ * Every field is real data from the WebView — no placeholders.
+ */
+data class DeviceInfo(
+    val viewport: String = "",
+    val devicePixelRatio: String = "",
+    val userAgent: String = "",
+    val screenSize: String = "",
+    val platform: String = "",
+    val language: String = "",
+    val touchSupport: String = "",
+    val cookiesEnabled: String = ""
+)
+
 @Composable
 fun DevToolsPanel(
     modifier: Modifier = Modifier,
@@ -32,14 +47,18 @@ fun DevToolsPanel(
     selectedTab: Int,
     onTabSelected: (Int) -> Unit,
     onClearLogs: () -> Unit,
-    onEvalJs: (String) -> Unit
+    onClearNetwork: () -> Unit,
+    onEvalJs: (String) -> Unit,
+    inspectorEnabled: Boolean,
+    onToggleInspector: () -> Unit,
+    deviceInfo: DeviceInfo?,
+    onRefreshDeviceInfo: () -> Unit
 ) {
-    val tabs = listOf("Elements", "Console", "Network", "Sources")
+    val tabs = listOf("Elements", "Console", "Network", "Sources", "Device")
 
     Column(
         modifier = modifier
             .fillMaxWidth()
-            .height(350.dp)
             .background(MaterialTheme.colorScheme.surfaceVariant)
     ) {
         // Tab Headers
@@ -56,22 +75,27 @@ fun DevToolsPanel(
         Box(
             modifier = Modifier
                 .fillMaxWidth()
-                .weight(1f)
+                .heightIn(min = 280.dp, max = 480.dp)
                 .background(Color(0xFF1E1E1E))
                 .padding(8.dp)
         ) {
             when (selectedTab) {
-                0 -> ElementsTab(domHtml)
+                0 -> ElementsTab(domHtml, inspectorEnabled, onToggleInspector)
                 1 -> ConsoleTab(logs, onClearLogs, onEvalJs)
-                2 -> NetworkTab(networkRequests)
+                2 -> NetworkTab(networkRequests, onClearNetwork)
                 3 -> SourcesTab(sourcesList)
+                4 -> DeviceTab(deviceInfo, onRefreshDeviceInfo)
             }
         }
     }
 }
 
 @Composable
-fun ElementsTab(domHtml: String) {
+fun ElementsTab(
+    domHtml: String,
+    inspectorEnabled: Boolean,
+    onToggleInspector: () -> Unit
+) {
     var displayModeHtml by remember { mutableStateOf(true) }
 
     Column(modifier = Modifier.fillMaxSize()) {
@@ -81,11 +105,27 @@ fun ElementsTab(domHtml: String) {
             verticalAlignment = Alignment.CenterVertically
         ) {
             Text("DOM Tree / Selected Element HTML", color = Color.Gray, fontSize = 12.sp)
-            Button(
-                onClick = { displayModeHtml = !displayModeHtml },
-                colors = ButtonDefaults.filledTonalButtonColors(containerColor = Color.DarkGray)
-            ) {
-                Text(if (displayModeHtml) "Formatted View" else "HTML Code", color = Color.White, fontSize = 10.sp)
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                // Real element inspector toggle — tap page elements to inspect them.
+                Button(
+                    onClick = onToggleInspector,
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = if (inspectorEnabled) Color(0xFF7B1FA2) else Color.DarkGray
+                    ),
+                    contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp)
+                ) {
+                    Text(
+                        if (inspectorEnabled) "Inspect: ON" else "Inspect: OFF",
+                        color = Color.White, fontSize = 10.sp
+                    )
+                }
+                Spacer(modifier = Modifier.width(6.dp))
+                Button(
+                    onClick = { displayModeHtml = !displayModeHtml },
+                    colors = ButtonDefaults.filledTonalButtonColors(containerColor = Color.DarkGray)
+                ) {
+                    Text(if (displayModeHtml) "Formatted View" else "HTML Code", color = Color.White, fontSize = 10.sp)
+                }
             }
         }
 
@@ -220,9 +260,21 @@ fun ConsoleTab(
 }
 
 @Composable
-fun NetworkTab(requests: List<NetworkRequest>) {
+fun NetworkTab(requests: List<NetworkRequest>, onClearNetwork: () -> Unit) {
     Column(modifier = Modifier.fillMaxSize()) {
-        Text("Network Interceptor", color = Color.Gray, fontSize = 12.sp, modifier = Modifier.padding(bottom = 4.dp))
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(bottom = 4.dp),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(
+                "Network Interceptor (${requests.size})",
+                color = Color.Gray, fontSize = 12.sp
+            )
+            TextButton(onClick = onClearNetwork) {
+                Text("Clear", color = Color.Red, fontSize = 12.sp)
+            }
+        }
 
         LazyColumn(modifier = Modifier.fillMaxWidth().weight(1f)) {
             items(requests) { req ->
@@ -291,6 +343,90 @@ fun SourcesTab(sources: List<String>) {
                             .padding(vertical = 3.dp)
                             .background(Color(0xFF262626))
                             .padding(4.dp)
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun DeviceTab(deviceInfo: DeviceInfo?, onRefreshDeviceInfo: () -> Unit) {
+    Column(modifier = Modifier.fillMaxSize()) {
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(bottom = 4.dp),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text("Viewport & Device Info", color = Color.Gray, fontSize = 12.sp)
+            Button(
+                onClick = onRefreshDeviceInfo,
+                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF1565C0)),
+                contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp)
+            ) {
+                Text("Refresh", color = Color.White, fontSize = 10.sp)
+            }
+        }
+
+        if (deviceInfo == null) {
+            Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                Text(
+                    "Tap Refresh to read live viewport info from the page.",
+                    color = Color.Gray, fontSize = 12.sp
+                )
+            }
+        } else {
+            val rows = listOf(
+                "Viewport" to deviceInfo.viewport,
+                "Device Pixel Ratio" to deviceInfo.devicePixelRatio,
+                "Screen" to deviceInfo.screenSize,
+                "Platform" to deviceInfo.platform,
+                "Language" to deviceInfo.language,
+                "Touch support" to deviceInfo.touchSupport,
+                "Cookies enabled" to deviceInfo.cookiesEnabled
+            )
+            LazyColumn(modifier = Modifier.fillMaxSize()) {
+                items(rows) { (label, value) ->
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(vertical = 3.dp)
+                            .background(Color(0xFF262626))
+                            .padding(8.dp)
+                    ) {
+                        Text(
+                            text = "$label: ",
+                            color = Color(0xFF81D4FA),
+                            fontFamily = FontFamily.Monospace,
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.Bold
+                        )
+                        Text(
+                            text = value.ifEmpty { "—" },
+                            color = Color.White,
+                            fontFamily = FontFamily.Monospace,
+                            fontSize = 11.sp
+                        )
+                    }
+                }
+                item {
+                    Text(
+                        text = "User Agent:",
+                        color = Color(0xFF81D4FA),
+                        fontFamily = FontFamily.Monospace,
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.Bold,
+                        modifier = Modifier.padding(top = 6.dp, bottom = 2.dp)
+                    )
+                    Text(
+                        text = deviceInfo.userAgent.ifEmpty { "—" },
+                        color = Color.White,
+                        fontFamily = FontFamily.Monospace,
+                        fontSize = 10.sp,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .background(Color(0xFF262626))
+                            .padding(8.dp)
                     )
                 }
             }

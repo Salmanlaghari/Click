@@ -24,6 +24,7 @@ class BrowserRepository(private val context: Context) {
         private val DOWNLOADS_KEY = stringPreferencesKey("downloads")
         private val DESKTOP_HOSTS_KEY = stringPreferencesKey("desktop_hosts")
         private val SITE_SETTINGS_KEY = stringPreferencesKey("site_settings")
+        private val LOCATION_MODE_HOSTS_KEY = stringPreferencesKey("location_mode_hosts")
     }
 
     // --- Bookmarks ---
@@ -254,6 +255,35 @@ class BrowserRepository(private val context: Context) {
             val map = SiteSettings.mapFromJson(jsonStr).toMutableMap()
             map.remove(host)
             preferences[SITE_SETTINGS_KEY] = SiteSettings.mapToJson(map)
+        }
+    }
+
+    // --- Per-site Location mode override (host -> "ask" | "block" | "spoof") ---
+    //
+    // Same per-profile DataStore pattern as desktop hosts: each engine keeps
+    // its own per-site location choices (Advance stays isolated per Prince's
+    // requirement). Absent host = follow the global LOCATION_MODE setting.
+    val locationModeHostsFlow: Flow<Map<String, String>> =
+        context.profileDataStore.data.map { preferences ->
+            val jsonStr = preferences[LOCATION_MODE_HOSTS_KEY] ?: "{}"
+            val obj = JSONObject(jsonStr)
+            val map = mutableMapOf<String, String>()
+            val keys = obj.keys()
+            while (keys.hasNext()) {
+                val host = keys.next()
+                val mode = obj.optString(host, "")
+                if (mode.isNotEmpty()) map[host] = mode
+            }
+            map
+        }
+
+    /** Sets a per-site location mode; pass null/blank mode to clear back to global. */
+    suspend fun setLocationModeHost(host: String, mode: String?) {
+        context.profileDataStore.edit { preferences ->
+            val jsonStr = preferences[LOCATION_MODE_HOSTS_KEY] ?: "{}"
+            val obj = JSONObject(jsonStr)
+            if (mode.isNullOrBlank()) obj.remove(host) else obj.put(host, mode)
+            preferences[LOCATION_MODE_HOSTS_KEY] = obj.toString()
         }
     }
 }
