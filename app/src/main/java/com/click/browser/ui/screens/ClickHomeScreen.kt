@@ -28,6 +28,7 @@ import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.sizeIn
@@ -1221,7 +1222,15 @@ fun homeGreeting(): String {
  * --------------------------------------------------------------------------- */
 
 /**
- * Compact address bar for the browsing surface: [🔒 URL field] [↻] [⋮].
+ * 2026-style premium address bar for the browsing surface.
+ *
+ * Layout: [☰ Sidebar] [🔒 URL field] [↻] [▭ Tabs] [⋮]
+ * - Hamburger opens the navigation drawer (sidebar) — restores sidebar access
+ *   directly from the top bar, 2026 browser style.
+ * - Elevated URL field with soft shadow (not just a border).
+ * - Tab counter button for quick tab switching.
+ * - Mode-aware accent colors, refined touch targets.
+ *
  * The URL field is directly editable (tap, type, Go).
  */
 @OptIn(ExperimentalMaterial3Api::class)
@@ -1233,6 +1242,9 @@ fun CompactBrowseBar(
     onReload: () -> Unit,
     onMenuClick: () -> Unit,
     onSiteSettingsClick: () -> Unit = {},
+    onDrawerClick: () -> Unit = {},
+    tabCount: Int = 1,
+    onTabsClick: () -> Unit = {},
     modifier: Modifier = Modifier,
     // LocationGuard indicator: null = no indicator; otherwise the effective
     // mode for the current site (BLOCK/Spoof shown, ASK hidden).
@@ -1242,82 +1254,152 @@ fun CompactBrowseBar(
 ) {
     var textInput by remember(currentUrl) { mutableStateOf(currentUrl) }
     val isHttps = currentUrl.startsWith("https://")
-    Row(
-        modifier = modifier
-            .fillMaxWidth()
-            .background(theme.topBarBg)
-            .padding(horizontal = 8.dp, vertical = 6.dp),
-        verticalAlignment = Alignment.CenterVertically
+    // 2026 style: elevated bar with soft shadow, rounded container.
+    Surface(
+        color = theme.topBarBg,
+        shadowElevation = 4.dp,
+        modifier = modifier.fillMaxWidth()
     ) {
-        // Click "C" logo mark (per the 3-mode reference image).
-        ClickLogoMark(size = 30.dp, fontSize = 17)
-        Spacer(modifier = Modifier.width(8.dp))
-        Surface(
-            shape = RoundedCornerShape(22.dp),
-            color = theme.surfaceVariant.copy(alpha = 0.55f),
-            border = androidx.compose.foundation.BorderStroke(
-                1.dp, theme.primary.copy(alpha = 0.25f)
-            ),
-            modifier = Modifier.weight(1f)
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 6.dp, vertical = 8.dp),
+            verticalAlignment = Alignment.CenterVertically
         ) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                IconButton(
-                    onClick = onSiteSettingsClick,
-                    modifier = Modifier.padding(start = 4.dp).size(32.dp)
-                ) {
-                    Icon(
-                        Icons.Default.Lock,
-                        contentDescription = if (isHttps) "Secure connection — site settings" else "Connection — site settings",
-                        tint = if (isHttps) Color(0xFF22C55E) else theme.onSurface.copy(alpha = 0.5f),
-                        modifier = Modifier.size(15.dp)
-                    )
-                }
-                // LocationGuard indicator: shows when this site's location is
-                // blocked or spoofed, so the user always knows the state.
-                if (locationMode == LocationGuard.LocationMode.BLOCK ||
-                    locationMode == LocationGuard.LocationMode.SPOOF
-                ) {
-                    IconButton(
-                        onClick = onLocationClick,
-                        modifier = Modifier.size(30.dp)
-                    ) {
-                        Icon(
-                            if (locationMode == LocationGuard.LocationMode.BLOCK)
-                                Icons.Default.LocationOff else Icons.Default.LocationOn,
-                            contentDescription =
-                                if (locationMode == LocationGuard.LocationMode.BLOCK)
-                                    "Location blocked for this site"
-                                else "Location spoofed for this site: $locationSpoofLabel",
-                            tint = Color(0xFF22C55E),
-                            modifier = Modifier.size(15.dp)
-                        )
-                    }
-                }
-                androidx.compose.foundation.text.BasicTextField(
-                    value = textInput,
-                    onValueChange = { textInput = it },
-                    singleLine = true,
-                    textStyle = androidx.compose.ui.text.TextStyle(
-                        fontSize = 13.sp,
-                        color = theme.onSurface
-                    ),
-                    keyboardOptions = KeyboardOptions(imeAction = ImeAction.Go),
-                    keyboardActions = KeyboardActions(onGo = { onNavigate(textInput) }),
-                    cursorBrush = androidx.compose.ui.graphics.SolidColor(theme.primary),
-                    modifier = Modifier
-                        .weight(1f)
-                        .padding(horizontal = 8.dp, vertical = 10.dp)
+            // Sidebar (drawer) button — 2026 style: hamburger opens the
+            // navigation sidebar with all browser options.
+            IconButton(
+                onClick = onDrawerClick,
+                modifier = Modifier.size(40.dp)
+            ) {
+                Icon(
+                    Icons.Default.Menu,
+                    contentDescription = "Open sidebar menu",
+                    tint = theme.onTopBar,
+                    modifier = Modifier.size(22.dp)
                 )
             }
-        }
-        IconButton(onClick = {
-            textInput = currentUrl
-            onReload()
-        }, modifier = Modifier.size(38.dp)) {
-            Icon(Icons.Default.Refresh, contentDescription = "Reload", tint = theme.onTopBar)
-        }
-        IconButton(onClick = onMenuClick, modifier = Modifier.size(38.dp)) {
-            Icon(Icons.Default.MoreVert, contentDescription = "Browser menu", tint = theme.onTopBar)
+            // URL field: elevated pill with soft shadow, 2026 premium look.
+            Surface(
+                shape = RoundedCornerShape(28.dp),
+                color = theme.surfaceVariant.copy(alpha = 0.65f),
+                shadowElevation = 2.dp,
+                border = androidx.compose.foundation.BorderStroke(
+                    1.dp, theme.primary.copy(alpha = 0.18f)
+                ),
+                modifier = Modifier.weight(1f)
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    IconButton(
+                        onClick = onSiteSettingsClick,
+                        modifier = Modifier.padding(start = 4.dp).size(34.dp)
+                    ) {
+                        Icon(
+                            Icons.Default.Lock,
+                            contentDescription = if (isHttps) "Secure connection — site settings" else "Connection — site settings",
+                            tint = if (isHttps) Color(0xFF22C55E) else theme.onSurface.copy(alpha = 0.5f),
+                            modifier = Modifier.size(16.dp)
+                        )
+                    }
+                    // LocationGuard indicator: shows when this site's location is
+                    // blocked or spoofed, so the user always knows the state.
+                    if (locationMode == LocationGuard.LocationMode.BLOCK ||
+                        locationMode == LocationGuard.LocationMode.SPOOF
+                    ) {
+                        IconButton(
+                            onClick = onLocationClick,
+                            modifier = Modifier.size(32.dp)
+                        ) {
+                            Icon(
+                                if (locationMode == LocationGuard.LocationMode.BLOCK)
+                                    Icons.Default.LocationOff else Icons.Default.LocationOn,
+                                contentDescription =
+                                    if (locationMode == LocationGuard.LocationMode.BLOCK)
+                                        "Location blocked for this site"
+                                    else "Location spoofed for this site: $locationSpoofLabel",
+                                tint = Color(0xFF22C55E),
+                                modifier = Modifier.size(16.dp)
+                            )
+                        }
+                    }
+                    androidx.compose.foundation.text.BasicTextField(
+                        value = textInput,
+                        onValueChange = { textInput = it },
+                        singleLine = true,
+                        textStyle = androidx.compose.ui.text.TextStyle(
+                            fontSize = 14.sp,
+                            color = theme.onSurface
+                        ),
+                        keyboardOptions = KeyboardOptions(imeAction = ImeAction.Go),
+                        keyboardActions = KeyboardActions(onGo = { onNavigate(textInput) }),
+                        cursorBrush = androidx.compose.ui.graphics.SolidColor(theme.primary),
+                        modifier = Modifier
+                            .weight(1f)
+                            .padding(horizontal = 8.dp, vertical = 12.dp)
+                    )
+                    // Clear button when there's text (2026 UX pattern).
+                    if (textInput.isNotEmpty() && textInput != currentUrl) {
+                        IconButton(
+                            onClick = { textInput = "" },
+                            modifier = Modifier.size(32.dp)
+                        ) {
+                            Icon(
+                                Icons.Default.Clear,
+                                contentDescription = "Clear",
+                                tint = theme.onSurface.copy(alpha = 0.5f),
+                                modifier = Modifier.size(16.dp)
+                            )
+                        }
+                    }
+                }
+            }
+            Spacer(modifier = Modifier.width(4.dp))
+            // Reload button.
+            IconButton(onClick = {
+                textInput = currentUrl
+                onReload()
+            }, modifier = Modifier.size(40.dp)) {
+                Icon(
+                    Icons.Default.Refresh,
+                    contentDescription = "Reload",
+                    tint = theme.onTopBar,
+                    modifier = Modifier.size(22.dp)
+                )
+            }
+            // Tab counter button (2026 style: quick tab access from top bar).
+            IconButton(onClick = onTabsClick, modifier = Modifier.size(40.dp)) {
+                BadgedBox(
+                    badge = {
+                        Badge(
+                            containerColor = theme.primary,
+                            contentColor = Color.White,
+                            modifier = Modifier.offset(x = 6.dp, y = (-6).dp)
+                        ) {
+                            Text(
+                                tabCount.coerceAtMost(99).toString(),
+                                fontSize = 9.sp,
+                                fontWeight = FontWeight.Bold
+                            )
+                        }
+                    }
+                ) {
+                    Icon(
+                        Icons.Default.FilterNone,
+                        contentDescription = "Tabs ($tabCount)",
+                        tint = theme.onTopBar,
+                        modifier = Modifier.size(22.dp)
+                    )
+                }
+            }
+            // Browser menu button.
+            IconButton(onClick = onMenuClick, modifier = Modifier.size(40.dp)) {
+                Icon(
+                    Icons.Default.MoreVert,
+                    contentDescription = "Browser menu",
+                    tint = theme.onTopBar,
+                    modifier = Modifier.size(22.dp)
+                )
+            }
         }
     }
 }
