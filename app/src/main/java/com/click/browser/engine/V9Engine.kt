@@ -7,8 +7,11 @@ import android.content.Intent
 import android.os.Process
 import android.util.Log
 import android.webkit.WebView
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withContext
 
 /**
  * V9 — "1 Browser, 4 Engines".
@@ -301,8 +304,20 @@ object V9Engine {
         // 4. Give the alarm + the directly-started activity a moment, then die.
         // The alarm fires in a FRESH process where ClickApplication pins the
         // new engine's WebView data directory.
-        kotlinx.coroutines.delay(RESTART_DELAY_MS)
-        Process.killProcess(Process.myPid())
+        //
+        // RACE FIX (mode switch "not working", reported in Simple mode): this
+        // MUST run non-cancellably. The caller invokes us from the Activity's
+        // coroutine scope (rememberCoroutineScope), and step 3's CLEAR_TASK
+        // destroys that Activity -> its scope is cancelled -> a plain delay()
+        // throws CancellationException and killProcess() NEVER runs. The app
+        // would then survive on the OLD engine while the UI shows the NEW
+        // mode (the DataStore was already updated in step 0) — the exact
+        // "mode switch doesn't work" symptom. NonCancellable guarantees the
+        // kill happens no matter what the Activity does.
+        withContext(NonCancellable) {
+            delay(RESTART_DELAY_MS)
+            Process.killProcess(Process.myPid())
+        }
         return true // unreachable
     }
 
