@@ -63,6 +63,7 @@ fun BrowserMenuSheet(
     onDeleteBrowsingData: () -> Unit,
     onDownloads: () -> Unit,
     onPlaylist: () -> Unit,
+    onStreamPlayer: () -> Unit,
     onBookmarks: () -> Unit,
     onGames: () -> Unit,
     onRecentTabs: () -> Unit,
@@ -123,6 +124,10 @@ fun BrowserMenuSheet(
                         MenuCustomization.MenuItemId.PLAYLIST -> MenuRow(
                             theme = theme, icon = Icons.Default.QueueMusic,
                             label = "Playlist", onClick = onPlaylist
+                        )
+                        MenuCustomization.MenuItemId.STREAM_PLAYER -> MenuRow(
+                            theme = theme, icon = Icons.Default.LiveTv,
+                            label = "Live Stream", onClick = onStreamPlayer
                         )
                         MenuCustomization.MenuItemId.BOOKMARKS -> MenuRow(
                             theme = theme, icon = Icons.Default.Bookmark,

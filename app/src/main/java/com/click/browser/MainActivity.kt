@@ -314,6 +314,14 @@ class MainActivity : FragmentActivity() {
 
     private var ttsEngine: TextToSpeech? = null
 
+    /**
+     * Fullscreen video exit hook. Set by the active WebChromeClient when a
+     * page enters fullscreen video (onShowCustomView); cleared on exit.
+     * The BackHandler invokes this first so back exits fullscreen video
+     * instead of navigating back.
+     */
+    var exitFullscreenVideo: (() -> Unit)? by androidx.compose.runtime.mutableStateOf(null)
+
     override fun onPause() {
         super.onPause()
         // Standard browser behavior: pause WebViews when the app is
@@ -1102,6 +1110,7 @@ class MainActivity : FragmentActivity() {
             var showHistory by remember { mutableStateOf(false) }
             var showDownloads by remember { mutableStateOf(false) }
             var showPlaylist by remember { mutableStateOf(false) }
+            var showStreamPlayer by remember { mutableStateOf(false) }
             // One-shot URL from the long-press menu ("Add to Playlist").
             var playlistSeedUrl by remember { mutableStateOf<String?>(null) }
             // Generic "background audio for web pages" setting (default off).
@@ -1598,6 +1607,10 @@ class MainActivity : FragmentActivity() {
             }
 
             // Back Press Handling
+            // Fullscreen video: back exits fullscreen first.
+            BackHandler(enabled = exitFullscreenVideo != null) {
+                exitFullscreenVideo?.invoke()
+            }
             BackHandler(enabled = currentTab.url != "about:blank") {
                 val wv = currentTab.webView
                 if (wv != null && wv.canGoBack()) {
@@ -2954,6 +2967,52 @@ class MainActivity : FragmentActivity() {
                                                         }
 
                                                         webChromeClient = object : WebChromeClient() {
+                                                            // Fullscreen video support (YouTube, Facebook, etc.):
+                                                            // when a page requests fullscreen video, show the
+                                                            // custom view full-screen; hide it when done.
+                                                            private var customView: android.view.View? = null
+                                                            private var customViewCallback: CustomViewCallback? = null
+
+                                                            override fun onShowCustomView(
+                                                                view: android.view.View?,
+                                                                callback: CustomViewCallback?
+                                                            ) {
+                                                                if (customView != null) {
+                                                                    callback?.onCustomViewHidden()
+                                                                    return
+                                                                }
+                                                                customView = view
+                                                                customViewCallback = callback
+                                                                // Register the back-press exit hook.
+                                                                this@MainActivity.exitFullscreenVideo = {
+                                                                    onHideCustomView()
+                                                                }
+                                                                // Hide the browser UI and show video fullscreen.
+                                                                this@MainActivity.window.addFlags(
+                                                                    android.view.WindowManager.LayoutParams.FLAG_FULLSCREEN
+                                                                )
+                                                                (this@MainActivity.window.decorView as? android.view.ViewGroup)?.let { decor ->
+                                                                    val params = android.widget.FrameLayout.LayoutParams(
+                                                                        android.widget.FrameLayout.LayoutParams.MATCH_PARENT,
+                                                                        android.widget.FrameLayout.LayoutParams.MATCH_PARENT
+                                                                    )
+                                                                    decor.addView(view, params)
+                                                                }
+                                                            }
+
+                                                            override fun onHideCustomView() {
+                                                                customView?.let { v ->
+                                                                    (this@MainActivity.window.decorView as? android.view.ViewGroup)?.removeView(v)
+                                                                }
+                                                                customView = null
+                                                                this@MainActivity.exitFullscreenVideo = null
+                                                                this@MainActivity.window.clearFlags(
+                                                                    android.view.WindowManager.LayoutParams.FLAG_FULLSCREEN
+                                                                )
+                                                                customViewCallback?.onCustomViewHidden()
+                                                                customViewCallback = null
+                                                            }
+
                                                             override fun onReceivedTitle(view: WebView?, title: String?) {
                                                                 super.onReceivedTitle(view, title)
                                                                 currentTab.title = title ?: "Page"
@@ -3445,6 +3504,13 @@ class MainActivity : FragmentActivity() {
                                     playlistManager = playlistManager,
                                     onClose = { showPlaylist = false; playlistSeedUrl = null },
                                     seedUrl = playlistSeedUrl
+                                )
+                            }
+
+                            // Live Stream player (ExoPlayer for HLS/DASH live streams).
+                            if (showStreamPlayer) {
+                                StreamPlayerScreen(
+                                    onClose = { showStreamPlayer = false }
                                 )
                             }
 
@@ -4565,6 +4631,10 @@ class MainActivity : FragmentActivity() {
                                         showBrowserMenu = false
                                         playlistSeedUrl = null
                                         showPlaylist = true
+                                    },
+                                    onStreamPlayer = {
+                                        showBrowserMenu = false
+                                        showStreamPlayer = true
                                     },
                                     onBookmarks = { showBrowserMenu = false; showBookmarks = true },
                                     onGames = { showBrowserMenu = false; showClickPage = "games" },
