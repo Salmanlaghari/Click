@@ -71,7 +71,7 @@ fun AdvanceIntroOverlay(
     // Master timeline 0 -> 1 over the full duration.
     val progress = remember { Animatable(0f) }
     LaunchedEffect(Unit) {
-        progress.animateTo(1f, tween(durationMs.toInt(), easing = LinearEasing))
+        progress.animateTo(1f, tween(durationMs.toInt().coerceAtLeast(1), easing = LinearEasing))
         finish()
     }
     val t = progress.value

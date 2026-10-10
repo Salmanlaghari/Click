@@ -3053,7 +3053,10 @@ class MainActivity : ComponentActivity() {
                                         showAdvanceSpecs = false
                                         scope.launch {
                                             drawerState.close()
-                                            v9SwitchMode(BrowserMode.ADVANCED, currentTab.webView, forceDesktopMode)
+                                            // Same feedback contract as the drawer's Advance entry:
+                                            // if the engine restart wasn't possible, say so.
+                                            val restarting = v9SwitchMode(BrowserMode.ADVANCED, currentTab.webView, forceDesktopMode)
+                                            if (!restarting) Toast.makeText(this@MainActivity, "Advance Mode Activated — fresh isolated space", Toast.LENGTH_SHORT).show()
                                         }
                                     }
                                 )
