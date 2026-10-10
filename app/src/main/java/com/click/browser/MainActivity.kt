@@ -23,7 +23,6 @@ import androidx.activity.compose.setContent
 import androidx.activity.result.ActivityResultLauncher
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.enableEdgeToEdge
-import androidx.activity.result.contract.ActivityResultContracts
 import androidx.core.app.ActivityCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
@@ -368,14 +367,18 @@ class MainActivity : FragmentActivity() {
     }
 
     /**
-     * Warm-path news notification tap: singleTask delivers the deep link
-     * here instead of creating a second MainActivity. The URL is consumed
-     * once into [notificationOpenUrl]; the composable opens it in a new tab.
+     * Warm-path deep links: singleTask delivers intents here instead of
+     * creating a second MainActivity.
+     * - News notification tap: EXTRA_OPEN_URL → open article in a new tab.
+     * - External ACTION_VIEW link: open in a new foreground tab.
      */
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         setIntent(intent)
         consumeNotificationUrl(intent)
+        // Link delivered to the already-running instance: open it in a new
+        // foreground tab via the pending-URL flow.
+        externalViewUrl(intent)?.let { pendingExternalUrl.value = it }
     }
 
     /**
@@ -5165,13 +5168,8 @@ class MainActivity : FragmentActivity() {
         }
     }
 
-    override fun onNewIntent(intent: Intent) {
-        super.onNewIntent(intent)
-        setIntent(intent)
-        // Link delivered to the already-running instance: open it in a new
-        // foreground tab via the pending-URL flow.
-        externalViewUrl(intent)?.let { pendingExternalUrl.value = it }
-    }
+    // onNewIntent is defined once near the top of this class (handles both
+    // news-notification deep links and external ACTION_VIEW links).
 
     /** New-tab URL: custom homepage flag or the premium home (about:blank). */
     private fun homeUrl(): String {

@@ -6,7 +6,6 @@ import androidx.work.Constraints
 import androidx.work.ExistingPeriodicWorkPolicy
 import androidx.work.NetworkType
 import androidx.work.PeriodicWorkRequestBuilder
-import androidx.work.WorkInfo
 import androidx.work.WorkManager
 import java.util.concurrent.TimeUnit
 
@@ -59,23 +58,6 @@ object NewsNotificationScheduler {
             Log.i(TAG, "News check cancelled")
         } catch (e: Exception) {
             Log.w(TAG, "cancel failed", e)
-        }
-    }
-
-    /**
-     * True when the periodic work is currently enqueued or running.
-     * Suspend — queries WorkManager off the calling thread.
-     */
-    suspend fun isScheduled(context: Context): Boolean {
-        return try {
-            val infos = WorkManager.getInstance(context)
-                .getWorkInfosForUniqueWork(UNIQUE_WORK_NAME)
-                .get()
-            infos.any {
-                it.state == WorkInfo.State.ENQUEUED || it.state == WorkInfo.State.RUNNING
-            }
-        } catch (_: Exception) {
-            false
         }
     }
 }
