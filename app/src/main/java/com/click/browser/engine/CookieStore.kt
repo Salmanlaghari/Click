@@ -3,6 +3,9 @@ package com.click.browser.engine
 import android.net.Uri
 import android.webkit.CookieManager
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.withContext
 import kotlin.coroutines.resume
 import kotlin.coroutines.suspendCoroutine
@@ -48,35 +51,53 @@ object CookieStore {
         }
     }
 
-    /** Cookies for one host (https first, http fallback). Safe to call from any thread. */
-    suspend fun cookiesForHost(host: String): List<CookieEntry> = withContext(Dispatchers.IO) {
+    /**
+     * Cookies for one host. Queries the given sample URLs (actual visited URLs,
+     * so path-scoped cookies are included) plus the https/http roots, merging
+     * by cookie name. Blocking getCookie() calls run on Dispatchers.IO.
+     */
+    suspend fun cookiesForHost(
+        host: String,
+        sampleUrls: List<String> = emptyList()
+    ): List<CookieEntry> = withContext(Dispatchers.IO) {
         val cm = CookieManager.getInstance()
-        val header = cm.getCookie("https://$host") ?: cm.getCookie("http://$host")
-        parseCookieHeader(header)
+        val urls = (sampleUrls + listOf("https://$host", "http://$host")).distinct()
+        urls.flatMap { url -> parseCookieHeader(cm.getCookie(url)) }
+            .distinctBy { it.name }
     }
 
-    /** Expire one cookie. Call from the main thread. */
-    fun deleteCookie(host: String, name: String, onDone: () -> Unit = {}) {
+    /** Expire one cookie. Call from the main thread. Result via [onDone]. */
+    fun deleteCookie(host: String, name: String, onDone: (Boolean) -> Unit = {}) {
         val cm = CookieManager.getInstance()
-        expire(cm, host, name) {
+        expire(cm, host, name) { ok ->
             cm.flush()
-            onDone()
+            onDone(ok)
         }
     }
 
-    /** Expire every cookie for a host. Safe to call from any thread. */
-    suspend fun clearSite(host: String) {
+    /**
+     * Expire every cookie for a host. Returns the names that failed to expire
+     * (empty = all good). Names are collected on IO; expirations run together
+     * on Main with a single dispatcher switch and parallel callbacks.
+     */
+    suspend fun clearSite(host: String): List<String> {
         val names = cookiesForHost(host).map { it.name }
-        if (names.isEmpty()) return
+        if (names.isEmpty()) return emptyList()
         val cm = CookieManager.getInstance()
-        for (name in names) {
-            withContext(Dispatchers.Main) {
-                suspendCoroutine { cont ->
-                    expire(cm, host, name) { cont.resume(Unit) }
-                }
+        val failed = withContext(Dispatchers.Main) {
+            coroutineScope {
+                names.map { name ->
+                    async {
+                        val ok = suspendCoroutine<Boolean> { cont ->
+                            expire(cm, host, name) { cont.resume(it) }
+                        }
+                        if (ok) null else name
+                    }
+                }.awaitAll().filterNotNull()
             }
         }
         cm.flush()
+        return failed
     }
 
     /** Remove ALL cookies (all sites, current engine mode). Call from the main thread. */
@@ -88,11 +109,16 @@ object CookieStore {
         }
     }
 
-    /** Expire a cookie on both schemes; invokes [done] after both writes complete. */
-    private fun expire(cm: CookieManager, host: String, name: String, done: () -> Unit) {
+    /**
+     * Expire a cookie on both schemes; [done] receives true only if both
+     * writes reported success (setCookie's ValueCallback<Boolean>).
+     */
+    private fun expire(cm: CookieManager, host: String, name: String, done: (Boolean) -> Unit) {
         val expired = "$name$EXPIRED_SUFFIX"
-        cm.setCookie("https://$host", expired) {
-            cm.setCookie("http://$host", expired) { done() }
+        cm.setCookie("https://$host", expired) { okHttps ->
+            cm.setCookie("http://$host", expired) { okHttp ->
+                done(okHttps && okHttp)
+            }
         }
     }
 
@@ -101,11 +127,29 @@ object CookieStore {
         return urls.mapNotNull { url ->
             try {
                 val host = Uri.parse(url).host?.lowercase()?.trim()
-                if (host.isNullOrBlank()) null
-                else host.removePrefix("www.")
+                if (host.isNullOrBlank()) null else host
             } catch (_: Exception) {
                 null
             }
         }.distinct().sorted()
+    }
+
+    /**
+     * Map each host to up to [maxPerHost] sample URLs (actual visited URLs —
+     * used so path-scoped cookies are included when querying).
+     */
+    fun sampleUrlsByHost(urls: List<String>, maxPerHost: Int = 3): Map<String, List<String>> {
+        val map = linkedMapOf<String, MutableList<String>>()
+        for (url in urls) {
+            val host = try {
+                Uri.parse(url).host?.lowercase()?.trim()
+            } catch (_: Exception) {
+                null
+            }
+            if (host.isNullOrBlank()) continue
+            val list = map.getOrPut(host) { mutableListOf() }
+            if (list.size < maxPerHost && url !in list) list.add(url)
+        }
+        return map
     }
 }

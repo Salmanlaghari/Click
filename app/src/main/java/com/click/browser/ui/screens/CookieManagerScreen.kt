@@ -1,5 +1,6 @@
 package com.click.browser.ui.screens
 
+import android.widget.Toast
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -15,6 +16,7 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -45,6 +47,7 @@ fun CookieManagerScreen(
     onClose: () -> Unit
 ) {
     val scope = rememberCoroutineScope()
+    val context = LocalContext.current
     var sites by remember { mutableStateOf<List<SiteCookies>>(emptyList()) }
     var loading by remember { mutableStateOf(true) }
     var query by remember { mutableStateOf("") }
@@ -55,12 +58,12 @@ fun CookieManagerScreen(
     suspend fun load() {
         loading = true
         try {
-            val urls = repository.historyFlow.first().take(200).map { it.url } +
+            val urls = repository.historyFlow.first().map { it.url } +
                 repository.bookmarksFlow.first().map { it.url }
-            val hosts = CookieStore.hostsFromUrls(urls)
+            val samples = CookieStore.sampleUrlsByHost(urls)
             sites = coroutineScope {
-                hosts.map { host ->
-                    async { SiteCookies(host, CookieStore.cookiesForHost(host)) }
+                samples.map { (host, sampleUrls) ->
+                    async { SiteCookies(host, CookieStore.cookiesForHost(host, sampleUrls)) }
                 }.awaitAll()
             }.filter { it.cookies.isNotEmpty() }
         } catch (_: Exception) {
@@ -225,7 +228,14 @@ fun CookieManagerScreen(
                                                 IconButton(onClick = {
                                                     // deleteCookie must run on the main thread;
                                                     // scope.launch defaults to Main.
-                                                    CookieStore.deleteCookie(site.host, cookie.name) {
+                                                    CookieStore.deleteCookie(site.host, cookie.name) { ok ->
+                                                        if (!ok) {
+                                                            Toast.makeText(
+                                                                context,
+                                                                "Couldn't delete cookie \"${cookie.name}\"",
+                                                                Toast.LENGTH_SHORT
+                                                            ).show()
+                                                        }
                                                         refresh()
                                                     }
                                                 }) {
@@ -283,7 +293,14 @@ fun CookieManagerScreen(
                     TextButton(onClick = {
                         siteToClear = null
                         scope.launch {
-                            CookieStore.clearSite(host)
+                            val failed = CookieStore.clearSite(host)
+                            if (failed.isNotEmpty()) {
+                                Toast.makeText(
+                                    context,
+                                    "Couldn't clear ${failed.size} cookie${if (failed.size == 1) "" else "s"}",
+                                    Toast.LENGTH_SHORT
+                                ).show()
+                            }
                             load()
                         }
                     }) {
