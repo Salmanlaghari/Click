@@ -61,12 +61,62 @@ object PrivacyGuards {
      * (canvas reads + AudioContext analyser data) and is safe to run in any
      * browsing mode.
      */
-    fun buildFingerprintScript(sessionSalt: String): String {
+    fun buildFingerprintScript(sessionSalt: String, strict: Boolean = false): String {
         val seed = sessionSalt.hashCode()
+        // Strict mode: stronger noise amplitude + extra hooks (toBlob,
+        // font measurement, audio byte/channel data). May break some sites.
+        val noiseAmp = if (strict) 8.0 else 2.0
+        val strictHooks = if (!strict) "" else """
+            // -- STRICT: toBlob fingerprint hook --
+            try {
+                var origToBlob = HTMLCanvasElement.prototype.toBlob;
+                HTMLCanvasElement.prototype.toBlob = function() {
+                    try {
+                        var ctx = this.getContext('2d');
+                        if (ctx) {
+                            var img = origGetImageData.call(ctx, 0, 0, this.width, this.height);
+                            ctx.putImageData(addNoise(img), 0, 0);
+                        }
+                    } catch (e) {}
+                    return origToBlob.apply(this, arguments);
+                };
+            } catch (e) {}
+            // -- STRICT: font fingerprinting (measureText) jitter --
+            try {
+                var origMeasureText = CanvasRenderingContext2D.prototype.measureText;
+                CanvasRenderingContext2D.prototype.measureText = function(text) {
+                    var m = origMeasureText.apply(this, arguments);
+                    try {
+                        var j = (fpRnd() - 0.5) * 0.6;
+                        Object.defineProperty(m, 'width', { value: m.width + j, configurable: true });
+                    } catch (e) {}
+                    return m;
+                };
+            } catch (e) {}
+            // -- STRICT: audio byte + channel data hooks --
+            try {
+                var origGetByte = AnalyserNode.prototype.getByteFrequencyData;
+                AnalyserNode.prototype.getByteFrequencyData = function(array) {
+                    origGetByte.apply(this, arguments);
+                    for (var i = 0; i < array.length; i++) {
+                        array[i] = Math.max(0, Math.min(255, array[i] + Math.round((fpRnd() - 0.5) * 3)));
+                    }
+                };
+                var origGetChannel = AudioBuffer.prototype.getChannelData;
+                AudioBuffer.prototype.getChannelData = function(ch) {
+                    var data = origGetChannel.apply(this, arguments);
+                    for (var i = 0; i < data.length; i += 97) {
+                        data[i] += (fpRnd() - 0.5) * 0.002;
+                    }
+                    return data;
+                };
+            } catch (e) {}
+        """.trimIndent()
         return """
         (function() {
             if (window.fpProtectInjected) return;
             window.fpProtectInjected = true;
+            var FP_NOISE_AMP = $noiseAmp;
             // mulberry32 seeded PRNG — session-unique noise pattern
             var _s = ($seed >>> 0) || 1;
             function fpRnd() {
@@ -81,7 +131,7 @@ object PrivacyGuards {
             function addNoise(imageData) {
                 var d = imageData.data;
                 for (var i = 0; i < d.length; i += 4) {
-                    var n = (fpRnd() - 0.5) * 2;
+                    var n = (fpRnd() - 0.5) * FP_NOISE_AMP;
                     d[i]     = Math.max(0, Math.min(255, d[i] + n));
                     d[i + 1] = Math.max(0, Math.min(255, d[i + 1] + n));
                     d[i + 2] = Math.max(0, Math.min(255, d[i + 2] + n));
@@ -128,6 +178,8 @@ object PrivacyGuards {
                 hookAudioContext(window.AudioContext);
                 hookAudioContext(window.webkitAudioContext);
             } catch (e) {}
+            // -- STRICT-only extra hooks (toBlob, measureText, audio data) --
+            $strictHooks
         })();
         """.trimIndent()
     }

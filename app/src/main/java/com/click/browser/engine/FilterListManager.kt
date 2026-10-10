@@ -38,6 +38,13 @@ object FilterListManager {
     private const val REMOTE_URL =
         "https://raw.githubusercontent.com/Salmanlaghari/Click/main/app/src/main/assets/adblock/filters.json"
 
+    // Cookie-consent banner cosmetic list (parallel to the domain list above).
+    private const val CONSENT_ASSET_PATH = "adblock/consent-filters.json"
+    private const val CONSENT_CACHED_FILE = "adblock-consent-filters.json"
+    private const val CONSENT_KEY_VERSION = "consent_list_version"
+    private const val CONSENT_REMOTE_URL =
+        "https://raw.githubusercontent.com/Salmanlaghari/Click/main/app/src/main/assets/adblock/consent-filters.json"
+
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val http = OkHttpClient.Builder()
         .connectTimeout(15, TimeUnit.SECONDS)
@@ -49,6 +56,13 @@ object FilterListManager {
 
     @Volatile
     private var listVersion: Int = 0
+
+    /** Cosmetic selectors for cookie-consent / GDPR banners. */
+    @Volatile
+    private var consentSelectors: Set<String> = emptySet()
+
+    @Volatile
+    private var consentVersion: Int = 0
 
     @Volatile
     private var initialized = false
@@ -91,6 +105,11 @@ object FilterListManager {
 
     fun currentVersion(): Int = listVersion
 
+    /** Synchronous snapshot of consent-banner cosmetic selectors. */
+    fun currentConsentSelectors(): Set<String> = consentSelectors
+
+    fun currentConsentVersion(): Int = consentVersion
+
     /** Suffix match: any parent domain of [host] in the set blocks it. */
     fun isBlockedHost(host: String?): Boolean {
         if (host.isNullOrBlank()) return false
@@ -128,6 +147,7 @@ object FilterListManager {
             listVersion = bundledVersion
             prefs?.edit()?.putInt(KEY_VERSION, bundledVersion)?.apply()
         }
+        loadConsentBestAvailable(app)
     }
 
     private fun maybeUpdateFromRemote() {
@@ -155,6 +175,72 @@ object FilterListManager {
         } catch (e: Exception) {
             // Offline or unreachable: keep using the local list.
             android.util.Log.w("FilterListManager", "Remote filter-list update failed", e)
+        }
+        maybeUpdateConsentFromRemote()
+    }
+
+    /** Bundled consent selectors win unless a newer cached copy exists. */
+    private fun loadConsentBestAvailable(app: Context) {
+        val cached = filesDir?.let { File(it, CONSENT_CACHED_FILE) }
+        val cachedSel = cached?.takeIf { it.exists() }?.let {
+            try { parseConsentJson(it.readText())?.second } catch (_: Exception) { null }
+        }
+        val bundled = try {
+            app.assets.open(CONSENT_ASSET_PATH).use { ins ->
+                parseConsentJson(ins.readBytes().toString(Charsets.UTF_8))
+            }
+        } catch (_: Exception) {
+            null
+        }
+        val cachedVersion = prefs?.getInt(CONSENT_KEY_VERSION, 0) ?: 0
+        val bundledVersion = bundled?.first ?: 0
+        if (cachedSel != null && cachedVersion >= bundledVersion && cachedSel.isNotEmpty()) {
+            consentSelectors = cachedSel
+            consentVersion = cachedVersion
+        } else if (bundled != null) {
+            consentSelectors = bundled.second
+            consentVersion = bundledVersion
+            prefs?.edit()?.putInt(CONSENT_KEY_VERSION, bundledVersion)?.apply()
+        }
+    }
+
+    private fun maybeUpdateConsentFromRemote() {
+        try {
+            val req = Request.Builder().url(CONSENT_REMOTE_URL).get().build()
+            http.newCall(req).execute().use { resp ->
+                if (!resp.isSuccessful) return
+                val body = resp.body?.string() ?: return
+                val (version, set) = parseConsentJson(body) ?: return
+                if (version > consentVersion && set.isNotEmpty()) {
+                    filesDir?.let { File(it, CONSENT_CACHED_FILE).writeText(body) }
+                    prefs?.edit()?.putInt(CONSENT_KEY_VERSION, version)?.apply()
+                    consentSelectors = set
+                    consentVersion = version
+                }
+            }
+        } catch (e: Exception) {
+            android.util.Log.w("FilterListManager", "Remote consent-list update failed", e)
+        }
+    }
+
+    /** Returns (version, selectors) or null when invalid. */
+    private fun parseConsentJson(json: String): Pair<Int, Set<String>>? {
+        return try {
+            val obj = JSONObject(json)
+            val version = obj.optInt("version", 0)
+            val arr = obj.optJSONArray("selectors") ?: return null
+            val set = HashSet<String>(arr.length())
+            for (i in 0 until arr.length()) {
+                val s = arr.optString(i).trim()
+                // Sanity: CSS selectors only — never empty, never absurdly long
+                // (a bad selector must not take down querySelectorAll).
+                if (s.isNotEmpty() && s.length <= 200 && !s.contains('<') && !s.contains('>')) {
+                    set.add(s)
+                }
+            }
+            if (version <= 0 || set.isEmpty()) null else version to set
+        } catch (_: Exception) {
+            null
         }
     }
 
