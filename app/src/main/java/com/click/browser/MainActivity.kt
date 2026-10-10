@@ -135,9 +135,29 @@ class MainActivity : ComponentActivity() {
     private var liveFlags = ExperimentalFlags()
     // Crash-restore: latest restorable-tab snapshot for this boot mode, kept
     // outside composable scope so onDestroy() and v9SwitchMode() can persist
-    // it and mark clean exits without touching UI state.
+    // it and mark clean exits without touching UI state. The mirror is
+    // refreshed synchronously on every tab change (see the snapshot saver) —
+    // only the DataStore write is debounced — so it never lags behind.
     private var liveRestoreTabs: List<SavedTab> = emptyList()
     private var liveRestoreActiveIndex: Int = 0
+
+    /**
+     * Builds the restorable-tab snapshot from live tab state: drops
+     * incognito / non-http(s) tabs, caps at [SessionRestore.MAX_TABS], and
+     * translates the active index through the filter. If the active tab was
+     * filtered out, the index falls back to 0.
+     */
+    private fun buildRestorableSnapshot(
+        tabStates: List<Triple<String, String, Boolean>>,
+        activeIdx: Int
+    ): Pair<List<SavedTab>, Int> {
+        val kept = tabStates.mapIndexed { i, t -> i to t }
+            .filter { (_, t) -> !t.third && SessionRestore.isRestorableUrl(t.first) }
+            .take(SessionRestore.MAX_TABS)
+        val active = kept.indexOfFirst { (i, _) -> i == activeIdx }.takeIf { it >= 0 } ?: 0
+        val tabs = kept.map { (_, t) -> SavedTab(t.first, t.second.ifBlank { t.first }) }
+        return tabs to active
+    }
     // Registry of live WebViews for flag-driven cleanup (clear-on-exit).
     private val liveWebViews = mutableListOf<android.webkit.WebView>()
 
@@ -239,12 +259,16 @@ class MainActivity : ComponentActivity() {
         // clean exit — no restore prompt next launch. Rotation and other
         // config changes have isFinishing=false, so they stay "unclean"
         // and correctly keep their snapshot for a later crash.
+        // Non-blocking fire-and-forget on IO: runBlocking here would block
+        // the main thread and risk ANR under I/O pressure. If the process
+        // dies before the write lands, the flag simply stays "unclean" and
+        // the (harmless) restore prompt may appear once — safe default.
         if (isFinishing) {
-            try {
-                kotlinx.coroutines.runBlocking {
+            kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.IO).launch {
+                try {
                     SessionRestore.markCleanExit(this@MainActivity, V9Engine.bootMode, true)
-                }
-            } catch (_: Exception) { }
+                } catch (_: Exception) { }
+            }
         }
         super.onDestroy()
     }
@@ -567,12 +591,20 @@ class MainActivity : ComponentActivity() {
             var showRestoreDialog by remember { mutableStateOf(false) }
             var crashedTabs by remember { mutableStateOf<List<SavedTab>>(emptyList()) }
             var crashedActiveIndex by remember { mutableStateOf(0) }
+            // Gated by the flags-loading effect below: the session saver and
+            // the restore check must not read liveFlags.clearOnExit before
+            // DataStore has delivered the real value (LaunchedEffect order
+            // is not a reliable signal).
+            var flagsLoaded by remember { mutableStateOf(false) }
 
             // Crash-restore startup check: if the previous run for THIS boot
             // mode did not exit cleanly and a tab snapshot exists, offer to
             // restore it. Never crosses modes — each mode keeps its own
             // snapshot in its own profile store (isolation is a feature).
+            // Waits for flagsLoaded: liveFlags.clearOnExit must come from
+            // DataStore, not its default, before we decide.
             LaunchedEffect(Unit) {
+                snapshotFlow { flagsLoaded }.first { it }
                 val bootMode = V9Engine.bootMode
                 val clean = SessionRestore.wasCleanExit(this@MainActivity, bootMode)
                 val (saved, savedActive) = SessionRestore.loadSession(this@MainActivity, bootMode)
@@ -589,9 +621,18 @@ class MainActivity : ComponentActivity() {
             // open restorable tabs (non-incognito, http/https only) into this
             // boot mode's profile store. With "clear data on exit" on, no
             // snapshot is kept at all (privacy first).
+            // The in-memory mirror (liveRestoreTabs) is updated synchronously
+            // on every tab change — only the DataStore write is debounced —
+            // so v9SwitchMode() always persists a fresh snapshot.
             LaunchedEffect(Unit) {
+                // Wait for experimental flags: reading liveFlags.clearOnExit
+                // before DataStore loads would use the default (false).
+                snapshotFlow { flagsLoaded }.first { it }
                 snapshotFlow { tabs.map { Triple(it.url, it.title, it.isIncognito) } to activeTabIndex }
                     .collect { (tabStates, activeIdx) ->
+                        val (snapshot, active) = buildRestorableSnapshot(tabStates, activeIdx)
+                        liveRestoreTabs = snapshot
+                        liveRestoreActiveIndex = active
                         delay(1000) // trailing-edge debounce: rapid edits collapse into one write
                         val bootMode = V9Engine.bootMode
                         if (liveFlags.clearOnExit) {
@@ -599,14 +640,11 @@ class MainActivity : ComponentActivity() {
                             liveRestoreTabs = emptyList()
                             liveRestoreActiveIndex = 0
                         } else {
-                            val snapshot = tabStates
-                                .filter { (url, _, incognito) ->
-                                    !incognito && SessionRestore.isRestorableUrl(url)
-                                }
-                                .map { (url, title, _) -> SavedTab(url, title.ifBlank { url }) }
-                            SessionRestore.saveSession(this@MainActivity, bootMode, snapshot, activeIdx)
-                            liveRestoreTabs = snapshot
-                            liveRestoreActiveIndex = activeIdx
+                            SessionRestore.saveSession(this@MainActivity, bootMode, snapshot, active)
+                            // Re-arm crash detection: clearSession() resets the
+                            // clean-exit flag when the user discards a restore
+                            // offer, so every real save must mark unclean again.
+                            SessionRestore.markCleanExit(this@MainActivity, bootMode, false)
                         }
                     }
             }
@@ -982,6 +1020,9 @@ class MainActivity : ComponentActivity() {
                     wallpaperUri = prefs[AppSettings.WALLPAPER_URI]
                     // Experimental flags (click://flags).
                     liveFlags = ExperimentalFlags.load(prefs)
+                    // Signal the crash-restore saver/check: clearOnExit is
+                    // now the real DataStore value, safe to read.
+                    flagsLoaded = true
                     flagsUi = liveFlags
                     applyScreenshotFlag()
                 }
@@ -3544,6 +3585,8 @@ class MainActivity : ComponentActivity() {
         // source mode — persist its final tab snapshot and mark it clean so
         // switching Simple→Hack→Simple restores Simple's tabs instead of
         // offering a phantom "crash" restore. Per-mode keys keep isolation.
+        // liveRestoreTabs is refreshed synchronously on every tab change
+        // (only the DataStore write is debounced), so this is never stale.
         val sourceMode = V9Engine.bootMode
         SessionRestore.saveSession(this, sourceMode, liveRestoreTabs, liveRestoreActiveIndex)
         SessionRestore.markCleanExit(this, sourceMode, true)

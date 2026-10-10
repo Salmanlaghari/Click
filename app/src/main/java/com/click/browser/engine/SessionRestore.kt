@@ -5,7 +5,7 @@ import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.intPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
-import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.firstOrNull
 import org.json.JSONArray
 import org.json.JSONObject
 
@@ -61,6 +61,11 @@ object SessionRestore {
      * Writes the current open-tab snapshot for [mode]. Call periodically /
      * on tab changes — cheap (small JSON, debounced by the caller).
      * Incognito and non-http(s) tabs are silently dropped.
+     *
+     * @param activeIndex index of the active tab within [tabs] (the already
+     *   filtered list). It is clamped defensively, but callers that filter
+     *   must translate the original index themselves — see
+     *   MainActivity.buildRestorableSnapshot.
      */
     suspend fun saveSession(
         context: Context,
@@ -89,7 +94,8 @@ object SessionRestore {
      * and the saved active-tab index (clamped to the list).
      */
     suspend fun loadSession(context: Context, mode: BrowserMode): Pair<List<SavedTab>, Int> {
-        val prefs = context.profileDataStoreFor(mode).data.first()
+        val prefs = context.profileDataStoreFor(mode).data.firstOrNull()
+            ?: return emptyList<SavedTab>() to 0
         val json = prefs[tabsKey(mode)] ?: "[]"
         val list = mutableListOf<SavedTab>()
         try {
@@ -111,7 +117,7 @@ object SessionRestore {
 
     /** Was the previous run for [mode] a clean exit? Defaults to true (first launch → no restore prompt). */
     suspend fun wasCleanExit(context: Context, mode: BrowserMode): Boolean {
-        val prefs = context.profileDataStoreFor(mode).data.first()
+        val prefs = context.profileDataStoreFor(mode).data.firstOrNull() ?: return true
         return prefs[cleanExitKey(mode)] ?: true
     }
 
@@ -122,11 +128,19 @@ object SessionRestore {
         }
     }
 
-    /** Drops the snapshot for [mode] (used when the user discards the restore offer). */
+    /**
+     * Drops the snapshot for [mode] (used when the user discards the restore
+     * offer, or when "clear data on exit" wipes it). Also resets the
+     * clean-exit flag: the discarded crash is now resolved, so a stale
+     * "unclean" marker must not cause a phantom restore prompt later.
+     * (Crash detection for the current run is re-armed by the caller —
+     * the snapshot saver re-marks unclean on every save.)
+     */
     suspend fun clearSession(context: Context, mode: BrowserMode) {
         context.profileDataStoreFor(mode).edit { prefs ->
             prefs.remove(tabsKey(mode))
             prefs.remove(activeIndexKey(mode))
+            prefs.remove(cleanExitKey(mode)) // default = true = clean
         }
     }
 }
