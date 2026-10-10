@@ -6,6 +6,7 @@ import android.graphics.Bitmap
 import android.os.Bundle
 import android.speech.tts.TextToSpeech
 import android.webkit.WebChromeClient
+import android.webkit.GeolocationPermissions
 import android.webkit.WebResourceError
 import android.webkit.WebResourceRequest
 import android.webkit.WebResourceResponse
@@ -113,6 +114,36 @@ class TabItem(
     var loadProgress by mutableStateOf(0)
 }
 
+/**
+ * Page transition wrapper — subtle fade + slide on every navigation start.
+ * Extracted to a top-level composable because [androidx.compose.animation.AnimatedVisibility]
+ * can't be called by implicit receiver inside a ColumnScope (ambiguous with
+ * ColumnScope.AnimatedVisibility). Purely visual: the WebView keeps loading
+ * underneath, navigation is never blocked. Durations collapse to 0 when
+ * [animationsEnabled] is false.
+ */
+@Composable
+private fun PageTransitionWrapper(
+    tick: Int,
+    animationsEnabled: Boolean,
+    content: @Composable () -> Unit
+) {
+    val pageAnimMs = if (animationsEnabled) 220 else 0
+    val pageTransitionState = remember(tick) {
+        MutableTransitionState(false).apply { targetState = true }
+    }
+    AnimatedVisibility(
+        visibleState = pageTransitionState,
+        enter = fadeIn(tween(pageAnimMs)) +
+                slideInHorizontally(tween(pageAnimMs)) { it / 14 },
+        modifier = Modifier.fillMaxSize()
+    ) {
+        content()
+    }
+}
+
+// FragmentActivity (extends ComponentActivity) — keeps the page-transition
+// animations from main AND the Fragment support BiometricPrompt needs.
 class MainActivity : FragmentActivity() {
 
     private lateinit var modeManager: ModeManager
@@ -132,6 +163,13 @@ class MainActivity : FragmentActivity() {
     private var liveCustomHeaders: Map<String, String> = emptyMap()
     // Live copy of per-site desktop hosts (persisted per host via BrowserRepository).
     private var liveDesktopHosts: Set<String> = emptySet()
+    // LocationGuard live copies (WebViewClient/WebChromeClient run off the UI
+    // thread and can't read composable state — same pattern as above).
+    private var liveLocationMode: LocationGuard.LocationMode = LocationGuard.LocationMode.ASK
+    private var liveLocationSpoofLat: Double = LocationGuard.DEFAULT_PRESET.lat
+    private var liveLocationSpoofLng: Double = LocationGuard.DEFAULT_PRESET.lng
+    private var liveLocationSpoofLabel: String = LocationGuard.DEFAULT_PRESET.label
+    private var liveLocationSiteModes: Map<String, String> = emptyMap()
     // Live copy of experimental flags (click://flags) for WebViewClient callbacks.
     private var liveFlags = ExperimentalFlags()
     // Biometric private-tab lock: live copies for onPause(), which runs
@@ -495,6 +533,70 @@ class MainActivity : FragmentActivity() {
         modeManager.applyDesktopOverride(webView, liveMode, desktop)
     }
 
+    /**
+     * LocationGuard: resolves the effective location mode for a URL —
+     * per-site override wins, else the global mode. Matches subdomains too
+     * (same rule as per-site desktop).
+     */
+    private fun effectiveLocationMode(url: String?): LocationGuard.LocationMode {
+        val host = LocationGuard.hostFromUrl(url).orEmpty()
+        if (host.isNotEmpty()) {
+            val override = liveLocationSiteModes[host]
+                ?: liveLocationSiteModes.entries.firstOrNull { (h, _) ->
+                    host == h || host.endsWith(".$h")
+                }?.value
+            if (!override.isNullOrBlank()) return LocationGuard.LocationMode.fromKey(override)
+        }
+        return liveLocationMode
+    }
+
+    /**
+     * LocationGuard: handles a WebView geolocation permission request.
+     * Must be called on the UI thread (WebChromeClient callbacks are).
+     *
+     * - BLOCK → deny immediately (website gets PERMISSION_DENIED).
+     * - SPOOF → inject the JS override, then grant (the page's
+     *   navigator.geolocation now returns spoofed coordinates; the native
+     *   prompt path is bypassed). No Android location permission is used.
+     * - ASK → stash the callback and show the in-app dialog (handled by the
+     *   composable via showLocationPrompt state).
+     */
+    private fun handleGeolocationPrompt(
+        origin: String?,
+        callback: GeolocationPermissions.Callback?,
+        onAsk: (origin: String, host: String?, callback: GeolocationPermissions.Callback) -> Unit
+    ) {
+        if (callback == null) return
+        // The requesting page's URL gives us the host for per-site lookup.
+        // WebChromeClient doesn't hand us the WebView here, so callers pass
+        // the current tab URL via onAsk; for BLOCK/SPOOF we resolve from origin.
+        val host = try {
+            android.net.Uri.parse(origin ?: "").host?.lowercase()
+        } catch (_: Exception) {
+            null
+        }
+        val mode = if (!host.isNullOrEmpty()) {
+            val override = liveLocationSiteModes[host]
+                ?: liveLocationSiteModes.entries.firstOrNull { (h, _) ->
+                    host == h || host.endsWith(".$h")
+                }?.value
+            if (!override.isNullOrBlank()) LocationGuard.LocationMode.fromKey(override)
+            else liveLocationMode
+        } else {
+            liveLocationMode
+        }
+        when (mode) {
+            LocationGuard.LocationMode.BLOCK -> callback.invoke(origin, false, false)
+            LocationGuard.LocationMode.SPOOF -> {
+                // Best-effort: the page-start injection usually already
+                // replaced navigator.geolocation; granting here keeps the
+                // WebView contract satisfied for any late requests.
+                callback.invoke(origin, true, false)
+            }
+            LocationGuard.LocationMode.ASK -> onAsk(origin ?: "", host, callback)
+        }
+    }
+
     /** Shared pretty error page used by both onReceivedError variants. */
     private fun showBrowserErrorPage(view: WebView?, description: String?) {
         val safeDesc = description?.take(200) ?: "Unknown error"
@@ -779,6 +881,10 @@ class MainActivity : FragmentActivity() {
                     }
             }
             var adBlockerEnabled by remember { mutableStateOf(true) }
+            // Page transition animation: bumped on every main-frame navigation
+            // start; drives a subtle fade+slide over the WebView (never blocks
+            // loading, purely visual). Disabled via the Settings toggle.
+            var pageTransitionTick by remember { mutableStateOf(0) }
             // Real session count of blocked tracker/ad requests (home privacy pill).
             val blockedCount by AdBlocker.blockedCountFlow.collectAsState()
             // V9 Shield VPN running state (for the home shield card).
@@ -787,6 +893,19 @@ class MainActivity : FragmentActivity() {
             var httpsOnlyMode by remember { mutableStateOf(true) }
             var javaScriptEnabledGlobal by remember { mutableStateOf(true) }
             var dataSaverEnabled by remember { mutableStateOf(false) }
+
+            // LocationGuard: hide/spoof browser geolocation (Prince request).
+            var locationMode by remember { mutableStateOf(LocationGuard.LocationMode.ASK) }
+            var locationSpoofLat by remember { mutableStateOf(LocationGuard.DEFAULT_PRESET.lat) }
+            var locationSpoofLng by remember { mutableStateOf(LocationGuard.DEFAULT_PRESET.lng) }
+            var locationSpoofLabel by remember { mutableStateOf(LocationGuard.DEFAULT_PRESET.label) }
+            val locationSiteModes by repository.locationModeHostsFlow.collectAsState(initial = emptyMap())
+            // Pending geolocation permission request (ASK mode dialog).
+            var locationPromptOrigin by remember { mutableStateOf<String?>(null) }
+            var locationPromptCallback by remember { mutableStateOf<GeolocationPermissions.Callback?>(null) }
+            var locationPromptHost by remember { mutableStateOf<String?>(null) }
+            var showLocationPrompt by remember { mutableStateOf(false) }
+            var showLocationSettings by remember { mutableStateOf(false) }
 
             // Common overlays
             var showBookmarks by remember { mutableStateOf(false) }
@@ -900,8 +1019,13 @@ class MainActivity : FragmentActivity() {
             var longPressImageUrl by remember { mutableStateOf<String?>(null) }
             var showLongPressMenu by remember { mutableStateOf(false) }
 
-            // DevTools panel tab (0=Elements, 1=Console, 2=Network, 3=Sources)
+            // DevTools panel tab (0=Elements, 1=Console, 2=Network, 3=Sources, 4=Device)
             var devToolsTab by remember { mutableStateOf(0) }
+            // DevTools bottom sheet visibility — the panel is a dismissible sheet
+            // so the website stays visible (never a fixed top overlay).
+            var showDevToolsSheet by remember { mutableStateOf(false) }
+            // Live viewport/device facts for the DevTools Device tab.
+            var devToolsDeviceInfo by remember { mutableStateOf<DeviceInfo?>(null) }
 
             // Full-view / immersive browsing: MANUAL fullscreen toggle only.
             // (Prince: no auto-hide on scroll — user control via the drawer toggle.)
@@ -927,12 +1051,17 @@ class MainActivity : FragmentActivity() {
                     FeatureId.COOKIES -> showCookieManager = true
                     FeatureId.TOOLS -> showExtensionsManager = true
                     FeatureId.DEVTOOLS -> {
-                        showDebugOverlay = !showDebugOverlay
-                        Toast.makeText(
-                            this@MainActivity,
-                            if (showDebugOverlay) "DevTools overlay ON" else "DevTools overlay OFF",
-                            Toast.LENGTH_SHORT
-                        ).show()
+                        // Opens the DevTools bottom sheet (website stays visible).
+                        // The FPS diagnostics overlay has its own drawer toggle.
+                        if (activeMode == BrowserMode.DEVELOPER && currentTab.url != "about:blank") {
+                            showDevToolsSheet = true
+                        } else {
+                            Toast.makeText(
+                                this@MainActivity,
+                                "DevTools needs Developer mode with a page loaded.",
+                                Toast.LENGTH_SHORT
+                            ).show()
+                        }
                     }
                     FeatureId.DOWNLOADS -> {
                         this@MainActivity.requestStoragePermissions()
@@ -1087,6 +1216,11 @@ class MainActivity : FragmentActivity() {
             LaunchedEffect(secureDnsEnabled) { liveSecureDns = secureDnsEnabled }
             LaunchedEffect(customHeaders) { liveCustomHeaders = customHeaders.associate { it.name to it.value } }
             LaunchedEffect(desktopHosts) { liveDesktopHosts = desktopHosts }
+            LaunchedEffect(locationMode) { liveLocationMode = locationMode }
+            LaunchedEffect(locationSpoofLat) { liveLocationSpoofLat = locationSpoofLat }
+            LaunchedEffect(locationSpoofLng) { liveLocationSpoofLng = locationSpoofLng }
+            LaunchedEffect(locationSpoofLabel) { liveLocationSpoofLabel = locationSpoofLabel }
+            LaunchedEffect(locationSiteModes) { liveLocationSiteModes = locationSiteModes }
 
             // Reloads the userscript list + code cache (DataStore + files).
             fun refreshUserscripts() {
@@ -1164,6 +1298,14 @@ class MainActivity : FragmentActivity() {
                     headerSpoofEnabled = prefs[AppSettings.HEADER_SPOOF_ENABLED] == true
                     fingerprintProtection = prefs[AppSettings.FINGERPRINT_PROTECTION] ?: true
                     secureDnsEnabled = prefs[AppSettings.SECURE_DNS_ENABLED] == true
+                    // LocationGuard: hide/spoof browser geolocation.
+                    locationMode = LocationGuard.LocationMode.fromKey(prefs[AppSettings.LOCATION_MODE])
+                    locationSpoofLat = prefs[AppSettings.LOCATION_SPOOF_LAT]?.toDoubleOrNull()
+                        ?: LocationGuard.DEFAULT_PRESET.lat
+                    locationSpoofLng = prefs[AppSettings.LOCATION_SPOOF_LNG]?.toDoubleOrNull()
+                        ?: LocationGuard.DEFAULT_PRESET.lng
+                    locationSpoofLabel = prefs[AppSettings.LOCATION_SPOOF_LABEL]
+                        ?: LocationGuard.DEFAULT_PRESET.label
                     customHeaders = AppSettings.parseHeaders(prefs[AppSettings.CUSTOM_HEADERS_JSON])
                     currentThemeSetting = if (prefs[AppSettings.UI_DARK_MODE] == false) "Light" else "Dark"
                     // Per-mode Day/Night overrides (missing key = follow global).
@@ -1240,9 +1382,60 @@ class MainActivity : FragmentActivity() {
             // Drawer Navigation State (Simple, Dev, Power and shortcuts inside the hamburger menu)
             val drawerState = rememberDrawerState(initialValue = DrawerValue.Closed)
 
-            // Opens the real DevTools bottom panel on the requested tab (0=Elements,
-            // 1=Console, 2=Network, 3=Sources), switching to Developer mode if needed.
-            // Declared after drawerState so the drawer can be closed from it.
+            /**
+             * Reads live viewport/device facts from the current page via JS.
+             * Updates [devToolsDeviceInfo]; safe to call when no page is loaded
+             * (clears the info instead of crashing). Declared before
+             * [openDevToolsTab] (Kotlin local funs need declaration-before-use).
+             */
+            fun refreshDevToolsDeviceInfo() {
+                val wv = currentTab.webView
+                if (wv == null || currentTab.url == "about:blank") {
+                    devToolsDeviceInfo = null
+                    return
+                }
+                wv.evaluateJavascript(
+                    """(function(){
+                        try {
+                            return JSON.stringify({
+                                viewport: window.innerWidth + 'x' + window.innerHeight,
+                                dpr: String(window.devicePixelRatio || '?'),
+                                ua: navigator.userAgent || '',
+                                screen: screen.width + 'x' + screen.height,
+                                platform: navigator.platform || '',
+                                lang: navigator.language || '',
+                                touch: ('ontouchstart' in window) ? 'yes' : 'no',
+                                cookies: navigator.cookieEnabled ? 'yes' : 'no'
+                            });
+                        } catch(e) { return '{}'; }
+                    })()"""
+                ) { result ->
+                    devToolsDeviceInfo = try {
+                        // evaluateJavascript returns the JS string as a JSON string
+                        // literal (quoted + escaped). Decode via a JSON array wrapper.
+                        val inner = if (result.isNullOrBlank() || result == "null") "{}"
+                        else org.json.JSONArray("[$result]").optString(0, "{}")
+                        val json = org.json.JSONObject(inner)
+                        DeviceInfo(
+                            viewport = json.optString("viewport"),
+                            devicePixelRatio = json.optString("dpr"),
+                            userAgent = json.optString("ua"),
+                            screenSize = json.optString("screen"),
+                            platform = json.optString("platform"),
+                            language = json.optString("lang"),
+                            touchSupport = json.optString("touch"),
+                            cookiesEnabled = json.optString("cookies")
+                        )
+                    } catch (_: Exception) {
+                        null
+                    }
+                }
+            }
+
+            // Opens the real DevTools bottom sheet on the requested tab (0=Elements,
+            // 1=Console, 2=Network, 3=Sources, 4=Device), switching to Developer
+            // mode if needed. Declared after drawerState so the drawer can be
+            // closed from it.
             fun openDevToolsTab(tab: Int) {
                 scope.launch {
                     drawerState.close()
@@ -1256,6 +1449,9 @@ class MainActivity : FragmentActivity() {
                         if (!restarting) currentTab.webView?.reload()
                     }
                     devToolsTab = tab
+                    // Refresh device facts when the Device tab is requested.
+                    if (tab == 4) refreshDevToolsDeviceInfo()
+                    showDevToolsSheet = true
                 }
             }
 
@@ -1774,7 +1970,18 @@ class MainActivity : FragmentActivity() {
                                         scope.launch {
                                             drawerState.close()
                                             elementInspectorEnabled = !elementInspectorEnabled
-                                            Toast.makeText(this@MainActivity, "Page Inspector: Click elements to view tag details", Toast.LENGTH_SHORT).show()
+                                            val wv = currentTab.webView
+                                            if (elementInspectorEnabled) {
+                                                wv?.evaluateJavascript(
+                                                    DevToolsInjections.ELEMENT_INSPECTOR_ENABLE, null
+                                                )
+                                                Toast.makeText(this@MainActivity, "Page Inspector: Click elements to view tag details", Toast.LENGTH_SHORT).show()
+                                            } else {
+                                                wv?.evaluateJavascript(
+                                                    DevToolsInjections.ELEMENT_INSPECTOR_DISABLE, null
+                                                )
+                                                Toast.makeText(this@MainActivity, "Page Inspector OFF", Toast.LENGTH_SHORT).show()
+                                            }
                                         }
                                     }
                                 }
@@ -1998,7 +2205,15 @@ class MainActivity : FragmentActivity() {
                                                     currentTab.webView?.loadUrl(destination)
                                                 },
                                                 onReload = { currentTab.webView?.reload() },
-                                                onMenuClick = { showBrowserMenu = true }
+                                                onMenuClick = { showBrowserMenu = true },
+                                                // LocationGuard indicator: show when this site's
+                                                // location is blocked or spoofed.
+                                                locationMode = run {
+                                                    val m = effectiveLocationMode(currentTab.url)
+                                                    if (m == LocationGuard.LocationMode.ASK) null else m
+                                                },
+                                                locationSpoofLabel = locationSpoofLabel,
+                                                onLocationClick = { showLocationSettings = true }
                                             )
                                             // Thin page-load progress indicator.
                                             val progress = currentTab.loadProgress
@@ -2098,6 +2313,12 @@ class MainActivity : FragmentActivity() {
                                             else -> Modifier.fillMaxSize()
                                         }
 
+                                        // Page transition: subtle fade + slide on every
+                                        // navigation start (see PageTransitionWrapper).
+                                        PageTransitionWrapper(
+                                            tick = pageTransitionTick,
+                                            animationsEnabled = flagsUi.tabAnimations
+                                        ) {
                                         Box(
                                             modifier = Modifier.fillMaxSize(),
                                             contentAlignment = Alignment.Center
@@ -2213,6 +2434,9 @@ class MainActivity : FragmentActivity() {
                                                                 super.onPageStarted(view, url, favicon)
                                                                 currentTab.url = url ?: ""
                                                                 lastPageStart = System.currentTimeMillis()
+                                                                // Page transition animation trigger (main-frame
+                                                                // navigations only — subframes don't call this).
+                                                                pageTransitionTick++
 
                                                                 // Clear stats
                                                                 networkRequests.clear()
@@ -2228,6 +2452,21 @@ class MainActivity : FragmentActivity() {
                                                                 if (liveMode == BrowserMode.HACK && liveAntiDetection) {
                                                                     view?.evaluateJavascript(
                                                                         AntiDetectionInjections.INJECT_SPOOF_LAYERS,
+                                                                        null
+                                                                    )
+                                                                }
+
+                                                                // LocationGuard: when the effective mode for this
+                                                                // page is SPOOF, replace navigator.geolocation
+                                                                // BEFORE page scripts run, so getCurrentPosition /
+                                                                // watchPosition return the spoofed coordinates and
+                                                                // the native permission prompt never fires.
+                                                                if (effectiveLocationMode(url) == LocationGuard.LocationMode.SPOOF) {
+                                                                    view?.evaluateJavascript(
+                                                                        LocationGuard.geolocationSpoofJs(
+                                                                            liveLocationSpoofLat,
+                                                                            liveLocationSpoofLng
+                                                                        ),
                                                                         null
                                                                     )
                                                                 }
@@ -2401,6 +2640,32 @@ class MainActivity : FragmentActivity() {
                                                                 super.onProgressChanged(view, newProgress)
                                                                 tabs.firstOrNull { it.webView === view }?.loadProgress = newProgress
                                                             }
+
+                                                            // LocationGuard: intercept browser geolocation
+                                                            // requests. BLOCK denies, SPOOF grants (the JS
+                                                            // override injected at page start returns spoofed
+                                                            // coordinates), ASK shows the in-app dialog.
+                                                            override fun onGeolocationPermissionsShowPrompt(
+                                                                origin: String?,
+                                                                callback: GeolocationPermissions.Callback?
+                                                            ) {
+                                                                if (callback == null) {
+                                                                    super.onGeolocationPermissionsShowPrompt(origin, callback)
+                                                                    return
+                                                                }
+                                                                handleGeolocationPrompt(origin, callback) { o, h, cb ->
+                                                                    locationPromptOrigin = o
+                                                                    locationPromptHost = h
+                                                                    locationPromptCallback = cb
+                                                                    showLocationPrompt = true
+                                                                }
+                                                            }
+
+                                                            override fun onGeolocationPermissionsHidePrompt() {
+                                                                super.onGeolocationPermissionsHidePrompt()
+                                                                showLocationPrompt = false
+                                                                locationPromptCallback = null
+                                                            }
                                                         }
 
                                                         // Setup Bridges
@@ -2558,16 +2823,49 @@ class MainActivity : FragmentActivity() {
                                                 )
                                             }
                                         }
-                                    }
+                                        }
+                                        } // PageTransitionWrapper
 
-                                    // 5. FLOATING DEV DEBUG STATUS OVERLAY
-                                    if (activeMode == BrowserMode.DEVELOPER && showDebugOverlay && currentTab.url != "about:blank") {
-                                        FloatingDebugOverlay(
-                                            pageLoadTime = pageLoadTime,
+                                    // 5. FLOATING DEV DEBUG STATUS OVERLAY + DevTools toggle
+                                    // DevTools icon sits at the TOP-RIGHT corner (Prince's
+                                    // request); the diagnostics overlay hangs below it.
+                                    if (activeMode == BrowserMode.DEVELOPER && currentTab.url != "about:blank") {
+                                        Column(
                                             modifier = Modifier
                                                 .align(Alignment.TopEnd)
-                                                .padding(16.dp)
-                                        )
+                                                .padding(12.dp),
+                                            horizontalAlignment = Alignment.End
+                                        ) {
+                                            // DevTools panel toggle — top-right corner.
+                                            IconButton(
+                                                onClick = {
+                                                    if (!showDevToolsSheet && devToolsTab == 4) {
+                                                        refreshDevToolsDeviceInfo()
+                                                    }
+                                                    showDevToolsSheet = !showDevToolsSheet
+                                                },
+                                                modifier = Modifier
+                                                    .size(44.dp)
+                                                    .background(
+                                                        if (showDevToolsSheet) Color(0xFF7B1FA2)
+                                                        else Color(0xCC1A1A2E),
+                                                        shape = RoundedCornerShape(12.dp)
+                                                    )
+                                            ) {
+                                                Icon(
+                                                    Icons.Default.Code,
+                                                    contentDescription = "DevTools",
+                                                    tint = Color.White,
+                                                    modifier = Modifier.size(22.dp)
+                                                )
+                                            }
+                                            if (showDebugOverlay) {
+                                                Spacer(modifier = Modifier.height(8.dp))
+                                                FloatingDebugOverlay(
+                                                    pageLoadTime = pageLoadTime
+                                                )
+                                            }
+                                        }
                                     }
 
                                     // Browsing surface: floating glowing AI button (bottom-right)
@@ -2649,21 +2947,9 @@ class MainActivity : FragmentActivity() {
                                     }
                                 }
 
-                                // 7. DETAILED BOTTOM PANELS (DevTools console)
-                                if (activeMode == BrowserMode.DEVELOPER && currentTab.url != "about:blank") {
-                                    DevToolsPanel(
-                                        logs = logs,
-                                        networkRequests = networkRequests,
-                                        domHtml = domHtml,
-                                        sourcesList = sourcesList,
-                                        selectedTab = devToolsTab,
-                                        onTabSelected = { devToolsTab = it },
-                                        onClearLogs = { logs.clear() },
-                                        onEvalJs = { code ->
-                                            currentTab.webView?.evaluateJavascript(code, null)
-                                        }
-                                    )
-                                }
+                                // 7. DevTools lives in a dismissible bottom sheet now
+                                // (see overlay screens below) — the website is never
+                                // covered by a fixed panel.
                             }
                             }
 
@@ -2811,6 +3097,60 @@ class MainActivity : FragmentActivity() {
                                 )
                             }
 
+                            // DevTools bottom sheet (Developer mode): dismissible,
+                            // partially-expanded by default so the website stays
+                            // visible above it. Opened via the top-right corner
+                            // icon, the drawer DevTools entries, or the FAB menu.
+                            if (showDevToolsSheet && activeMode == BrowserMode.DEVELOPER) {
+                                val devToolsSheetState = rememberModalBottomSheetState(
+                                    skipPartiallyExpanded = false
+                                )
+                                ModalBottomSheet(
+                                    onDismissRequest = { showDevToolsSheet = false },
+                                    sheetState = devToolsSheetState,
+                                    dragHandle = { BottomSheetDefaults.DragHandle() },
+                                    containerColor = MaterialTheme.colorScheme.surface
+                                ) {
+                                    DevToolsPanel(
+                                        logs = logs,
+                                        networkRequests = networkRequests,
+                                        domHtml = domHtml,
+                                        sourcesList = sourcesList,
+                                        selectedTab = devToolsTab,
+                                        onTabSelected = {
+                                            devToolsTab = it
+                                            if (it == 4) refreshDevToolsDeviceInfo()
+                                        },
+                                        onClearLogs = { logs.clear() },
+                                        onClearNetwork = { networkRequests.clear() },
+                                        onEvalJs = { code ->
+                                            currentTab.webView?.evaluateJavascript(code, null)
+                                        },
+                                        inspectorEnabled = elementInspectorEnabled,
+                                        onToggleInspector = {
+                                            elementInspectorEnabled = !elementInspectorEnabled
+                                            val wv = currentTab.webView
+                                            if (elementInspectorEnabled) {
+                                                wv?.evaluateJavascript(
+                                                    DevToolsInjections.ELEMENT_INSPECTOR_ENABLE, null
+                                                )
+                                                Toast.makeText(
+                                                    this@MainActivity,
+                                                    "Inspector ON — tap any page element.",
+                                                    Toast.LENGTH_SHORT
+                                                ).show()
+                                            } else {
+                                                wv?.evaluateJavascript(
+                                                    DevToolsInjections.ELEMENT_INSPECTOR_DISABLE, null
+                                                )
+                                            }
+                                        },
+                                        deviceInfo = devToolsDeviceInfo,
+                                        onRefreshDeviceInfo = { refreshDevToolsDeviceInfo() }
+                                    )
+                                }
+                            }
+
                             // click:// internal pages (chrome://-style) full-screen overlay.
                             if (showClickPage != null) {
                                 ClickPageHost(
@@ -2895,6 +3235,105 @@ class MainActivity : FragmentActivity() {
                                             androidx.compose.material3.Text("Stay")
                                         }
                                     }
+                                )
+                            }
+
+                            // LocationGuard: ASK-mode dialog — a website wants geolocation.
+                            if (showLocationPrompt && locationPromptCallback != null) {
+                                LocationPromptDialog(
+                                    origin = locationPromptOrigin.orEmpty(),
+                                    host = locationPromptHost,
+                                    spoofLabel = locationSpoofLabel,
+                                    onBlock = { rememberForSite ->
+                                        locationPromptCallback?.invoke(locationPromptOrigin, false, false)
+                                        if (rememberForSite && locationPromptHost != null) {
+                                            scope.launch {
+                                                repository.setLocationModeHost(
+                                                    locationPromptHost!!,
+                                                    LocationGuard.LocationMode.BLOCK.key
+                                                )
+                                            }
+                                        }
+                                        showLocationPrompt = false
+                                        locationPromptCallback = null
+                                    },
+                                    onSpoof = { rememberForSite ->
+                                        // Inject the spoof JS now (page-start injection may
+                                        // have missed if the prompt fired first), then grant.
+                                        currentTab.webView?.evaluateJavascript(
+                                            LocationGuard.geolocationSpoofJs(
+                                                locationSpoofLat, locationSpoofLng
+                                            ),
+                                            null
+                                        )
+                                        locationPromptCallback?.invoke(locationPromptOrigin, true, false)
+                                        if (rememberForSite && locationPromptHost != null) {
+                                            scope.launch {
+                                                repository.setLocationModeHost(
+                                                    locationPromptHost!!,
+                                                    LocationGuard.LocationMode.SPOOF.key
+                                                )
+                                            }
+                                        }
+                                        showLocationPrompt = false
+                                        locationPromptCallback = null
+                                    },
+                                    onDismiss = {
+                                        // "Not now" = deny this request without remembering.
+                                        locationPromptCallback?.invoke(locationPromptOrigin, false, false)
+                                        showLocationPrompt = false
+                                        locationPromptCallback = null
+                                    }
+                                )
+                            }
+
+                            // LocationGuard: full settings sheet.
+                            if (showLocationSettings) {
+                                LocationSettingsSheet(
+                                    theme = theme,
+                                    mode = locationMode,
+                                    onModeChange = { m ->
+                                        locationMode = m
+                                        scope.launch {
+                                            dataStore.edit { prefs ->
+                                                prefs[AppSettings.LOCATION_MODE] = m.key
+                                            }
+                                        }
+                                    },
+                                    spoofLat = locationSpoofLat,
+                                    spoofLng = locationSpoofLng,
+                                    spoofLabel = locationSpoofLabel,
+                                    onSpoofPreset = { preset ->
+                                        locationSpoofLat = preset.lat
+                                        locationSpoofLng = preset.lng
+                                        locationSpoofLabel = preset.label
+                                        scope.launch {
+                                            dataStore.edit { prefs ->
+                                                prefs[AppSettings.LOCATION_SPOOF_LAT] = preset.lat.toString()
+                                                prefs[AppSettings.LOCATION_SPOOF_LNG] = preset.lng.toString()
+                                                prefs[AppSettings.LOCATION_SPOOF_LABEL] = preset.label
+                                            }
+                                        }
+                                    },
+                                    onCustomSpoof = { lat, lng, label ->
+                                        locationSpoofLat = lat
+                                        locationSpoofLng = lng
+                                        locationSpoofLabel = label
+                                        scope.launch {
+                                            dataStore.edit { prefs ->
+                                                prefs[AppSettings.LOCATION_SPOOF_LAT] = lat.toString()
+                                                prefs[AppSettings.LOCATION_SPOOF_LNG] = lng.toString()
+                                                prefs[AppSettings.LOCATION_SPOOF_LABEL] = label
+                                            }
+                                        }
+                                    },
+                                    siteModes = locationSiteModes,
+                                    onClearSiteMode = { host ->
+                                        scope.launch {
+                                            repository.setLocationModeHost(host, null)
+                                        }
+                                    },
+                                    onClose = { showLocationSettings = false }
                                 )
                             }
 
@@ -3032,6 +3471,18 @@ class MainActivity : FragmentActivity() {
                                             com.click.browser.engine.TextScaleStore.setGlobal(this@MainActivity, clamped)
                                         }
                                     },
+                                    animationsEnabled = flagsUi.tabAnimations,
+                                    onToggleAnimations = { enabled ->
+                                        scope.launch {
+                                            dataStore.edit { prefs ->
+                                                prefs[ExperimentalFlags.K_TAB_ANIMATIONS] = enabled
+                                            }
+                                            liveFlags = liveFlags.copy(tabAnimations = enabled)
+                                            flagsUi = liveFlags
+                                        }
+                                    },
+                                        }
+                                    },
                                     onClearHistoryForMode = { mode ->
                                         scope.launch {
                                             repository.clearHistoryFor(mode)
@@ -3060,6 +3511,8 @@ class MainActivity : FragmentActivity() {
                                         Toast.makeText(this@MainActivity, "All browsing data cleared (current mode)", Toast.LENGTH_SHORT).show()
                                     },
                                     onOpenCookieManager = { showSettings = false; showCookieManager = true },
+                                    locationSummary = LocationGuard.websitesWillSee(locationMode, locationSpoofLabel),
+                                    onOpenLocationSettings = { showLocationSettings = true },
                                     perModeDark = perModeDark,
                                     onPerModeThemeChange = { mode, dark ->
                                         val updated = perModeDark.toMutableMap()

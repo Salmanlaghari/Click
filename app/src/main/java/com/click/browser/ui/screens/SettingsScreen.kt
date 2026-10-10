@@ -84,9 +84,15 @@ fun SettingsScreen(
     onClearCache: () -> Unit,
     onClearAllCurrentMode: () -> Unit,
     onOpenCookieManager: () -> Unit,
+    // --- LocationGuard ---
+    locationSummary: String,
+    onOpenLocationSettings: () -> Unit,
     // --- Per-mode themes ---
     perModeDark: Map<BrowserMode, Boolean?>,
     onPerModeThemeChange: (BrowserMode, Boolean?) -> Unit,
+    // --- UI animations ---
+    animationsEnabled: Boolean,
+    onToggleAnimations: (Boolean) -> Unit,
     // --- AI Assistant ---
     aiApiKey: String,
     onAiApiKeyChange: (String) -> Unit,
@@ -129,7 +135,7 @@ fun SettingsScreen(
         theme, currentThemeSetting, wallpaperUri, activeMode,
         currentSearchEngineSetting, adBlockerEnabled, forceNightMode,
         httpsOnlyMode, jsEnabled, dataSaver, perModeDark, historyModeTarget,
-        aiApiKey, aiProvider, aiModel, showAiKey
+        aiApiKey, aiProvider, aiModel, showAiKey, animationsEnabled
     ) {
         buildList {
             // ================= GENERAL =================
@@ -244,6 +250,15 @@ fun SettingsScreen(
                     }
                 }
             })
+            add(Row(null) {
+                CardRow(theme) {
+                    ToggleRow(
+                        "UI Animations",
+                        "Tab close & page transition effects",
+                        animationsEnabled, onToggleAnimations, theme
+                    )
+                }
+            })
             // ---- AI Assistant (kept from the old settings) ----
             add(Row(null) {
                 CardRow(theme) {
@@ -320,6 +335,15 @@ fun SettingsScreen(
                     ToggleRow("Data Saver", "Reduce web resource overhead", dataSaver, onToggleDataSaver, theme)
                     HorizontalDivider(color = theme.onSurface.copy(alpha = 0.1f))
                     ToggleRow("Lock Private Tabs", biometricStatusText, biometricLockEnabled, onToggleBiometricLock, theme)
+                    HorizontalDivider(color = theme.onSurface.copy(alpha = 0.1f))
+                    // LocationGuard: hide/spoof browser geolocation.
+                    ActionRow(
+                        "Location",
+                        "Websites will see: $locationSummary",
+                        Icons.Default.LocationOn,
+                        theme,
+                        onOpenLocationSettings
+                    )
                 }
             })
             add(Row(null) {

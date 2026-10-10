@@ -38,7 +38,10 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
+import androidx.compose.material3.SwipeToDismissBox
+import androidx.compose.material3.SwipeToDismissBoxValue
 import androidx.compose.material3.Text
+import androidx.compose.material3.rememberSwipeToDismissBoxState
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
@@ -215,6 +218,60 @@ fun TabSwitcherScreen(
                     val enterDelayMs = if (animationsEnabled) stagger else 0
                     val exitMs = if (animationsEnabled) 180 else 0
                     val exitScaleMs = if (animationsEnabled) 300 else 0
+                    // Shared close flow (X button + swipe): plays the exit
+                    // animation, then removes the tab. Delay collapses to 0
+                    // when animations are off so close stays instant.
+                    fun animatedClose() {
+                        if (idx >= 0 && closingTabId == null) {
+                            closingTabId = tab.id
+                            cardVisibility.targetState = false
+                            animScope.launch {
+                                try {
+                                    delay(if (animationsEnabled) 300 else 0)
+                                    onCloseTab(idx)
+                                } finally {
+                                    closingTabId = null
+                                }
+                            }
+                        }
+                    }
+                    // Swipe-to-dismiss: drag reveals a red delete background;
+                    // on release past the threshold the card plays the same
+                    // animated close as the X button.
+                    val dismissState = rememberSwipeToDismissBoxState(
+                        confirmValueChange = { value ->
+                            val swiped = value == SwipeToDismissBoxValue.StartToEnd ||
+                                    value == SwipeToDismissBoxValue.EndToStart
+                            if (swiped) animatedClose()
+                            // False: our AnimatedVisibility exit owns the close
+                            // animation; the box only provides drag + background.
+                            false
+                        }
+                    )
+                    SwipeToDismissBox(
+                        state = dismissState,
+                        backgroundContent = {
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxSize()
+                                    .clip(RoundedCornerShape(14.dp))
+                                    .background(
+                                        androidx.compose.ui.graphics.Color(0xFFD32F2F)
+                                            .copy(alpha = 0.85f)
+                                    ),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Icon(
+                                    Icons.Default.Delete,
+                                    contentDescription = "Close tab",
+                                    tint = androidx.compose.ui.graphics.Color.White,
+                                    modifier = Modifier.size(28.dp)
+                                )
+                            }
+                        },
+                        enableDismissFromStartToEnd = true,
+                        enableDismissFromEndToStart = true,
+                    ) {
                     AnimatedVisibility(
                         visibleState = cardVisibility,
                         enter = fadeIn(tween(enterMs, delayMillis = enterDelayMs)),
@@ -267,23 +324,7 @@ fun TabSwitcherScreen(
                                 // Close X (top-right, like Mises) — Premium UI v2:
                                 // plays the slide/scale-out animation, then removes.
                                 IconButton(
-                                    onClick = {
-                                        if (idx >= 0 && closingTabId == null) {
-                                            closingTabId = tab.id
-                                            // Play the exit animation, then remove the tab.
-                                            // try/finally: the lock is always released, even
-                                            // if onCloseTab throws or the coroutine is cancelled.
-                                            cardVisibility.targetState = false
-                                            animScope.launch {
-                                                try {
-                                                    delay(300)
-                                                    onCloseTab(idx)
-                                                } finally {
-                                                    closingTabId = null
-                                                }
-                                            }
-                                        }
-                                    },
+                                    onClick = { animatedClose() },
                                     modifier = Modifier
                                         .align(Alignment.TopEnd)
                                         .padding(4.dp)
@@ -339,7 +380,8 @@ fun TabSwitcherScreen(
                             }
                         }
                     }
-                    }
+                    } // AnimatedVisibility
+                    } // SwipeToDismissBox
                 }
             }
         }

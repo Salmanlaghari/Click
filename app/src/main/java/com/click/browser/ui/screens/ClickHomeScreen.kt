@@ -44,6 +44,8 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.ArrowForward
 import androidx.compose.material.icons.filled.Lock
+import androidx.compose.material.icons.filled.LocationOff
+import androidx.compose.material.icons.filled.LocationOn
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Add
@@ -106,6 +108,7 @@ import androidx.compose.ui.unit.sp
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
 import com.click.browser.engine.BrowserMode
+import com.click.browser.engine.LocationGuard
 import com.click.browser.engine.ModePersonalization
 import com.click.browser.engine.QuickSiteDef
 import kotlinx.coroutines.launch
@@ -1229,7 +1232,12 @@ fun CompactBrowseBar(
     onNavigate: (String) -> Unit,
     onReload: () -> Unit,
     onMenuClick: () -> Unit,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    // LocationGuard indicator: null = no indicator; otherwise the effective
+    // mode for the current site (BLOCK/Spoof shown, ASK hidden).
+    locationMode: LocationGuard.LocationMode? = null,
+    locationSpoofLabel: String = "",
+    onLocationClick: () -> Unit = {}
 ) {
     var textInput by remember(currentUrl) { mutableStateOf(currentUrl) }
     val isHttps = currentUrl.startsWith("https://")
@@ -1258,6 +1266,27 @@ fun CompactBrowseBar(
                     tint = if (isHttps) Color(0xFF22C55E) else theme.onSurface.copy(alpha = 0.5f),
                     modifier = Modifier.padding(start = 12.dp).size(15.dp)
                 )
+                // LocationGuard indicator: shows when this site's location is
+                // blocked or spoofed, so the user always knows the state.
+                if (locationMode == LocationGuard.LocationMode.BLOCK ||
+                    locationMode == LocationGuard.LocationMode.SPOOF
+                ) {
+                    IconButton(
+                        onClick = onLocationClick,
+                        modifier = Modifier.size(30.dp)
+                    ) {
+                        Icon(
+                            if (locationMode == LocationGuard.LocationMode.BLOCK)
+                                Icons.Default.LocationOff else Icons.Default.LocationOn,
+                            contentDescription =
+                                if (locationMode == LocationGuard.LocationMode.BLOCK)
+                                    "Location blocked for this site"
+                                else "Location spoofed for this site: $locationSpoofLabel",
+                            tint = Color(0xFF22C55E),
+                            modifier = Modifier.size(15.dp)
+                        )
+                    }
+                }
                 androidx.compose.foundation.text.BasicTextField(
                     value = textInput,
                     onValueChange = { textInput = it },
