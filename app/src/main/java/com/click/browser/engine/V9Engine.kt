@@ -202,6 +202,10 @@ object V9Engine {
             Log.i(TAG, "V9 engine online: ${suffixFor(mode)} (${profileFor(mode).deviceLabel})")
         } catch (t: Throwable) {
             Log.e(TAG, "V9 data-directory suffix failed; engines share storage", t)
+            // Fall back consistently: the WebView is now on SHARED storage, so
+            // the app-data profile must follow suit — otherwise cookies would
+            // land in shared storage while bookmarks/history went per-profile.
+            bootMode = BrowserMode.SIMPLE
         } finally {
             // Pin the flag even on failure: bootMode then holds the
             // best-known value (default SIMPLE) and every profile decision
