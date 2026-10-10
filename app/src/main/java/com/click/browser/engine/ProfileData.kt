@@ -28,7 +28,7 @@ val Context.advancedDataStore: DataStore<Preferences> by preferencesDataStore(
     name = "browser_settings_advanced"
 )
 
-/** DataStore holding [mode]'s private app data. */
+/** DataStore holding [mode]'s private app data. ADVANCED never falls back to the shared store. */
 fun Context.profileDataStoreFor(mode: BrowserMode): DataStore<Preferences> =
     if (mode == BrowserMode.ADVANCED) advancedDataStore else dataStore
 
