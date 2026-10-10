@@ -16,6 +16,7 @@ import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.Link
 import androidx.compose.material.icons.filled.OpenInNew
+import androidx.compose.material.icons.filled.QueueMusic
 import androidx.compose.material.icons.filled.Share
 import androidx.compose.material3.Divider
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -57,6 +58,7 @@ fun LongPressMenuSheet(
     onSaveImage: (String) -> Unit,
     onCopyImageUrl: (String) -> Unit,
     onShareImage: (String) -> Unit,
+    onAddToPlaylist: ((String) -> Unit)? = null,
     onDismiss: () -> Unit
 ) {
     ModalBottomSheet(
@@ -168,6 +170,16 @@ fun LongPressMenuSheet(
                     label = "Share link",
                     onClick = { onShareLink(linkUrl) }
                 )
+                // Only shown for direct media file links — never for
+                // streaming-service pages (Playlist refuses those).
+                if (onAddToPlaylist != null) {
+                    LongPressMenuRow(
+                        theme = theme,
+                        icon = Icons.Default.QueueMusic,
+                        label = "Add to Playlist",
+                        onClick = { onAddToPlaylist(linkUrl) }
+                    )
+                }
             }
         }
     }

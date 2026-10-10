@@ -149,6 +149,11 @@ class MainActivity : FragmentActivity() {
 
     private lateinit var modeManager: ModeManager
     private lateinit var repository: BrowserRepository
+    private lateinit var playlistManager: PlaylistManager
+
+    // Cached copy of the "background audio" setting for onPause/onResume,
+    // which run outside composition. Synced from the composable state.
+    @Volatile private var backgroundAudioEnabledCached: Boolean = false
 
     // Live copies of composable state for use inside WebViewClient callbacks,
     // which are created once and would otherwise capture stale values.
@@ -308,6 +313,35 @@ class MainActivity : FragmentActivity() {
     }
 
     private var ttsEngine: TextToSpeech? = null
+
+    override fun onPause() {
+        super.onPause()
+        // Standard browser behavior: pause WebViews when the app is
+        // backgrounded, so page audio/video stops — UNLESS the user
+        // explicitly enabled "Background audio" in Settings (a generic
+        // media setting, never tied to any specific site or service).
+        if (!backgroundAudioEnabledCached) {
+            liveWebViews.forEach { wv ->
+                try { wv.onPause() } catch (_: Exception) { }
+                try { wv.pauseTimers() } catch (_: Exception) { }
+            }
+        }
+        // Biometric private-tab lock: whenever the app goes to background
+        // while the lock is enabled and at least one incognito tab exists,
+        // the private tabs re-lock. The overlay + BiometricPrompt handle
+        // the unlock on return.
+        if (liveBiometricLockEnabled && liveHasIncognitoTabs) {
+            privateLockedFlow.value = true
+        }
+    }
+
+    override fun onResume() {
+        super.onResume()
+        liveWebViews.forEach { wv ->
+            try { wv.onResume() } catch (_: Exception) { }
+            try { wv.resumeTimers() } catch (_: Exception) { }
+        }
+    }
 
     override fun onDestroy() {
         try { ttsEngine?.shutdown() } catch (_: Exception) { }
@@ -780,18 +814,6 @@ class MainActivity : FragmentActivity() {
         }
     }
 
-    /**
-     * Biometric private-tab lock: whenever the app goes to background while
-     * the lock is enabled and at least one incognito tab exists, the private
-     * tabs re-lock. The overlay + BiometricPrompt handle the unlock on return.
-     */
-    override fun onPause() {
-        super.onPause()
-        if (liveBiometricLockEnabled && liveHasIncognitoTabs) {
-            privateLockedFlow.value = true
-        }
-    }
-
     /** Shows the AndroidX BiometricPrompt to unlock private tabs. */
     fun promptUnlockPrivateTabs() {
         val executor = ContextCompat.getMainExecutor(this)
@@ -839,6 +861,7 @@ class MainActivity : FragmentActivity() {
 
         modeManager = ModeManager(this)
         repository = BrowserRepository(this)
+        playlistManager = PlaylistManager(this)
         // Bundled ad/tracker filter lists (assets) + weekly remote updates.
         com.click.browser.engine.FilterListManager.init(this)
         // Translate language list (asset-overridable, built-in fallback).
@@ -1078,6 +1101,11 @@ class MainActivity : FragmentActivity() {
             var showBookmarks by remember { mutableStateOf(false) }
             var showHistory by remember { mutableStateOf(false) }
             var showDownloads by remember { mutableStateOf(false) }
+            var showPlaylist by remember { mutableStateOf(false) }
+            // One-shot URL from the long-press menu ("Add to Playlist").
+            var playlistSeedUrl by remember { mutableStateOf<String?>(null) }
+            // Generic "background audio for web pages" setting (default off).
+            var backgroundAudioEnabled by remember { mutableStateOf(false) }
             var showSettings by remember { mutableStateOf(false) }
             var showFindInPageDialog by remember { mutableStateOf(false) }
             var findQuery by remember { mutableStateOf("") }
@@ -1508,6 +1536,7 @@ class MainActivity : FragmentActivity() {
                     locationSpoofLabel = prefs[AppSettings.LOCATION_SPOOF_LABEL]
                         ?: LocationGuard.DEFAULT_PRESET.label
                     customHeaders = AppSettings.parseHeaders(prefs[AppSettings.CUSTOM_HEADERS_JSON])
+                    backgroundAudioEnabled = prefs[AppSettings.BACKGROUND_AUDIO_ENABLED] == true
                     // Brave-inspired privacy quick wins.
                     stripTrackingParams = prefs[AppSettings.STRIP_TRACKING_PARAMS] ?: true
                     forgetfulBrowsing = prefs[AppSettings.FORGETFUL_BROWSING] == true
@@ -1546,6 +1575,11 @@ class MainActivity : FragmentActivity() {
                 // their own, in the Extensions screen.
                 userscriptManager.seedBundledScripts()
                 refreshUserscripts()
+            }
+
+            // Keep the activity-level cache in sync for onPause/onResume.
+            LaunchedEffect(backgroundAudioEnabled) {
+                backgroundAudioEnabledCached = backgroundAudioEnabled
             }
 
             // Settings Configurations
@@ -3406,6 +3440,14 @@ class MainActivity : FragmentActivity() {
                                 )
                             }
 
+                            if (showPlaylist) {
+                                PlaylistScreen(
+                                    playlistManager = playlistManager,
+                                    onClose = { showPlaylist = false; playlistSeedUrl = null },
+                                    seedUrl = playlistSeedUrl
+                                )
+                            }
+
                             // DevTools bottom sheet (Developer mode): dismissible,
                             // partially-expanded by default so the website stays
                             // visible above it. Opened via the top-right corner
@@ -3778,6 +3820,15 @@ class MainActivity : FragmentActivity() {
                                     onToggleJs = { javaScriptEnabledGlobal = it },
                                     dataSaver = dataSaverEnabled,
                                     onToggleDataSaver = { dataSaverEnabled = it },
+                                    backgroundAudioEnabled = backgroundAudioEnabled,
+                                    onToggleBackgroundAudio = { v ->
+                                        backgroundAudioEnabled = v
+                                        scope.launch {
+                                            dataStore.edit { prefs ->
+                                                prefs[AppSettings.BACKGROUND_AUDIO_ENABLED] = v
+                                            }
+                                        }
+                                    },
                                     biometricLockEnabled = biometricLockEnabled,
                                     onToggleBiometricLock = { v ->
                                         if (v && !com.click.browser.engine.PrivateTabLock.canLock(this@MainActivity)) {
@@ -4118,6 +4169,19 @@ class MainActivity : FragmentActivity() {
                                         longPressLinkUrl = null
                                         longPressImageUrl = null
                                     },
+                                    // Only offer for direct media file links — never for
+                                    // streaming-service pages (Playlist refuses those).
+                                    onAddToPlaylist = longPressLinkUrl
+                                        ?.takeIf { PlaylistManager.looksLikeDirectMedia(it) }
+                                        ?.let { _ ->
+                                            { url: String ->
+                                                showLongPressMenu = false
+                                                longPressLinkUrl = null
+                                                longPressImageUrl = null
+                                                playlistSeedUrl = url
+                                                showPlaylist = true
+                                            }
+                                        },
                                     onDismiss = {
                                         showLongPressMenu = false
                                         longPressLinkUrl = null
@@ -4496,6 +4560,11 @@ class MainActivity : FragmentActivity() {
                                         showBrowserMenu = false
                                         this@MainActivity.requestStoragePermissions()
                                         showDownloads = true
+                                    },
+                                    onPlaylist = {
+                                        showBrowserMenu = false
+                                        playlistSeedUrl = null
+                                        showPlaylist = true
                                     },
                                     onBookmarks = { showBrowserMenu = false; showBookmarks = true },
                                     onGames = { showBrowserMenu = false; showClickPage = "games" },
