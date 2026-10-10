@@ -56,6 +56,7 @@ fun BrowserMenuSheet(
     onHistory: () -> Unit,
     onDeleteBrowsingData: () -> Unit,
     onDownloads: () -> Unit,
+    onPlaylist: () -> Unit,
     onBookmarks: () -> Unit,
     onGames: () -> Unit,
     onRecentTabs: () -> Unit,
@@ -126,6 +127,14 @@ fun BrowserMenuSheet(
                     icon = Icons.Default.Download,
                     label = "Downloads",
                     onClick = onDownloads
+                )
+            }
+            item {
+                MenuRow(
+                    theme = theme,
+                    icon = Icons.Default.QueueMusic,
+                    label = "Playlist",
+                    onClick = onPlaylist
                 )
             }
             item {
