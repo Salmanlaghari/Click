@@ -60,7 +60,9 @@ fun CookieManagerScreen(
         try {
             val urls = repository.historyFlow.first().map { it.url } +
                 repository.bookmarksFlow.first().map { it.url }
-            val samples = CookieStore.sampleUrlsByHost(urls)
+            // Bound the IPC burst: distinct hosts (not history items) are capped;
+            // 500 covers real-world usage while keeping load time sane.
+            val samples = CookieStore.sampleUrlsByHost(urls).entries.take(500)
             sites = coroutineScope {
                 samples.map { (host, sampleUrls) ->
                     async { SiteCookies(host, CookieStore.cookiesForHost(host, sampleUrls)) }

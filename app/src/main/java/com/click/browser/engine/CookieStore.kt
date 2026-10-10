@@ -63,7 +63,9 @@ object CookieStore {
         val cm = CookieManager.getInstance()
         val urls = (sampleUrls + listOf("https://$host", "http://$host")).distinct()
         urls.flatMap { url -> parseCookieHeader(cm.getCookie(url)) }
-            .distinctBy { it.name }
+            // Same name can exist on different paths with different values —
+            // dedupe by name+value so both remain visible.
+            .distinctBy { it.name to it.value }
     }
 
     /** Expire one cookie. Call from the main thread. Result via [onDone]. */
@@ -84,20 +86,23 @@ object CookieStore {
         val names = cookiesForHost(host).map { it.name }
         if (names.isEmpty()) return emptyList()
         val cm = CookieManager.getInstance()
-        val failed = withContext(Dispatchers.Main) {
-            coroutineScope {
-                names.map { name ->
-                    async {
-                        val ok = suspendCoroutine<Boolean> { cont ->
-                            expire(cm, host, name) { cont.resume(it) }
+        return try {
+            withContext(Dispatchers.Main) {
+                coroutineScope {
+                    names.map { name ->
+                        async {
+                            val ok = suspendCoroutine<Boolean> { cont ->
+                                expire(cm, host, name) { cont.resume(it) }
+                            }
+                            if (ok) null else name
                         }
-                        if (ok) null else name
-                    }
-                }.awaitAll().filterNotNull()
+                    }.awaitAll().filterNotNull()
+                }
             }
+        } finally {
+            // Persist even if an expiration threw midway.
+            cm.flush()
         }
-        cm.flush()
-        return failed
     }
 
     /** Remove ALL cookies (all sites, current engine mode). Call from the main thread. */
