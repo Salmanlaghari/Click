@@ -232,8 +232,10 @@ object V9Engine {
      * kill. This version:
      *  1. NEVER kills the process unless a restart is actually scheduled
      *     (returns false so the caller can apply the mode in-place instead).
-     *  2. Uses RTC_WAKEUP + setAndAllowWhileIdle (fires even in Doze, no
-     *     SCHEDULE_EXACT_ALARM permission needed) with a 1s delay.
+     *  2. Uses AlarmManager.setAlarmClock (alarm-clock alarms are delivered
+     *     at the highest priority and are NOT swallowed by MIUI/Oppo/Vivo
+     *     battery optimizers after a kill — the classic OEM-proof restart
+     *     trick; needs no SCHEDULE_EXACT_ALARM permission) with a 1s delay.
      *  3. Also starts the relaunch intent directly as a backup before dying.
      *
      * @param hackIntro when true, the relaunched process shows the Hack Mode
@@ -271,8 +273,15 @@ object V9Engine {
             return false
         }
 
-        // 2. Schedule the relaunch via AlarmManager. setAndAllowWhileIdle
-        // fires even in Doze and needs no exact-alarm permission.
+        // 2. Schedule the relaunch via AlarmManager.setAlarmClock. Alarm-clock
+        // alarms are the OEM-proof restart mechanism: unlike
+        // setAndAllowWhileIdle (which MIUI's battery optimizer swallows after
+        // the process is killed), alarm-clock alarms are delivered at the
+        // highest priority on all skins — Xiaomi/Oppo/Vivo treat them as
+        // user-visible and do not suppress them. No SCHEDULE_EXACT_ALARM
+        // permission is needed for setAlarmClock. The showIntent is null —
+        // tapping the transient status-bar alarm icon does nothing; the
+        // operation PendingIntent is what relaunches the app.
         var scheduled = false
         try {
             val pi = PendingIntent.getActivity(
@@ -280,9 +289,11 @@ object V9Engine {
                 PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
             )
             val am = context.getSystemService(Context.ALARM_SERVICE) as AlarmManager
-            am.setAndAllowWhileIdle(
-                AlarmManager.RTC_WAKEUP,
-                System.currentTimeMillis() + RESTART_DELAY_MS,
+            am.setAlarmClock(
+                AlarmManager.AlarmClockInfo(
+                    System.currentTimeMillis() + RESTART_DELAY_MS,
+                    null
+                ),
                 pi
             )
             scheduled = true
