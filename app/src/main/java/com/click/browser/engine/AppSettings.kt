@@ -25,6 +25,25 @@ object AppSettings {
     val HEADER_SPOOF_ENABLED = booleanPreferencesKey("header_spoof_enabled")
     val FINGERPRINT_PROTECTION = booleanPreferencesKey("fingerprint_protection")
     val SECURE_DNS_ENABLED = booleanPreferencesKey("secure_dns_enabled")
+
+    // ---- Brave-hardening: HTTPS Strict / Fingerprint Strict / DNT+GPC ----
+    // HTTPS mode: "off" | "standard" | "strict". Default "standard" matches
+    // the historical HTTPS-Only default-on behavior (upgrade http -> https).
+    // "strict" BLOCKS plain-http navigations instead of upgrading them.
+    val HTTPS_MODE = stringPreferencesKey("https_mode")
+    // HTTPS-Strict per-site exceptions: JSON array of host strings that are
+    // allowed over plain http even in Strict mode.
+    val HTTPS_STRICT_EXCEPTIONS = stringPreferencesKey("https_strict_exceptions")
+    // Fingerprint mode: "off" | "standard" | "strict". Default "standard"
+    // (canvas + AudioContext noise, re-randomized every launch). "strict"
+    // adds font-measurement jitter, toBlob/getChannelData hooks and
+    // stronger noise — may break some sites, the UI says so.
+    val FINGERPRINT_MODE = stringPreferencesKey("fingerprint_mode")
+    // Do-Not-Track + Global Privacy Control. OPT-IN, default OFF.
+    // Honest labeling: these are voluntary signals — most sites ignore
+    // them; they are requests, not enforcement.
+    val DNT_ENABLED = booleanPreferencesKey("dnt_enabled")
+    val GPC_ENABLED = booleanPreferencesKey("gpc_enabled")
     val UI_DARK_MODE = booleanPreferencesKey("ui_dark_mode")
     val WALLPAPER_URI = stringPreferencesKey("wallpaper_uri")
 
@@ -97,6 +116,33 @@ object AppSettings {
         }
         return arr.toString()
     }
+
+    /** Parses the HTTPS-Strict exception host list (JSON array of strings). */
+    fun parseHostList(json: String?): List<String> {
+        if (json.isNullOrBlank()) return emptyList()
+        return try {
+            val arr = JSONArray(json)
+            (0 until arr.length()).mapNotNull { i ->
+                arr.optString(i)?.trim()?.lowercase()?.takeIf { it.isNotEmpty() }
+            }.distinct()
+        } catch (_: Exception) {
+            emptyList()
+        }
+    }
+
+    fun hostsToJson(hosts: List<String>): String {
+        val arr = JSONArray()
+        hosts.map { it.trim().lowercase() }.filter { it.isNotEmpty() }.distinct()
+            .forEach { arr.put(it) }
+        return arr.toString()
+    }
+
+    /** Normalizes a mode string to one of "off" | "standard" | "strict". */
+    fun normalizeMode(value: String?, default: String = "standard"): String =
+        when (value?.lowercase()) {
+            "off", "standard", "strict" -> value.lowercase()
+            else -> default
+        }
 
     /**
      * Appends a user-flagged AI response to the on-device report log

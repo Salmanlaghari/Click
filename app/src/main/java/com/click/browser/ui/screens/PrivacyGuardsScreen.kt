@@ -71,8 +71,12 @@ fun PrivacyGuardsScreen(
     customHeaders: List<AppSettings.CustomHeader>,
     onAddHeader: (String, String) -> Unit,
     onRemoveHeader: (Int) -> Unit,
-    fingerprintProtection: Boolean,
-    onToggleFingerprint: (Boolean) -> Unit,
+    fingerprintMode: String,
+    onFingerprintModeChange: (String) -> Unit,
+    dntEnabled: Boolean,
+    onToggleDnt: (Boolean) -> Unit,
+    gpcEnabled: Boolean,
+    onToggleGpc: (Boolean) -> Unit,
     secureDns: Boolean,
     onToggleSecureDns: (Boolean) -> Unit,
     webrtcRunning: Boolean,
@@ -180,14 +184,62 @@ fun PrivacyGuardsScreen(
                 }
             }
 
-            // ---- Fingerprint Protection ----
+            // ---- Fingerprint Protection: Off / Standard / Strict ----
+            item {
+                Column(modifier = Modifier.fillMaxWidth()) {
+                    Text(
+                        "Fingerprint Protection",
+                        style = MaterialTheme.typography.titleSmall,
+                        fontWeight = FontWeight.SemiBold
+                    )
+                    Text(
+                        "Poisons canvas + AudioContext fingerprint reads with noise " +
+                            "re-randomized every app launch. Strict adds font/toBlob/audio " +
+                            "hooks and stronger noise — may break some sites. " +
+                            "Runs in all browsing modes.",
+                        fontSize = 11.sp, color = Color.Gray
+                    )
+                    Spacer(modifier = Modifier.height(4.dp))
+                    GuardModeOption(
+                        value = "off", title = "Off",
+                        desc = "No fingerprint poisoning",
+                        selected = fingerprintMode == "off",
+                        onSelect = { onFingerprintModeChange("off") }
+                    )
+                    GuardModeOption(
+                        value = "standard", title = "Standard",
+                        desc = "Canvas + audio noise (recommended)",
+                        selected = fingerprintMode == "standard",
+                        onSelect = { onFingerprintModeChange("standard") }
+                    )
+                    GuardModeOption(
+                        value = "strict", title = "Strict",
+                        desc = "Stronger noise + extra hooks (may break sites)",
+                        selected = fingerprintMode == "strict",
+                        onSelect = { onFingerprintModeChange("strict") }
+                    )
+                }
+            }
+
+            // ---- Do-Not-Track + Global Privacy Control (opt-in) ----
             item {
                 GuardToggleRow(
-                    title = "Fingerprint Protection",
-                    subtitle = "Poisons canvas + AudioContext fingerprint reads with noise " +
-                        "that is re-randomized every app launch. Runs in all browsing modes.",
-                    checked = fingerprintProtection,
-                    onCheckedChange = onToggleFingerprint
+                    title = "Do-Not-Track (DNT)",
+                    subtitle = "Sends DNT: 1 with page requests. Opt-in and off by " +
+                        "default. Honest note: this is a voluntary signal — most " +
+                        "sites ignore it; it does not force privacy.",
+                    checked = dntEnabled,
+                    onCheckedChange = onToggleDnt
+                )
+            }
+            item {
+                GuardToggleRow(
+                    title = "Global Privacy Control (GPC)",
+                    subtitle = "Sends Sec-GPC: 1, the legal opt-out signal " +
+                        "(e.g. CCPA 'do not sell my data'). Opt-in and off by " +
+                        "default. Like DNT, sites choose whether to honor it.",
+                    checked = gpcEnabled,
+                    onCheckedChange = onToggleGpc
                 )
             }
 
@@ -295,6 +347,29 @@ fun PrivacyGuardsScreen(
                     }
                 }
             }
+        }
+    }
+}
+
+@Composable
+private fun GuardModeOption(
+    value: String,
+    title: String,
+    desc: String,
+    selected: Boolean,
+    onSelect: () -> Unit
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 4.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        androidx.compose.material3.RadioButton(selected = selected, onClick = onSelect)
+        Spacer(modifier = Modifier.width(8.dp))
+        Column(modifier = Modifier.weight(1f)) {
+            Text(title, fontSize = 14.sp, fontWeight = FontWeight.Medium)
+            Text(desc, fontSize = 11.sp, color = Color.Gray)
         }
     }
 }
