@@ -4,6 +4,7 @@ import android.util.Log
 import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
+import androidx.datastore.preferences.core.stringSetPreferencesKey
 import org.json.JSONArray
 import org.json.JSONException
 import org.json.JSONObject
@@ -54,6 +55,16 @@ object AppSettings {
     val LOCATION_SPOOF_LAT = stringPreferencesKey("location_spoof_lat")
     val LOCATION_SPOOF_LNG = stringPreferencesKey("location_spoof_lng")
     val LOCATION_SPOOF_LABEL = stringPreferencesKey("location_spoof_label")
+
+    // Brave-inspired privacy quick wins.
+    /** Strip tracking query params (utm_*, gclid, fbclid, ...) on navigation. Default ON. */
+    val STRIP_TRACKING_PARAMS = booleanPreferencesKey("strip_tracking_params")
+    /** Forgetful Browsing: wipe a site's cookies+storage when its last tab closes. Opt-in. */
+    val FORGETFUL_BROWSING = booleanPreferencesKey("forgetful_browsing")
+    /** Hosts exempted from Forgetful Browsing (kept data). */
+    val FORGETFUL_BROWSING_EXCEPTIONS = stringSetPreferencesKey("forgetful_browsing_exceptions")
+    /** Auto-hide cookie-consent / GDPR banners. Default ON. */
+    val BLOCK_CONSENT_BANNERS = booleanPreferencesKey("block_consent_banners")
 
     data class CustomHeader(val name: String, val value: String)
 
