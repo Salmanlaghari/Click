@@ -1,0 +1,88 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+<title>Breakout — Click Games</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+body{background:#0b1020;color:#fff;font-family:system-ui,sans-serif;display:flex;flex-direction:column;align-items:center;min-height:100vh;touch-action:none;user-select:none}
+#hud{width:100%;max-width:420px;display:flex;justify-content:space-between;padding:14px 18px;font-weight:800}
+#hud .lives{color:#f87171}
+canvas{background:#131a30;border-radius:14px;box-shadow:0 8px 30px rgba(0,0,0,.45);margin-top:6px}
+#tip{color:#8b93b8;font-size:13px;margin-top:12px}
+#overlay{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;background:rgba(5,8,18,.82);z-index:10}
+#overlay .box{text-align:center;background:#1d2745;padding:28px 34px;border-radius:18px}
+#overlay button{margin-top:14px;background:#3b82f6;border:none;color:#fff;font-weight:800;font-size:16px;padding:12px 34px;border-radius:12px}
+.hidden{display:none!important}
+</style>
+</head>
+<body>
+<div id="hud"><div id="score">Score 0</div><div class="lives" id="lives">❤❤❤</div></div>
+<canvas id="c" width="380" height="480"></canvas>
+<div id="tip">Drag anywhere to move the paddle</div>
+<div id="overlay" class="hidden"><div class="box"><h2 id="otitle"></h2><p id="osub"></p><button id="again">Play Again</button></div></div>
+<script>
+const cv=document.getElementById('c'),ctx=cv.getContext('2d');
+const PW=76,PH=12,BR=7;
+let paddleX,bricks,ball,score,lives,playing;
+function build(){
+  paddleX=cv.width/2-PW/2;
+  bricks=[];const cols=8,rows=5;
+  const bw=(cv.width-20)/cols;
+  const colors=['#ef4444','#f97316','#facc15','#22c55e','#3b82f6'];
+  for(let r=0;r<rows;r++)for(let col=0;col<cols;col++)
+    bricks.push({x:10+col*bw,y:50+r*26,w:bw-4,h:20,c:colors[r],hp:1});
+  ball={x:cv.width/2,y:cv.height-60,vx:3.2,vy:-3.4,r:BR};
+  score=0;lives=3;playing=true;hide();loop();
+}
+function hide(){document.getElementById('overlay').classList.add('hidden');}
+function end(win){
+  playing=false;
+  document.getElementById('otitle').textContent=win?'You Win! 🎉':'Game Over';
+  document.getElementById('osub').textContent='Score: '+score;
+  document.getElementById('overlay').classList.remove('hidden');
+}
+function loop(){
+  if(!playing)return;
+  ball.x+=ball.vx;ball.y+=ball.vy;
+  if(ball.x<BR||ball.x>cv.width-BR)ball.vx*=-1;
+  if(ball.y<BR)ball.vy*=-1;
+  if(ball.y>cv.height){lives--;updateHud();if(lives<=0){end(false);return;}
+    ball={x:paddleX+PW/2,y:cv.height-60,vx:3.2,vy:-3.4,r:BR};}
+  const py=cv.height-40;
+  if(ball.y+BR>=py&&ball.y+BR<=py+PH+8&&ball.x>paddleX&&ball.x<paddleX+PW&&ball.vy>0){
+    const rel=(ball.x-(paddleX+PW/2))/(PW/2);
+    const sp=Math.hypot(ball.vx,ball.vy);
+    ball.vx=rel*sp*0.9;ball.vy=-Math.sqrt(Math.max(sp*sp-ball.vx*ball.vx,4));
+  }
+  bricks=bricks.filter(b=>{
+    if(ball.x>b.x&&ball.x<b.x+b.w&&ball.y>b.y&&ball.y<b.y+b.h){ball.vy*=-1;score+=10;updateHud();return false;}
+    return true;
+  });
+  if(!bricks.length){end(true);return;}
+  draw();requestAnimationFrame(loop);
+}
+function updateHud(){
+  document.getElementById('score').textContent='Score '+score;
+  document.getElementById('lives').textContent='❤'.repeat(lives);
+}
+function draw(){
+  ctx.fillStyle='#131a30';ctx.fillRect(0,0,cv.width,cv.height);
+  bricks.forEach(b=>{ctx.fillStyle=b.c;ctx.beginPath();ctx.roundRect(b.x,b.y,b.w,b.h,4);ctx.fill();});
+  ctx.fillStyle='#e2e8f0';ctx.beginPath();ctx.roundRect(paddleX,cv.height-40,PW,PH,6);ctx.fill();
+  ctx.fillStyle='#fff';ctx.beginPath();ctx.arc(ball.x,ball.y,BR,0,7);ctx.fill();
+}
+cv.addEventListener('pointermove',e=>{
+  const r=cv.getBoundingClientRect();
+  paddleX=Math.min(Math.max(e.clientX-r.left-PW/2,0),cv.width-PW);
+});
+cv.addEventListener('touchmove',e=>{
+  const r=cv.getBoundingClientRect();
+  paddleX=Math.min(Math.max(e.touches[0].clientX-r.left-PW/2,0),cv.width-PW);
+},{passive:true});
+document.getElementById('again').addEventListener('click',build);
+updateHud();build();
+</script>
+</body>
+</html>

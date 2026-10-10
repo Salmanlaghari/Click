@@ -1,0 +1,80 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+<title>Sky Hopper — Click Games</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+body{background:#0b1020;color:#fff;font-family:system-ui,sans-serif;display:flex;flex-direction:column;align-items:center;min-height:100vh;touch-action:none;user-select:none}
+#hud{width:100%;max-width:420px;display:flex;justify-content:space-between;padding:14px 18px;font-weight:800;font-size:18px}
+canvas{background:linear-gradient(#0ea5e9,#0369a1);border-radius:14px;box-shadow:0 8px 30px rgba(0,0,0,.45);margin-top:4px}
+#tip{color:#8b93b8;font-size:13px;margin-top:10px}
+#overlay{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;background:rgba(5,8,18,.82);z-index:10}
+#overlay .box{text-align:center;background:#1d2745;padding:28px 34px;border-radius:18px}
+#overlay button{margin-top:14px;background:#0ea5e9;border:none;color:#fff;font-weight:800;font-size:16px;padding:12px 34px;border-radius:12px}
+.hidden{display:none!important}
+</style>
+</head>
+<body>
+<div id="hud"><div>🏆 <span id="score">0</span></div><div style="font-size:13px;color:#8b93b8">Best: <span id="best">0</span></div></div>
+<canvas id="c" width="380" height="480"></canvas>
+<div id="tip">Tap anywhere to flap!</div>
+<div id="overlay" class="hidden"><div class="box"><h2>Game Over</h2><p id="osub"></p><button id="again">Play Again</button></div></div>
+<script>
+const cv=document.getElementById('c'),ctx=cv.getContext('2d');
+let bird,pipes,score,running,frame;
+let best=+(localStorage.getItem('click_hopper_best')||0);
+document.getElementById('best').textContent=best;
+function reset(){
+  bird={x:90,y:200,vy:0,r:14};
+  pipes=[];score=0;running=true;frame=0;
+  document.getElementById('score').textContent='0';
+  document.getElementById('overlay').classList.add('hidden');
+  loop();
+}
+function flap(){if(!running){reset();return;}bird.vy=-7.5;}
+function addPipe(){
+  const gap=150,top=60+Math.random()*(cv.height-gap-160);
+  pipes.push({x:cv.width,w:64,top:top,gap:gap,scored:false});
+}
+function loop(){
+  if(!running)return;
+  frame++;
+  bird.vy=Math.min(bird.vy+0.45,11);bird.y+=bird.vy;
+  if(frame%95===0)addPipe();
+  pipes.forEach(p=>p.x-=2.6);
+  if(pipes.length&&pipes[0].x+pipes[0].w<0)pipes.shift();
+  // collisions + scoring
+  for(const p of pipes){
+    if(bird.x+bird.r>p.x&&bird.x-bird.r<p.x+p.w){
+      if(bird.y-bird.r<p.top||bird.y+bird.r>p.top+p.gap){die();return;}
+    }
+    if(!p.scored&&p.x+p.w<bird.x){p.scored=true;score++;document.getElementById('score').textContent=score;}
+  }
+  if(bird.y+bird.r>=cv.height||bird.y-bird.r<=0){die();return;}
+  draw();requestAnimationFrame(loop);
+}
+function die(){
+  running=false;
+  if(score>best){best=score;localStorage.setItem('click_hopper_best',best);document.getElementById('best').textContent=best;}
+  document.getElementById('osub').textContent='Score: '+score;
+  document.getElementById('overlay').classList.remove('hidden');
+}
+function draw(){
+  ctx.fillStyle='#0ea5e9';ctx.fillRect(0,0,cv.width,cv.height);
+  ctx.fillStyle='rgba(255,255,255,.25)';
+  for(let i=0;i<6;i++){const x=(i*90-frame*0.4)%(cv.width+90);ctx.beginPath();ctx.ellipse(x,60+i*70,34,18,0,0,7);ctx.fill();}
+  ctx.fillStyle='#16a34a';
+  pipes.forEach(p=>{ctx.fillRect(p.x,0,p.w,p.top);ctx.fillRect(p.x,p.top+p.gap,p.w,cv.height-p.top-p.gap);});
+  ctx.fillStyle='#facc15';ctx.beginPath();ctx.arc(bird.x,bird.y,bird.r,0,7);ctx.fill();
+  ctx.fillStyle='#000';ctx.beginPath();ctx.arc(bird.x+5,bird.y-3,3,0,7);ctx.fill();
+  ctx.fillStyle='#f97316';ctx.beginPath();ctx.moveTo(bird.x+bird.r,bird.y);ctx.lineTo(bird.x+bird.r+10,bird.y+4);ctx.lineTo(bird.x+bird.r,bird.y+8);ctx.fill();
+}
+cv.addEventListener('pointerdown',e=>{e.preventDefault();flap();});
+document.getElementById('again').addEventListener('click',reset);
+document.addEventListener('keydown',e=>{if(e.code==='Space')flap();});
+reset();
+</script>
+</body>
+</html>

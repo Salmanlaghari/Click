@@ -26,6 +26,7 @@ object ClickInternalPages {
         Page("cookies", "Cookies", "Cookie manager"),
         Page("dns", "DNS", "DNS-over-HTTPS settings"),
         Page("newtab", "New Tab", "Premium home page"),
+        Page("games", "Games", "Offline mini-games + Today Update"),
     )
 
     /** Total user-facing features, kept in sync with docs/FEATURES.md. */
