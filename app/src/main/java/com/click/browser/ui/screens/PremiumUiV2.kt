@@ -79,7 +79,7 @@ import com.click.browser.engine.ModeTheme
 // ---------------------------------------------------------------------------
 
 enum class FeatureId {
-    HISTORY, SETTINGS, STORAGE, PASSWORDS, TOOLS, DEVTOOLS,
+    HISTORY, SETTINGS, STORAGE, PASSWORDS, COOKIES, TOOLS, DEVTOOLS,
     DOWNLOADS, BOOKMARKS, AI_CHAT, TRANSLATE, DESKTOP, NEW_TAB,
     PRIVATE_TAB, TABS, RECENT_TABS, SHARE, FIND_IN_PAGE, EXTENSIONS,
     ADBLOCK, READER, SCREENSHOT, SAVE_PDF, ADD_HOME, SITE_INFO,
@@ -98,6 +98,7 @@ val ALL_FEATURES: List<FeatureDef> = listOf(
     FeatureDef(FeatureId.SETTINGS, "Settings", Icons.Default.Settings),
     FeatureDef(FeatureId.STORAGE, "Storage", Icons.Default.Save),
     FeatureDef(FeatureId.PASSWORDS, "Passwords", Icons.Default.Lock),
+    FeatureDef(FeatureId.COOKIES, "Cookies", Icons.Default.Cookie),
     FeatureDef(FeatureId.TOOLS, "Tools", Icons.Default.Build),
     FeatureDef(FeatureId.DEVTOOLS, "DevTools", Icons.Default.Code),
     FeatureDef(FeatureId.DOWNLOADS, "Downloads", Icons.Default.Download),

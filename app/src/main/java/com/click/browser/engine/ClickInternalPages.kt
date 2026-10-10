@@ -23,12 +23,13 @@ object ClickInternalPages {
         Page("downloads", "Downloads", "Downloaded files"),
         Page("bookmarks", "Bookmarks", "Saved bookmarks"),
         Page("vpn", "VPN", "V9 secure tunnel"),
+        Page("cookies", "Cookies", "Cookie manager"),
         Page("dns", "DNS", "DNS-over-HTTPS settings"),
         Page("newtab", "New Tab", "Premium home page"),
     )
 
     /** Total user-facing features, kept in sync with docs/FEATURES.md. */
-    const val FEATURE_COUNT = 141
+    const val FEATURE_COUNT = 142
 
     fun isInternalUrl(url: String): Boolean =
         url.trim().lowercase().startsWith(SCHEME)

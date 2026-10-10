@@ -598,6 +598,8 @@ class MainActivity : ComponentActivity() {
             }
             // Password manager: saved-logins management screen.
             var showPasswordManager by remember { mutableStateOf(false) }
+            // Cookie manager: per-site cookie viewer.
+            var showCookieManager by remember { mutableStateOf(false) }
             // Built-in engines (Safe Browsing / Translate / PDF)
             var showTranslateSheet by remember { mutableStateOf(false) }
             var pdfOfferUrl by remember { mutableStateOf<String?>(null) }
@@ -675,6 +677,7 @@ class MainActivity : ComponentActivity() {
                     FeatureId.SETTINGS -> showSettings = true
                     FeatureId.STORAGE, FeatureId.CLEAR_DATA -> showDeleteBrowsingConfirm = true
                     FeatureId.PASSWORDS -> showPasswordManager = true
+                    FeatureId.COOKIES -> showCookieManager = true
                     FeatureId.TOOLS -> showExtensionsManager = true
                     FeatureId.DEVTOOLS -> {
                         showDebugOverlay = !showDebugOverlay
@@ -2499,6 +2502,7 @@ class MainActivity : ComponentActivity() {
                                             }
                                             "vpn" -> { showClickPage = null; showV9Shield = true }
                                             "dns" -> { showClickPage = null; showV9Shield = true }
+                                            "cookies" -> { showClickPage = null; showCookieManager = true }
                                             else -> showClickPage = key
                                         }
                                     },
@@ -2642,6 +2646,14 @@ class MainActivity : ComponentActivity() {
                                 com.click.browser.ui.screens.PasswordManagerScreen(
                                     theme = theme,
                                     onClose = { showPasswordManager = false }
+                                )
+                            }
+                            // Cookie manager: per-site cookie list.
+                            if (showCookieManager) {
+                                com.click.browser.ui.screens.CookieManagerScreen(
+                                    theme = theme,
+                                    repository = repository,
+                                    onClose = { showCookieManager = false }
                                 )
                             }
                             // V9: Hack Mode signature moment — full-screen 5s

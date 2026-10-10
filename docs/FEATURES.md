@@ -1,4 +1,4 @@
-# Click Browser — Feature Catalog (141)
+# Click Browser — Feature Catalog (142)
 
 Every user-facing feature in the app, grouped by category. Count is shown in
 `click://version` and the About screen (`ClickInternalPages.FEATURE_COUNT`).
@@ -115,3 +115,4 @@ Every user-facing feature in the app, grouped by category. Count is shown in
 139. Per-mode search engines
 140. Custom wallpaper
 141. Signing tamper detection with blocking dialog
+142. Cookie manager (per-site view/delete, click://cookies)
