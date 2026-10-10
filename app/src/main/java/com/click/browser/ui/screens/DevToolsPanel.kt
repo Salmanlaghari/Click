@@ -204,8 +204,12 @@ fun ConsoleTab(
                         "error" -> Color(0xFFEF5350) // error red
                         else -> Color.White
                     }
+                    val time = java.text.SimpleDateFormat(
+                        "HH:mm:ss",
+                        java.util.Locale.getDefault()
+                    ).format(java.util.Date(log.timestamp))
                     Text(
-                        text = "[${log.type.uppercase()}] ${log.message}",
+                        text = "[$time] [${log.type.uppercase()}] ${log.message}",
                         color = color,
                         fontFamily = FontFamily.Monospace,
                         fontSize = 11.sp,
