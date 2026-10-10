@@ -153,8 +153,9 @@ object CookieStore {
                 ws.getOrigins { origins ->
                     var cleared = 0
                     try {
-                        val map = origins ?: emptyMap<String, WebStorage.Origin>()
-                        for ((origin, _) in map) {
+                        val map: Map<*, *> = origins ?: emptyMap<Any, Any>()
+                        for ((originKey, _) in map) {
+                            val origin = originKey as? String ?: continue
                             val originHost = try {
                                 Uri.parse(origin).host?.lowercase()
                             } catch (_: Exception) {
