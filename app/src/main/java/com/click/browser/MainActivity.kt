@@ -172,6 +172,11 @@ class MainActivity : ComponentActivity() {
     private var liveGpcEnabled = false
     // Live copy of per-site desktop hosts (persisted per host via BrowserRepository).
     private var liveDesktopHosts: Set<String> = emptySet()
+    // Live copy of per-site settings (JS / adblock / location / cookies / zoom),
+    // persisted per host per engine mode via BrowserRepository.
+    private var liveSiteSettings: Map<String, com.click.browser.engine.SiteSettings> = emptyMap()
+    // Live copy of the global ad-block toggle for WebViewClient callbacks.
+    private var liveAdBlockerEnabled: Boolean = true
     // LocationGuard live copies (WebViewClient/WebChromeClient run off the UI
     // thread and can't read composable state — same pattern as above).
     private var liveLocationMode: LocationGuard.LocationMode = LocationGuard.LocationMode.ASK
@@ -548,6 +553,68 @@ class MainActivity : ComponentActivity() {
         val desktop = host.isNotEmpty() && (host in liveDesktopHosts
             || liveDesktopHosts.any { h -> host == h || host.endsWith(".$h") })
         modeManager.applyDesktopOverride(webView, liveMode, desktop)
+    }
+
+    /**
+     * Applies the per-site settings overrides for the given URL on top of the
+     * mode settings. Called at WebView creation and before every navigation
+     * (same call sites as applyPerSiteDesktop).
+     *
+     * Honest scope per toggle:
+     * - JavaScript: real WebSettings toggle per WebView.
+     * - Text zoom: real WebSettings.textZoom per WebView.
+     * - Third-party cookies: real per-WebView CookieManager toggle.
+     * - Ad-block / location: stored here for the WebViewClient /
+     *   WebChromeClient callbacks (see shouldInterceptRequest +
+     *   onGeolocationPermissionsShowPrompt).
+     * Desktop mode stays in the existing desktop-hosts path.
+     */
+    private fun applyPerSiteSettings(
+        webView: WebView,
+        url: String?,
+        override: com.click.browser.engine.SiteSettings? = null
+    ) {
+        val host = try {
+            android.net.Uri.parse(url ?: "").host?.lowercase().orEmpty()
+        } catch (e: Exception) {
+            ""
+        }
+        if (host.isEmpty()) return
+        // `override` carries the just-saved settings so the sheet's Apply
+        // doesn't race the DataStore flow emission.
+        val site = override ?: liveSiteSettings.forHost(host) ?: return
+        val s = webView.settings
+        site.javaScript?.let { s.javaScriptEnabled = it }
+        site.textZoom?.let { s.textZoom = it }
+        site.thirdPartyCookies?.let { allow ->
+            try {
+                android.webkit.CookieManager.getInstance()
+                    .setAcceptThirdPartyCookies(webView, allow)
+            } catch (_: Exception) {
+            }
+        }
+    }
+
+    /**
+     * Per-site ad-block decision for a page host: site override wins,
+     * otherwise the global adBlockerEnabled applies.
+     */
+    private fun isAdBlockEnabledForHost(host: String?): Boolean {
+        if (host.isNullOrEmpty()) return adBlockerEnabledGlobal()
+        val site = liveSiteSettings.forHost(host.lowercase())
+        return site?.adBlock ?: adBlockerEnabledGlobal()
+    }
+
+    /** Reads the global ad-block toggle without touching composable state. */
+    private fun adBlockerEnabledGlobal(): Boolean = liveAdBlockerEnabled
+
+    /**
+     * Per-site location decision for an origin host: ALLOW / BLOCK are
+     * enforced silently, ASK (or unset) falls through to the default prompt.
+     */
+    private fun siteLocationPref(host: String?): com.click.browser.engine.SiteLocationPref? {
+        if (host.isNullOrEmpty()) return null
+        return liveSiteSettings.forHost(host.lowercase())?.location
     }
 
     /**
@@ -996,6 +1063,8 @@ class MainActivity : ComponentActivity() {
             var showPasswordManager by remember { mutableStateOf(false) }
             // Cookie manager: per-site cookie viewer.
             var showCookieManager by remember { mutableStateOf(false) }
+            // Per-site settings sheet (opened from the lock icon in the address bar).
+            var showSiteSettings by remember { mutableStateOf(false) }
             // Built-in engines (Safe Browsing / Translate / PDF)
             var showTranslateSheet by remember { mutableStateOf(false) }
             var pdfOfferUrl by remember { mutableStateOf<String?>(null) }
@@ -1075,6 +1144,8 @@ class MainActivity : ComponentActivity() {
             var isRefreshing by remember { mutableStateOf(false) }
             // Per-site desktop preference (persisted per host).
             val desktopHosts by repository.desktopHostsFlow.collectAsState(initial = emptySet())
+            // Per-site settings overrides (persisted per host, per engine mode).
+            val siteSettings by repository.siteSettingsFlow.collectAsState(initial = emptyMap())
 
             /**
              * Premium UI v2: wires the 32 bottom-left FAB menu features to the
@@ -1262,6 +1333,8 @@ class MainActivity : ComponentActivity() {
             LaunchedEffect(secureDnsEnabled) { liveSecureDns = secureDnsEnabled }
             LaunchedEffect(customHeaders) { liveCustomHeaders = customHeaders.associate { it.name to it.value } }
             LaunchedEffect(desktopHosts) { liveDesktopHosts = desktopHosts }
+            LaunchedEffect(adBlockerEnabled) { liveAdBlockerEnabled = adBlockerEnabled }
+            LaunchedEffect(siteSettings) { liveSiteSettings = siteSettings }
             LaunchedEffect(locationMode) { liveLocationMode = locationMode }
             LaunchedEffect(locationSpoofLat) { liveLocationSpoofLat = locationSpoofLat }
             LaunchedEffect(locationSpoofLng) { liveLocationSpoofLng = locationSpoofLng }
@@ -2279,6 +2352,7 @@ class MainActivity : ComponentActivity() {
                                                 },
                                                 onReload = { currentTab.webView?.reload() },
                                                 onMenuClick = { showBrowserMenu = true },
+                                                onSiteSettingsClick = { showSiteSettings = true },
                                                 // LocationGuard indicator: show when this site's
                                                 // location is blocked or spoofed.
                                                 locationMode = run {
@@ -2471,6 +2545,7 @@ class MainActivity : ComponentActivity() {
                                                                         if (urlStr.startsWith("http://") || urlStr.startsWith("https://")) {
                                                                             // Per-site desktop override BEFORE loading (UA must be set first).
                                                                             if (view != null) this@MainActivity.applyPerSiteDesktop(view, urlStr)
+                                                                            if (view != null) this@MainActivity.applyPerSiteSettings(view, urlStr)
                                                                             // Privacy signals + header spoofing: navigations
                                                                             // carry DNT/GPC whenever enabled (not gated
                                                                             // on the header-spoof toggle — the toggles
@@ -2524,6 +2599,7 @@ class MainActivity : ComponentActivity() {
                                                                         }
                                                                         if (urlStr.startsWith("http://") || urlStr.startsWith("https://")) {
                                                                             if (view != null) this@MainActivity.applyPerSiteDesktop(view, urlStr)
+                                                                            if (view != null) this@MainActivity.applyPerSiteSettings(view, urlStr)
                                                                             // Privacy signals: DNT/GPC ride on navigations
                                                                             // whenever enabled (not gated on header-spoof).
                                                                             val navHeaders = liveCustomHeaders.toMutableMap()
@@ -2719,8 +2795,14 @@ class MainActivity : ComponentActivity() {
                                                             }
 
                                                             override fun shouldInterceptRequest(view: WebView?, request: WebResourceRequest?): WebResourceResponse? {
-                                                                // Basic Ad Blocker check
-                                                                if (adBlockerEnabled && AdBlocker.shouldBlock(request?.url?.toString())) {
+                                                                // Ad Blocker check with per-site override: a site
+                                                                // setting of adBlock=false whitelists the page host.
+                                                                val pageHost = try {
+                                                                    android.net.Uri.parse(view?.url ?: "").host
+                                                                } catch (_: Exception) { null }
+                                                                if (this@MainActivity.isAdBlockEnabledForHost(pageHost) &&
+                                                                    AdBlocker.shouldBlock(request?.url?.toString())
+                                                                ) {
                                                                     return WebResourceResponse("text/plain", "UTF-8", null)
                                                                 }
                                                                 // Header spoofing: re-fetch subresources with the
@@ -2758,10 +2840,11 @@ class MainActivity : ComponentActivity() {
                                                                 tabs.firstOrNull { it.webView === view }?.loadProgress = newProgress
                                                             }
 
-                                                            // LocationGuard: intercept browser geolocation
-                                                            // requests. BLOCK denies, SPOOF grants (the JS
-                                                            // override injected at page start returns spoofed
-                                                            // coordinates), ASK shows the in-app dialog.
+                                                            // Geolocation: per-site SiteSettings location pref
+                                                            // (ALLOW/BLOCK from the site sheet) wins when set;
+                                                            // otherwise LocationGuard handles it (global mode +
+                                                            // per-site overrides + ASK dialog). Both features
+                                                            // stay fully functional.
                                                             override fun onGeolocationPermissionsShowPrompt(
                                                                 origin: String?,
                                                                 callback: GeolocationPermissions.Callback?
@@ -2770,11 +2853,20 @@ class MainActivity : ComponentActivity() {
                                                                     super.onGeolocationPermissionsShowPrompt(origin, callback)
                                                                     return
                                                                 }
-                                                                handleGeolocationPrompt(origin, callback) { o, h, cb ->
-                                                                    locationPromptOrigin = o
-                                                                    locationPromptHost = h
-                                                                    locationPromptCallback = cb
-                                                                    showLocationPrompt = true
+                                                                val host = try {
+                                                                    android.net.Uri.parse(origin ?: "").host
+                                                                } catch (_: Exception) { null }
+                                                                when (this@MainActivity.siteLocationPref(host)) {
+                                                                    com.click.browser.engine.SiteLocationPref.ALLOW ->
+                                                                        callback.invoke(origin, true, false)
+                                                                    com.click.browser.engine.SiteLocationPref.BLOCK ->
+                                                                        callback.invoke(origin, false, false)
+                                                                    else -> handleGeolocationPrompt(origin, callback) { o, h, cb ->
+                                                                        locationPromptOrigin = o
+                                                                        locationPromptHost = h
+                                                                        locationPromptCallback = cb
+                                                                        showLocationPrompt = true
+                                                                    }
                                                                 }
                                                             }
 
@@ -2862,6 +2954,7 @@ class MainActivity : ComponentActivity() {
                                                                 this@MainActivity.applyExperimentalFlags(this)
                                                                 // Per-site desktop override for the initial URL.
                                                                 this@MainActivity.applyPerSiteDesktop(this, currentTab.url)
+                                                                this@MainActivity.applyPerSiteSettings(this, currentTab.url)
                                                                 currentTab.webView = this
                                                                 if (!this@MainActivity.liveWebViews.contains(this)) {
                                                                     this@MainActivity.liveWebViews.add(this)
@@ -3748,6 +3841,56 @@ class MainActivity : ComponentActivity() {
                                     repository = repository,
                                     onClose = { showCookieManager = false }
                                 )
+                            }
+                            // Per-site settings sheet (lock icon in the address bar).
+                            if (showSiteSettings) {
+                                val siteHost = try {
+                                    android.net.Uri.parse(currentTab.url).host?.lowercase().orEmpty()
+                                } catch (_: Exception) { "" }
+                                if (siteHost.isNotEmpty()) {
+                                    val siteCurrent =
+                                        siteSettings.forHost(siteHost)
+                                            ?: com.click.browser.engine.SiteSettings()
+                                    val siteDesktop = siteHost in desktopHosts ||
+                                        desktopHosts.any { h ->
+                                            siteHost == h || siteHost.endsWith(".$h")
+                                        }
+                                    com.click.browser.ui.screens.SiteSettingsSheet(
+                                        theme = theme,
+                                        host = siteHost,
+                                        isHttps = currentTab.url.startsWith("https://"),
+                                        current = siteCurrent,
+                                        desktopMode = siteDesktop,
+                                        globalJavaScript = javaScriptEnabledGlobal,
+                                        globalAdBlock = adBlockerEnabled,
+                                        globalThirdPartyCookies = !liveFlags.blockThirdPartyCookies,
+                                        onSettingsChange = { next ->
+                                            scope.launch {
+                                                repository.setSiteSettings(siteHost, next)
+                                            }
+                                        },
+                                        onDesktopModeChange = { desktop ->
+                                            scope.launch {
+                                                repository.setDesktopHost(siteHost, desktop)
+                                                currentTab.webView?.let { wv ->
+                                                    modeManager.applyDesktopOverride(
+                                                        wv, activeMode, desktop
+                                                    )
+                                                }
+                                                currentTab.webView?.reload()
+                                            }
+                                        },
+                                        onApplyToWebView = { next ->
+                                            currentTab.webView?.let { wv ->
+                                                applyPerSiteSettings(wv, currentTab.url, next)
+                                            }
+                                        },
+                                        onReload = { currentTab.webView?.reload() },
+                                        onDismiss = { showSiteSettings = false }
+                                    )
+                                } else {
+                                    showSiteSettings = false
+                                }
                             }
                             // V9: Hack Mode signature moment — full-screen 5s
                             // Markhor intro after a Hack engine boot. Tap to skip.

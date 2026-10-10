@@ -2,6 +2,7 @@ package com.click.browser.engine
 
 import android.net.Uri
 import android.webkit.CookieManager
+import android.webkit.WebStorage
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
@@ -113,6 +114,68 @@ object CookieStore {
             onDone()
         }
     }
+
+    /**
+     * Result of a full per-site data wipe.
+     */
+    data class SiteDataClearResult(
+        val cookiesCleared: Int,
+        val cookiesFailed: List<String>,
+        val storageOriginsCleared: Int
+    )
+
+    /**
+     * Wipes ALL data for one host: cookies (via expiry) + DOM storage /
+     * localStorage origins (via WebStorage.deleteOrigin). Runs the cookie
+     * expiry on Main (WebView requirement) and origin deletion wherever.
+     * Returns counts for honest UI copy.
+     */
+    suspend fun clearSiteData(host: String): SiteDataClearResult {
+        val failed = clearSite(host)
+        val cookieCount = cookiesForHost(host).size + failed.size
+        val originsCleared = clearStorageOrigins(host)
+        return SiteDataClearResult(
+            cookiesCleared = (cookieCount - failed.size).coerceAtLeast(0),
+            cookiesFailed = failed,
+            storageOriginsCleared = originsCleared
+        )
+    }
+
+    /**
+     * Deletes WebStorage (DOM storage / localStorage / IndexedDB) origins
+     * belonging to [host]. Matches the origin host suffix-aware, same as
+     * the cookie logic. Returns the number of origins deleted.
+     */
+    suspend fun clearStorageOrigins(host: String): Int =
+        suspendCoroutine { cont ->
+            try {
+                val ws = WebStorage.getInstance()
+                ws.getOrigins { origins ->
+                    var cleared = 0
+                    try {
+                        val map: Map<*, *> = origins ?: emptyMap<Any, Any>()
+                        for ((originKey, _) in map) {
+                            val origin = originKey as? String ?: continue
+                            val originHost = try {
+                                Uri.parse(origin).host?.lowercase()
+                            } catch (_: Exception) {
+                                null
+                            }
+                            if (originHost != null &&
+                                (originHost == host || originHost.endsWith(".$host"))
+                            ) {
+                                ws.deleteOrigin(origin)
+                                cleared++
+                            }
+                        }
+                    } catch (_: Exception) {
+                    }
+                    cont.resume(cleared)
+                }
+            } catch (_: Exception) {
+                cont.resume(0)
+            }
+        }
 
     /**
      * Expire a cookie on both schemes; [done] receives true only if both

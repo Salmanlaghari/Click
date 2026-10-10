@@ -1232,6 +1232,7 @@ fun CompactBrowseBar(
     onNavigate: (String) -> Unit,
     onReload: () -> Unit,
     onMenuClick: () -> Unit,
+    onSiteSettingsClick: () -> Unit = {},
     modifier: Modifier = Modifier,
     // LocationGuard indicator: null = no indicator; otherwise the effective
     // mode for the current site (BLOCK/Spoof shown, ASK hidden).
@@ -1260,12 +1261,17 @@ fun CompactBrowseBar(
             modifier = Modifier.weight(1f)
         ) {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Icon(
-                    Icons.Default.Lock,
-                    contentDescription = if (isHttps) "Secure connection" else "Connection",
-                    tint = if (isHttps) Color(0xFF22C55E) else theme.onSurface.copy(alpha = 0.5f),
-                    modifier = Modifier.padding(start = 12.dp).size(15.dp)
-                )
+                IconButton(
+                    onClick = onSiteSettingsClick,
+                    modifier = Modifier.padding(start = 4.dp).size(32.dp)
+                ) {
+                    Icon(
+                        Icons.Default.Lock,
+                        contentDescription = if (isHttps) "Secure connection — site settings" else "Connection — site settings",
+                        tint = if (isHttps) Color(0xFF22C55E) else theme.onSurface.copy(alpha = 0.5f),
+                        modifier = Modifier.size(15.dp)
+                    )
+                }
                 // LocationGuard indicator: shows when this site's location is
                 // blocked or spoofed, so the user always knows the state.
                 if (locationMode == LocationGuard.LocationMode.BLOCK ||
