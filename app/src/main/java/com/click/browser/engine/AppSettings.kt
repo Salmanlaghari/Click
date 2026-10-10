@@ -24,6 +24,10 @@ object AppSettings {
     val HEADER_SPOOF_ENABLED = booleanPreferencesKey("header_spoof_enabled")
     val FINGERPRINT_PROTECTION = booleanPreferencesKey("fingerprint_protection")
     val SECURE_DNS_ENABLED = booleanPreferencesKey("secure_dns_enabled")
+    // Playlist-adjacent: let web-page audio keep playing when the app is
+    // backgrounded. Default OFF (standard browser behavior = pause).
+    // Generic media setting — never marketed for any specific site/service.
+    val BACKGROUND_AUDIO_ENABLED = booleanPreferencesKey("background_audio_enabled")
     val UI_DARK_MODE = booleanPreferencesKey("ui_dark_mode")
     val WALLPAPER_URI = stringPreferencesKey("wallpaper_uri")
 

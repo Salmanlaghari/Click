@@ -71,6 +71,8 @@ fun SettingsScreen(
     onToggleJs: (Boolean) -> Unit,
     dataSaver: Boolean,
     onToggleDataSaver: (Boolean) -> Unit,
+    backgroundAudioEnabled: Boolean,
+    onToggleBackgroundAudio: (Boolean) -> Unit,
     // --- Clear browsing data ---
     onClearHistoryForMode: (BrowserMode) -> Unit,
     onClearCookies: () -> Unit,
@@ -297,6 +299,12 @@ fun SettingsScreen(
                     ToggleRow("JavaScript", "Enable core scripting execution", jsEnabled, onToggleJs, theme)
                     HorizontalDivider(color = theme.onSurface.copy(alpha = 0.1f))
                     ToggleRow("Data Saver", "Reduce web resource overhead", dataSaver, onToggleDataSaver, theme)
+                    HorizontalDivider(color = theme.onSurface.copy(alpha = 0.1f))
+                    ToggleRow(
+                        "Background audio",
+                        "Let web-page audio keep playing when the app is in the background",
+                        backgroundAudioEnabled, onToggleBackgroundAudio, theme
+                    )
                     HorizontalDivider(color = theme.onSurface.copy(alpha = 0.1f))
                     // LocationGuard: hide/spoof browser geolocation.
                     ActionRow(

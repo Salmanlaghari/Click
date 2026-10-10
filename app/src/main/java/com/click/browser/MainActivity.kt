@@ -145,6 +145,11 @@ class MainActivity : ComponentActivity() {
 
     private lateinit var modeManager: ModeManager
     private lateinit var repository: BrowserRepository
+    private lateinit var playlistManager: PlaylistManager
+
+    // Cached copy of the "background audio" setting for onPause/onResume,
+    // which run outside composition. Synced from the composable state.
+    @Volatile private var backgroundAudioEnabledCached: Boolean = false
 
     // Live copies of composable state for use inside WebViewClient callbacks,
     // which are created once and would otherwise capture stale values.
@@ -275,6 +280,28 @@ class MainActivity : ComponentActivity() {
     }
 
     private var ttsEngine: TextToSpeech? = null
+
+    override fun onPause() {
+        super.onPause()
+        // Standard browser behavior: pause WebViews when the app is
+        // backgrounded, so page audio/video stops — UNLESS the user
+        // explicitly enabled "Background audio" in Settings (a generic
+        // media setting, never tied to any specific site or service).
+        if (!backgroundAudioEnabledCached) {
+            liveWebViews.forEach { wv ->
+                try { wv.onPause() } catch (_: Exception) { }
+                try { wv.pauseTimers() } catch (_: Exception) { }
+            }
+        }
+    }
+
+    override fun onResume() {
+        super.onResume()
+        liveWebViews.forEach { wv ->
+            try { wv.onResume() } catch (_: Exception) { }
+            try { wv.resumeTimers() } catch (_: Exception) { }
+        }
+    }
 
     override fun onDestroy() {
         try { ttsEngine?.shutdown() } catch (_: Exception) { }
@@ -641,6 +668,7 @@ class MainActivity : ComponentActivity() {
 
         modeManager = ModeManager(this)
         repository = BrowserRepository(this)
+        playlistManager = PlaylistManager(this)
         // Bundled ad/tracker filter lists (assets) + weekly remote updates.
         com.click.browser.engine.FilterListManager.init(this)
         // Translate language list (asset-overridable, built-in fallback).
@@ -848,6 +876,11 @@ class MainActivity : ComponentActivity() {
             var showBookmarks by remember { mutableStateOf(false) }
             var showHistory by remember { mutableStateOf(false) }
             var showDownloads by remember { mutableStateOf(false) }
+            var showPlaylist by remember { mutableStateOf(false) }
+            // One-shot URL from the long-press menu ("Add to Playlist").
+            var playlistSeedUrl by remember { mutableStateOf<String?>(null) }
+            // Generic "background audio for web pages" setting (default off).
+            var backgroundAudioEnabled by remember { mutableStateOf(false) }
             var showSettings by remember { mutableStateOf(false) }
             var showFindInPageDialog by remember { mutableStateOf(false) }
             var findQuery by remember { mutableStateOf("") }
@@ -1234,6 +1267,7 @@ class MainActivity : ComponentActivity() {
                     locationSpoofLabel = prefs[AppSettings.LOCATION_SPOOF_LABEL]
                         ?: LocationGuard.DEFAULT_PRESET.label
                     customHeaders = AppSettings.parseHeaders(prefs[AppSettings.CUSTOM_HEADERS_JSON])
+                    backgroundAudioEnabled = prefs[AppSettings.BACKGROUND_AUDIO_ENABLED] == true
                     currentThemeSetting = if (prefs[AppSettings.UI_DARK_MODE] == false) "Light" else "Dark"
                     // Per-mode Day/Night overrides (missing key = follow global).
                     perModeDark = BrowserMode.values().associateWith { mode ->
@@ -1255,6 +1289,11 @@ class MainActivity : ComponentActivity() {
                 // their own, in the Extensions screen.
                 userscriptManager.seedBundledScripts()
                 refreshUserscripts()
+            }
+
+            // Keep the activity-level cache in sync for onPause/onResume.
+            LaunchedEffect(backgroundAudioEnabled) {
+                backgroundAudioEnabledCached = backgroundAudioEnabled
             }
 
             // Settings Configurations
@@ -3005,6 +3044,14 @@ class MainActivity : ComponentActivity() {
                                 )
                             }
 
+                            if (showPlaylist) {
+                                PlaylistScreen(
+                                    playlistManager = playlistManager,
+                                    onClose = { showPlaylist = false; playlistSeedUrl = null },
+                                    seedUrl = playlistSeedUrl
+                                )
+                            }
+
                             // DevTools bottom sheet (Developer mode): dismissible,
                             // partially-expanded by default so the website stays
                             // visible above it. Opened via the top-right corner
@@ -3340,6 +3387,15 @@ class MainActivity : ComponentActivity() {
                                     onToggleJs = { javaScriptEnabledGlobal = it },
                                     dataSaver = dataSaverEnabled,
                                     onToggleDataSaver = { dataSaverEnabled = it },
+                                    backgroundAudioEnabled = backgroundAudioEnabled,
+                                    onToggleBackgroundAudio = { v ->
+                                        backgroundAudioEnabled = v
+                                        scope.launch {
+                                            dataStore.edit { prefs ->
+                                                prefs[AppSettings.BACKGROUND_AUDIO_ENABLED] = v
+                                            }
+                                        }
+                                    },
                                     animationsEnabled = flagsUi.tabAnimations,
                                     onToggleAnimations = { enabled ->
                                         scope.launch {
@@ -3549,6 +3605,19 @@ class MainActivity : ComponentActivity() {
                                         longPressLinkUrl = null
                                         longPressImageUrl = null
                                     },
+                                    // Only offer for direct media file links — never for
+                                    // streaming-service pages (Playlist refuses those).
+                                    onAddToPlaylist = longPressLinkUrl
+                                        ?.takeIf { PlaylistManager.looksLikeDirectMedia(it) }
+                                        ?.let { _ ->
+                                            { url: String ->
+                                                showLongPressMenu = false
+                                                longPressLinkUrl = null
+                                                longPressImageUrl = null
+                                                playlistSeedUrl = url
+                                                showPlaylist = true
+                                            }
+                                        },
                                     onDismiss = {
                                         showLongPressMenu = false
                                         longPressLinkUrl = null
@@ -3917,6 +3986,11 @@ class MainActivity : ComponentActivity() {
                                         showBrowserMenu = false
                                         this@MainActivity.requestStoragePermissions()
                                         showDownloads = true
+                                    },
+                                    onPlaylist = {
+                                        showBrowserMenu = false
+                                        playlistSeedUrl = null
+                                        showPlaylist = true
                                     },
                                     onBookmarks = { showBrowserMenu = false; showBookmarks = true },
                                     onGames = { showBrowserMenu = false; showClickPage = "games" },
