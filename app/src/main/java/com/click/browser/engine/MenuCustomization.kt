@@ -23,6 +23,7 @@ object MenuCustomization {
         HISTORY("History"),
         DELETE_DATA("Delete browsing data"),
         DOWNLOADS("Downloads"),
+        PLAYLIST("Playlist"),
         BOOKMARKS("Bookmarks"),
         GAMES("Games"),
         RECENT_TABS("Recent tabs"),

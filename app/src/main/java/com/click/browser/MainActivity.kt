@@ -326,6 +326,13 @@ class MainActivity : FragmentActivity() {
                 try { wv.pauseTimers() } catch (_: Exception) { }
             }
         }
+        // Biometric private-tab lock: whenever the app goes to background
+        // while the lock is enabled and at least one incognito tab exists,
+        // the private tabs re-lock. The overlay + BiometricPrompt handle
+        // the unlock on return.
+        if (liveBiometricLockEnabled && liveHasIncognitoTabs) {
+            privateLockedFlow.value = true
+        }
     }
 
     override fun onResume() {
@@ -804,18 +811,6 @@ class MainActivity : FragmentActivity() {
             Toast.makeText(this, "Reading page aloud…", Toast.LENGTH_SHORT).show()
         } catch (e: Exception) {
             Toast.makeText(this, "TTS not available: ${e.message}", Toast.LENGTH_SHORT).show()
-        }
-    }
-
-    /**
-     * Biometric private-tab lock: whenever the app goes to background while
-     * the lock is enabled and at least one incognito tab exists, the private
-     * tabs re-lock. The overlay + BiometricPrompt handle the unlock on return.
-     */
-    override fun onPause() {
-        super.onPause()
-        if (liveBiometricLockEnabled && liveHasIncognitoTabs) {
-            privateLockedFlow.value = true
         }
     }
 
