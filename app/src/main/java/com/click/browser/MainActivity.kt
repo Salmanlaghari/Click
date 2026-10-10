@@ -920,8 +920,10 @@ class MainActivity : ComponentActivity() {
                     applyScreenshotFlag()
                 }
                 // First run: install the bundled pre-installed userscript
-                // extensions (enabled by default; user can disable/delete
-                // any of them, or add their own, in the Extensions screen).
+                // extensions (most enabled by default; the WebRTC Leak Guard
+                // seeds disabled/opt-in because it breaks video calls). The
+                // user can enable, disable, or delete any of them, or add
+                // their own, in the Extensions screen.
                 userscriptManager.seedBundledScripts()
                 refreshUserscripts()
             }
@@ -2910,6 +2912,15 @@ class MainActivity : ComponentActivity() {
                                     webrtcIps = webrtcIps,
                                     webrtcTested = webrtcTested,
                                     onRunWebrtcTest = { runWebrtcLeakTest() },
+                                    webrtcGuardEnabled = userscripts.any {
+                                        it.meta.name == UserscriptManager.WEBRTC_GUARD_NAME && it.enabled
+                                    },
+                                    onToggleWebrtcGuard = { v ->
+                                        scope.launch(Dispatchers.IO) {
+                                            userscriptManager.setWebrtcGuardEnabled(v)
+                                            withContext(Dispatchers.Main) { refreshUserscripts() }
+                                        }
+                                    },
                                     onClose = { showPrivacyGuards = false }
                                 )
                             }

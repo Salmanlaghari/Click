@@ -18,6 +18,19 @@ import java.util.UUID
  */
 class UserscriptManager(private val context: Context) {
 
+    companion object {
+        /** Display name of the bundled opt-in WebRTC guard script (see assets). */
+        const val WEBRTC_GUARD_NAME = "WebRTC Leak Guard"
+        private const val WEBRTC_GUARD_ASSET = "16-webrtc-leak-guard.user.js"
+
+        /**
+         * Bundled scripts that seed DISABLED (opt-in). Everything else seeds
+         * enabled. The WebRTC guard breaks legitimate video calls, so it must
+         * never turn itself on.
+         */
+        private val OPT_IN_SEED_DISABLED = setOf(WEBRTC_GUARD_ASSET)
+    }
+
     private val indexKey = stringPreferencesKey("userscripts_index")
 
     private val dir: File
@@ -50,14 +63,14 @@ class UserscriptManager(private val context: Context) {
         }
     }
 
-    suspend fun install(source: String): Result<UserscriptInfo> = withContext(Dispatchers.IO) {
+    suspend fun install(source: String, enabled: Boolean = true): Result<UserscriptInfo> = withContext(Dispatchers.IO) {
         val (meta, code) = UserscriptEngine.parse(source)
             ?: return@withContext Result.failure(
                 Exception("Not a valid userscript — needs a ==UserScript== block with @name and code.")
             )
         val id = UUID.randomUUID().toString()
         File(dir, "$id.user.js").writeText(code)
-        val info = UserscriptInfo(id, meta, enabled = true)
+        val info = UserscriptInfo(id, meta, enabled = enabled)
         saveIndex(listScripts() + info)
         Result.success(info)
     }
@@ -108,18 +121,22 @@ class UserscriptManager(private val context: Context) {
 
     /**
      * First-run seeding: installs the bundled pre-installed userscripts from
-     * the app assets folder ("userscripts", files ending with .user.js),
-     * enabled by default. Runs exactly once (guarded by a DataStore flag).
-     * The user can disable, delete, or add scripts afterwards from the
-     * Userscript Extensions screen.
+     * the app assets folder ("userscripts", files ending with .user.js).
+     * Scripts already present (matched by @name) are skipped, so re-seeding
+     * never creates duplicates. Most scripts seed enabled; [OPT_IN_SEED_DISABLED]
+     * scripts (e.g. the WebRTC guard, which breaks video calls) seed disabled.
+     * Runs once per guard version (DataStore flag). The user can enable,
+     * disable, or delete any script afterwards from the Userscript Extensions
+     * screen.
      *
      * @return how many bundled scripts were newly installed.
      */
     suspend fun seedBundledScripts(): Int = withContext(Dispatchers.IO) {
-        val seededKey = stringPreferencesKey("userscripts_bundled_seeded_v1")
+        val seededKey = stringPreferencesKey("userscripts_bundled_seeded_v2")
         if (context.dataStore.data.first()[seededKey] == "1") return@withContext 0
         var count = 0
         try {
+            val existingNames = listScripts().map { it.meta.name }.toSet()
             val names = context.assets.list("userscripts").orEmpty()
                 .filter { it.endsWith(".user.js") }
                 .sorted()
@@ -127,7 +144,12 @@ class UserscriptManager(private val context: Context) {
                 try {
                     val source = context.assets.open("userscripts/$name")
                         .bufferedReader().use { it.readText() }
-                    if (install(source).isSuccess) count++
+                    val meta = UserscriptEngine.parse(source)?.first
+                        ?: continue
+                    // Already installed (e.g. from an earlier seed version) — skip.
+                    if (existingNames.contains(meta.name)) continue
+                    val seedEnabled = name !in OPT_IN_SEED_DISABLED
+                    if (install(source, enabled = seedEnabled).isSuccess) count++
                 } catch (_: Exception) {
                     // One bad asset must not block the rest.
                 }
@@ -137,5 +159,29 @@ class UserscriptManager(private val context: Context) {
         }
         context.dataStore.edit { it[seededKey] = "1" }
         count
+    }
+
+    /**
+     * Opt-in switch for the bundled WebRTC Leak Guard script. Finds it by
+     * [WEBRTC_GUARD_NAME]; if the user deleted it, toggling ON reinstalls it
+     * from the bundled asset. The script seeds disabled and is only ever
+     * enabled through this explicit user action.
+     *
+     * @return whether the guard is enabled after the call.
+     */
+    suspend fun setWebrtcGuardEnabled(enabled: Boolean): Boolean = withContext(Dispatchers.IO) {
+        val existing = listScripts().find { it.meta.name == WEBRTC_GUARD_NAME }
+        if (existing != null) {
+            setEnabled(existing.id, enabled)
+            return@withContext enabled
+        }
+        if (!enabled) return@withContext false
+        return@withContext try {
+            val source = context.assets.open("userscripts/$WEBRTC_GUARD_ASSET")
+                .bufferedReader().use { it.readText() }
+            install(source, enabled = true).isSuccess
+        } catch (_: Exception) {
+            false
+        }
     }
 }
