@@ -245,6 +245,72 @@ class MainActivity : ComponentActivity() {
     }
 
     /**
+     * Long-press menu helpers (links + images). All actions are real —
+     * no dead menu items.
+     */
+    private fun copyLongPressText(text: String, toastMsg: String) {
+        try {
+            val cm = getSystemService(Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
+            cm.setPrimaryClip(android.content.ClipData.newPlainText("Click Browser", text))
+            Toast.makeText(this, toastMsg, Toast.LENGTH_SHORT).show()
+        } catch (e: Exception) {
+            Toast.makeText(this, "Copy failed.", Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    private fun shareLongPressText(text: String, chooserTitle: String) {
+        try {
+            val share = Intent(Intent.ACTION_SEND).apply {
+                type = "text/plain"
+                putExtra(Intent.EXTRA_TEXT, text)
+            }
+            startActivity(Intent.createChooser(share, chooserTitle))
+        } catch (e: Exception) {
+            Toast.makeText(this, "Share failed.", Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    /**
+     * Saves a long-pressed image to Downloads/ClickBrowser via DownloadManager
+     * (same established pattern as the video downloader — no storage permission
+     * needed on API 29+). blob:/data: URLs can't be fetched by DownloadManager,
+     * so those get an honest toast instead of a dead button.
+     */
+    private fun saveLongPressImage(url: String) {
+        if (url.startsWith("blob:") || url.startsWith("data:")) {
+            Toast.makeText(this, "This image can't be saved directly.", Toast.LENGTH_LONG).show()
+            return
+        }
+        try {
+            val dm = getSystemService(Context.DOWNLOAD_SERVICE) as android.app.DownloadManager
+            var fileName = url.substringAfterLast("/").substringBefore("?").take(64)
+            if (fileName.isBlank() || !fileName.contains(".")) {
+                val ext = when {
+                    url.contains(".png", ignoreCase = true) -> "png"
+                    url.contains(".webp", ignoreCase = true) -> "webp"
+                    url.contains(".gif", ignoreCase = true) -> "gif"
+                    else -> "jpg"
+                }
+                fileName = "click_image_${System.currentTimeMillis()}.$ext"
+            }
+            val request = android.app.DownloadManager.Request(android.net.Uri.parse(url))
+                .setTitle("Click Browser Download")
+                .setDescription(fileName)
+                .setNotificationVisibility(android.app.DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED)
+                .setDestinationInExternalPublicDir(
+                    android.os.Environment.DIRECTORY_DOWNLOADS,
+                    "ClickBrowser/$fileName"
+                )
+                .setAllowedOverMetered(true)
+                .setAllowedOverRoaming(false)
+            dm.enqueue(request)
+            Toast.makeText(this, "Downloading image…", Toast.LENGTH_SHORT).show()
+        } catch (e: Exception) {
+            Toast.makeText(this, "Download failed.", Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    /**
      * Downloads a PDF to the app cache dir for the in-app viewer.
      * Returns the file, or null on failure. Call off the main thread.
      */
@@ -652,6 +718,12 @@ class MainActivity : ComponentActivity() {
             var spoofedUAIndex by remember { mutableStateOf(0) }
             val detectedVideos = remember { mutableStateListOf<String>() }
             var showDownloaderDialog by remember { mutableStateOf(false) }
+
+            // Long-press context menu (links + images on web pages).
+            // Set from the WebView's OnLongClickListener via requestFocusNodeHref.
+            var longPressLinkUrl by remember { mutableStateOf<String?>(null) }
+            var longPressImageUrl by remember { mutableStateOf<String?>(null) }
+            var showLongPressMenu by remember { mutableStateOf(false) }
 
             // DevTools panel tab (0=Elements, 1=Console, 2=Network, 3=Sources)
             var devToolsTab by remember { mutableStateOf(0) }
@@ -2203,6 +2275,58 @@ class MainActivity : ComponentActivity() {
                                                                     this@MainActivity.liveWebViews.add(this)
                                                                 }
 
+                                                                // Long-press context menu (links + images).
+                                                                // Attached once at WebView creation, so it works in
+                                                                // every mode (Simple / Developer / Hack / Advance).
+                                                                // requestFocusNodeHref gives both the anchor URL
+                                                                // ("url") and the image source ("src") for the
+                                                                // long-pressed node; HitTestResult is the fallback.
+                                                                // Returning false for plain text keeps the default
+                                                                // text-selection behavior intact.
+                                                                setOnLongClickListener { v ->
+                                                                    val wv = v as WebView
+                                                                    try {
+                                                                        val handler = android.os.Handler(
+                                                                            android.os.Looper.getMainLooper()
+                                                                        )
+                                                                        val msg = handler.obtainMessage()
+                                                                        wv.requestFocusNodeHref(msg)
+                                                                        val data = msg.data
+                                                                        val hrefUrl = data.getString("url")
+                                                                            ?.takeIf { it.isNotBlank() }
+                                                                        val hrefSrc = data.getString("src")
+                                                                            ?.takeIf { it.isNotBlank() }
+                                                                        if (hrefUrl != null || hrefSrc != null) {
+                                                                            longPressLinkUrl = hrefUrl
+                                                                            longPressImageUrl = hrefSrc
+                                                                            showLongPressMenu = true
+                                                                            true
+                                                                        } else {
+                                                                            val result = wv.hitTestResult
+                                                                            val extra = result.extra
+                                                                                ?.takeIf { it.isNotBlank() }
+                                                                            when (result.type) {
+                                                                                WebView.HitTestResult.SRC_ANCHOR_TYPE -> {
+                                                                                    longPressLinkUrl = extra
+                                                                                    longPressImageUrl = null
+                                                                                    showLongPressMenu = true
+                                                                                    true
+                                                                                }
+                                                                                WebView.HitTestResult.IMAGE_TYPE,
+                                                                                WebView.HitTestResult.SRC_IMAGE_ANCHOR_TYPE -> {
+                                                                                    longPressImageUrl = extra
+                                                                                    longPressLinkUrl = null
+                                                                                    showLongPressMenu = true
+                                                                                    true
+                                                                                }
+                                                                                else -> false
+                                                                            }
+                                                                        }
+                                                                    } catch (_: Exception) {
+                                                                        false
+                                                                    }
+                                                                }
+
                                                                 if (currentTab.url != "about:blank") {
                                                                     loadUrl(currentTab.url)
                                                                 }
@@ -2706,6 +2830,58 @@ class MainActivity : ComponentActivity() {
                                     webView = currentTab.webView,
                                     pageUrl = currentTab.url,
                                     onDismiss = { showTranslateSheet = false }
+                                )
+                            }
+                            // Long-press context menu (links + images). Every action
+                            // is real: new tab / copy / share / DownloadManager
+                            // save to Downloads/ClickBrowser. Works in all modes.
+                            if (showLongPressMenu && (longPressLinkUrl != null || longPressImageUrl != null)) {
+                                com.click.browser.ui.screens.LongPressMenuSheet(
+                                    theme = theme,
+                                    linkUrl = longPressLinkUrl,
+                                    imageUrl = longPressImageUrl,
+                                    onOpenInNewTab = { url ->
+                                        tabs.add(TabItem(url = url, title = "New Tab"))
+                                        activeTabIndex = tabs.size - 1
+                                        showLongPressMenu = false
+                                        longPressLinkUrl = null
+                                        longPressImageUrl = null
+                                    },
+                                    onCopyLink = { url ->
+                                        copyLongPressText(url, "Link copied")
+                                        showLongPressMenu = false
+                                        longPressLinkUrl = null
+                                        longPressImageUrl = null
+                                    },
+                                    onShareLink = { url ->
+                                        shareLongPressText(url, "Share link via")
+                                        showLongPressMenu = false
+                                        longPressLinkUrl = null
+                                        longPressImageUrl = null
+                                    },
+                                    onSaveImage = { url ->
+                                        saveLongPressImage(url)
+                                        showLongPressMenu = false
+                                        longPressLinkUrl = null
+                                        longPressImageUrl = null
+                                    },
+                                    onCopyImageUrl = { url ->
+                                        copyLongPressText(url, "Image URL copied")
+                                        showLongPressMenu = false
+                                        longPressLinkUrl = null
+                                        longPressImageUrl = null
+                                    },
+                                    onShareImage = { url ->
+                                        shareLongPressText(url, "Share image via")
+                                        showLongPressMenu = false
+                                        longPressLinkUrl = null
+                                        longPressImageUrl = null
+                                    },
+                                    onDismiss = {
+                                        showLongPressMenu = false
+                                        longPressLinkUrl = null
+                                        longPressImageUrl = null
+                                    }
                                 )
                             }
                             // PDF: offer in-app viewing when a PDF link is tapped.
