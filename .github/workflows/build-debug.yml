@@ -22,20 +22,47 @@ jobs:
           java-version: '21'
           distribution: 'temurin'
 
-      - name: Generate Debug Keystore (for build process)
+      # NOTE: AGP generates the debug keystore automatically — no manual step needed.
+      # Release APKs MUST be signed with Prince's real keystore (same as
+      # build-release.yml). A debug-signed "release" APK trips the in-app
+      # tamper warning on install — so we fail loudly instead of silently
+      # shipping a wrongly-signed artifact (Prince's rule: no improperly
+      # signed APKs, ever).
+      - name: Setup release signing (real keystore)
+        env:
+          KEYSTORE_B64: ${{ secrets.CLICK_KEYSTORE_BASE64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.CLICK_KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.CLICK_KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.CLICK_KEY_PASSWORD }}
         run: |
-          mkdir -p ~/.android
-          keytool -genkey -v -keystore ~/.android/debug.keystore \
-            -alias androiddebugkey -keyalg RSA -keysize 2048 -validity 10000 \
-            -storepass android -keypass android \
-            -dname "CN=Android Debug,O=Android,C=US"
-
-      - name: Configure Keystore Properties
-        run: |
-          echo "storeFile=app/release-key.jks" > keystore.properties
-          echo "storePassword=${{ secrets.RELEASE_STORE_PASSWORD || 'click123' }}" >> keystore.properties
-          echo "keyAlias=${{ secrets.RELEASE_KEY_ALIAS || 'click' }}" >> keystore.properties
-          echo "keyPassword=${{ secrets.RELEASE_KEY_PASSWORD || 'click123' }}" >> keystore.properties
+          if [ -n "$KEYSTORE_B64" ]; then
+            echo "$KEYSTORE_B64" | base64 -d > app/click-release.p12
+            # Validate the FULL signing chain with a real trial signature.
+            APKSIGNER_BIN=$(echo "$ANDROID_HOME"/build-tools/*/apksigner | tr ' ' '\n' | sort -V | tail -1)
+            echo "trial" > /tmp/dummy.txt && (cd /tmp && zip -q dummy.zip dummy.txt)
+            if "$APKSIGNER_BIN" sign \
+                --ks app/click-release.p12 \
+                --ks-pass "pass:$KEYSTORE_PASSWORD" \
+                --ks-key-alias "$KEY_ALIAS" \
+                --key-pass "pass:$KEY_PASSWORD" \
+                --min-sdk-version 26 \
+                --out /tmp/dummy-signed.apk /tmp/dummy.zip 2>/tmp/sign-err.log; then
+              {
+                echo "CLICK_KEYSTORE_FILE=$GITHUB_WORKSPACE/app/click-release.p12"
+                echo "CLICK_KEYSTORE_PASSWORD=$KEYSTORE_PASSWORD"
+                echo "CLICK_KEY_ALIAS=$KEY_ALIAS"
+                echo "CLICK_KEY_PASSWORD=$KEY_PASSWORD"
+              } >> "$GITHUB_ENV"
+              echo "Release signing configured from secrets (trial signature OK)."
+            else
+              echo "ERROR: release keystore secrets failed validation — refusing to build a wrongly-signed release APK."
+              head -5 /tmp/sign-err.log
+              exit 1
+            fi
+          else
+            echo "ERROR: CLICK_KEYSTORE_BASE64 secret is missing — refusing to build a wrongly-signed release APK."
+            exit 1
+          fi
 
       - name: Grant Gradle Permission
         run: chmod +x gradlew
@@ -48,7 +75,16 @@ jobs:
       - name: Build Release APK
         env:
           GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+          CLICK_KEYSTORE_FILE: ${{ env.CLICK_KEYSTORE_FILE }}
+          CLICK_KEYSTORE_PASSWORD: ${{ env.CLICK_KEYSTORE_PASSWORD }}
+          CLICK_KEY_ALIAS: ${{ env.CLICK_KEY_ALIAS }}
+          CLICK_KEY_PASSWORD: ${{ env.CLICK_KEY_PASSWORD }}
         run: ./gradlew assembleRelease
+
+      - name: Verify release signature (must be Prince's key)
+        run: |
+          APKSIGNER=$(echo "$ANDROID_HOME"/build-tools/*/apksigner | tr ' ' '\n' | sort -V | tail -1)
+          "$APKSIGNER" verify --print-certs app/build/outputs/apk/release/app-release.apk | grep -E "Signer #1|SHA-256"
 
       - name: Upload Debug APK
         uses: actions/upload-artifact@v4
