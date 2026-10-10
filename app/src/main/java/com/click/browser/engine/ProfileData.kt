@@ -12,7 +12,8 @@ import androidx.datastore.preferences.preferencesDataStore
  * Hack must NOT show in Advance." Cookies / cache / localStorage are isolated
  * for free by the WebView data-directory suffix ([V9Engine.suffixFor]).
  * The app-level data (bookmarks, history, downloads, saved passwords,
- * userscripts, quick sites, search-engine prefs) is split here:
+ * userscripts, quick sites, search-engine prefs, per-site desktop
+ * preferences) is split here:
  *
  * - SIMPLE / DEVELOPER / HACK keep using the legacy shared `browser_settings`
  *   store — zero migration, existing data untouched.
@@ -32,6 +33,21 @@ val Context.advancedDataStore: DataStore<Preferences> by preferencesDataStore(
 fun Context.profileDataStoreFor(mode: BrowserMode): DataStore<Preferences> =
     if (mode == BrowserMode.ADVANCED) advancedDataStore else dataStore
 
-/** DataStore holding the current engine's private app data. */
+/** DataStore holding the current engine's private app data.
+ *
+ * Init-order contract: may only be accessed after
+ * [V9Engine.applyDataDirectorySuffix] has run (first thing in
+ * `ClickApplication.onCreate`, before any Activity, Service, or ViewModel
+ * exists). Fails fast via [V9Engine.isBootPinned] instead of silently
+ * returning the wrong profile's store — writing to the wrong profile would
+ * leak browsing data across engines, which is exactly what Click Advance
+ * must never do.
+ */
 val Context.profileDataStore: DataStore<Preferences>
-    get() = profileDataStoreFor(V9Engine.bootMode)
+    get() {
+        check(V9Engine.isBootPinned) {
+            "profileDataStore accessed before V9Engine.applyDataDirectorySuffix() " +
+                "(must run first in ClickApplication.onCreate)"
+        }
+        return profileDataStoreFor(V9Engine.bootMode)
+    }

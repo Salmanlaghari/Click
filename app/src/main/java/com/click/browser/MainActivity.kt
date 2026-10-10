@@ -3386,6 +3386,7 @@ class MainActivity : ComponentActivity() {
             }
             BrowserMode.ADVANCED -> {
                 when (searchEngine) {
+                    "Google" -> "https://www.google.com/search?q=$query"
                     "Brave Search" -> "https://search.brave.com/search?q=$query"
                     "DuckDuckGo" -> "https://duckduckgo.com/?q=$query"
                     "Startpage" -> "https://www.startpage.com/sp/search?query=$query"

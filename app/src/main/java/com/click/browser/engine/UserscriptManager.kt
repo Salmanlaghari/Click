@@ -39,6 +39,18 @@ class UserscriptManager(private val context: Context) {
         get() {
             // Click Advance keeps its own script folder: nothing installed on
             // the other modes is visible here, and vice versa.
+            //
+            // Deliberately keyed off V9Engine.bootMode — the process's pinned
+            // engine identity — NOT the persisted UI mode. bootMode is the
+            // same single source of truth behind profileDataStore and the
+            // WebView data-directory suffix, so the folder, the script index,
+            // and the cookie jar can never disagree. The only divergence is
+            // the restart-failure fallback in MainActivity.v9SwitchMode, which
+            // is already documented there as a degraded no-isolation mode.
+            // Fail-fast init contract mirrors Context.profileDataStore.
+            check(V9Engine.isBootPinned) {
+                "UserscriptManager.dir accessed before V9Engine.applyDataDirectorySuffix()"
+            }
             val name =
                 if (V9Engine.bootMode == BrowserMode.ADVANCED) "userscripts_advanced"
                 else "userscripts"

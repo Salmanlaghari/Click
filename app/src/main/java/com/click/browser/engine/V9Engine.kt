@@ -41,10 +41,32 @@ object V9Engine {
     const val BRAND_LINE = "V9 · 1 Browser · 4 Engines"
     const val TAGLINE = "First time in the World We Present A Superior Testing Future"
 
-    /** The engine this process booted with (set in [applyDataDirectorySuffix]). */
+    /** The engine this process booted with (set in [applyDataDirectorySuffix]).
+     *
+     * SINGLE SOURCE OF TRUTH for the process's engine identity. Every
+     * profile decision — the WebView data-directory suffix, [profileDataStore],
+     * [UserscriptManager]'s script folder — keys off this value, so they can
+     * never disagree with each other. It is pinned once in
+     * [ClickApplication.onCreate] and never changes afterwards: a mode switch
+     * restarts the process rather than mutating it (see [restartForEngineSwitch];
+     * the in-place fallback is a documented degraded mode with no isolation).
+     */
     @Volatile
     var bootMode: BrowserMode = BrowserMode.SIMPLE
         private set
+
+    /**
+     * True once [applyDataDirectorySuffix] has run (called first thing in
+     * [ClickApplication.onCreate]). Code that resolves per-profile state
+     * ([profileDataStore], [UserscriptManager.dir]) must only run after this
+     * is true; they fail fast otherwise instead of silently touching the
+     * wrong profile.
+     */
+    @Volatile
+    private var bootPinned = false
+
+    /** See [bootPinned]. */
+    val isBootPinned: Boolean get() = bootPinned
 
     data class EngineProfile(
         val mode: BrowserMode,
@@ -126,6 +148,7 @@ object V9Engine {
             canvasSeed = 90031991L,
             deviceLabel = "Windows 11 · Chrome Desktop",
             timezone = "America/Los_Angeles",
+            // UTC-8 (standard time); getTimezoneOffset() counts minutes west of UTC.
             timezoneOffsetMinutes = 480,
         )
         // Click Advance: desktop-class like Hack, but a DISTINCT identity
@@ -150,6 +173,9 @@ object V9Engine {
             canvasSeed = 77120408L,
             deviceLabel = "Click Advance · Desktop-class isolated profile",
             timezone = "Asia/Dubai",
+            // Sign convention: JS Date.getTimezoneOffset() returns minutes WEST of
+            // UTC, so UTC+4 (Asia/Dubai) = -240. (America/Los_Angeles above is
+            // UTC-8 in standard time = +480 for the same reason.)
             timezoneOffsetMinutes = -240,
         )
     }
@@ -176,6 +202,11 @@ object V9Engine {
             Log.i(TAG, "V9 engine online: ${suffixFor(mode)} (${profileFor(mode).deviceLabel})")
         } catch (t: Throwable) {
             Log.e(TAG, "V9 data-directory suffix failed; engines share storage", t)
+        } finally {
+            // Pin the flag even on failure: bootMode then holds the
+            // best-known value (default SIMPLE) and every profile decision
+            // consistently degrades to the shared store — never half-pinned.
+            bootPinned = true
         }
     }
 
