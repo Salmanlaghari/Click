@@ -60,6 +60,11 @@ fun SettingsScreen(
     onModeChange: (BrowserMode) -> Unit,
     currentSearchEngineSetting: String,
     onSearchEngineChange: (String) -> Unit,
+    // --- Address bar position ---
+    addressBarPosition: String, // "top" | "bottom"
+    onAddressBarPositionChange: (String) -> Unit,
+    // --- Customizable menu ---
+    onCustomizeMenu: () -> Unit,
     // --- Privacy toggles ---
     adBlockerEnabled: Boolean,
     onToggleAdBlocker: (Boolean) -> Unit,
@@ -135,7 +140,8 @@ fun SettingsScreen(
     data class Row(val section: String?, val content: @Composable () -> Unit)
     val rows = remember(
         theme, currentThemeSetting, wallpaperUri, activeMode,
-        currentSearchEngineSetting, adBlockerEnabled, forceNightMode,
+        currentSearchEngineSetting, addressBarPosition,
+        adBlockerEnabled, forceNightMode,
         httpsOnlyMode, jsEnabled, dataSaver, perModeDark, historyModeTarget,
         aiApiKey, aiProvider, aiModel, showAiKey, animationsEnabled
     ) {
@@ -229,6 +235,41 @@ fun SettingsScreen(
                         "UI Animations",
                         "Tab close & page transition effects",
                         animationsEnabled, onToggleAnimations, theme
+                    )
+                }
+            })
+            // ---- Address bar position (Brave/Chrome style) ----
+            add(Row(null) {
+                CardRow(theme) {
+                    Text("Address Bar Position", color = theme.onSurface, fontWeight = FontWeight.SemiBold, fontSize = 14.sp)
+                    Text(
+                        "Move the URL bar to the top or bottom of the screen — works in all 4 modes.",
+                        fontSize = 11.sp, color = theme.onSurface.copy(alpha = 0.6f)
+                    )
+                    Spacer(Modifier.height(8.dp))
+                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        FilterChip(
+                            selected = addressBarPosition == "top",
+                            onClick = { onAddressBarPositionChange("top") },
+                            label = { Text("⬆️ Top") }
+                        )
+                        FilterChip(
+                            selected = addressBarPosition == "bottom",
+                            onClick = { onAddressBarPositionChange("bottom") },
+                            label = { Text("⬇️ Bottom") }
+                        )
+                    }
+                }
+            })
+            // ---- Customize browser menu ----
+            add(Row(null) {
+                CardRow(theme) {
+                    ActionRow(
+                        "Customize Menu",
+                        "Reorder & hide items in the browser menu",
+                        Icons.Default.Tune,
+                        theme,
+                        onCustomizeMenu
                     )
                 }
             })

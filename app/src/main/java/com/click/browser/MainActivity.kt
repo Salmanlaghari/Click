@@ -711,6 +711,14 @@ class MainActivity : ComponentActivity() {
             // Chrome/Mises-style browser menu (bottom sheet) + recent tabs +
             // delete-browsing-data confirmation.
             var showBrowserMenu by remember { mutableStateOf(false) }
+            // Customizable menu: user-defined order + hidden items.
+            var menuOrder by remember {
+                mutableStateOf(MenuCustomization.DEFAULT_ORDER)
+            }
+            var menuHidden by remember {
+                mutableStateOf(setOf<MenuCustomization.MenuItemId>())
+            }
+            var showMenuCustomize by remember { mutableStateOf(false) }
             // Premium UI v2: bottom-left FAB feature menu (always visible).
             var showFeatureMenu by remember { mutableStateOf(false) }
             // Tab-close snackbar with UNDO (Premium UI v2).
@@ -1293,6 +1301,9 @@ class MainActivity : ComponentActivity() {
                         prefs[AppSettings.darkModeKey(mode)]
                     }
                     wallpaperUri = prefs[AppSettings.WALLPAPER_URI]
+                    // Customizable browser menu: order + hidden items.
+                    menuOrder = MenuCustomization.loadOrder(prefs[MenuCustomization.MENU_ORDER_JSON])
+                    menuHidden = MenuCustomization.loadHidden(prefs[MenuCustomization.MENU_HIDDEN_JSON])
                     // Experimental flags (click://flags).
                     liveFlags = ExperimentalFlags.load(prefs)
                     // Signal the crash-restore saver/check: clearOnExit is
@@ -2952,8 +2963,13 @@ class MainActivity : ComponentActivity() {
                             // › Forward · ⌂ Home · ▭ Tabs (count badge) · ⋮ More.
                             // (No center AI tab here — AI lives in the floating pill.)
                             // Polish: one-shot theme crossfade (battery-safe).
-                            // Bottom-address-bar flag: bar renders below the page.
-                            if (flagsUi.bottomAddressBar) BrowseTopBarBlock()
+                            // Bottom-address-bar option: bar renders below the page,
+                            // padded above the overlaid bottom nav so they never overlap.
+                            if (flagsUi.bottomAddressBar) {
+                                Box(modifier = Modifier.padding(bottom = 76.dp)) {
+                                    BrowseTopBarBlock()
+                                }
+                            }
                             if (!showOverlays && !immersiveMode) {
                                 Crossfade(
                                     targetState = theme,
@@ -3403,6 +3419,18 @@ class MainActivity : ComponentActivity() {
                                     },
                                     currentSearchEngineSetting = currentSearchEngineSetting,
                                     onSearchEngineChange = { currentSearchEngineSetting = it },
+                                    addressBarPosition = if (flagsUi.bottomAddressBar) "bottom" else "top",
+                                    onAddressBarPositionChange = { pos ->
+                                        val bottom = pos == "bottom"
+                                        scope.launch {
+                                            dataStore.edit { prefs ->
+                                                prefs[ExperimentalFlags.K_BOTTOM_ADDRESS_BAR] = bottom
+                                            }
+                                            liveFlags = liveFlags.copy(bottomAddressBar = bottom)
+                                            flagsUi = liveFlags
+                                        }
+                                    },
+                                    onCustomizeMenu = { showSettings = false; showMenuCustomize = true },
                                     adBlockerEnabled = adBlockerEnabled,
                                     onToggleAdBlocker = { adBlockerEnabled = it },
                                     forceNightMode = forceNightModeWebsites,
@@ -4087,7 +4115,31 @@ class MainActivity : ComponentActivity() {
                                         }
                                     },
                                     onSettings = { showBrowserMenu = false; showSettings = true },
+                                    visibleItems = MenuCustomization.effectiveVisibleItems(menuOrder, menuHidden),
+                                    onCustomizeMenu = { showBrowserMenu = false; showMenuCustomize = true },
                                     onDismiss = { showBrowserMenu = false }
+                                )
+                            }
+
+                            // "Customize menu" sheet (reorder + hide menu items).
+                            if (showMenuCustomize) {
+                                MenuCustomizeSheet(
+                                    theme = theme,
+                                    initialOrder = menuOrder,
+                                    initialHidden = menuHidden,
+                                    onSave = { order, hidden ->
+                                        menuOrder = order
+                                        menuHidden = hidden
+                                        scope.launch {
+                                            dataStore.edit { prefs ->
+                                                prefs[MenuCustomization.MENU_ORDER_JSON] =
+                                                    MenuCustomization.orderToJson(order)
+                                                prefs[MenuCustomization.MENU_HIDDEN_JSON] =
+                                                    MenuCustomization.hiddenToJson(hidden)
+                                            }
+                                        }
+                                    },
+                                    onDismiss = { showMenuCustomize = false }
                                 )
                             }
 
