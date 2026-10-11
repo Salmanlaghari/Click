@@ -12,6 +12,7 @@ import androidx.credentials.exceptions.CreateCredentialException
 import androidx.credentials.exceptions.GetCredentialCancellationException
 import androidx.credentials.exceptions.GetCredentialException
 import androidx.credentials.exceptions.NoCredentialException
+import java.util.WeakHashMap
 
 /**
  * Google Password Manager integration via the AndroidX Credential Manager.
@@ -40,6 +41,18 @@ object CredentialVault {
     }
 
     /**
+     * CredentialManager involves binder calls to Play Services on creation,
+     * so we cache one instance per Activity instead of rebuilding it on
+     * every save/get. WeakHashMap avoids leaking finished Activities.
+     */
+    private val managers = WeakHashMap<Activity, CredentialManager>()
+
+    private fun manager(activity: Activity): CredentialManager =
+        synchronized(managers) {
+            managers.getOrPut(activity) { CredentialManager.create(activity) }
+        }
+
+    /**
      * Saves a username/password to the user's Google Password Manager.
      * Must be called from an Activity context (system UI may appear).
      */
@@ -52,8 +65,8 @@ object CredentialVault {
             return VaultResult.Error("Username and password can't be empty")
         }
         return try {
-            val manager = CredentialManager.create(activity)
-            manager.createCredential(activity, CreatePasswordRequest(username, password))
+            val m = manager(activity)
+            m.createCredential(activity, CreatePasswordRequest(username, password))
             VaultResult.Ok(Unit)
         } catch (e: CreateCredentialCancellationException) {
             VaultResult.Cancelled
@@ -72,9 +85,9 @@ object CredentialVault {
      */
     suspend fun getPassword(activity: Activity): VaultResult<VaultCredential> {
         return try {
-            val manager = CredentialManager.create(activity)
+            val m = manager(activity)
             val request = GetCredentialRequest(listOf(GetPasswordOption()))
-            val response = manager.getCredential(activity, request)
+            val response = m.getCredential(activity, request)
             val credential = response.credential
             if (credential is PasswordCredential) {
                 VaultResult.Ok(VaultCredential(credential.id, credential.password))
@@ -96,8 +109,12 @@ object CredentialVault {
 
     private fun humanize(e: Exception): String {
         val msg = e.message.orEmpty()
+        val lower = msg.lowercase()
         return when {
-            "play services" in msg.lowercase() -> "Google Play Services needs an update"
+            // Play Services errors surface with many casings/names:
+            // "Google Play services", "Play Services", "com.google.android.gms" …
+            "play services" in lower || "gms" in lower || "google play" in lower ->
+                "Google Play Services needs an update"
             msg.isNotBlank() -> msg.take(120)
             else -> "Google Password Manager unavailable"
         }

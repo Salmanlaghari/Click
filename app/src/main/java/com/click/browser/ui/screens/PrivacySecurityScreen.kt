@@ -61,6 +61,7 @@ fun PrivacySecurityScreen(
 
     var checks by remember { mutableStateOf<List<SafetyCheck.Check>?>(null) }
     var checking by remember { mutableStateOf(false) }
+    var checkError by remember { mutableStateOf<String?>(null) }
 
     var vaultMessage by remember { mutableStateOf<String?>(null) }
     var showSavePasswordDialog by remember { mutableStateOf(false) }
@@ -78,9 +79,12 @@ fun PrivacySecurityScreen(
 
     LaunchedEffect(Unit) {
         refreshAccount()
+        // Product default when unset: ON. But on READ ERROR we fail CLOSED
+        // (OFF) — a privacy-sensitive feature must not default on when we
+        // can't verify the stored preference.
         autofillEnabled = try {
             context.dataStore.data.map { prefs -> prefs[AppSettings.AUTOFILL_ENABLED] }.first() ?: true
-        } catch (_: Exception) { true }
+        } catch (_: Exception) { false }
     }
 
     val signInLauncher = rememberLauncherForActivityResult(
@@ -243,7 +247,15 @@ fun PrivacySecurityScreen(
                     onClick = {
                         scope.launch {
                             checking = true
-                            checks = try { SafetyCheck.run(context) } catch (_: Exception) { null }
+                            checkError = null
+                            checks = try {
+                                SafetyCheck.run(context)
+                            } catch (e: Exception) {
+                                // Never fail silently: show the error with a
+                                // retry affordance instead of a blank card.
+                                checkError = "Safety Check couldn't run: ${(e.message ?: "unknown error").take(100)}"
+                                null
+                            }
                             checking = false
                         }
                     },
@@ -254,7 +266,11 @@ fun PrivacySecurityScreen(
                         CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp)
                         Spacer(Modifier.width(8.dp))
                     }
-                    Text(if (checking) "Checking…" else "Run Safety Check")
+                    Text(if (checking) "Checking…" else if (checkError != null) "Retry Safety Check" else "Run Safety Check")
+                }
+                if (checkError != null) {
+                    Spacer(Modifier.height(6.dp))
+                    Text(checkError!!, fontSize = 12.sp, color = MaterialTheme.colorScheme.error)
                 }
                 checks?.let { list ->
                     Spacer(Modifier.height(8.dp))
@@ -269,7 +285,12 @@ fun PrivacySecurityScreen(
                         SafetyCheckRow(check, theme, onFix = {
                             scope.launch {
                                 if (SafetyCheck.applyFix(context, check.id)) {
-                                    checks = try { SafetyCheck.run(context) } catch (_: Exception) { checks }
+                                    checks = try {
+                                        SafetyCheck.run(context)
+                                    } catch (e: Exception) {
+                                        checkError = "Re-check failed: ${(e.message ?: "unknown error").take(100)}"
+                                        checks
+                                    }
                                 }
                             }
                         }, onAction = {
@@ -449,6 +470,9 @@ private fun SavePasswordDialog(
     var username by remember { mutableStateOf("") }
     var password by remember { mutableStateOf("") }
     var showPassword by remember { mutableStateOf(false) }
+    // Client-side validation: don't even offer Save while a field is empty —
+    // avoids a pointless round-trip into the system credential UI.
+    val canSave = username.isNotBlank() && password.isNotBlank()
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text("Save to Google Password Manager", color = theme.onSurface, fontSize = 16.sp) },
@@ -483,7 +507,10 @@ private fun SavePasswordDialog(
             }
         },
         confirmButton = {
-            Button(onClick = { onSave(username.trim(), password) }) { Text("Save") }
+            Button(
+                onClick = { onSave(username.trim(), password) },
+                enabled = canSave
+            ) { Text("Save") }
         },
         dismissButton = {
             TextButton(onClick = onDismiss) { Text("Cancel") }

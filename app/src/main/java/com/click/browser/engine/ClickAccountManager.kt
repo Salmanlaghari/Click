@@ -16,6 +16,7 @@ import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
 import org.json.JSONObject
 import kotlin.coroutines.resume
+import kotlin.coroutines.resumeWithException
 
 /**
  * Click account via Google Sign-In.
@@ -35,12 +36,25 @@ object ClickAccountManager {
 
     private const val TAG = "ClickAccount"
 
+    /**
+     * GoogleSignInClient is cheap to obtain but not free — cache one per
+     * process (built from the application context so no Activity leaks).
+     */
+    @Volatile
+    private var cachedClient: GoogleSignInClient? = null
+
     private fun client(context: Context): GoogleSignInClient {
+        return cachedClient ?: synchronized(this) {
+            cachedClient ?: buildClient(context.applicationContext).also { cachedClient = it }
+        }
+    }
+
+    private fun buildClient(appContext: Context): GoogleSignInClient {
         val gso = GoogleSignInOptions.Builder(GoogleSignInOptions.DEFAULT_SIGN_IN)
             .requestEmail()
             .requestProfile()
             .build()
-        return GoogleSignIn.getClient(context, gso)
+        return GoogleSignIn.getClient(appContext, gso)
     }
 
     /** Intent to launch with StartActivityForResult from the UI. */
@@ -51,6 +65,12 @@ object ClickAccountManager {
      * user cancelled. Throws on real errors (caller shows the message).
      */
     suspend fun handleSignInResult(context: Context, data: Intent?): ClickAccount? {
+        // A null intent means the result wasn't delivered (e.g. the Activity
+        // was recreated) — not a normal cancel; log it and treat as no-op.
+        if (data == null) {
+            Log.w(TAG, "handleSignInResult: null intent — result not delivered")
+            return null
+        }
         val task = GoogleSignIn.getSignedInAccountFromIntent(data)
         val gsAccount: GoogleSignInAccount = try {
             task.getResult(ApiException::class.java)
@@ -94,7 +114,17 @@ object ClickAccountManager {
         withContext(Dispatchers.IO) {
             suspendCancellableCoroutine<Unit> { cont ->
                 client(context).signOut()
-                    .addOnCompleteListener { cont.resume(Unit) }
+                    .addOnCompleteListener { task ->
+                        // Don't swallow sign-out failures: surface them so the
+                        // caller can tell the user instead of pretending it worked.
+                        if (task.isSuccessful) {
+                            cont.resume(Unit)
+                        } else {
+                            cont.resumeWithException(
+                                task.exception ?: Exception("Google sign-out failed")
+                            )
+                        }
+                    }
             }
         }
         context.dataStore.edit { it.remove(AppSettings.CLICK_ACCOUNT_JSON) }

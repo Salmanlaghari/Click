@@ -4,6 +4,7 @@ import android.content.Context
 import android.content.Intent
 import android.net.Uri
 import android.util.Log
+import android.widget.Toast
 import androidx.datastore.preferences.core.edit
 import androidx.webkit.WebViewFeature
 import kotlinx.coroutines.flow.first
@@ -70,11 +71,15 @@ object SafetyCheck {
             )
         )
 
-        // 3. Password manager.
+        // 3. Password manager. Fail CLOSED: if the check itself throws
+        // (DataStore corruption, keystore failure), we must NOT report
+        // "passed" — an unverifiable protection is reported as failing so
+        // the user sees it and can re-enable.
         val pmOn = try {
             PasswordManager.isEnabled(context)
         } catch (e: Exception) {
-            Log.w(TAG, "password-manager check failed", e); true
+            Log.w(TAG, "password-manager check failed", e)
+            false
         }
         checks.add(
             Check(
@@ -139,7 +144,10 @@ object SafetyCheck {
         return try {
             when (checkId) {
                 "https" -> context.dataStore.edit { it[AppSettings.HTTPS_MODE] = "standard" }
-                "password_manager" -> PasswordManager.setEnabled(context, true)
+                "password_manager" -> {
+                    // setEnabled reports success — verify it, don't assume.
+                    if (!PasswordManager.setEnabled(context, true)) return false
+                }
                 "fingerprint" -> context.dataStore.edit { it[AppSettings.FINGERPRINT_PROTECTION] = true }
                 "strip_params" -> context.dataStore.edit { it[AppSettings.STRIP_TRACKING_PARAMS] = true }
                 else -> return false
@@ -158,6 +166,9 @@ object SafetyCheck {
                     addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                 }
             )
-        } catch (_: Exception) { }
+        } catch (e: Exception) {
+            Log.w(TAG, "openPlayListing failed", e)
+            Toast.makeText(context, "Couldn't open the Play Store", Toast.LENGTH_SHORT).show()
+        }
     }
 }

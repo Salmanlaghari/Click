@@ -20,7 +20,9 @@ import androidx.compose.ui.unit.sp
 import com.click.browser.engine.ModeTheme
 import com.click.browser.engine.PaymentCard
 import com.click.browser.engine.SecureCardStore
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 /**
  * Payment methods: cards encrypted on-device (EncryptedSharedPreferences).
@@ -39,9 +41,21 @@ fun PaymentMethodsScreen(
     var showEditor by remember { mutableStateOf(false) }
     var editing by remember { mutableStateOf<PaymentCard?>(null) }
     var confirmDelete by remember { mutableStateOf<PaymentCard?>(null) }
+    var loadError by remember { mutableStateOf<String?>(null) }
 
     fun refresh() {
-        cards = try { SecureCardStore.listCards(context) } catch (_: Exception) { emptyList() }
+        // Encrypted-prefs reads involve Keystore crypto — never on the UI thread.
+        scope.launch {
+            loadError = null
+            cards = try {
+                withContext(Dispatchers.IO) { SecureCardStore.listCards(context) }
+            } catch (e: Exception) {
+                // Distinguish corruption from "no cards": the store throws
+                // IllegalStateException on unreadable/corrupt data.
+                loadError = (e.message ?: "Couldn't load saved cards").take(120)
+                emptyList()
+            }
+        }
     }
 
     LaunchedEffect(Unit) { refresh() }
@@ -80,6 +94,41 @@ fun PaymentMethodsScreen(
                 fontSize = 12.sp, color = theme.onSurface.copy(alpha = 0.6f)
             )
             Spacer(Modifier.height(12.dp))
+            if (loadError != null) {
+                Card(
+                    shape = RoundedCornerShape(12.dp),
+                    colors = CardDefaults.cardColors(
+                        containerColor = MaterialTheme.colorScheme.errorContainer
+                    ),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Row(
+                        modifier = Modifier.padding(12.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Icon(
+                            Icons.Default.Warning, contentDescription = null,
+                            tint = MaterialTheme.colorScheme.onErrorContainer,
+                            modifier = Modifier.size(20.dp)
+                        )
+                        Spacer(Modifier.width(8.dp))
+                        Column(Modifier.weight(1f)) {
+                            Text(
+                                "Couldn't load saved cards",
+                                fontWeight = FontWeight.SemiBold, fontSize = 13.sp,
+                                color = MaterialTheme.colorScheme.onErrorContainer
+                            )
+                            Text(
+                                loadError!!,
+                                fontSize = 11.sp,
+                                color = MaterialTheme.colorScheme.onErrorContainer.copy(alpha = 0.8f)
+                            )
+                        }
+                        TextButton(onClick = { refresh() }) { Text("Retry", fontSize = 12.sp) }
+                    }
+                }
+                Spacer(Modifier.height(8.dp))
+            }
             if (cards.isEmpty()) {
                 Box(Modifier.fillMaxWidth().padding(vertical = 40.dp), contentAlignment = Alignment.Center) {
                     Column(horizontalAlignment = Alignment.CenterHorizontally) {
@@ -208,6 +257,7 @@ private fun CardEditorDialog(
                     value = expiry, onValueChange = { expiry = it; error = null },
                     label = { Text("Expiry (MM/YY)") }, singleLine = true,
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                    placeholder = { Text("e.g. 01/25") },
                     modifier = Modifier.fillMaxWidth()
                 )
                 if (error != null) {
@@ -221,7 +271,9 @@ private fun CardEditorDialog(
         },
         confirmButton = {
             Button(onClick = {
-                val problem = SecureCardStore.validate(label.trim(), cardholder.trim(), number, expiry.trim())
+                // Normalize flexible input ("0125" -> "01/25") before validating.
+                val expiryNorm = SecureCardStore.normalizeExpiry(expiry.trim())
+                val problem = SecureCardStore.validate(label.trim(), cardholder.trim(), number, expiryNorm)
                 if (problem != null) {
                     error = problem
                 } else {
@@ -230,7 +282,7 @@ private fun CardEditorDialog(
                             label = label.trim(),
                             cardholder = cardholder.trim(),
                             number = number.filter { it.isDigit() },
-                            expiry = expiry.trim()
+                            expiry = expiryNorm
                         )
                     )
                 }

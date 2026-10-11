@@ -84,8 +84,14 @@ object PasswordManager {
         return context.profileDataStore.data.map { it[ENABLED_KEY] ?: true }.first()
     }
 
-    suspend fun setEnabled(context: Context, enabled: Boolean) {
-        context.profileDataStore.edit { it[ENABLED_KEY] = enabled }
+    suspend fun setEnabled(context: Context, enabled: Boolean): Boolean {
+        return try {
+            context.profileDataStore.edit { it[ENABLED_KEY] = enabled }
+            true
+        } catch (e: Exception) {
+            android.util.Log.w("PasswordManager", "setEnabled failed", e)
+            false
+        }
     }
 
     suspend fun getAll(context: Context): List<SavedPassword> {

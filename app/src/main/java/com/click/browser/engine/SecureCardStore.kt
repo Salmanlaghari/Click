@@ -5,6 +5,8 @@ import android.content.SharedPreferences
 import android.util.Log
 import androidx.security.crypto.EncryptedSharedPreferences
 import androidx.security.crypto.MasterKey
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import org.json.JSONObject
 import java.util.UUID
@@ -35,12 +37,28 @@ object SecureCardStore {
     private const val PREFS_FILE = "click_payment_methods"
     private const val CARDS_KEY = "cards_json_v1"
 
+    /**
+     * Cached EncryptedSharedPreferences. MasterKey.Builder.build() hits the
+     * Android Keystore on every call — creating it per-access causes UI lag
+     * and Keystore contention, so we build it once per process and reuse it.
+     * The application context is used so the cached instance never leaks an
+     * Activity.
+     */
+    @Volatile
+    private var cachedPrefs: SharedPreferences? = null
+
     private fun prefs(context: Context): SharedPreferences {
-        val masterKey = MasterKey.Builder(context)
+        return cachedPrefs ?: synchronized(this) {
+            cachedPrefs ?: createPrefs(context.applicationContext).also { cachedPrefs = it }
+        }
+    }
+
+    private fun createPrefs(appContext: Context): SharedPreferences {
+        val masterKey = MasterKey.Builder(appContext)
             .setKeyScheme(MasterKey.KeyScheme.AES256_GCM)
             .build()
         return EncryptedSharedPreferences.create(
-            context,
+            appContext,
             PREFS_FILE,
             masterKey,
             EncryptedSharedPreferences.PrefKeyEncryptionScheme.AES256_SIV,
@@ -48,12 +66,18 @@ object SecureCardStore {
         )
     }
 
+    /**
+     * Returns the saved cards. Empty list = genuinely no cards saved.
+     * @throws IllegalStateException when the encrypted store is unreadable
+     * or the saved JSON is corrupt — callers must surface this distinctly
+     * from "no cards yet" so data loss is never silent.
+     */
     fun listCards(context: Context): List<PaymentCard> {
         val json = try {
             prefs(context).getString(CARDS_KEY, null)
         } catch (e: Exception) {
             Log.w(TAG, "Encrypted prefs unreadable", e)
-            return emptyList()
+            throw IllegalStateException("Saved cards couldn't be decrypted", e)
         } ?: return emptyList()
         return try {
             val arr = JSONArray(json)
@@ -70,7 +94,7 @@ object SecureCardStore {
             }
         } catch (e: Exception) {
             Log.w(TAG, "Card JSON corrupt", e)
-            emptyList()
+            throw IllegalStateException("Saved cards are corrupt and couldn't be read", e)
         }
     }
 
@@ -81,22 +105,53 @@ object SecureCardStore {
         val digits = number.filter { it.isDigit() }
         if (digits.length !in 13..19) return "Card number looks wrong (13–19 digits)"
         if (!luhnOk(digits)) return "Card number failed the checksum — check the digits"
-        if (!Regex("""^(0[1-9]|1[0-2])/\d{2}$""").matches(expiry.trim())) {
+        val norm = normalizeExpiry(expiry)
+        if (!Regex("""^(0[1-9]|1[0-2])/\d{2}$""").matches(norm)) {
             return "Expiry must be MM/YY"
         }
         return null
     }
 
-    fun addCard(context: Context, card: PaymentCard) {
-        persist(context, listCards(context) + card)
+    /**
+     * Accepts flexible expiry input ("1/25", "0125", "12/2025", "MM/YY") and
+     * normalizes to "MM/YY". Returns the trimmed input unchanged when it
+     * can't be interpreted, so validate() still rejects it with a message.
+     */
+    fun normalizeExpiry(input: String): String {
+        val trimmed = input.trim()
+        if (Regex("""^(0[1-9]|1[0-2])/\d{2}$""").matches(trimmed)) return trimmed
+        val digits = trimmed.filter { it.isDigit() }
+        return when (digits.length) {
+            // MMYY -> MM/YY
+            4 -> "${digits.substring(0, 2)}/${digits.substring(2, 4)}"
+            // MMYYYY -> MM/YY
+            6 -> "${digits.substring(0, 2)}/${digits.substring(4, 6)}"
+            // MYY -> 0M/YY
+            3 -> "0${digits[0]}/${digits.substring(1, 3)}"
+            else -> trimmed
+        }
     }
 
-    fun updateCard(context: Context, card: PaymentCard) {
-        persist(context, listCards(context).map { if (it.id == card.id) card else it })
+    /**
+     * All writes run on Dispatchers.IO: encrypted-prefs writes involve
+     * Keystore crypto and must never block the UI thread.
+     */
+    suspend fun addCard(context: Context, card: PaymentCard) {
+        withContext(Dispatchers.IO) {
+            persist(context, listCards(context) + card)
+        }
     }
 
-    fun deleteCard(context: Context, id: String) {
-        persist(context, listCards(context).filterNot { it.id == id })
+    suspend fun updateCard(context: Context, card: PaymentCard) {
+        withContext(Dispatchers.IO) {
+            persist(context, listCards(context).map { if (it.id == card.id) card else it })
+        }
+    }
+
+    suspend fun deleteCard(context: Context, id: String) {
+        withContext(Dispatchers.IO) {
+            persist(context, listCards(context).filterNot { it.id == id })
+        }
     }
 
     private fun persist(context: Context, cards: List<PaymentCard>) {
@@ -113,7 +168,11 @@ object SecureCardStore {
             )
         }
         try {
-            prefs(context).edit().putString(CARDS_KEY, arr.toString()).apply()
+            // commit() (synchronous) not apply(): for payment data we must not
+            // risk losing a write if the process dies before the async flush.
+            // Already on Dispatchers.IO, so the blocking write is safe.
+            val ok = prefs(context).edit().putString(CARDS_KEY, arr.toString()).commit()
+            if (!ok) Log.w(TAG, "persist: commit() returned false")
         } catch (e: Exception) {
             Log.w(TAG, "Failed to persist cards", e)
         }
