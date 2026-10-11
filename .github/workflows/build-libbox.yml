@@ -54,11 +54,13 @@ jobs:
       - name: Install gomobile
         if: steps.cache-libbox.outputs.cache-hit != 'true'
         run: |
-          # Newer gomobile removed the `-ndk` flag; the NDK is now picked up
-          # from ANDROID_NDK_HOME.
+          # sing-box's own CI builds with their gomobile fork —
+          # upstream golang.org/x/mobile removed the -ndk / -libname /
+          # -buildvcs flags that the classic bind invocation needs.
+          # (github.com/sagernet/gomobile@v0.1.13, same as sing-box v1.14.3)
           export ANDROID_NDK_HOME=${{ steps.setup-ndk.outputs.ndk-path }}
-          go install golang.org/x/mobile/cmd/gomobile@latest
-          go install golang.org/x/mobile/cmd/gobind@latest
+          go install github.com/sagernet/gomobile/cmd/gomobile@v0.1.13
+          go install github.com/sagernet/gomobile/cmd/gobind@v0.1.13
           export PATH=$PATH:$(go env GOPATH)/bin
           gomobile init
 
@@ -74,17 +76,9 @@ jobs:
           export PATH=$PATH:$(go env GOPATH)/bin
           export ANDROID_NDK_HOME=${{ steps.setup-ndk.outputs.ndk-path }}
           cd sing-box-src
-          # Newer gomobile requires golang.org/x/mobile in the module graph.
-          go get -tool golang.org/x/mobile/cmd/gomobile@latest
-          go get -tool golang.org/x/mobile/cmd/gobind@latest
-          # NOTE: newer gomobile removed -libname (the native lib is now
-          # always libgojni.so, loaded by the regenerated Java stubs) —
-          # use -o to name the AAR instead. -buildvcs is also no longer a
-          # bind flag (harmless to drop: -trimpath + -buildid= already
-          # keep the build reproducible).
           gomobile bind -v -target android -androidapi 21 \
-            -javapkg=io.nekohasekai -o libbox.aar \
-            -trimpath \
+            -javapkg=io.nekohasekai -libname=box \
+            -trimpath -buildvcs=false \
             -ldflags "-X github.com/sagernet/sing-box/constant.Version=${{ env.SINGBOX_VERSION }} -s -w -buildid=" \
             -tags "with_gvisor,with_quic,with_wireguard,with_ech,with_utls,with_clash_api" \
             ./experimental/libbox
