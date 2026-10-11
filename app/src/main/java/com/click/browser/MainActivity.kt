@@ -6,6 +6,7 @@ import android.graphics.Bitmap
 import android.os.Bundle
 import android.speech.tts.TextToSpeech
 import android.webkit.WebChromeClient
+import android.webkit.ConsoleMessage
 import android.webkit.GeolocationPermissions
 import android.webkit.WebResourceError
 import android.webkit.WebResourceRequest
@@ -2977,6 +2978,44 @@ class MainActivity : FragmentActivity() {
                                                         }
 
                                                         webChromeClient = object : WebChromeClient() {
+
+                                                            // DevTools Console: capture ALL page console messages
+                                                            // natively (console.log/warn/error/info + uncaught
+                                                            // exceptions). This is the reliable path — the JS
+                                                            // console-hijack injection can miss early/late logs
+                                                            // and cross-frame messages; onConsoleMessage sees
+                                                            // everything at the WebView level.
+                                                            override fun onConsoleMessage(consoleMessage: ConsoleMessage?): Boolean {
+                                                                val msg = consoleMessage ?: return true
+                                                                val type = when (msg.messageLevel()) {
+                                                                    ConsoleMessage.MessageLevel.ERROR -> "error"
+                                                                    ConsoleMessage.MessageLevel.WARNING -> "warning"
+                                                                    ConsoleMessage.MessageLevel.LOG -> "success"
+                                                                    // TIP = developer tips from the page, not a
+                                                                    // success signal — show as neutral info.
+                                                                    ConsoleMessage.MessageLevel.TIP -> "info"
+                                                                    ConsoleMessage.MessageLevel.DEBUG -> "info"
+                                                                    else -> "info"
+                                                                }
+                                                                // sourceId can be a URL, a filename, or a pseudo-
+                                                                // source like "console-api". Only show it when it
+                                                                // looks like a real file (has an extension).
+                                                                // Strip query params (?a=b) and hash fragments
+                                                                // (#section) — they're noise in a log line.
+                                                                val rawSrc = msg.sourceId()
+                                                                    ?.substringAfterLast('/')
+                                                                    ?.substringBefore('?')
+                                                                    ?.substringBefore('#')
+                                                                val src = rawSrc?.takeIf { it.isNotBlank() && it.contains('.') }
+                                                                val loc = if (src != null) " ($src:${msg.lineNumber()})" else ""
+                                                                // Cap message length so a spammy page can't OOM the log list.
+                                                                val text = msg.message().take(500)
+                                                                logs.add(LogEntry(type, "$text$loc"))
+                                                                // Cap list size (drop oldest) — same guard as elsewhere.
+                                                                if (logs.size > 500) logs.removeAt(0)
+                                                                return true
+                                                            }
+
                                                             // Fullscreen video support (YouTube, Facebook, etc.):
                                                             // when a page requests fullscreen video, show the
                                                             // custom view full-screen; hide it when done.
@@ -3021,6 +3060,7 @@ class MainActivity : FragmentActivity() {
                                                                 )
                                                                 customViewCallback?.onCustomViewHidden()
                                                                 customViewCallback = null
+
                                                             }
 
                                                             override fun onReceivedTitle(view: WebView?, title: String?) {
@@ -3551,7 +3591,37 @@ class MainActivity : FragmentActivity() {
                                         onClearLogs = { logs.clear() },
                                         onClearNetwork = { networkRequests.clear() },
                                         onEvalJs = { code ->
-                                            currentTab.webView?.evaluateJavascript(code, null)
+                                            // Echo the input, then run it and show the
+                                            // result (or error) as a console entry — no
+                                            // more silent eval.
+                                            logs.add(LogEntry("info", "> $code".take(500)))
+                                            if (logs.size > 500) logs.removeAt(0)
+                                            currentTab.webView?.evaluateJavascript(code) { result ->
+                                                val display = if (result.isNullOrBlank() || result == "null") {
+                                                    "(no return value)"
+                                                } else {
+                                                    // WebView JSON-encodes the result: strings come back
+                                                    // wrapped in quotes ("hello"), numbers/booleans/objects
+                                                    // come back unquoted (42, true, {...}). Strip quotes and
+                                                    // unescape only when they're actually present.
+                                                    // Unescape order matters: handle \\ FIRST so that an
+                                                    // escaped backslash (e.g. "\\n" meaning literal \ + n)
+                                                    // isn't misread as an escape sequence afterwards.
+                                                    val unquoted = if (result.length >= 2 &&
+                                                        result.startsWith("\"") && result.endsWith("\"")
+                                                    ) {
+                                                        result.substring(1, result.length - 1)
+                                                            .replace("\\\\", "\\")
+                                                            .replace("\\\"", "\"")
+                                                            .replace("\\n", "\n")
+                                                    } else {
+                                                        result
+                                                    }
+                                                    unquoted.take(500)
+                                                }
+                                                logs.add(LogEntry("success", "< $display"))
+                                                if (logs.size > 500) logs.removeAt(0)
+                                            }
                                         },
                                         inspectorEnabled = elementInspectorEnabled,
                                         onToggleInspector = {
