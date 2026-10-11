@@ -18,7 +18,7 @@ env:
   SINGBOX_VERSION: "v1.14.3"
   # Latest gomobile requires Go >= 1.26 (and dropped the `gomobile init -ndk`
   # flag — the NDK now comes from ANDROID_NDK_HOME).
-  GO_VERSION: "1.26.9"
+  GO_VERSION: "1.26.8"
 
 jobs:
   build-libbox:
@@ -51,19 +51,6 @@ jobs:
         with:
           ndk-version: r26d
 
-      - name: Install gomobile
-        if: steps.cache-libbox.outputs.cache-hit != 'true'
-        run: |
-          # sing-box's own CI builds with their gomobile fork —
-          # upstream golang.org/x/mobile removed the -ndk / -libname /
-          # -buildvcs flags that the classic bind invocation needs.
-          # (github.com/sagernet/gomobile@v0.1.13, same as sing-box v1.14.3)
-          export ANDROID_NDK_HOME=${{ steps.setup-ndk.outputs.ndk-path }}
-          go install github.com/sagernet/gomobile/cmd/gomobile@v0.1.13
-          go install github.com/sagernet/gomobile/cmd/gobind@v0.1.13
-          export PATH=$PATH:$(go env GOPATH)/bin
-          gomobile init
-
       - name: Clone sing-box (pinned)
         if: steps.cache-libbox.outputs.cache-hit != 'true'
         run: |
@@ -75,13 +62,12 @@ jobs:
         run: |
           export PATH=$PATH:$(go env GOPATH)/bin
           export ANDROID_NDK_HOME=${{ steps.setup-ndk.outputs.ndk-path }}
+          # sing-box's own supported build path (same as their release CI):
+          # their build_libbox tool drives their gomobile fork with the
+          # exact flags/tags the libbox Java API expects.
+          make -C sing-box-src lib_install
           cd sing-box-src
-          gomobile bind -v -target android -androidapi 21 \
-            -javapkg=io.nekohasekai -libname=box \
-            -trimpath -buildvcs=false \
-            -ldflags "-X github.com/sagernet/sing-box/constant.Version=${{ env.SINGBOX_VERSION }} -s -w -buildid=" \
-            -tags "with_gvisor,with_quic,with_wireguard,with_utls,with_clash_api" \
-            ./experimental/libbox
+          go run ./cmd/internal/build_libbox -target android
           ls -lh libbox.aar
           cp libbox.aar ../libbox.aar
 

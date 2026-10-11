@@ -10,13 +10,14 @@ OFFICIAL SagerNet/sing-box source:
 
 1. **CI (preferred):** Run the `build-libbox.yml` workflow (or it runs
    automatically when `libbox.version` changes). It:
-   - Installs Go + Android NDK + gomobile
+   - Installs Go 1.26.8 + Android NDK + JDK 17
    - Clones `https://github.com/SagerNet/sing-box` at the pinned version
-   - Runs `gomobile bind` with the tags in the workflow
+   - Runs sing-box's own `build_libbox` tool (same as their release CI,
+     which uses their `sagernet/gomobile` fork)
    - Uploads `libbox.aar` as an artifact + caches it
-2. **Manual build:** Follow the same `gomobile bind` command in
-   `.github/workflows/build-libbox.yml` on a machine with Go 1.26+, JDK 17,
-   and Android NDK r26.
+2. **Manual build:** In a sing-box checkout at the pinned version, run
+   `make lib_install` then `go run ./cmd/internal/build_libbox -target android`
+   on a machine with Go 1.26.8, JDK 17, and Android NDK r26.
 
 ## Wiring
 
