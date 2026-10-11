@@ -35,8 +35,8 @@ object CredentialVault {
     sealed interface VaultResult<out T> {
         data class Ok<T>(val value: T) : VaultResult<T>
         /** User cancelled — not an error. */
-        data object Cancelled : VaultResult<Nothing>()
-        data class Error(val message: String) : VaultResult<Nothing>()
+        data object Cancelled : VaultResult<Nothing>
+        data class Error(val message: String) : VaultResult<Nothing>
     }
 
     /**
