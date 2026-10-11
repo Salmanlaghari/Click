@@ -114,7 +114,7 @@ jobs:
           CLICK_KEYSTORE_PASSWORD: ${{ env.CLICK_KEYSTORE_PASSWORD }}
           CLICK_KEY_ALIAS: ${{ env.CLICK_KEY_ALIAS }}
           CLICK_KEY_PASSWORD: ${{ env.CLICK_KEY_PASSWORD }}
-        run: ./gradlew assembleRelease
+        run: ./gradlew assembleRelease --stacktrace
 
       - name: Verify release signature (must be Prince's key)
         run: |
