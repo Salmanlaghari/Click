@@ -74,8 +74,11 @@ jobs:
           export PATH=$PATH:$(go env GOPATH)/bin
           export ANDROID_NDK_HOME=${{ steps.setup-ndk.outputs.ndk-path }}
           cd sing-box-src
+          # NOTE: newer gomobile removed -libname (the native lib is now
+          # always libgojni.so, loaded by the regenerated Java stubs) —
+          # use -o to name the AAR instead.
           gomobile bind -v -target android -androidapi 21 \
-            -javapkg=io.nekohasekai -libname=box \
+            -javapkg=io.nekohasekai -o libbox.aar \
             -trimpath -buildvcs=false \
             -ldflags "-X github.com/sagernet/sing-box/constant.Version=${{ env.SINGBOX_VERSION }} -s -w -buildid=" \
             -tags "with_gvisor,with_quic,with_wireguard,with_ech,with_utls,with_clash_api" \
