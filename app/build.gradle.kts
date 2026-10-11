@@ -130,6 +130,20 @@ android {
 }
 
 dependencies {
+    // sing-box VPN core (libbox.aar). Built from OFFICIAL SagerNet/sing-box
+    // source by the build-libbox.yml workflow — never a third-party binary.
+    // The build FAILS LOUDLY if the AAR is missing (a "VPN" without the
+    // tunnel core would be dishonest). See app/libs/README.md.
+    val libboxAar = File(projectDir, "libs/libbox.aar")
+    if (!libboxAar.exists()) {
+        throw GradleException(
+            "Missing app/libs/libbox.aar — run the 'Build libbox.aar' " +
+            "workflow (.github/workflows/build-libbox.yml) or follow " +
+            "app/libs/README.md to build it from official sing-box source."
+        )
+    }
+    implementation(files("libs/libbox.aar"))
+
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.lifecycle.runtime.ktx)
     implementation(libs.androidx.activity.compose)
