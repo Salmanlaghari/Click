@@ -1167,6 +1167,9 @@ class MainActivity : FragmentActivity() {
             var showPasswordManager by remember { mutableStateOf(false) }
             // Cookie manager: per-site cookie viewer.
             var showCookieManager by remember { mutableStateOf(false) }
+            // Privacy & Security suite (Google Sign-In, passwords, Safety Check, autofill, cards).
+            var showPrivacySecurity by remember { mutableStateOf(false) }
+            var showPaymentMethods by remember { mutableStateOf(false) }
             // Per-site settings sheet (opened from the lock icon in the address bar).
             var showSiteSettings by remember { mutableStateOf(false) }
             // Built-in engines (Safe Browsing / Translate / PDF)
@@ -4008,6 +4011,7 @@ class MainActivity : FragmentActivity() {
                                         Toast.makeText(this@MainActivity, "All browsing data cleared (current mode)", Toast.LENGTH_SHORT).show()
                                     },
                                     onOpenCookieManager = { showSettings = false; showCookieManager = true },
+                                    onOpenPrivacySecurity = { showSettings = false; showPrivacySecurity = true },
                                     locationSummary = LocationGuard.websitesWillSee(locationMode, locationSpoofLabel),
                                     onOpenLocationSettings = { showLocationSettings = true },
                                     perModeDark = perModeDark,
@@ -4095,6 +4099,21 @@ class MainActivity : FragmentActivity() {
                                 com.click.browser.ui.screens.PasswordManagerScreen(
                                     theme = theme,
                                     onClose = { showPasswordManager = false }
+                                )
+                            }
+                            // Privacy & Security suite: account, passwords, Safety Check, autofill, cards.
+                            if (showPrivacySecurity) {
+                                com.click.browser.ui.screens.PrivacySecurityScreen(
+                                    theme = theme,
+                                    onOpenPaymentMethods = { showPaymentMethods = true },
+                                    onOpenPasswords = { showPasswordManager = true },
+                                    onClose = { showPrivacySecurity = false }
+                                )
+                            }
+                            if (showPaymentMethods) {
+                                com.click.browser.ui.screens.PaymentMethodsScreen(
+                                    theme = theme,
+                                    onClose = { showPaymentMethods = false }
                                 )
                             }
                             // Cookie manager: per-site cookie list.

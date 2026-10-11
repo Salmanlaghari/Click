@@ -103,6 +103,8 @@ fun SettingsScreen(
     onClearCache: () -> Unit,
     onClearAllCurrentMode: () -> Unit,
     onOpenCookieManager: () -> Unit,
+    // --- Privacy & Security suite ---
+    onOpenPrivacySecurity: () -> Unit,
     // --- LocationGuard ---
     locationSummary: String,
     onOpenLocationSettings: () -> Unit,
@@ -563,6 +565,12 @@ fun SettingsScreen(
             add(Row(null) {
                 CardRow(theme) {
                     ActionRow("Cookie Manager", "Inspect & delete cookies per site", Icons.Default.Cookie, theme, onOpenCookieManager)
+                    HorizontalDivider(color = theme.onSurface.copy(alpha = 0.1f))
+                    ActionRow(
+                        "Privacy & Security",
+                        "Click account, passwords, Safety Check, autofill, payment methods",
+                        Icons.Default.VerifiedUser, theme, onOpenPrivacySecurity
+                    )
                 }
             })
 
