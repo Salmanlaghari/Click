@@ -1,52 +1,124 @@
 name: Build and Package APKs
 
+# THE single Click build workflow. On every main push it produces the
+# properly-signed release APK (Prince's real keystore — never a
+# debug-signed "release" APK; the build fails loudly if the keystore
+# secrets are missing or invalid, per Prince's rule: no improperly
+# signed APKs, ever).
+#
+# Job 1 builds libbox.aar (sing-box VPN core) from official SagerNet
+# source with a version-pinned cache — a fast no-op when the pin in
+# app/libs/libbox.version hasn't changed.
+# Job 2 builds and signs the app. No cross-workflow artifact races:
+# everything happens inside this one run.
+
 on:
   push:
     branches: [ main ]
+    tags:
+      - 'v*'
   pull_request:
     branches: [ main ]
   workflow_dispatch:
 
 jobs:
+  build-libbox:
+    name: Build libbox.aar
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Read libbox version pin
+        id: libbox-version
+        run: echo "version=$(tr -d '[:space:]' < app/libs/libbox.version)" >> "$GITHUB_OUTPUT"
+
+      - name: Check cache
+        id: cache-libbox
+        uses: actions/cache@v4
+        with:
+          path: libbox.aar
+          key: libbox-${{ steps.libbox-version.outputs.version }}-aar
+
+      - name: Set up Go
+        if: steps.cache-libbox.outputs.cache-hit != 'true'
+        uses: actions/setup-go@v5
+        with:
+          # Latest gomobile requires Go >= 1.26 (sing-box's exact CI version;
+          # 1.26.9 has a c-shared linker regression).
+          go-version: "1.26.8"
+
+      - name: Set up JDK 17
+        if: steps.cache-libbox.outputs.cache-hit != 'true'
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - name: Set up Android NDK
+        if: steps.cache-libbox.outputs.cache-hit != 'true'
+        uses: nttld/setup-ndk@v1
+        id: setup-ndk
+        with:
+          # sing-box's own CI uses r28 (their cronet prebuilt libs need it).
+          ndk-version: r28
+
+      - name: Clone sing-box (pinned)
+        if: steps.cache-libbox.outputs.cache-hit != 'true'
+        run: |
+          git clone --depth 1 --branch ${{ steps.libbox-version.outputs.version }} \
+            https://github.com/SagerNet/sing-box.git sing-box-src
+
+      - name: Build libbox.aar
+        if: steps.cache-libbox.outputs.cache-hit != 'true'
+        run: |
+          export PATH=$PATH:$(go env GOPATH)/bin
+          export ANDROID_NDK_HOME=${{ steps.setup-ndk.outputs.ndk-path }}
+          # sing-box's own supported build path (same as their release CI):
+          # their build_libbox tool drives their gomobile fork with the
+          # exact flags/tags the libbox Java API expects.
+          make -C sing-box-src lib_install
+          cd sing-box-src
+          go run ./cmd/internal/build_libbox -target android
+          ls -lh libbox.aar
+          cp libbox.aar ../libbox.aar
+
+      - name: Verify libbox.aar present
+        run: |
+          if [ ! -f libbox.aar ]; then
+            echo "::error::libbox.aar missing after build/cache step."
+            exit 1
+          fi
+          ls -lh libbox.aar
+
+      - name: Upload libbox.aar (for app build job)
+        uses: actions/upload-artifact@v4
+        with:
+          name: libbox-aar
+          path: libbox.aar
+          retention-days: 7
+
   build:
     name: Build Debug and Release APKs
+    needs: build-libbox
     runs-on: ubuntu-latest
 
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
 
-      # libbox.aar (sing-box VPN core): built from official source by the
-      # build-libbox.yml workflow. Restored from cache if the version pin
-      # hasn't changed; otherwise downloaded from the workflow artifact
-      # (the actions cache is branch-scoped, so a PR build cannot see the
-      # AAR cached on the feature branch — the artifact is the bridge).
-      - name: Read libbox version pin
-        id: libbox-version
-        run: echo "version=$(tr -d '[:space:]' < app/libs/libbox.version)" >> "$GITHUB_OUTPUT"
-
-      - name: Restore libbox.aar from cache
-        id: cache-libbox
-        uses: actions/cache@v4
+      # libbox.aar comes from the build-libbox job in THIS run — no
+      # cross-workflow artifact race possible.
+      - name: Download libbox.aar from build job
+        uses: actions/download-artifact@v4
         with:
-          path: app/libs/libbox.aar
-          key: libbox-${{ steps.libbox-version.outputs.version }}-aar
-
-      - name: Download libbox.aar from build-libbox artifact
-        if: steps.cache-libbox.outputs.cache-hit != 'true'
-        uses: dawidd6/action-download-artifact@v6
-        with:
-          workflow: build-libbox.yml
-          workflow_conclusion: success
-          name: libbox-aar-${{ steps.libbox-version.outputs.version }}
+          name: libbox-aar
           path: app/libs
-          branch: ${{ github.head_ref || github.ref_name }}
-          if_no_artifact_found: fail
 
       - name: Verify libbox.aar present
         run: |
           if [ ! -f app/libs/libbox.aar ]; then
-            echo "::error::app/libs/libbox.aar missing — run the 'Build libbox.aar' workflow first."
+            echo "::error::app/libs/libbox.aar missing."
             exit 1
           fi
           ls -lh app/libs/libbox.aar
@@ -58,11 +130,10 @@ jobs:
           distribution: 'temurin'
 
       # NOTE: AGP generates the debug keystore automatically — no manual step needed.
-      # Release APKs MUST be signed with Prince's real keystore (same as
-      # build-release.yml). A debug-signed "release" APK trips the in-app
-      # tamper warning on install — so we fail loudly instead of silently
-      # shipping a wrongly-signed artifact (Prince's rule: no improperly
-      # signed APKs, ever).
+      # Release APKs MUST be signed with Prince's real keystore. A debug-signed
+      # "release" APK trips the in-app tamper warning on install — so we fail
+      # loudly instead of silently shipping a wrongly-signed artifact
+      # (Prince's rule: no improperly signed APKs, ever).
       - name: Setup release signing (real keystore)
         env:
           KEYSTORE_B64: ${{ secrets.CLICK_KEYSTORE_BASE64 }}
@@ -107,6 +178,11 @@ jobs:
           GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
         run: ./gradlew assembleDebug
 
+      - name: Build Debug AAB
+        env:
+          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+        run: ./gradlew bundleDebug
+
       - name: Build Release APK
         env:
           GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
@@ -115,6 +191,15 @@ jobs:
           CLICK_KEY_ALIAS: ${{ env.CLICK_KEY_ALIAS }}
           CLICK_KEY_PASSWORD: ${{ env.CLICK_KEY_PASSWORD }}
         run: ./gradlew assembleRelease --stacktrace
+
+      - name: Build Release AAB
+        env:
+          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+          CLICK_KEYSTORE_FILE: ${{ env.CLICK_KEYSTORE_FILE }}
+          CLICK_KEYSTORE_PASSWORD: ${{ env.CLICK_KEYSTORE_PASSWORD }}
+          CLICK_KEY_ALIAS: ${{ env.CLICK_KEY_ALIAS }}
+          CLICK_KEY_PASSWORD: ${{ env.CLICK_KEY_PASSWORD }}
+        run: ./gradlew bundleRelease
 
       - name: Verify release signature (must be Prince's key)
         run: |
@@ -128,9 +213,41 @@ jobs:
           path: app/build/outputs/apk/debug/app-debug.apk
           retention-days: 30
 
+      - name: Upload Debug AAB
+        uses: actions/upload-artifact@v4
+        with:
+          name: Click-Browser-Debug-AAB
+          path: app/build/outputs/bundle/debug/app-debug.aab
+          retention-days: 30
+
       - name: Upload Release APK
         uses: actions/upload-artifact@v4
         with:
           name: Click-Browser-Release
           path: app/build/outputs/apk/release/app-release.apk
           retention-days: 90
+
+      - name: Upload Release AAB
+        uses: actions/upload-artifact@v4
+        with:
+          name: Click-Browser-Release-AAB
+          path: app/build/outputs/bundle/release/app-release.aab
+          retention-days: 90
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v1
+        if: startsWith(github.ref, 'refs/tags/')
+        with:
+          name: Click Browser ${{ github.ref_name }}
+          body: |
+            ## Click Browser ${{ github.ref_name }}
+            - API 36 (Android 16), edge-to-edge, predictive back
+            - Simple / Developer / Hack modes with per-mode premium themes
+            - Real AI chat (Groq/OpenRouter, user-provided key)
+            - Privacy guards, userscript extensions (.user.js)
+            - Pull-to-refresh, fullscreen view, per-site desktop toggle
+          files: |
+            app/build/outputs/apk/debug/app-debug.apk
+            app/build/outputs/bundle/debug/app-debug.aab
+            app/build/outputs/apk/release/app-release.apk
+            app/build/outputs/bundle/release/app-release.aab

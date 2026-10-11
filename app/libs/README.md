@@ -8,8 +8,10 @@ Android library via gomobile.
 **NEVER commit a third-party prebuilt binary.** The AAR is built from
 OFFICIAL SagerNet/sing-box source:
 
-1. **CI (preferred):** Run the `build-libbox.yml` workflow (or it runs
-   automatically when `libbox.version` changes). It:
+1. **CI (preferred):** The `Build and Package APKs` workflow
+   (`build-debug.yml`) builds it automatically in its `build-libbox` job
+   on every run (version-pinned cache — a fast no-op unless
+   `libbox.version` changes). It:
    - Installs Go 1.26.8 + Android NDK + JDK 17
    - Clones `https://github.com/SagerNet/sing-box` at the pinned version
    - Runs sing-box's own `build_libbox` tool (same as their release CI,
@@ -33,4 +35,4 @@ silently skipped, because a "VPN" without the tunnel core would be dishonest.
 ## Version pin
 
 See `libbox.version` — single source of truth for the sing-box version.
-Bump it + run `build-libbox.yml` to upgrade.
+Bump it and the next `Build and Package APKs` run rebuilds the AAR.
