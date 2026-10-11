@@ -147,6 +147,11 @@ private fun PageTransitionWrapper(
 // animations from main AND the Fragment support BiometricPrompt needs.
 class MainActivity : FragmentActivity() {
 
+    // App language (English / اردو / Roman Urdu) applies before anything inflates.
+    override fun attachBaseContext(newBase: Context) {
+        super.attachBaseContext(com.click.browser.engine.AppLanguage.wrapContext(newBase))
+    }
+
     private lateinit var modeManager: ModeManager
     private lateinit var repository: BrowserRepository
     private lateinit var playlistManager: PlaylistManager
@@ -174,6 +179,10 @@ class MainActivity : FragmentActivity() {
     private var liveForgetfulBrowsing = false
     private var liveForgetfulExceptions: Set<String> = emptySet()
     private var liveBlockConsentBanners = true
+    // Accessibility: force zoom / reader mode / reduced motion.
+    private var liveForceZoom = false
+    private var liveReaderMode = false
+    private var liveReducedMotion = false
     // HTTPS mode: "off" | "standard" | "strict" + per-site Strict exceptions.
     private var liveHttpsMode = "standard"
     private var liveHttpsStrictExceptions: Set<String> = emptySet()
@@ -434,32 +443,19 @@ class MainActivity : FragmentActivity() {
             Toast.makeText(this, "This image can't be saved directly.", Toast.LENGTH_LONG).show()
             return
         }
-        try {
-            val dm = getSystemService(Context.DOWNLOAD_SERVICE) as android.app.DownloadManager
-            var fileName = url.substringAfterLast("/").substringBefore("?").take(64)
-            if (fileName.isBlank() || !fileName.contains(".")) {
-                val ext = when {
-                    url.contains(".png", ignoreCase = true) -> "png"
-                    url.contains(".webp", ignoreCase = true) -> "webp"
-                    url.contains(".gif", ignoreCase = true) -> "gif"
-                    else -> "jpg"
-                }
-                fileName = "click_image_${System.currentTimeMillis()}.$ext"
+        var fileName = url.substringAfterLast("/").substringBefore("?").take(64)
+        if (fileName.isBlank() || !fileName.contains(".")) {
+            val ext = when {
+                url.contains(".png", ignoreCase = true) -> "png"
+                url.contains(".webp", ignoreCase = true) -> "webp"
+                url.contains(".gif", ignoreCase = true) -> "gif"
+                else -> "jpg"
             }
-            val request = android.app.DownloadManager.Request(android.net.Uri.parse(url))
-                .setTitle("Click Browser Download")
-                .setDescription(fileName)
-                .setNotificationVisibility(android.app.DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED)
-                .setDestinationInExternalPublicDir(
-                    android.os.Environment.DIRECTORY_DOWNLOADS,
-                    "ClickBrowser/$fileName"
-                )
-                .setAllowedOverMetered(true)
-                .setAllowedOverRoaming(false)
-            dm.enqueue(request)
-            Toast.makeText(this, "Downloading image…", Toast.LENGTH_SHORT).show()
-        } catch (e: Exception) {
-            Toast.makeText(this, "Download failed.", Toast.LENGTH_SHORT).show()
+            fileName = "click_image_${System.currentTimeMillis()}.$ext"
+        }
+        // Honors the user's download-location setting (phone / app-private / custom).
+        kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.Main).launch {
+            com.click.browser.engine.DownloadHelper.enqueue(this@MainActivity, url, fileName)
         }
     }
 
@@ -885,15 +881,25 @@ class MainActivity : FragmentActivity() {
             val scope = rememberCoroutineScope()
             val activeMode by modeManager.modeFlow.collectAsState(initial = BrowserMode.SIMPLE)
 
-            // App Layout configuration: global Day/Night toggle.
-            // Each browsing mode has its own premium light/dark theme
-            // (see ModeThemes — adapted from the approved design references).
-            var currentThemeSetting by remember { mutableStateOf("Dark") }
-            // Per-mode Day/Night overrides (null = follow the global toggle).
+            // App Layout configuration: Day/Night theme mode.
+            // "auto" follows the system, "scheduled" follows the clock,
+            // "light"/"dark" are fixed. Each browsing mode can still override
+            // via perModeDark (see Modes section in Settings).
+            var themeMode by remember { mutableStateOf("dark") }
+            var scheduleStartHour by remember { mutableStateOf(6) }
+            var scheduleEndHour by remember { mutableStateOf(19) }
+            // Per-mode Day/Night overrides (null = follow the global theme mode).
             var perModeDark by remember { mutableStateOf<Map<BrowserMode, Boolean?>>(emptyMap()) }
+            // Resolved dark flag for the active mode right now (suspend read).
+            var darkNow by remember { mutableStateOf(true) }
+            LaunchedEffect(activeMode, themeMode, perModeDark, scheduleStartHour, scheduleEndHour) {
+                darkNow = try {
+                    com.click.browser.engine.ThemeController.isDarkNow(this@MainActivity, activeMode)
+                } catch (_: Exception) { true }
+            }
             var wallpaperUri by remember { mutableStateOf<String?>(null) }
-            val theme = remember(activeMode, currentThemeSetting, perModeDark) {
-                val dark = perModeDark[activeMode] ?: (currentThemeSetting == "Dark")
+            val theme = remember(activeMode, darkNow, perModeDark) {
+                val dark = perModeDark[activeMode] ?: darkNow
                 ModeThemes.forMode(activeMode, dark)
             }
 
@@ -1095,6 +1101,10 @@ class MainActivity : FragmentActivity() {
             var forgetfulBrowsing by remember { mutableStateOf(false) }
             var forgetfulExceptions by remember { mutableStateOf(setOf<String>()) }
             var blockConsentBanners by remember { mutableStateOf(true) }
+            // Accessibility settings (Settings → Browser → Accessibility).
+            var forceZoomEnabled by remember { mutableStateOf(false) }
+            var readerModeEnabled by remember { mutableStateOf(false) }
+            var reducedMotionEnabled by remember { mutableStateOf(false) }
 
             // LocationGuard: hide/spoof browser geolocation (Prince request).
             var locationMode by remember { mutableStateOf(LocationGuard.LocationMode.ASK) }
@@ -1167,6 +1177,12 @@ class MainActivity : FragmentActivity() {
             var showPasswordManager by remember { mutableStateOf(false) }
             // Cookie manager: per-site cookie viewer.
             var showCookieManager by remember { mutableStateOf(false) }
+            // Settings suite: tab groups, accessibility, language, downloads, reports.
+            var showTabGroups by remember { mutableStateOf(false) }
+            var showAccessibility by remember { mutableStateOf(false) }
+            var showLanguage by remember { mutableStateOf(false) }
+            var showDownloadSettings by remember { mutableStateOf(false) }
+            var showReports by remember { mutableStateOf(false) }
             // Per-site settings sheet (opened from the lock icon in the address bar).
             var showSiteSettings by remember { mutableStateOf(false) }
             // Built-in engines (Safe Browsing / Translate / PDF)
@@ -1445,6 +1461,10 @@ class MainActivity : FragmentActivity() {
             LaunchedEffect(forgetfulBrowsing) { liveForgetfulBrowsing = forgetfulBrowsing }
             LaunchedEffect(forgetfulExceptions) { liveForgetfulExceptions = forgetfulExceptions }
             LaunchedEffect(blockConsentBanners) { liveBlockConsentBanners = blockConsentBanners }
+            // Accessibility: keep WebViewClient-safe live copies in sync.
+            LaunchedEffect(forceZoomEnabled) { liveForceZoom = forceZoomEnabled }
+            LaunchedEffect(readerModeEnabled) { liveReaderMode = readerModeEnabled }
+            LaunchedEffect(reducedMotionEnabled) { liveReducedMotion = reducedMotionEnabled }
             LaunchedEffect(secureDnsEnabled) { liveSecureDns = secureDnsEnabled }
             LaunchedEffect(customHeaders) { liveCustomHeaders = customHeaders.associate { it.name to it.value } }
             LaunchedEffect(desktopHosts) { liveDesktopHosts = desktopHosts }
@@ -1557,7 +1577,24 @@ class MainActivity : FragmentActivity() {
                     forgetfulBrowsing = prefs[AppSettings.FORGETFUL_BROWSING] == true
                     forgetfulExceptions = prefs[AppSettings.FORGETFUL_BROWSING_EXCEPTIONS] ?: emptySet()
                     blockConsentBanners = prefs[AppSettings.BLOCK_CONSENT_BANNERS] ?: true
-                    currentThemeSetting = if (prefs[AppSettings.UI_DARK_MODE] == false) "Light" else "Dark"
+                    // Accessibility settings.
+                    forceZoomEnabled = prefs[AppSettings.FORCE_ZOOM] == true
+                    readerModeEnabled = prefs[AppSettings.READER_MODE] == true
+                    reducedMotionEnabled = prefs[AppSettings.REDUCED_MOTION] == true
+                    // Theme mode (+ legacy UI_DARK_MODE migration) and schedule hours.
+                    val legacyThemeMode = prefs[AppSettings.THEME_MODE]
+                    themeMode = if (legacyThemeMode == null) {
+                        // One-time migration: persist so ThemeController agrees.
+                        val migrated = if (prefs[AppSettings.UI_DARK_MODE] == false) "light" else "dark"
+                        try {
+                            com.click.browser.engine.ThemeController.setThemeMode(this@MainActivity, migrated)
+                        } catch (_: Exception) { }
+                        migrated
+                    } else {
+                        com.click.browser.engine.ThemeController.normalize(legacyThemeMode)
+                    }
+                    scheduleStartHour = (prefs[AppSettings.THEME_SCHEDULE_START_HOUR] ?: 6).coerceIn(0, 23)
+                    scheduleEndHour = (prefs[AppSettings.THEME_SCHEDULE_END_HOUR] ?: 19).coerceIn(0, 23)
                     // Per-mode Day/Night overrides (missing key = follow global).
                     perModeDark = BrowserMode.values().associateWith { mode ->
                         prefs[AppSettings.darkModeKey(mode)]
@@ -2867,6 +2904,28 @@ class MainActivity : FragmentActivity() {
                                                                     } catch (_: Exception) { "" }
                                                                     wv.settings.textZoom =
                                                                         liveHostTextScales[host] ?: liveGlobalTextScale
+                                                                    // Accessibility injections: force zoom,
+                                                                    // reduced motion, reader mode (opt-in toggles).
+                                                                    try {
+                                                                        if (liveForceZoom) {
+                                                                            wv.evaluateJavascript(
+                                                                                com.click.browser.engine.AccessibilityJs.FORCE_ZOOM_JS,
+                                                                                null
+                                                                            )
+                                                                        }
+                                                                        if (liveReducedMotion) {
+                                                                            wv.evaluateJavascript(
+                                                                                com.click.browser.engine.AccessibilityJs.REDUCED_MOTION_JS,
+                                                                                null
+                                                                            )
+                                                                        }
+                                                                        if (liveReaderMode) {
+                                                                            wv.evaluateJavascript(
+                                                                                com.click.browser.engine.AccessibilityJs.READER_MODE_JS,
+                                                                                null
+                                                                            )
+                                                                        }
+                                                                    } catch (_: Exception) { /* non-fatal */ }
                                                                 }
 
                                                                 // Visual tab switcher thumbnails: capture the visible
@@ -3820,12 +3879,22 @@ class MainActivity : FragmentActivity() {
                             if (showSettings) {
                                 SettingsScreen(
                                     theme = theme,
-                                    currentThemeSetting = currentThemeSetting,
+                                    themeMode = themeMode,
                                     onThemeChange = {
-                                        currentThemeSetting = it
+                                        themeMode = it
+                                        scope.launch {
+                                            com.click.browser.engine.ThemeController.setThemeMode(this@MainActivity, it)
+                                        }
+                                    },
+                                    globalDarkEffective = darkNow,
+                                    scheduleStartHour = scheduleStartHour,
+                                    scheduleEndHour = scheduleEndHour,
+                                    onScheduleChange = { start, end ->                                        scheduleStartHour = start
+                                        scheduleEndHour = end
                                         scope.launch {
                                             dataStore.edit { prefs ->
-                                                prefs[AppSettings.UI_DARK_MODE] = it == "Dark"
+                                                prefs[AppSettings.THEME_SCHEDULE_START_HOUR] = start
+                                                prefs[AppSettings.THEME_SCHEDULE_END_HOUR] = end
                                             }
                                         }
                                     },
@@ -4008,6 +4077,11 @@ class MainActivity : FragmentActivity() {
                                         Toast.makeText(this@MainActivity, "All browsing data cleared (current mode)", Toast.LENGTH_SHORT).show()
                                     },
                                     onOpenCookieManager = { showSettings = false; showCookieManager = true },
+                                    onOpenTabGroups = { showSettings = false; showTabGroups = true },
+                                    onOpenAccessibility = { showSettings = false; showAccessibility = true },
+                                    onOpenLanguage = { showSettings = false; showLanguage = true },
+                                    onOpenDownloadSettings = { showSettings = false; showDownloadSettings = true },
+                                    onOpenReports = { showSettings = false; showReports = true },
                                     locationSummary = LocationGuard.websitesWillSee(locationMode, locationSpoofLabel),
                                     onOpenLocationSettings = { showLocationSettings = true },
                                     perModeDark = perModeDark,
@@ -4103,6 +4177,38 @@ class MainActivity : FragmentActivity() {
                                     theme = theme,
                                     repository = repository,
                                     onClose = { showCookieManager = false }
+                                )
+                            }
+                            // Settings suite: tab groups, accessibility, language, downloads, reports.
+                            if (showTabGroups) {
+                                com.click.browser.ui.screens.TabGroupsScreen(
+                                    theme = theme,
+                                    liveTabs = tabs.map { it.id to it.title },
+                                    onClose = { showTabGroups = false }
+                                )
+                            }
+                            if (showAccessibility) {
+                                com.click.browser.ui.screens.AccessibilityScreen(
+                                    theme = theme,
+                                    onClose = { showAccessibility = false }
+                                )
+                            }
+                            if (showLanguage) {
+                                com.click.browser.ui.screens.LanguageScreen(
+                                    theme = theme,
+                                    onClose = { showLanguage = false }
+                                )
+                            }
+                            if (showDownloadSettings) {
+                                com.click.browser.ui.screens.DownloadSettingsScreen(
+                                    theme = theme,
+                                    onClose = { showDownloadSettings = false }
+                                )
+                            }
+                            if (showReports) {
+                                com.click.browser.ui.screens.ReportsScreen(
+                                    theme = theme,
+                                    onClose = { showReports = false }
                                 )
                             }
                             // Per-site settings sheet (lock icon in the address bar).
@@ -4297,24 +4403,13 @@ class MainActivity : FragmentActivity() {
                                         }
                                     },
                                     onDownload = {
-                                        // Real download via DownloadManager (existing pattern).
-                                        try {
-                                            val dm = getSystemService(Context.DOWNLOAD_SERVICE) as android.app.DownloadManager
-                                            val fileName = offerUrl.substringAfterLast("/").take(64).ifBlank { "document.pdf" }
-                                            val request = android.app.DownloadManager.Request(android.net.Uri.parse(offerUrl))
-                                                .setTitle("Click Browser Download")
-                                                .setDescription(fileName)
-                                                .setNotificationVisibility(android.app.DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED)
-                                                .setDestinationInExternalPublicDir(
-                                                    android.os.Environment.DIRECTORY_DOWNLOADS,
-                                                    "ClickBrowser/$fileName"
-                                                )
-                                                .setAllowedOverMetered(true)
-                                                .setAllowedOverRoaming(false)
-                                            dm.enqueue(request)
-                                            Toast.makeText(this@MainActivity, "Downloading PDF…", Toast.LENGTH_SHORT).show()
-                                        } catch (e: Exception) {
-                                            Toast.makeText(this@MainActivity, "Download failed.", Toast.LENGTH_SHORT).show()
+                                        // Real download via DownloadHelper — honors the user's
+                                        // download-location setting (phone / app-private / custom).
+                                        val fileName = offerUrl.substringAfterLast("/").take(64).ifBlank { "document.pdf" }
+                                        scope.launch {
+                                            com.click.browser.engine.DownloadHelper.enqueue(
+                                                this@MainActivity, offerUrl, fileName
+                                            )
                                         }
                                         pdfOfferUrl = null
                                     },

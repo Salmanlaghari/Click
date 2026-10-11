@@ -52,14 +52,26 @@ private const val PLAY_STORE_PACKAGE = "com.teampkai.clickbrowser"
 fun SettingsScreen(
     theme: ModeTheme,
     // --- General ---
-    currentThemeSetting: String,
+    themeMode: String, // "auto" | "light" | "dark" | "scheduled"
     onThemeChange: (String) -> Unit,
+    /** Resolved global dark flag right now (auto/scheduled already resolved). */
+    globalDarkEffective: Boolean,
+    scheduleStartHour: Int,
+    scheduleEndHour: Int,
+    onScheduleChange: (Int, Int) -> Unit,
     wallpaperUri: String?,
     onWallpaperChange: (String?) -> Unit,
     activeMode: BrowserMode,
     onModeChange: (BrowserMode) -> Unit,
     currentSearchEngineSetting: String,
     onSearchEngineChange: (String) -> Unit,
+    // --- Browser suite (tabs, accessibility, language, downloads) ---
+    onOpenTabGroups: () -> Unit,
+    onOpenAccessibility: () -> Unit,
+    onOpenLanguage: () -> Unit,
+    onOpenDownloadSettings: () -> Unit,
+    // --- Reports ---
+    onOpenReports: () -> Unit,
     // --- Address bar position ---
     addressBarPosition: String, // "top" | "bottom"
     onAddressBarPositionChange: (String) -> Unit,
@@ -154,7 +166,7 @@ fun SettingsScreen(
     // ---- Row model: each row optionally opens a named section ----
     data class Row(val section: String?, val content: @Composable () -> Unit)
     val rows = remember(
-        theme, currentThemeSetting, wallpaperUri, activeMode,
+        theme, themeMode, globalDarkEffective, scheduleStartHour, scheduleEndHour, wallpaperUri, activeMode,
         currentSearchEngineSetting, addressBarPosition,
         adBlockerEnabled, forceNightMode,
         httpsMode, httpsStrictExceptions, jsEnabled, dataSaver, perModeDark, historyModeTarget,
@@ -175,15 +187,56 @@ fun SettingsScreen(
                     Spacer(Modifier.height(8.dp))
                     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         FilterChip(
-                            selected = currentThemeSetting == "Light",
-                            onClick = { onThemeChange("Light") },
-                            label = { Text("☀️ Light") }
+                            selected = themeMode == "auto",
+                            onClick = { onThemeChange("auto") },
+                            label = { Text("🔄 Auto", fontSize = 12.sp) }
                         )
                         FilterChip(
-                            selected = currentThemeSetting == "Dark",
-                            onClick = { onThemeChange("Dark") },
-                            label = { Text("🌙 Dark") }
+                            selected = themeMode == "light",
+                            onClick = { onThemeChange("light") },
+                            label = { Text("☀️ Light", fontSize = 12.sp) }
                         )
+                        FilterChip(
+                            selected = themeMode == "dark",
+                            onClick = { onThemeChange("dark") },
+                            label = { Text("🌙 Dark", fontSize = 12.sp) }
+                        )
+                        FilterChip(
+                            selected = themeMode == "scheduled",
+                            onClick = { onThemeChange("scheduled") },
+                            label = { Text("🕒 Scheduled", fontSize = 12.sp) }
+                        )
+                    }
+                    if (themeMode == "auto") {
+                        Text(
+                            "Follows your phone's system day/night setting.",
+                            fontSize = 11.sp, color = theme.onSurface.copy(alpha = 0.55f)
+                        )
+                    }
+                    if (themeMode == "scheduled") {
+                        Spacer(Modifier.height(8.dp))
+                        Text(
+                            "Light theme between the hours below, dark otherwise.",
+                            fontSize = 11.sp, color = theme.onSurface.copy(alpha = 0.55f)
+                        )
+                        Spacer(Modifier.height(4.dp))
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            HourPicker(
+                                label = "Light from",
+                                hour = scheduleStartHour,
+                                theme = theme,
+                                onChange = { onScheduleChange(it, scheduleEndHour) }
+                            )
+                            HourPicker(
+                                label = "Dark from",
+                                hour = scheduleEndHour,
+                                theme = theme,
+                                onChange = { onScheduleChange(scheduleStartHour, it) }
+                            )
+                        }
                     }
                 }
             })
@@ -566,6 +619,22 @@ fun SettingsScreen(
                 }
             })
 
+            // ================= BROWSER =================
+            add(Row("Browser") {
+                SectionHeader("Browser", Icons.Default.Web, theme)
+            })
+            add(Row(null) {
+                CardRow(theme) {
+                    ActionRow("Tab Groups", "Named, color-coded tab collections", Icons.Default.FolderCopy, theme, onOpenTabGroups)
+                    HorizontalDivider(color = theme.onSurface.copy(alpha = 0.1f))
+                    ActionRow("Accessibility", "Force zoom, reader mode, reduced motion", Icons.Default.Accessibility, theme, onOpenAccessibility)
+                    HorizontalDivider(color = theme.onSurface.copy(alpha = 0.1f))
+                    ActionRow("Language", "App language + on-device page translate", Icons.Default.Translate, theme, onOpenLanguage)
+                    HorizontalDivider(color = theme.onSurface.copy(alpha = 0.1f))
+                    ActionRow("Downloads", "Download location — phone storage by default", Icons.Default.Download, theme, onOpenDownloadSettings)
+                }
+            })
+
             // ================= MODES =================
             add(Row("Modes") {
                 SectionHeader("Modes", Icons.Default.Apps, theme)
@@ -580,7 +649,7 @@ fun SettingsScreen(
                     BrowserMode.values().forEach { mode ->
                         val isActive = mode == activeMode
                         val override = perModeDark[mode]
-                        val effective = override ?: (currentThemeSetting == "Dark")
+                        val effective = override ?: globalDarkEffective
                         Card(
                             colors = CardDefaults.cardColors(
                                 containerColor = if (isActive) theme.primary.copy(alpha = 0.12f)
@@ -659,6 +728,8 @@ fun SettingsScreen(
                     HorizontalDivider(color = theme.onSurface.copy(alpha = 0.1f))
                     ActionRow("Help & Feedback", "FAQs + email the developer", Icons.Default.Help, theme, onOpenHelpFeedback)
                     HorizontalDivider(color = theme.onSurface.copy(alpha = 0.1f))
+                    ActionRow("Reports", "Crash & OOM reports, feedback, bug reports", Icons.Default.BugReport, theme, onOpenReports)
+                    HorizontalDivider(color = theme.onSurface.copy(alpha = 0.1f))
                     ActionRow("Rate Click", "Rate us on Google Play", Icons.Default.Star, theme) {
                         try {
                             context.startActivity(
@@ -698,7 +769,7 @@ fun SettingsScreen(
             rows.forEachIndexed { i, row -> row.section?.let { put(it, i) } }
         }
     }
-    val sections = listOf("General", "Privacy", "Modes", "About")
+    val sections = listOf("General", "Privacy", "Browser", "Modes", "About")
     var activeSection by remember { mutableStateOf("General") }
 
     Scaffold(
@@ -748,6 +819,32 @@ fun SettingsScreen(
                 contentPadding = PaddingValues(bottom = 24.dp)
             ) {
                 items(rows.size) { i -> rows[i].content() }
+            }
+        }
+    }
+}
+
+@Composable
+private fun HourPicker(
+    label: String,
+    hour: Int,
+    theme: ModeTheme,
+    onChange: (Int) -> Unit
+) {
+    var expanded by remember { mutableStateOf(false) }
+    Column {
+        Text(label, fontSize = 11.sp, color = theme.onSurface.copy(alpha = 0.6f))
+        Box {
+            OutlinedButton(onClick = { expanded = true }) {
+                Text("%02d:00".format(hour), fontSize = 13.sp)
+            }
+            DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+                (0..23).forEach { h ->
+                    DropdownMenuItem(
+                        text = { Text("%02d:00".format(h), fontSize = 13.sp) },
+                        onClick = { onChange(h); expanded = false }
+                    )
+                }
             }
         }
     }

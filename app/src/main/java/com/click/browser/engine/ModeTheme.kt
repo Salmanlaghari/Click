@@ -82,11 +82,14 @@ object ModeThemes {
         modePillText = "DEVELOPER MODE"
     )
 
+    // Fresh Light: white + very light blue tint + a hint of greenery.
+    // Per-mode accent identities are preserved; Simple's light theme is
+    // intentionally left untouched (Prince: "simple mode sahi hai").
     private fun developerLight() = ModeTheme(
         mode = BrowserMode.DEVELOPER, dark = false,
-        background = Color(0xFFFAF8FF),
+        background = Color(0xFFF7FCFF),
         surface = Color(0xFFFFFFFF),
-        surfaceVariant = Color(0xFFF0E9FF),
+        surfaceVariant = Color(0xFFE9F3F1),
         primary = Color(0xFF7C3AED),
         secondary = Color(0xFF8B5CF6),
         onBackground = Color(0xFF1E1B2E),
@@ -114,9 +117,9 @@ object ModeThemes {
 
     private fun hackLight() = ModeTheme(
         mode = BrowserMode.HACK, dark = false,
-        background = Color(0xFFF6FFF6),
+        background = Color(0xFFF7FCFF),
         surface = Color(0xFFFFFFFF),
-        surfaceVariant = Color(0xFFE9F5E9),
+        surfaceVariant = Color(0xFFE9F5F2),
         primary = Color(0xFFDC2626),
         secondary = Color(0xFF16A34A),
         onBackground = Color(0xFF0A0F0A),
@@ -130,9 +133,9 @@ object ModeThemes {
     // Click Advance: deep-space teal/cyan "fresh space" identity.
     private fun advanceLight() = ModeTheme(
         mode = BrowserMode.ADVANCED, dark = false,
-        background = Color(0xFFF5FEFF),
+        background = Color(0xFFF7FCFF),
         surface = Color(0xFFFFFFFF),
-        surfaceVariant = Color(0xFFE6FAFA),
+        surfaceVariant = Color(0xFFE6F4F1),
         primary = Color(0xFF0E7490),
         secondary = Color(0xFF06B6D4),
         onBackground = Color(0xFF0C2E35),
