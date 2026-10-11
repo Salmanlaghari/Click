@@ -80,7 +80,7 @@ jobs:
             -javapkg=io.nekohasekai -libname=box \
             -trimpath -buildvcs=false \
             -ldflags "-X github.com/sagernet/sing-box/constant.Version=${{ env.SINGBOX_VERSION }} -s -w -buildid=" \
-            -tags "with_gvisor,with_quic,with_wireguard,with_ech,with_utls,with_clash_api" \
+            -tags "with_gvisor,with_quic,with_wireguard,with_utls,with_clash_api" \
             ./experimental/libbox
           ls -lh libbox.aar
           cp libbox.aar ../libbox.aar
