@@ -88,7 +88,7 @@ object VpnController {
             .putExtra(SingBoxVpnService.EXTRA_SERVER_NAME, server.name)
         if (Build.VERSION.SDK_INT >= 26) context.startForegroundService(i)
         else context.startService(i)
-        true
+        return true
     }
 
     fun stop(context: Context) {

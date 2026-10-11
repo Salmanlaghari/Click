@@ -1408,12 +1408,10 @@ class MainActivity : FragmentActivity() {
             // DevTools log state lives at Activity level (devToolsLogs etc.)
             // so WebView callbacks and this UI can never diverge. Local
             // aliases keep the existing code below unchanged.
-            val logs get() = devToolsLogs
-            val networkRequests get() = devToolsNetwork
-            var domHtml: String
-                get() = devToolsDomHtml.value
-                set(v) { devToolsDomHtml.value = v }
-            val sourcesList get() = devToolsSources
+            val logs = devToolsLogs
+            val networkRequests = devToolsNetwork
+            val domHtml: String by devToolsDomHtml
+            val sourcesList = devToolsSources
 
             // Hack tools states
             var antiDetectionEnabled by remember { mutableStateOf(true) }
