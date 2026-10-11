@@ -76,10 +76,12 @@ jobs:
           cd sing-box-src
           # NOTE: newer gomobile removed -libname (the native lib is now
           # always libgojni.so, loaded by the regenerated Java stubs) —
-          # use -o to name the AAR instead.
+          # use -o to name the AAR instead. -buildvcs is also no longer a
+          # bind flag (harmless to drop: -trimpath + -buildid= already
+          # keep the build reproducible).
           gomobile bind -v -target android -androidapi 21 \
             -javapkg=io.nekohasekai -o libbox.aar \
-            -trimpath -buildvcs=false \
+            -trimpath \
             -ldflags "-X github.com/sagernet/sing-box/constant.Version=${{ env.SINGBOX_VERSION }} -s -w -buildid=" \
             -tags "with_gvisor,with_quic,with_wireguard,with_ech,with_utls,with_clash_api" \
             ./experimental/libbox
