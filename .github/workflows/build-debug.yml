@@ -18,13 +18,30 @@ jobs:
 
       # libbox.aar (sing-box VPN core): built from official source by the
       # build-libbox.yml workflow. Restored from cache if the version pin
-      # hasn't changed; otherwise downloaded from the workflow artifact.
+      # hasn't changed; otherwise downloaded from the workflow artifact
+      # (the actions cache is branch-scoped, so a PR build cannot see the
+      # AAR cached on the feature branch — the artifact is the bridge).
+      - name: Read libbox version pin
+        id: libbox-version
+        run: echo "version=$(tr -d '[:space:]' < app/libs/libbox.version)" >> "$GITHUB_OUTPUT"
+
       - name: Restore libbox.aar from cache
         id: cache-libbox
         uses: actions/cache@v4
         with:
           path: app/libs/libbox.aar
-          key: libbox-v1.14.3-aar
+          key: libbox-${{ steps.libbox-version.outputs.version }}-aar
+
+      - name: Download libbox.aar from build-libbox artifact
+        if: steps.cache-libbox.outputs.cache-hit != 'true'
+        uses: dawidd6/action-download-artifact@v6
+        with:
+          workflow: build-libbox.yml
+          workflow_conclusion: success
+          name: libbox-aar-${{ steps.libbox-version.outputs.version }}
+          path: app/libs
+          branch: ${{ github.head_ref || github.ref_name }}
+          if_no_artifact_found: fail
 
       - name: Verify libbox.aar present
         run: |

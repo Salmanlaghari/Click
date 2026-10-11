@@ -56,6 +56,8 @@ object VpnController {
                 saveWarpCreds(context, creds)
                 VpnConfigBuilder.buildWarpConfig(creds)
             }
+            // Built-in VLESS preset and user-added servers share the proxy-URL path.
+            VpnServer.ServerKind.BUILT_IN_VLESS,
             VpnServer.ServerKind.CUSTOM -> {
                 VpnConfigBuilder.buildCustomConfig(server.config) ?: run {
                     Log.e(TAG, "Custom config parse failed")
@@ -85,10 +87,13 @@ object VpnController {
 
     // ---------- server list ----------
 
-    /** All servers: built-in WARP + user's custom entries. */
+    /** All servers: built-in WARP + built-in Canada VPS + user's custom entries. */
     suspend fun getServers(context: Context): List<VpnServer> =
         withContext(Dispatchers.IO) {
-            val list = mutableListOf(VpnServer.warpPlaceholder())
+            val list = mutableListOf(
+                VpnServer.warpPlaceholder(),
+                VpnServer.canadaVps(),
+            )
             list.addAll(getCustomServers(context))
             list
         }
@@ -227,8 +232,8 @@ object VpnController {
     /** Play-policy disclosure text (also shown in Settings). */
     const val DISCLOSURE_TEXT =
         "Click VPN routes ALL of your device's internet traffic through " +
-        "third-party servers (Cloudflare WARP, or a custom server you add " +
-        "yourself). The server operator can see the sites you visit. " +
-        "All DNS queries travel inside the encrypted tunnel — use the " +
-        "DNS Leak Test to verify."
+        "third-party servers (Cloudflare WARP, Prince's Canada VPS, or a " +
+        "custom server you add yourself). The server operator can see the " +
+        "sites you visit. All DNS queries travel inside the encrypted " +
+        "tunnel — use the DNS Leak Test to verify."
 }

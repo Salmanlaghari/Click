@@ -15,7 +15,7 @@ OFFICIAL SagerNet/sing-box source:
    - Runs `gomobile bind` with the tags in the workflow
    - Uploads `libbox.aar` as an artifact + caches it
 2. **Manual build:** Follow the same `gomobile bind` command in
-   `.github/workflows/build-libbox.yml` on a machine with Go 1.24+, JDK 17,
+   `.github/workflows/build-libbox.yml` on a machine with Go 1.26+, JDK 17,
    and Android NDK r26.
 
 ## Wiring

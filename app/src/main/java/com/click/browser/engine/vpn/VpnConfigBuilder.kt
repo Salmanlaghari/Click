@@ -76,15 +76,19 @@ object VpnConfigBuilder {
         config.put("log", JSONObject().put("level", "info"))
 
         // DNS: everything through the tunnel via DoH.
+        // NOTE (sing-box >= 1.12): legacy "address"-string server entries
+        // were removed — servers now need an explicit "type".
         config.put("dns", JSONObject()
             .put("servers", JSONArray()
                 .put(JSONObject()
                     .put("tag", "cf-doh")
-                    .put("address", "https://1.1.1.1/dns-query")
+                    .put("type", "https")
+                    .put("server", "1.1.1.1")
                     .put("detour", "proxy"))
                 .put(JSONObject()
                     .put("tag", "google-doh")
-                    .put("address", "https://8.8.8.8/dns-query")
+                    .put("type", "https")
+                    .put("server", "8.8.8.8")
                     .put("detour", "proxy")))
             .put("rules", JSONArray()
                 .put(JSONObject()
@@ -108,18 +112,18 @@ object VpnConfigBuilder {
                 .put("stack", "gvisor")
                 .put("sniff", true)))
 
+        // NOTE (sing-box >= 1.13): the "dns" outbound type was removed —
+        // DNS now travels via the servers' "detour", and plain port-53
+        // traffic simply falls through to "final" (the proxy). No leak.
         config.put("outbounds", JSONArray()
             .put(outbound)
             .put(JSONObject().put("type", "direct").put("tag", "direct"))
-            .put(JSONObject().put("type", "block").put("tag", "block"))
-            .put(JSONObject().put("type", "dns").put("tag", "dns-out")))
+            .put(JSONObject().put("type", "block").put("tag", "block")))
 
-        // Route: DNS -> dns-out; everything else -> proxy.
+        // Route: everything unmatched goes through the proxy (including
+        // plain DNS, which then exits at the server — no leak).
         config.put("route", JSONObject()
-            .put("rules", JSONArray()
-                .put(JSONObject()
-                    .put("protocol", "dns")
-                    .put("outbound", "dns-out")))
+            .put("rules", JSONArray())
             .put("final", "proxy")
             .put("auto_detect_interface", true))
 
@@ -137,16 +141,26 @@ object VpnConfigBuilder {
             .put("server", uri.host)
             .put("server_port", if (uri.port > 0) uri.port else 443)
             .put("uuid", uri.userInfo ?: "")
-        params["encryption"]?.let { o.put("encryption", it) }
+        // NOTE (sing-box >= 1.14): the "encryption" field was REMOVED from
+        // the vless outbound (it's always "none" now) — never emit it.
+        // XTLS vision flow (e.g. flow=xtls-rprx-vision).
+        params["flow"]?.takeIf { it.isNotBlank() }?.let { o.put("flow", it) }
         val security = params["security"].orEmpty()
         if (security == "reality") {
-            o.put("tls", JSONObject()
+            val tls = JSONObject()
                 .put("enabled", true)
                 .put("server_name", params["sni"].orEmpty())
-                .put("reality", JSONObject()
+            // uTLS fingerprint (fp=chrome) — matters for Reality.
+            params["fp"]?.takeIf { it.isNotBlank() }?.let { fp ->
+                tls.put("utls", JSONObject()
                     .put("enabled", true)
-                    .put("public_key", params["pbk"].orEmpty())
-                    .put("short_id", params["sid"].orEmpty()))
+                    .put("fingerprint", fp))
+            }
+            tls.put("reality", JSONObject()
+                .put("enabled", true)
+                .put("public_key", params["pbk"].orEmpty())
+                .put("short_id", params["sid"].orEmpty()))
+            o.put("tls", tls)
         } else if (security == "tls") {
             o.put("tls", JSONObject()
                 .put("enabled", true)

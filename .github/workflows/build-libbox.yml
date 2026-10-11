@@ -16,7 +16,9 @@ on:
 
 env:
   SINGBOX_VERSION: "v1.14.3"
-  GO_VERSION: "1.24.7"
+  # Latest gomobile requires Go >= 1.26 (and dropped the `gomobile init -ndk`
+  # flag — the NDK now comes from ANDROID_NDK_HOME).
+  GO_VERSION: "1.26.9"
 
 jobs:
   build-libbox:
@@ -52,10 +54,13 @@ jobs:
       - name: Install gomobile
         if: steps.cache-libbox.outputs.cache-hit != 'true'
         run: |
+          # Newer gomobile removed the `-ndk` flag; the NDK is now picked up
+          # from ANDROID_NDK_HOME.
+          export ANDROID_NDK_HOME=${{ steps.setup-ndk.outputs.ndk-path }}
           go install golang.org/x/mobile/cmd/gomobile@latest
           go install golang.org/x/mobile/cmd/gobind@latest
           export PATH=$PATH:$(go env GOPATH)/bin
-          gomobile init -ndk ${{ steps.setup-ndk.outputs.ndk-path }}
+          gomobile init
 
       - name: Clone sing-box (pinned)
         if: steps.cache-libbox.outputs.cache-hit != 'true'

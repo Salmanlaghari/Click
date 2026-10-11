@@ -244,11 +244,12 @@ fun VpnScreen(onClose: () -> Unit) {
             ) {
                 Text(
                     "Note: Cloudflare WARP connects to the nearest server " +
-                    "automatically — country selection (USA/UK) is not " +
-                    "available with WARP. To choose a country, add your own " +
-                    "server below (vless://, vmess://, trojan://, ss://). " +
-                    "Free public servers are slow; fast USA/UK servers need " +
-                    "a paid service or your own VPS.",
+                    "automatically — country selection is not available " +
+                    "with WARP. For a fixed country, use the built-in " +
+                    "\"Canada VPS\" server above, or add your own below " +
+                    "(vless://, vmess://, trojan://, ss://). Free public " +
+                    "servers are slow; fast servers in other countries " +
+                    "need a paid service or your own VPS.",
                     fontSize = 12.sp,
                     modifier = Modifier.padding(12.dp)
                 )
@@ -307,9 +308,11 @@ private fun ServerRow(
             Column(Modifier.weight(1f)) {
                 Text(server.name, fontWeight = FontWeight.SemiBold)
                 Text(
-                    if (server.kind == VpnServer.ServerKind.BUILT_IN_WARP)
-                        "Free • Fast • Auto location"
-                    else "Custom server",
+                    when (server.kind) {
+                        VpnServer.ServerKind.BUILT_IN_WARP -> "Free • Fast • Auto location"
+                        VpnServer.ServerKind.BUILT_IN_VLESS -> "Fixed location • Canada"
+                        VpnServer.ServerKind.CUSTOM -> "Custom server"
+                    },
                     fontSize = 12.sp,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
