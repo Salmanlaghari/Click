@@ -60,6 +60,14 @@ fun VpnScreen(onClose: () -> Unit) {
     var showAddDialog by remember { mutableStateOf(false) }
     var starting by remember { mutableStateOf(false) }
 
+    // The service owns the truth: once it reports any state change, the
+    // local "starting" spinner must stop. (Previously an exception between
+    // start() returning true and the service coming up left the spinner
+    // spinning on "Disconnected" forever.)
+    LaunchedEffect(vpnState) {
+        if (vpnState != VpnState.DISCONNECTED) starting = false
+    }
+
     fun refresh() {
         scope.launch {
             servers = VpnController.getServers(context)
@@ -75,7 +83,11 @@ fun VpnScreen(onClose: () -> Unit) {
         starting = false
         if (result.resultCode == Activity.RESULT_OK) {
             scope.launch {
-                if (!VpnController.start(context)) starting = false
+                // start() never throws, but guard anyway — the spinner
+                // must never get stuck.
+                if (!runCatching { VpnController.start(context) }.getOrDefault(false)) {
+                    starting = false
+                }
             }
         }
     }
@@ -85,12 +97,17 @@ fun VpnScreen(onClose: () -> Unit) {
             if (acked != true) return // disclosure dialog blocks
             starting = true
             scope.launch {
-                val intent = VpnController.prepareIntent(context)
-                if (intent == null) {
-                    if (!VpnController.start(context)) starting = false
-                } else {
-                    // Permission needed — launcher resets `starting` on result.
-                    vpnPermissionLauncher.launch(intent)
+                try {
+                    val intent = VpnController.prepareIntent(context)
+                    if (intent == null) {
+                        if (!VpnController.start(context)) starting = false
+                    } else {
+                        // Permission needed — launcher resets `starting` on result.
+                        vpnPermissionLauncher.launch(intent)
+                    }
+                } catch (t: Throwable) {
+                    android.util.Log.e("ClickVpn", "setVpn failed", t)
+                    starting = false
                 }
             }
         } else {

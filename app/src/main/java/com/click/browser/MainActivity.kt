@@ -228,6 +228,39 @@ class MainActivity : FragmentActivity() {
     // Text scaling live copies for WebViewClient callbacks (per-host map).
     private var liveGlobalTextScale = com.click.browser.engine.TextScaleStore.DEFAULT
     private var liveHostTextScales: Map<String, Int> = emptyMap()
+    // DevTools console/network state — Activity-level (NOT compose remember).
+    // The WebView factory's onConsoleMessage and the JS-bridge callbacks must
+    // NEVER diverge onto a different list object after recomposition; keeping
+    // them here guarantees a single source of truth for the DevToolsPanel.
+    // All mutations go through the helpers below, which marshal to the main
+    // thread (JavascriptInterface callbacks run on WebView's bridge thread,
+    // and SnapshotStateList must be touched on the UI thread).
+    private val devToolsLogs = androidx.compose.runtime.mutableStateListOf<com.click.browser.engine.LogEntry>()
+    private val devToolsNetwork = androidx.compose.runtime.mutableStateListOf<com.click.browser.engine.NetworkRequest>()
+    private val devToolsDomHtml = androidx.compose.runtime.mutableStateOf("")
+    private val devToolsSources = androidx.compose.runtime.mutableStateListOf<String>()
+
+    /** Thread-safe DevTools log append (caps at 500 entries, drops oldest). */
+    private fun addDevToolsLog(entry: com.click.browser.engine.LogEntry) {
+        if (android.os.Looper.myLooper() == android.os.Looper.getMainLooper()) {
+            devToolsLogs.add(entry)
+            if (devToolsLogs.size > 500) devToolsLogs.removeAt(0)
+        } else {
+            runOnUiThread {
+                devToolsLogs.add(entry)
+                if (devToolsLogs.size > 500) devToolsLogs.removeAt(0)
+            }
+        }
+    }
+
+    /** Thread-safe DevTools network-request append. */
+    private fun addDevToolsNetwork(entry: com.click.browser.engine.NetworkRequest) {
+        if (android.os.Looper.myLooper() == android.os.Looper.getMainLooper()) {
+            devToolsNetwork.add(entry)
+        } else {
+            runOnUiThread { devToolsNetwork.add(entry) }
+        }
+    }
     // Crash-restore: latest restorable-tab snapshot for this boot mode, kept
     // outside composable scope so onDestroy() and v9SwitchMode() can persist
     // it and mark clean exits without touching UI state. The mirror is
@@ -949,15 +982,20 @@ class MainActivity : FragmentActivity() {
             val scope = rememberCoroutineScope()
             val activeMode by modeManager.modeFlow.collectAsState(initial = BrowserMode.SIMPLE)
 
-            // App Layout configuration: global Day/Night toggle.
-            // Each browsing mode has its own premium light/dark theme
-            // (see ModeThemes — adapted from the approved design references).
-            var currentThemeSetting by remember { mutableStateOf("Dark") }
+            // App Layout configuration: global appearance mode.
+            // "Auto" (default) follows the system night mode — light during
+            // the day for everyone (Prince: light default), dark at night.
+            // Each browsing mode can still override per-mode below.
+            var currentThemeSetting by remember { mutableStateOf("Auto") }
             // Per-mode Day/Night overrides (null = follow the global toggle).
             var perModeDark by remember { mutableStateOf<Map<BrowserMode, Boolean?>>(emptyMap()) }
             var wallpaperUri by remember { mutableStateOf<String?>(null) }
             val theme = remember(activeMode, currentThemeSetting, perModeDark) {
-                val dark = perModeDark[activeMode] ?: (currentThemeSetting == "Dark")
+                val dark = perModeDark[activeMode] ?: when (currentThemeSetting) {
+                    "Dark" -> true
+                    "Light" -> false
+                    else -> AppSettings.isSystemNightMode(this@MainActivity)
+                }
                 ModeThemes.forMode(activeMode, dark)
             }
 
@@ -1367,10 +1405,13 @@ class MainActivity : FragmentActivity() {
             var pageLoadTime by remember { mutableStateOf(0L) }
             var lastPageStart by remember { mutableStateOf(0L) }
             var showDebugOverlay by remember { mutableStateOf(true) }
-            val logs = remember { mutableStateListOf<LogEntry>() }
-            val networkRequests = remember { mutableStateListOf<NetworkRequest>() }
-            var domHtml by remember { mutableStateOf("") }
-            val sourcesList = remember { mutableStateListOf<String>() }
+            // DevTools log state lives at Activity level (devToolsLogs etc.)
+            // so WebView callbacks and this UI can never diverge. Local
+            // aliases keep the existing code below unchanged.
+            val logs = devToolsLogs
+            val networkRequests = devToolsNetwork
+            val domHtml: String by devToolsDomHtml
+            val sourcesList = devToolsSources
 
             // Hack tools states
             var antiDetectionEnabled by remember { mutableStateOf(true) }
@@ -1712,7 +1753,15 @@ class MainActivity : FragmentActivity() {
                     forgetfulBrowsing = prefs[AppSettings.FORGETFUL_BROWSING] == true
                     forgetfulExceptions = prefs[AppSettings.FORGETFUL_BROWSING_EXCEPTIONS] ?: emptySet()
                     blockConsentBanners = prefs[AppSettings.BLOCK_CONSENT_BANNERS] ?: true
-                    currentThemeSetting = if (prefs[AppSettings.UI_DARK_MODE] == false) "Light" else "Dark"
+                    // Appearance: "auto" (default, follows system night mode) |
+                    // "light" | "dark". Migrates the legacy UI_DARK_MODE
+                    // boolean for users who set it explicitly.
+                    currentThemeSetting = when (prefs[AppSettings.APPEARANCE_MODE]) {
+                        "light" -> "Light"
+                        "dark" -> "Dark"
+                        "auto" -> "Auto"
+                        else -> if (prefs[AppSettings.UI_DARK_MODE] == true) "Dark" else "Auto"
+                    }
                     // Per-mode Day/Night overrides (missing key = follow global).
                     perModeDark = BrowserMode.values().associateWith { mode ->
                         prefs[AppSettings.darkModeKey(mode)]
@@ -3164,9 +3213,11 @@ class MainActivity : FragmentActivity() {
                                                                 val loc = if (src != null) " ($src:${msg.lineNumber()})" else ""
                                                                 // Cap message length so a spammy page can't OOM the log list.
                                                                 val text = msg.message().take(500)
-                                                                logs.add(LogEntry(type, "$text$loc"))
-                                                                // Cap list size (drop oldest) — same guard as elsewhere.
-                                                                if (logs.size > 500) logs.removeAt(0)
+                                                                android.util.Log.d(
+                                                                    "ClickDevTools",
+                                                                    "console [$type] $text$loc"
+                                                                )
+                                                                addDevToolsLog(LogEntry(type, "$text$loc"))
                                                                 return true
                                                             }
 
@@ -3266,15 +3317,18 @@ class MainActivity : FragmentActivity() {
                                                             }
                                                         }
 
-                                                        // Setup Bridges
+                                                        // Setup Bridges (callbacks may run on WebView's
+                                                        // bridge thread — the helpers marshal to main).
                                                         addJavascriptInterface(
                                                             DevToolsBridge(
-                                                                onLogAdded = { logs.add(it) },
-                                                                onNetworkAdded = { networkRequests.add(it) },
-                                                                onDomUpdated = { domHtml = it },
+                                                                onLogAdded = { addDevToolsLog(it) },
+                                                                onNetworkAdded = { addDevToolsNetwork(it) },
+                                                                onDomUpdated = { runOnUiThread { devToolsDomHtml.value = it } },
                                                                 onSourcesUpdated = { list ->
-                                                                    sourcesList.clear()
-                                                                    sourcesList.addAll(list)
+                                                                    runOnUiThread {
+                                                                        devToolsSources.clear()
+                                                                        devToolsSources.addAll(list)
+                                                                    }
                                                                 }
                                                             ),
                                                             "DevToolsBridge"
@@ -4143,6 +4197,13 @@ class MainActivity : FragmentActivity() {
                                         currentThemeSetting = it
                                         scope.launch {
                                             dataStore.edit { prefs ->
+                                                prefs[AppSettings.APPEARANCE_MODE] = when (it) {
+                                                    "Light" -> "light"
+                                                    "Dark" -> "dark"
+                                                    else -> "auto"
+                                                }
+                                                // Keep the legacy boolean in sync for
+                                                // any reader still on UI_DARK_MODE.
                                                 prefs[AppSettings.UI_DARK_MODE] = it == "Dark"
                                             }
                                         }
@@ -4466,6 +4527,14 @@ class MainActivity : FragmentActivity() {
                                     android.net.Uri.parse(currentTab.url).host?.lowercase().orEmpty()
                                 } catch (_: Exception) { "" }
                                 if (siteHost.isNotEmpty()) {
+                                    // Shields: live cookie count for this host.
+                                    var siteCookieCount by remember(siteHost) { mutableStateOf(0) }
+                                    LaunchedEffect(siteHost) {
+                                        siteCookieCount = try {
+                                            com.click.browser.engine.CookieStore
+                                                .cookiesForHost(siteHost).size
+                                        } catch (_: Exception) { 0 }
+                                    }
                                     val siteCurrent =
                                         siteSettings.forHost(siteHost)
                                             ?: com.click.browser.engine.SiteSettings()
@@ -4504,7 +4573,18 @@ class MainActivity : FragmentActivity() {
                                             }
                                         },
                                         onReload = { currentTab.webView?.reload() },
-                                        onDismiss = { showSiteSettings = false }
+                                        onDismiss = { showSiteSettings = false },
+                                        // Brave-style Shields panel data.
+                                        trackersBlocked = blockedCount,
+                                        cookieCount = siteCookieCount,
+                                        onManageCookies = {
+                                            showSiteSettings = false
+                                            showCookieManager = true
+                                        },
+                                        onOpenHistory = {
+                                            showSiteSettings = false
+                                            showHistory = true
+                                        }
                                     )
                                 } else {
                                     showSiteSettings = false
