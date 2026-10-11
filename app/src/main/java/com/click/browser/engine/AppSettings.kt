@@ -53,6 +53,12 @@ object AppSettings {
     val UI_DARK_MODE = booleanPreferencesKey("ui_dark_mode")
     val WALLPAPER_URI = stringPreferencesKey("wallpaper_uri")
 
+    // ---- Privacy & Security suite (PR: feature/privacy-security) ----
+    /** Click account (Google Sign-In): JSON {name,email,photo} or empty. */
+    val CLICK_ACCOUNT_JSON = stringPreferencesKey("click_account_json")
+    /** Offer / use Android autofill (Credential Manager + system service). Default ON. */
+    val AUTOFILL_ENABLED = booleanPreferencesKey("autofill_enabled")
+
     // Biometric private-tab lock: when ON, private/incognito tabs re-lock
     // with the device biometric (or device PIN/pattern fallback) every time
     // the app goes to background and returns.

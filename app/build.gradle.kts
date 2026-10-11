@@ -172,6 +172,14 @@ dependencies {
     implementation(libs.media3.exoplayer.hls)
     implementation(libs.media3.exoplayer.dash)
     implementation(libs.media3.ui)
+    // Google Sign-In for the Click account (play-services-auth).
+    implementation(libs.play.services.auth)
+    // Credential Manager: save / retrieve passwords & passkeys through the
+    // user's Google Password Manager (Play Services provider).
+    implementation(libs.androidx.credentials)
+    implementation(libs.androidx.credentials.play.services.auth)
+    // EncryptedSharedPreferences for payment-method storage.
+    implementation(libs.androidx.security.crypto)
 
     testImplementation(libs.junit)
     androidTestImplementation(libs.androidx.junit)
