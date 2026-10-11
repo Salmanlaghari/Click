@@ -5,6 +5,8 @@ import android.util.Log
 import androidx.datastore.preferences.core.edit
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import org.json.JSONArray
 import org.json.JSONObject
 import java.util.UUID
@@ -27,6 +29,8 @@ data class TabGroup(
 object TabGroupStore {
 
     private const val TAG = "TabGroupStore"
+    /** Serializes read-modify-write mutations to prevent lost updates. */
+    private val mutationMutex = Mutex()
 
     /** Fixed palette offered in the group editor (ARGB). */
     val PALETTE = listOf(
@@ -65,46 +69,49 @@ object TabGroupStore {
         }
     }
 
-    suspend fun create(context: Context, name: String, color: Int): TabGroup {
+    suspend fun create(context: Context, name: String, color: Int): TabGroup = mutationMutex.withLock {
         val group = TabGroup(name = name.ifBlank { "Group" }, color = color)
-        save(context, list(context) + group)
-        return group
+        if (!save(context, list(context) + group)) {
+            Log.e(TAG, "create failed to persist group ${group.id}")
+        }
+        group
     }
 
-    suspend fun rename(context: Context, id: String, name: String) {
+    suspend fun rename(context: Context, id: String, name: String) = mutationMutex.withLock {
         save(context, list(context).map {
             if (it.id == id) it.copy(name = name.ifBlank { it.name }) else it
         })
     }
 
-    suspend fun recolor(context: Context, id: String, color: Int) {
+    suspend fun recolor(context: Context, id: String, color: Int) = mutationMutex.withLock {
         save(context, list(context).map { if (it.id == id) it.copy(color = color) else it })
     }
 
-    suspend fun delete(context: Context, id: String) {
+    suspend fun delete(context: Context, id: String) = mutationMutex.withLock {
         save(context, list(context).filterNot { it.id == id })
     }
 
-    suspend fun addTab(context: Context, groupId: String, tabId: String) {
+    suspend fun addTab(context: Context, groupId: String, tabId: String) = mutationMutex.withLock {
         save(context, list(context).map {
             if (it.id == groupId && tabId !in it.tabIds) it.copy(tabIds = it.tabIds + tabId) else it
         })
     }
 
-    suspend fun removeTab(context: Context, groupId: String, tabId: String) {
+    suspend fun removeTab(context: Context, groupId: String, tabId: String) = mutationMutex.withLock {
         save(context, list(context).map {
             if (it.id == groupId) it.copy(tabIds = it.tabIds - tabId) else it
         })
     }
 
     /** Drops tab IDs that no longer exist (caller passes the live IDs). */
-    suspend fun pruneDeadTabs(context: Context, liveIds: Set<String>) {
+    suspend fun pruneDeadTabs(context: Context, liveIds: Set<String>) = mutationMutex.withLock {
         val groups = list(context)
         val pruned = groups.map { it.copy(tabIds = it.tabIds.filter { id -> id in liveIds }) }
         if (pruned != groups) save(context, pruned)
     }
 
-    private suspend fun save(context: Context, groups: List<TabGroup>) {
+    /** Returns true on success; callers should handle false (data not persisted). */
+    private suspend fun save(context: Context, groups: List<TabGroup>): Boolean {
         val arr = JSONArray()
         groups.forEach { g ->
             arr.put(
@@ -115,10 +122,12 @@ object TabGroupStore {
                     .put("tabIds", JSONArray(g.tabIds))
             )
         }
-        try {
+        return try {
             context.dataStore.edit { it[AppSettings.TAB_GROUPS_JSON] = arr.toString() }
+            true
         } catch (e: Exception) {
-            Log.w(TAG, "save failed", e)
+            Log.e(TAG, "save failed - tab groups not persisted", e)
+            false
         }
     }
 }

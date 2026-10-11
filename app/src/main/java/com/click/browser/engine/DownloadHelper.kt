@@ -22,6 +22,14 @@ import kotlinx.coroutines.withContext
  */
 object DownloadHelper {
 
+    /** Shared OkHttpClient — reused across downloads (connection pooling). */
+    private val httpClient: okhttp3.OkHttpClient by lazy {
+        okhttp3.OkHttpClient.Builder()
+            .connectTimeout(20, java.util.concurrent.TimeUnit.SECONDS)
+            .readTimeout(120, java.util.concurrent.TimeUnit.SECONDS)
+            .build()
+    }
+
     suspend fun enqueue(context: Context, url: String, fileName: String) {
         val location = try { DownloadSettings.location(context) }
         catch (_: Exception) { DownloadSettings.LOCATION_PHONE }
@@ -78,14 +86,10 @@ object DownloadHelper {
             if (!tree.canWrite()) return@withContext false
             tree.findFile(fileName)?.delete()
             val doc = tree.createFile(guessMime(fileName), fileName) ?: return@withContext false
-            val client = okhttp3.OkHttpClient.Builder()
-                .connectTimeout(20, java.util.concurrent.TimeUnit.SECONDS)
-                .readTimeout(120, java.util.concurrent.TimeUnit.SECONDS)
-                .build()
             val req = okhttp3.Request.Builder().url(url).get()
                 .header("User-Agent", "Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36")
                 .build()
-            client.newCall(req).execute().use { resp ->
+            httpClient.newCall(req).execute().use { resp ->
                 if (!resp.isSuccessful) return@withContext false
                 val body = resp.body ?: return@withContext false
                 context.contentResolver.openOutputStream(doc.uri)?.use { out ->

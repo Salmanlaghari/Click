@@ -67,9 +67,15 @@ fun LanguageScreen(
         if (code == appLang || saving) return
         saving = true
         scope.launch {
-            AppLanguage.set(context, code)
-            // Recreate so attachBaseContext wraps the new locale.
-            try { activity?.recreate() } catch (_: Exception) { }
+            try {
+                AppLanguage.set(context, code)
+                // Recreate so attachBaseContext wraps the new locale.
+                activity?.recreate()
+            } catch (_: Exception) {
+                // Recreate failed — allow retry.
+            } finally {
+                saving = false
+            }
         }
     }
 

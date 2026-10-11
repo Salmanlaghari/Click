@@ -82,7 +82,7 @@ fun AccessibilityScreen(
             A11yCard(theme) {
                 A11yToggle(
                     title = "Force zoom",
-                    desc = "Allow pinch-zoom on every site, even pages that try to block it.",
+                    desc = "Allow pinch-zoom on every site, even pages that try to block it. Applies on next page load.",
                     icon = Icons.Default.ZoomIn,
                     checked = forceZoom,
                     enabled = loaded,
@@ -92,7 +92,7 @@ fun AccessibilityScreen(
                 HorizontalDivider(color = theme.onSurface.copy(alpha = 0.08f))
                 A11yToggle(
                     title = "Reader mode",
-                    desc = "Show a clean reading view for articles (distraction-free text).",
+                    desc = "Show a clean reading view for articles (distraction-free text). Applies on next page load.",
                     icon = Icons.Default.Article,
                     checked = readerMode,
                     enabled = loaded,
@@ -102,7 +102,7 @@ fun AccessibilityScreen(
                 HorizontalDivider(color = theme.onSurface.copy(alpha = 0.08f))
                 A11yToggle(
                     title = "Reduced motion",
-                    desc = "Minimize animations and transitions across the app.",
+                    desc = "Minimize animations and transitions across the app. Applies on next page load.",
                     icon = Icons.Default.MotionPhotosOff,
                     checked = reducedMotion,
                     enabled = loaded,

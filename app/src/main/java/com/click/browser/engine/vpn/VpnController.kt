@@ -39,18 +39,36 @@ object VpnController {
      * Starts the tunnel for the currently selected server.
      * Returns false (with [SingBoxVpnService.error] set) when the server
      * can't be resolved — the UI must surface the error honestly.
+     *
+     * NEVER throws: any unexpected exception is caught, reported to the
+     * service error flow, and converted to `false`. (An uncaught throw
+     * here used to leave the VPN screen stuck on "Disconnected" with an
+     * endless spinner.)
      */
     suspend fun start(context: Context): Boolean = withContext(Dispatchers.IO) {
+        try {
+            startInternal(context)
+        } catch (t: Throwable) {
+            Log.e(TAG, "VPN start failed", t)
+            SingBoxVpnService.reportStartError(
+                t.message?.takeIf { it.isNotBlank() } ?: "Connection failed"
+            )
+            false
+        }
+    }
+
+    private suspend fun startInternal(context: Context): Boolean {
         val server = getSelectedServer(context) ?: run {
             Log.w(TAG, "No server selected")
-            return@withContext false
+            SingBoxVpnService.reportStartError("No server selected.")
+            return false
         }
         val configJson: String = when (server.kind) {
             VpnServer.ServerKind.BUILT_IN_WARP -> {
                 val creds = WarpRegistrar.ensureCredentials(getWarpCreds(context))
                     ?: run {
                         Log.e(TAG, "WARP registration failed")
-                        return@withContext false
+                        return false
                     }
                 saveWarpCreds(context, creds)
                 VpnConfigBuilder.buildWarpConfig(creds)
@@ -60,7 +78,7 @@ object VpnController {
             VpnServer.ServerKind.CUSTOM -> {
                 VpnConfigBuilder.buildCustomConfig(server.config) ?: run {
                     Log.e(TAG, "Custom config parse failed")
-                    return@withContext false
+                    return false
                 }
             }
         }
@@ -70,7 +88,7 @@ object VpnController {
             .putExtra(SingBoxVpnService.EXTRA_SERVER_NAME, server.name)
         if (Build.VERSION.SDK_INT >= 26) context.startForegroundService(i)
         else context.startService(i)
-        true
+        return true
     }
 
     fun stop(context: Context) {

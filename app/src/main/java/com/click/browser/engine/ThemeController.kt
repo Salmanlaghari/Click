@@ -67,11 +67,14 @@ object ThemeController {
         else isDarkForMode(context, themeMode)
     }
 
-    /** Pure function — easy to unit-test the schedule logic. */
+    /** Pure function — easy to unit-test the schedule logic.
+     * Note: MODE_SCHEDULED is handled by the caller via [isDarkScheduled]
+     * (it needs DataStore hours); this branch is unreachable in practice. */
     fun isDarkForMode(context: Context, themeMode: String): Boolean = when (themeMode) {
         MODE_LIGHT -> false
         MODE_DARK -> true
-        // Scheduled needs DataStore hours — use isDarkScheduled() instead.
+        // Scheduled is resolved by isDarkNow() -> isDarkScheduled() which reads
+        // the user's hours from DataStore. Fall back to system here for safety.
         MODE_SCHEDULED -> isSystemDark(context)
         else -> isSystemDark(context)
     }

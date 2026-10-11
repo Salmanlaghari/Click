@@ -69,18 +69,18 @@ object DownloadSettings {
 
     /**
      * Resolves the download directory for the current setting.
-     * Returns null when the custom SAF tree is gone (caller falls back).
+     * Returns null when the custom SAF tree is in use (caller must use
+     * DocumentFile via [customUri]) or when it is gone (caller falls back).
      */
     suspend fun resolveDir(context: Context): File? {
         return when (location(context)) {
             LOCATION_APP -> context.getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS)
                 ?: File(context.filesDir, "downloads").apply { mkdirs() }
             LOCATION_CUSTOM -> {
-                // SAF trees are used via DocumentFile at download time; the
-                // File fallback here is the public Downloads dir.
-                val uri = customUri(context)
-                if (uri == null) publicDownloadsDir()
-                else publicDownloadsDir() // DocumentFile handling lives with the downloader
+                // SAF trees cannot be represented as java.io.File — the
+                // downloader uses DocumentFile.fromTreeUri(customUri()).
+                // Return null so callers take the DocumentFile path.
+                null
             }
             else -> publicDownloadsDir()
         }

@@ -114,7 +114,11 @@ object CrashReporter {
     }
 
     private fun writeReport(context: Context, prefix: String, title: String, body: String) {
-        val dir = File(context.filesDir, DIR).apply { mkdirs() }
+        val dir = File(context.filesDir, DIR)
+        if (!dir.exists() && !dir.mkdirs()) {
+            Log.e(TAG, "Failed to create report directory: ${dir.absolutePath}")
+            return
+        }
         prune(dir)
         val stamp = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(Date())
         val file = File(dir, "$prefix$stamp.json")
@@ -138,12 +142,13 @@ object CrashReporter {
     }
 
     private fun formatThrowable(t: Throwable): String {
+        // Cap output at 8KB to avoid OOM on pathological stack traces.
         val sb = StringBuilder()
-        sb.append(t.javaClass.name).append(": ").append(t.message).append("\n")
+        sb.append(t.javaClass.name).append(": ").append(t.message?.take(500)).append("\n")
         val trace = t.stackTrace.take(40).joinToString("\n") { "    at $it" }
-        sb.append(trace)
-        t.cause?.let { sb.append("\nCaused by: ").append(it.javaClass.name).append(": ").append(it.message) }
-        return sb.toString().take(8000)
+        sb.append(trace.take(6000))
+        t.cause?.let { sb.append("\nCaused by: ").append(it.javaClass.name).append(": ").append(it.message?.take(200)) }
+        return sb.toString().take(8192)
     }
 
     /** Device/app block appended to every outgoing report email. */

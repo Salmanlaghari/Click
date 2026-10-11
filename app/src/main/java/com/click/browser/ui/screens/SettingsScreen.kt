@@ -53,7 +53,7 @@ private const val PLAY_STORE_PACKAGE = "com.teampkai.clickbrowser"
 fun SettingsScreen(
     theme: ModeTheme,
     // --- General ---
-    themeMode: String, // "auto" | "light" | "dark" | "scheduled"
+    currentThemeSetting: String, // "Auto" | "Light" | "Dark" | "Scheduled"
     onThemeChange: (String) -> Unit,
     /** Resolved global dark flag right now (auto/scheduled already resolved). */
     globalDarkEffective: Boolean,
@@ -119,6 +119,8 @@ fun SettingsScreen(
     onClearCache: () -> Unit,
     onClearAllCurrentMode: () -> Unit,
     onOpenCookieManager: () -> Unit,
+    // --- Privacy & Security suite ---
+    onOpenPrivacySecurity: () -> Unit,
     // --- LocationGuard ---
     locationSummary: String,
     onOpenLocationSettings: () -> Unit,
@@ -175,7 +177,7 @@ fun SettingsScreen(
     // ---- Row model: each row optionally opens a named section ----
     data class Row(val section: String?, val content: @Composable () -> Unit)
     val rows = remember(
-        theme, themeMode, globalDarkEffective, scheduleStartHour, scheduleEndHour, wallpaperUri, activeMode,
+        theme, currentThemeSetting, globalDarkEffective, scheduleStartHour, scheduleEndHour, wallpaperUri, activeMode,
         currentSearchEngineSetting, addressBarPosition,
         adBlockerEnabled, forceNightMode,
         httpsMode, httpsStrictExceptions, jsEnabled, dataSaver, perModeDark, historyModeTarget,
@@ -197,33 +199,33 @@ fun SettingsScreen(
                     Spacer(Modifier.height(8.dp))
                     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         FilterChip(
-                            selected = themeMode == "auto",
-                            onClick = { onThemeChange("auto") },
+                            selected = currentThemeSetting == "Auto",
+                            onClick = { onThemeChange("Auto") },
                             label = { Text("🔄 Auto", fontSize = 12.sp) }
                         )
                         FilterChip(
-                            selected = themeMode == "light",
-                            onClick = { onThemeChange("light") },
+                            selected = currentThemeSetting == "Light",
+                            onClick = { onThemeChange("Light") },
                             label = { Text("☀️ Light", fontSize = 12.sp) }
                         )
                         FilterChip(
-                            selected = themeMode == "dark",
-                            onClick = { onThemeChange("dark") },
+                            selected = currentThemeSetting == "Dark",
+                            onClick = { onThemeChange("Dark") },
                             label = { Text("🌙 Dark", fontSize = 12.sp) }
                         )
                         FilterChip(
-                            selected = themeMode == "scheduled",
-                            onClick = { onThemeChange("scheduled") },
+                            selected = currentThemeSetting == "Scheduled",
+                            onClick = { onThemeChange("Scheduled") },
                             label = { Text("🕒 Scheduled", fontSize = 12.sp) }
                         )
                     }
-                    if (themeMode == "auto") {
+                    if (currentThemeSetting == "Auto") {
                         Text(
                             "Follows your phone's system day/night setting.",
                             fontSize = 11.sp, color = theme.onSurface.copy(alpha = 0.55f)
                         )
                     }
-                    if (themeMode == "scheduled") {
+                    if (currentThemeSetting == "Scheduled") {
                         Spacer(Modifier.height(8.dp))
                         Text(
                             "Light theme between the hours below, dark otherwise.",
@@ -695,6 +697,12 @@ fun SettingsScreen(
             add(Row(null) {
                 CardRow(theme) {
                     ActionRow("Cookie Manager", "Inspect & delete cookies per site", Icons.Default.Cookie, theme, onOpenCookieManager)
+                    HorizontalDivider(color = theme.onSurface.copy(alpha = 0.1f))
+                    ActionRow(
+                        "Privacy & Security",
+                        "Click account, passwords, Safety Check, autofill, payment methods",
+                        Icons.Default.VerifiedUser, theme, onOpenPrivacySecurity
+                    )
                 }
             })
 

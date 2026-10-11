@@ -52,6 +52,29 @@ object AppSettings {
     val GPC_ENABLED = booleanPreferencesKey("gpc_enabled")
     val UI_DARK_MODE = booleanPreferencesKey("ui_dark_mode")
     val WALLPAPER_URI = stringPreferencesKey("wallpaper_uri")
+    /**
+     * Appearance mode: "auto" | "light" | "dark". Default "auto" — the app
+     * follows the system night mode (light during the day). This replaced
+     * the old Dark-default: fresh installs start in Light unless the
+     * system is in night mode.
+     */
+    val APPEARANCE_MODE = stringPreferencesKey("appearance_mode")
+
+    /**
+     * True when the Android system is currently in night mode
+     * (user's system theme / bedtime schedule).
+     */
+    fun isSystemNightMode(context: android.content.Context): Boolean {
+        val uiMode = context.resources.configuration.uiMode and
+            android.content.res.Configuration.UI_MODE_NIGHT_MASK
+        return uiMode == android.content.res.Configuration.UI_MODE_NIGHT_YES
+    }
+
+    // ---- Privacy & Security suite (PR: feature/privacy-security) ----
+    /** Click account (Google Sign-In): JSON {name,email,photo} or empty. */
+    val CLICK_ACCOUNT_JSON = stringPreferencesKey("click_account_json")
+    /** Offer / use Android autofill (Credential Manager + system service). Default ON. */
+    val AUTOFILL_ENABLED = booleanPreferencesKey("autofill_enabled")
 
     // ---- Settings/Reports/Themes suite (PR: feature/settings-reports-themes) ----
     /** Theme mode: "auto" (follow system) | "light" | "dark" | "scheduled". */
@@ -93,10 +116,15 @@ object AppSettings {
 
     /**
      * Effective dark-mode flag for [mode]: per-mode override if set, else the
-     * global [UI_DARK_MODE] toggle, else Dark (the historical default).
+     * appearance mode, else the legacy [UI_DARK_MODE] toggle, else Light
+     * (the default since v1.2 — Prince: light default for everyone).
      */
     fun effectiveDarkMode(prefs: Preferences, mode: BrowserMode): Boolean =
-        prefs[darkModeKey(mode)] ?: (prefs[UI_DARK_MODE] ?: true)
+        prefs[darkModeKey(mode)] ?: when (prefs[APPEARANCE_MODE]) {
+            "dark" -> true
+            "light" -> false
+            else -> prefs[UI_DARK_MODE] ?: false
+        }
 
     // V9 Shield: DNS-over-HTTPS provider + VPN toggle.
     // "cloudflare" | "google" | "custom" (see V9DohResolver).

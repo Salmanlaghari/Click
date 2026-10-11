@@ -237,6 +237,39 @@ class MainActivity : FragmentActivity() {
     // Text scaling live copies for WebViewClient callbacks (per-host map).
     private var liveGlobalTextScale = com.click.browser.engine.TextScaleStore.DEFAULT
     private var liveHostTextScales: Map<String, Int> = emptyMap()
+    // DevTools console/network state — Activity-level (NOT compose remember).
+    // The WebView factory's onConsoleMessage and the JS-bridge callbacks must
+    // NEVER diverge onto a different list object after recomposition; keeping
+    // them here guarantees a single source of truth for the DevToolsPanel.
+    // All mutations go through the helpers below, which marshal to the main
+    // thread (JavascriptInterface callbacks run on WebView's bridge thread,
+    // and SnapshotStateList must be touched on the UI thread).
+    private val devToolsLogs = androidx.compose.runtime.mutableStateListOf<com.click.browser.engine.LogEntry>()
+    private val devToolsNetwork = androidx.compose.runtime.mutableStateListOf<com.click.browser.engine.NetworkRequest>()
+    private val devToolsDomHtml = androidx.compose.runtime.mutableStateOf("")
+    private val devToolsSources = androidx.compose.runtime.mutableStateListOf<String>()
+
+    /** Thread-safe DevTools log append (caps at 500 entries, drops oldest). */
+    private fun addDevToolsLog(entry: com.click.browser.engine.LogEntry) {
+        if (android.os.Looper.myLooper() == android.os.Looper.getMainLooper()) {
+            devToolsLogs.add(entry)
+            if (devToolsLogs.size > 500) devToolsLogs.removeAt(0)
+        } else {
+            runOnUiThread {
+                devToolsLogs.add(entry)
+                if (devToolsLogs.size > 500) devToolsLogs.removeAt(0)
+            }
+        }
+    }
+
+    /** Thread-safe DevTools network-request append. */
+    private fun addDevToolsNetwork(entry: com.click.browser.engine.NetworkRequest) {
+        if (android.os.Looper.myLooper() == android.os.Looper.getMainLooper()) {
+            devToolsNetwork.add(entry)
+        } else {
+            runOnUiThread { devToolsNetwork.add(entry) }
+        }
+    }
     // Crash-restore: latest restorable-tab snapshot for this boot mode, kept
     // outside composable scope so onDestroy() and v9SwitchMode() can persist
     // it and mark clean exits without touching UI state. The mirror is
@@ -945,25 +978,31 @@ class MainActivity : FragmentActivity() {
             val scope = rememberCoroutineScope()
             val activeMode by modeManager.modeFlow.collectAsState(initial = BrowserMode.SIMPLE)
 
-            // App Layout configuration: Day/Night theme mode.
-            // "auto" follows the system, "scheduled" follows the clock,
-            // "light"/"dark" are fixed. Each browsing mode can still override
-            // via perModeDark (see Modes section in Settings).
-            var themeMode by remember { mutableStateOf("dark") }
+            // App Layout configuration: global appearance mode.
+            // "Auto" (default) follows the system night mode — light during
+            // the day for everyone (Prince: light default), dark at night.
+            // "Scheduled" uses the start/end hours below. Each browsing mode
+            // can still override per-mode below.
+            var currentThemeSetting by remember { mutableStateOf("Auto") }
             var scheduleStartHour by remember { mutableStateOf(6) }
             var scheduleEndHour by remember { mutableStateOf(19) }
-            // Per-mode Day/Night overrides (null = follow the global theme mode).
+            // Per-mode Day/Night overrides (null = follow the global toggle).
             var perModeDark by remember { mutableStateOf<Map<BrowserMode, Boolean?>>(emptyMap()) }
-            // Resolved dark flag for the active mode right now (suspend read).
-            var darkNow by remember { mutableStateOf(true) }
-            LaunchedEffect(activeMode, themeMode, perModeDark, scheduleStartHour, scheduleEndHour) {
-                darkNow = try {
-                    com.click.browser.engine.ThemeController.isDarkNow(this@MainActivity, activeMode)
-                } catch (_: Exception) { true }
-            }
             var wallpaperUri by remember { mutableStateOf<String?>(null) }
-            val theme = remember(activeMode, darkNow, perModeDark) {
-                val dark = perModeDark[activeMode] ?: darkNow
+            val theme = remember(activeMode, currentThemeSetting, perModeDark, scheduleStartHour, scheduleEndHour) {
+                val dark = perModeDark[activeMode] ?: when (currentThemeSetting) {
+                    "Dark" -> true
+                    "Light" -> false
+                    "Scheduled" -> {
+                        // Light between startHour (inclusive) and endHour (exclusive), dark otherwise.
+                        val hour = java.util.Calendar.getInstance().get(java.util.Calendar.HOUR_OF_DAY)
+                        val s = scheduleStartHour.coerceIn(0, 23)
+                        val e = scheduleEndHour.coerceIn(0, 23)
+                        val isLight = if (s < e) hour in s until e else hour >= s || hour < e
+                        !isLight
+                    }
+                    else -> AppSettings.isSystemNightMode(this@MainActivity)
+                }
                 ModeThemes.forMode(activeMode, dark)
             }
 
@@ -1329,6 +1368,9 @@ class MainActivity : FragmentActivity() {
             var showLanguage by remember { mutableStateOf(false) }
             var showDownloadSettings by remember { mutableStateOf(false) }
             var showReports by remember { mutableStateOf(false) }
+            // Privacy & Security suite (Google Sign-In, passwords, Safety Check, autofill, cards).
+            var showPrivacySecurity by remember { mutableStateOf(false) }
+            var showPaymentMethods by remember { mutableStateOf(false) }
             // Per-site settings sheet (opened from the lock icon in the address bar).
             var showSiteSettings by remember { mutableStateOf(false) }
             // Built-in engines (Safe Browsing / Translate / PDF)
@@ -1380,10 +1422,13 @@ class MainActivity : FragmentActivity() {
             var pageLoadTime by remember { mutableStateOf(0L) }
             var lastPageStart by remember { mutableStateOf(0L) }
             var showDebugOverlay by remember { mutableStateOf(true) }
-            val logs = remember { mutableStateListOf<LogEntry>() }
-            val networkRequests = remember { mutableStateListOf<NetworkRequest>() }
-            var domHtml by remember { mutableStateOf("") }
-            val sourcesList = remember { mutableStateListOf<String>() }
+            // DevTools log state lives at Activity level (devToolsLogs etc.)
+            // so WebView callbacks and this UI can never diverge. Local
+            // aliases keep the existing code below unchanged.
+            val logs = devToolsLogs
+            val networkRequests = devToolsNetwork
+            val domHtml: String by devToolsDomHtml
+            val sourcesList = devToolsSources
 
             // Hack tools states
             var antiDetectionEnabled by remember { mutableStateOf(true) }
@@ -1733,17 +1778,22 @@ class MainActivity : FragmentActivity() {
                     forceZoomEnabled = prefs[AppSettings.FORCE_ZOOM] == true
                     readerModeEnabled = prefs[AppSettings.READER_MODE] == true
                     reducedMotionEnabled = prefs[AppSettings.REDUCED_MOTION] == true
-                    // Theme mode (+ legacy UI_DARK_MODE migration) and schedule hours.
-                    val legacyThemeMode = prefs[AppSettings.THEME_MODE]
-                    themeMode = if (legacyThemeMode == null) {
-                        // One-time migration: persist so ThemeController agrees.
-                        val migrated = if (prefs[AppSettings.UI_DARK_MODE] == false) "light" else "dark"
-                        try {
-                            com.click.browser.engine.ThemeController.setThemeMode(this@MainActivity, migrated)
-                        } catch (_: Exception) { }
-                        migrated
-                    } else {
-                        com.click.browser.engine.ThemeController.normalize(legacyThemeMode)
+                    // Appearance: "auto" (default, follows system night mode) |
+                    // "light" | "dark" | "scheduled". Migrates legacy keys.
+                    currentThemeSetting = when (prefs[AppSettings.APPEARANCE_MODE]) {
+                        "light" -> "Light"
+                        "dark" -> "Dark"
+                        "scheduled" -> "Scheduled"
+                        "auto" -> "Auto"
+                        else -> {
+                            // Migrate from old THEME_MODE if present.
+                            when (prefs[AppSettings.THEME_MODE]) {
+                                "light" -> "Light"
+                                "dark" -> "Dark"
+                                "scheduled" -> "Scheduled"
+                                else -> if (prefs[AppSettings.UI_DARK_MODE] == true) "Dark" else "Auto"
+                            }
+                        }
                     }
                     scheduleStartHour = (prefs[AppSettings.THEME_SCHEDULE_START_HOUR] ?: 6).coerceIn(0, 23)
                     scheduleEndHour = (prefs[AppSettings.THEME_SCHEDULE_END_HOUR] ?: 19).coerceIn(0, 23)
@@ -3220,9 +3270,11 @@ class MainActivity : FragmentActivity() {
                                                                 val loc = if (src != null) " ($src:${msg.lineNumber()})" else ""
                                                                 // Cap message length so a spammy page can't OOM the log list.
                                                                 val text = msg.message().take(500)
-                                                                logs.add(LogEntry(type, "$text$loc"))
-                                                                // Cap list size (drop oldest) — same guard as elsewhere.
-                                                                if (logs.size > 500) logs.removeAt(0)
+                                                                android.util.Log.d(
+                                                                    "ClickDevTools",
+                                                                    "console [$type] $text$loc"
+                                                                )
+                                                                addDevToolsLog(LogEntry(type, "$text$loc"))
                                                                 return true
                                                             }
 
@@ -3322,15 +3374,18 @@ class MainActivity : FragmentActivity() {
                                                             }
                                                         }
 
-                                                        // Setup Bridges
+                                                        // Setup Bridges (callbacks may run on WebView's
+                                                        // bridge thread — the helpers marshal to main).
                                                         addJavascriptInterface(
                                                             DevToolsBridge(
-                                                                onLogAdded = { logs.add(it) },
-                                                                onNetworkAdded = { networkRequests.add(it) },
-                                                                onDomUpdated = { domHtml = it },
+                                                                onLogAdded = { addDevToolsLog(it) },
+                                                                onNetworkAdded = { addDevToolsNetwork(it) },
+                                                                onDomUpdated = { runOnUiThread { devToolsDomHtml.value = it } },
                                                                 onSourcesUpdated = { list ->
-                                                                    sourcesList.clear()
-                                                                    sourcesList.addAll(list)
+                                                                    runOnUiThread {
+                                                                        devToolsSources.clear()
+                                                                        devToolsSources.addAll(list)
+                                                                    }
                                                                 }
                                                             ),
                                                             "DevToolsBridge"
@@ -4194,14 +4249,24 @@ class MainActivity : FragmentActivity() {
                             if (showSettings) {
                                 SettingsScreen(
                                     theme = theme,
-                                    themeMode = themeMode,
+                                    currentThemeSetting = currentThemeSetting,
                                     onThemeChange = {
-                                        themeMode = it
+                                        currentThemeSetting = it
                                         scope.launch {
-                                            com.click.browser.engine.ThemeController.setThemeMode(this@MainActivity, it)
+                                            dataStore.edit { prefs ->
+                                                prefs[AppSettings.APPEARANCE_MODE] = when (it) {
+                                                    "Light" -> "light"
+                                                    "Dark" -> "dark"
+                                                    "Scheduled" -> "scheduled"
+                                                    else -> "auto"
+                                                }
+                                                // Keep the legacy boolean in sync for
+                                                // any reader still on UI_DARK_MODE.
+                                                prefs[AppSettings.UI_DARK_MODE] = it == "Dark"
+                                            }
                                         }
                                     },
-                                    globalDarkEffective = darkNow,
+                                    globalDarkEffective = theme.dark,
                                     scheduleStartHour = scheduleStartHour,
                                     scheduleEndHour = scheduleEndHour,
                                     onScheduleChange = { start, end ->                                        scheduleStartHour = start
@@ -4413,6 +4478,7 @@ class MainActivity : FragmentActivity() {
                                     onOpenLanguage = { showSettings = false; showLanguage = true },
                                     onOpenDownloadSettings = { showSettings = false; showDownloadSettings = true },
                                     onOpenReports = { showSettings = false; showReports = true },
+                                    onOpenPrivacySecurity = { showSettings = false; showPrivacySecurity = true },
                                     locationSummary = LocationGuard.websitesWillSee(locationMode, locationSpoofLabel),
                                     onOpenLocationSettings = { showLocationSettings = true },
                                     perModeDark = perModeDark,
@@ -4507,6 +4573,21 @@ class MainActivity : FragmentActivity() {
                                     onClose = { showPasswordManager = false }
                                 )
                             }
+                            // Privacy & Security suite: account, passwords, Safety Check, autofill, cards.
+                            if (showPrivacySecurity) {
+                                com.click.browser.ui.screens.PrivacySecurityScreen(
+                                    theme = theme,
+                                    onOpenPaymentMethods = { showPaymentMethods = true },
+                                    onOpenPasswords = { showPasswordManager = true },
+                                    onClose = { showPrivacySecurity = false }
+                                )
+                            }
+                            if (showPaymentMethods) {
+                                com.click.browser.ui.screens.PaymentMethodsScreen(
+                                    theme = theme,
+                                    onClose = { showPaymentMethods = false }
+                                )
+                            }
                             // Cookie manager: per-site cookie list.
                             if (showCookieManager) {
                                 com.click.browser.ui.screens.CookieManagerScreen(
@@ -4553,6 +4634,14 @@ class MainActivity : FragmentActivity() {
                                     android.net.Uri.parse(currentTab.url).host?.lowercase().orEmpty()
                                 } catch (_: Exception) { "" }
                                 if (siteHost.isNotEmpty()) {
+                                    // Shields: live cookie count for this host.
+                                    var siteCookieCount by remember(siteHost) { mutableStateOf(0) }
+                                    LaunchedEffect(siteHost) {
+                                        siteCookieCount = try {
+                                            com.click.browser.engine.CookieStore
+                                                .cookiesForHost(siteHost).size
+                                        } catch (_: Exception) { 0 }
+                                    }
                                     val siteCurrent =
                                         siteSettings.forHost(siteHost)
                                             ?: com.click.browser.engine.SiteSettings()
@@ -4591,7 +4680,18 @@ class MainActivity : FragmentActivity() {
                                             }
                                         },
                                         onReload = { currentTab.webView?.reload() },
-                                        onDismiss = { showSiteSettings = false }
+                                        onDismiss = { showSiteSettings = false },
+                                        // Brave-style Shields panel data.
+                                        trackersBlocked = blockedCount,
+                                        cookieCount = siteCookieCount,
+                                        onManageCookies = {
+                                            showSiteSettings = false
+                                            showCookieManager = true
+                                        },
+                                        onOpenHistory = {
+                                            showSiteSettings = false
+                                            showHistory = true
+                                        }
                                     )
                                 } else {
                                     showSiteSettings = false

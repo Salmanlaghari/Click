@@ -13,7 +13,12 @@ import android.net.Uri
  */
 object ReportMailer {
 
-    /** Admin recipients for every report type. */
+    /**
+     * Admin recipients for every report type.
+     * These are Prince's public support contacts (chosen by him for the
+     * in-app email chooser) — not secrets. They appear in the mailto:
+     * intent so the user can review before sending.
+     */
     val ADMIN_EMAILS = listOf(
         "laghariprince2@gmail.com",
         "lovefaillaghari@gmail.com",
