@@ -150,6 +150,11 @@ dependencies {
     implementation(libs.play.services.ads)
     // AndroidX BiometricPrompt for the private-tab lock (no custom crypto).
     implementation(libs.androidx.biometric)
+    // Media3 ExoPlayer for live streaming playback (HLS/DASH) — playback only.
+    implementation(libs.media3.exoplayer)
+    implementation(libs.media3.exoplayer.hls)
+    implementation(libs.media3.exoplayer.dash)
+    implementation(libs.media3.ui)
 
     testImplementation(libs.junit)
     androidTestImplementation(libs.androidx.junit)

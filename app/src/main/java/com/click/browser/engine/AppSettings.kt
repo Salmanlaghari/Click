@@ -81,6 +81,8 @@ object AppSettings {
     val DOH_PROVIDER = stringPreferencesKey("doh_provider")
     val DOH_CUSTOM_URL = stringPreferencesKey("doh_custom_url")
     val V9_VPN_ENABLED = booleanPreferencesKey("v9_vpn_enabled")
+    /** Advance Mode 5s intro animation on engine boot. Default ON; tap skips. */
+    val ADVANCE_INTRO_ENABLED = booleanPreferencesKey("advance_intro_enabled")
 
     // Brave-inspired privacy quick wins.
     /** Strip tracking query params (utm_*, gclid, fbclid, ...) on navigation. Default ON. */

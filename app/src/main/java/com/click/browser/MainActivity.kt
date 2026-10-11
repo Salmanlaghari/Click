@@ -162,6 +162,8 @@ class MainActivity : FragmentActivity() {
     private var liveAntiDetection = true
     private var liveNightMode = false
     private var liveDataSaver = false
+    // Advance Mode intro animation toggle (Settings; default ON).
+    private var liveAdvanceIntroEnabled = true
     // Live copies for the privacy-guard features (see PrivacyGuards).
     private var liveHeaderSpoof = false
     // Fingerprint mode: "off" | "standard" | "strict" (Brave-hardening).
@@ -314,6 +316,14 @@ class MainActivity : FragmentActivity() {
     }
 
     private var ttsEngine: TextToSpeech? = null
+
+    /**
+     * Fullscreen video exit hook. Set by the active WebChromeClient when a
+     * page enters fullscreen video (onShowCustomView); cleared on exit.
+     * The BackHandler invokes this first so back exits fullscreen video
+     * instead of navigating back.
+     */
+    var exitFullscreenVideo: (() -> Unit)? by androidx.compose.runtime.mutableStateOf(null)
 
     override fun onPause() {
         super.onPause()
@@ -1079,6 +1089,8 @@ class MainActivity : FragmentActivity() {
             var httpsStrictExceptions by remember { mutableStateOf(emptyList<String>()) }
             var javaScriptEnabledGlobal by remember { mutableStateOf(true) }
             var dataSaverEnabled by remember { mutableStateOf(false) }
+            // Advance Mode 5s intro animation on engine boot (default ON).
+            var advanceIntroEnabled by remember { mutableStateOf(true) }
             // Brave-inspired privacy quick wins (DataStore-persisted below).
             var stripTrackingParams by remember { mutableStateOf(true) }
             var forgetfulBrowsing by remember { mutableStateOf(false) }
@@ -1103,6 +1115,7 @@ class MainActivity : FragmentActivity() {
             var showHistory by remember { mutableStateOf(false) }
             var showDownloads by remember { mutableStateOf(false) }
             var showPlaylist by remember { mutableStateOf(false) }
+            var showStreamPlayer by remember { mutableStateOf(false) }
             // One-shot URL from the long-press menu ("Add to Playlist").
             var playlistSeedUrl by remember { mutableStateOf<String?>(null) }
             // Generic "background audio for web pages" setting (default off).
@@ -1139,7 +1152,7 @@ class MainActivity : FragmentActivity() {
             var showHackIntro by remember {
                 mutableStateOf(intent.getBooleanExtra(V9Engine.EXTRA_HACK_INTRO, false))
             }
-            // Advance Mode signature moment: full-screen 5s blue-light intro
+            // Advance Mode signature moment: full-screen 5s teal intro
             // after an Advance engine boot. Tap to skip.
             var showAdvanceIntro by remember {
                 mutableStateOf(intent.getBooleanExtra(V9Engine.EXTRA_ADVANCE_INTRO, false))
@@ -1425,6 +1438,7 @@ class MainActivity : FragmentActivity() {
             LaunchedEffect(gpcEnabled) { liveGpcEnabled = gpcEnabled }
             LaunchedEffect(forceNightModeWebsites) { liveNightMode = forceNightModeWebsites }
             LaunchedEffect(dataSaverEnabled) { liveDataSaver = dataSaverEnabled }
+            LaunchedEffect(advanceIntroEnabled) { liveAdvanceIntroEnabled = advanceIntroEnabled }
             LaunchedEffect(headerSpoofEnabled) { liveHeaderSpoof = headerSpoofEnabled }
             LaunchedEffect(fingerprintMode) { liveFingerprintMode = fingerprintMode }
             // Privacy quick wins: keep WebViewClient-safe live copies in sync.
@@ -1538,6 +1552,7 @@ class MainActivity : FragmentActivity() {
                         ?: LocationGuard.DEFAULT_PRESET.label
                     customHeaders = AppSettings.parseHeaders(prefs[AppSettings.CUSTOM_HEADERS_JSON])
                     backgroundAudioEnabled = prefs[AppSettings.BACKGROUND_AUDIO_ENABLED] == true
+                    advanceIntroEnabled = prefs[AppSettings.ADVANCE_INTRO_ENABLED] ?: true
                     // Brave-inspired privacy quick wins.
                     stripTrackingParams = prefs[AppSettings.STRIP_TRACKING_PARAMS] ?: true
                     forgetfulBrowsing = prefs[AppSettings.FORGETFUL_BROWSING] == true
@@ -1599,6 +1614,10 @@ class MainActivity : FragmentActivity() {
             }
 
             // Back Press Handling
+            // Fullscreen video: back exits fullscreen first.
+            BackHandler(enabled = exitFullscreenVideo != null) {
+                exitFullscreenVideo?.invoke()
+            }
             BackHandler(enabled = currentTab.url != "about:blank") {
                 val wv = currentTab.webView
                 if (wv != null && wv.canGoBack()) {
@@ -2470,6 +2489,10 @@ class MainActivity : FragmentActivity() {
                                                 onReload = { currentTab.webView?.reload() },
                                                 onMenuClick = { showBrowserMenu = true },
                                                 onSiteSettingsClick = { showSiteSettings = true },
+                                                // 2026 style: sidebar (drawer) accessible from top bar.
+                                                onDrawerClick = { scope.launch { drawerState.open() } },
+                                                tabCount = tabs.size,
+                                                onTabsClick = { showTabsManager = true },
                                                 // LocationGuard indicator: show when this site's
                                                 // location is blocked or spoofed.
                                                 locationMode = run {
@@ -2955,6 +2978,7 @@ class MainActivity : FragmentActivity() {
                                                         }
 
                                                         webChromeClient = object : WebChromeClient() {
+
                                                             // DevTools Console: capture ALL page console messages
                                                             // natively (console.log/warn/error/info + uncaught
                                                             // exceptions). This is the reliable path — the JS
@@ -2990,6 +3014,53 @@ class MainActivity : FragmentActivity() {
                                                                 // Cap list size (drop oldest) — same guard as elsewhere.
                                                                 if (logs.size > 500) logs.removeAt(0)
                                                                 return true
+                                                            }
+
+                                                            // Fullscreen video support (YouTube, Facebook, etc.):
+                                                            // when a page requests fullscreen video, show the
+                                                            // custom view full-screen; hide it when done.
+                                                            private var customView: android.view.View? = null
+                                                            private var customViewCallback: CustomViewCallback? = null
+
+                                                            override fun onShowCustomView(
+                                                                view: android.view.View?,
+                                                                callback: CustomViewCallback?
+                                                            ) {
+                                                                if (customView != null) {
+                                                                    callback?.onCustomViewHidden()
+                                                                    return
+                                                                }
+                                                                customView = view
+                                                                customViewCallback = callback
+                                                                // Register the back-press exit hook.
+                                                                this@MainActivity.exitFullscreenVideo = {
+                                                                    onHideCustomView()
+                                                                }
+                                                                // Hide the browser UI and show video fullscreen.
+                                                                this@MainActivity.window.addFlags(
+                                                                    android.view.WindowManager.LayoutParams.FLAG_FULLSCREEN
+                                                                )
+                                                                (this@MainActivity.window.decorView as? android.view.ViewGroup)?.let { decor ->
+                                                                    val params = android.widget.FrameLayout.LayoutParams(
+                                                                        android.widget.FrameLayout.LayoutParams.MATCH_PARENT,
+                                                                        android.widget.FrameLayout.LayoutParams.MATCH_PARENT
+                                                                    )
+                                                                    decor.addView(view, params)
+                                                                }
+                                                            }
+
+                                                            override fun onHideCustomView() {
+                                                                customView?.let { v ->
+                                                                    (this@MainActivity.window.decorView as? android.view.ViewGroup)?.removeView(v)
+                                                                }
+                                                                customView = null
+                                                                this@MainActivity.exitFullscreenVideo = null
+                                                                this@MainActivity.window.clearFlags(
+                                                                    android.view.WindowManager.LayoutParams.FLAG_FULLSCREEN
+                                                                )
+                                                                customViewCallback?.onCustomViewHidden()
+                                                                customViewCallback = null
+
                                                             }
 
                                                             override fun onReceivedTitle(view: WebView?, title: String?) {
@@ -3486,6 +3557,13 @@ class MainActivity : FragmentActivity() {
                                 )
                             }
 
+                            // Live Stream player (ExoPlayer for HLS/DASH live streams).
+                            if (showStreamPlayer) {
+                                StreamPlayerScreen(
+                                    onClose = { showStreamPlayer = false }
+                                )
+                            }
+
                             // DevTools bottom sheet (Developer mode): dismissible,
                             // partially-expanded by default so the website stays
                             // visible above it. Opened via the top-right corner
@@ -3967,6 +4045,11 @@ class MainActivity : FragmentActivity() {
                                             flagsUi = liveFlags
                                         }
                                     },
+                                    advanceIntroEnabled = advanceIntroEnabled,
+                                    onToggleAdvanceIntro = { v ->
+                                        advanceIntroEnabled = v
+                                        scope.launch { dataStore.edit { prefs -> prefs[AppSettings.ADVANCE_INTRO_ENABLED] = v } }
+                                    },
                                     onClearHistoryForMode = { mode ->
                                         scope.launch {
                                             repository.clearHistoryFor(mode)
@@ -4148,7 +4231,7 @@ class MainActivity : FragmentActivity() {
                                 HackIntroOverlay(onDone = { showHackIntro = false })
                             }
                             // V9: Advance Mode signature moment — full-screen 5s
-                            // blue-light intro after an Advance engine boot. Tap to skip.
+                            // teal intro after an Advance engine boot. Tap to skip.
                             if (showAdvanceIntro) {
                                 AdvanceIntroOverlay(onDone = { showAdvanceIntro = false })
                             }
@@ -4634,6 +4717,10 @@ class MainActivity : FragmentActivity() {
                                         playlistSeedUrl = null
                                         showPlaylist = true
                                     },
+                                    onStreamPlayer = {
+                                        showBrowserMenu = false
+                                        showStreamPlayer = true
+                                    },
                                     onBookmarks = { showBrowserMenu = false; showBookmarks = true },
                                     onGames = { showBrowserMenu = false; showClickPage = "games" },
                                     onRecentTabs = { showBrowserMenu = false; showRecentTabs = true },
@@ -5091,7 +5178,7 @@ class MainActivity : FragmentActivity() {
         val restarted = V9Engine.restartForEngineSwitch(
             this, modeManager, mode,
             hackIntro = (mode == BrowserMode.HACK),
-            advanceIntro = (mode == BrowserMode.ADVANCED)
+            advanceIntro = (mode == BrowserMode.ADVANCED) && liveAdvanceIntroEnabled
         )
         if (!restarted) {
             // Restart wasn't possible (alarm unavailable etc.) — apply the
