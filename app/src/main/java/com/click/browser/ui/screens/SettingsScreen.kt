@@ -187,6 +187,11 @@ fun SettingsScreen(
                     Spacer(Modifier.height(8.dp))
                     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         FilterChip(
+                            selected = currentThemeSetting == "Auto",
+                            onClick = { onThemeChange("Auto") },
+                            label = { Text("🔄 Auto") }
+                        )
+                        FilterChip(
                             selected = currentThemeSetting == "Light",
                             onClick = { onThemeChange("Light") },
                             label = { Text("☀️ Light") }
@@ -667,7 +672,14 @@ fun SettingsScreen(
                     BrowserMode.values().forEach { mode ->
                         val isActive = mode == activeMode
                         val override = perModeDark[mode]
-                        val effective = override ?: (currentThemeSetting == "Dark")
+                        // Mirror the MainActivity resolution: per-mode
+                        // override wins, else global appearance (Auto follows
+                        // the system night mode).
+                        val effective = override ?: when (currentThemeSetting) {
+                            "Dark" -> true
+                            "Light" -> false
+                            else -> com.click.browser.engine.AppSettings.isSystemNightMode(context)
+                        }
                         Card(
                             colors = CardDefaults.cardColors(
                                 containerColor = if (isActive) theme.primary.copy(alpha = 0.12f)

@@ -81,6 +81,17 @@ class SingBoxVpnService : VpnService(), PlatformInterface, CommandServerHandler 
         private val _error = MutableStateFlow("")
         val error: StateFlow<String> = _error.asStateFlow()
 
+        /**
+         * Report a startup failure from outside the service (e.g. the
+         * controller failed before the service could even start). Puts the
+         * UI into the ERROR state with a human-readable message instead of
+         * leaving it stuck on a spinner.
+         */
+        fun reportStartError(message: String) {
+            _error.value = message
+            _state.value = VpnState.ERROR
+        }
+
         @Volatile private var libboxReady = false
 
         /** One-time libbox init. Must run before any other libbox call. */

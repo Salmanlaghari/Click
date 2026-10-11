@@ -15,10 +15,13 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Cookie
 import androidx.compose.material.icons.filled.DeleteSweep
+import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.LockOpen
 import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.Shield
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
@@ -77,7 +80,12 @@ fun SiteSettingsSheet(
     onDesktopModeChange: (Boolean) -> Unit,
     onApplyToWebView: (SiteSettings) -> Unit,
     onReload: () -> Unit,
-    onDismiss: () -> Unit
+    onDismiss: () -> Unit,
+    // Brave-style Shields info (optional — defaults keep old call sites working).
+    trackersBlocked: Int = 0,
+    cookieCount: Int = 0,
+    onManageCookies: () -> Unit = {},
+    onOpenHistory: () -> Unit = {}
 ) {
     val scope = rememberCoroutineScope()
     val context = LocalContext.current
@@ -120,6 +128,48 @@ fun SiteSettingsSheet(
                 }
             }
             Spacer(Modifier.height(16.dp))
+
+            // ---- Brave-style Shields: connection security, trackers,
+            // cookies and history — all reachable from the address bar. ----
+            Text(
+                "🛡️ Shields",
+                fontWeight = FontWeight.Bold,
+                fontSize = 15.sp,
+                color = theme.onSurface
+            )
+            Spacer(Modifier.height(4.dp))
+            Text(
+                if (isHttps) "Your connection to this site is encrypted (HTTPS)."
+                else "Not encrypted — avoid entering passwords or payment details here.",
+                fontSize = 12.sp,
+                color = theme.onSurface.copy(alpha = 0.6f)
+            )
+            Spacer(Modifier.height(8.dp))
+            ShieldsInfoRow(
+                theme = theme,
+                icon = Icons.Default.Shield,
+                title = "Trackers & ads blocked",
+                subtitle = if (globalAdBlock) "$trackersBlocked blocked by Click Shields"
+                else "Shields are off for this browser",
+                onClick = null
+            )
+            ShieldsInfoRow(
+                theme = theme,
+                icon = Icons.Default.Cookie,
+                title = "Cookies",
+                subtitle = "$cookieCount cookie${if (cookieCount == 1) "" else "s"} stored by $host",
+                actionLabel = "Manage",
+                onClick = onManageCookies
+            )
+            ShieldsInfoRow(
+                theme = theme,
+                icon = Icons.Default.History,
+                title = "History",
+                subtitle = "Recently visited pages",
+                actionLabel = "Open",
+                onClick = onOpenHistory
+            )
+            Spacer(Modifier.height(8.dp))
 
             // JavaScript — tri-state: Default / On / Off.
             TriStateRow(
@@ -416,5 +466,43 @@ private fun SettingToggleRow(
             Text(subtitle, fontSize = 12.sp, color = theme.onSurface.copy(alpha = 0.6f))
         }
         Switch(checked = checked, onCheckedChange = onChange)
+    }
+}
+
+/**
+ * One Brave-style Shields info row: icon + title/subtitle, optional
+ * action button on the right (null = info only, no click).
+ */
+@Composable
+private fun ShieldsInfoRow(
+    theme: ModeTheme,
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    title: String,
+    subtitle: String,
+    actionLabel: String? = null,
+    onClick: (() -> Unit)? = null
+) {
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 6.dp)
+    ) {
+        Icon(
+            icon,
+            contentDescription = null,
+            tint = theme.primary,
+            modifier = Modifier.size(20.dp)
+        )
+        Spacer(Modifier.width(12.dp))
+        Column(modifier = Modifier.weight(1f)) {
+            Text(title, fontWeight = FontWeight.SemiBold, fontSize = 14.sp, color = theme.onSurface)
+            Text(subtitle, fontSize = 12.sp, color = theme.onSurface.copy(alpha = 0.6f))
+        }
+        if (actionLabel != null && onClick != null) {
+            TextButton(onClick = onClick) {
+                Text(actionLabel)
+            }
+        }
     }
 }
