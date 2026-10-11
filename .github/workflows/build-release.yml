@@ -15,6 +15,36 @@ jobs:
       - name: Checkout Code
         uses: actions/checkout@v4
 
+      - name: Read libbox version pin
+        id: libbox-version
+        run: echo "version=$(tr -d '[:space:]' < app/libs/libbox.version)" >> "$GITHUB_OUTPUT"
+
+      - name: Restore libbox.aar from cache
+        id: cache-libbox
+        uses: actions/cache@v4
+        with:
+          path: app/libs/libbox.aar
+          key: libbox-${{ steps.libbox-version.outputs.version }}-aar
+
+      - name: Download libbox.aar from build-libbox artifact
+        if: steps.cache-libbox.outputs.cache-hit != 'true'
+        uses: dawidd6/action-download-artifact@v6
+        with:
+          workflow: build-libbox.yml
+          workflow_conclusion: success
+          name: libbox-aar-${{ steps.libbox-version.outputs.version }}
+          path: app/libs
+          branch: ${{ github.head_ref || github.ref_name }}
+          if_no_artifact_found: fail
+
+      - name: Verify libbox.aar present
+        run: |
+          if [ ! -f app/libs/libbox.aar ]; then
+            echo "::error::app/libs/libbox.aar missing — run the 'Build libbox.aar' workflow first."
+            exit 1
+          fi
+          ls -lh app/libs/libbox.aar
+
       - name: Setup JDK 21
         uses: actions/setup-java@v4
         with:

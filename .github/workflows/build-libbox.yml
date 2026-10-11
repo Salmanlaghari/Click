@@ -1,0 +1,96 @@
+name: Build libbox.aar
+
+# Builds sing-box's libbox.aar from OFFICIAL SagerNet/sing-box source via gomobile.
+# The AAR is cached by sing-box version — rebuilds only when the pin changes.
+# This avoids shipping third-party binaries: we compile from official source.
+#
+# The AAR is uploaded as a workflow artifact AND cached. The main build
+# workflows (build-debug.yml, build-release.yml) download it before compiling.
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - ".github/workflows/build-libbox.yml"
+      - "app/libs/libbox.version"
+
+env:
+  SINGBOX_VERSION: "v1.14.3"
+  # Latest gomobile requires Go >= 1.26 (and dropped the `gomobile init -ndk`
+  # flag — the NDK now comes from ANDROID_NDK_HOME).
+  GO_VERSION: "1.26.9"
+
+jobs:
+  build-libbox:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check cache
+        id: cache-libbox
+        uses: actions/cache@v4
+        with:
+          path: libbox.aar
+          key: libbox-${{ env.SINGBOX_VERSION }}-aar
+
+      - name: Set up Go
+        if: steps.cache-libbox.outputs.cache-hit != 'true'
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+
+      - name: Set up JDK 17
+        if: steps.cache-libbox.outputs.cache-hit != 'true'
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - name: Set up Android NDK
+        if: steps.cache-libbox.outputs.cache-hit != 'true'
+        uses: nttld/setup-ndk@v1
+        id: setup-ndk
+        with:
+          ndk-version: r26d
+
+      - name: Install gomobile
+        if: steps.cache-libbox.outputs.cache-hit != 'true'
+        run: |
+          # Newer gomobile removed the `-ndk` flag; the NDK is now picked up
+          # from ANDROID_NDK_HOME.
+          export ANDROID_NDK_HOME=${{ steps.setup-ndk.outputs.ndk-path }}
+          go install golang.org/x/mobile/cmd/gomobile@latest
+          go install golang.org/x/mobile/cmd/gobind@latest
+          export PATH=$PATH:$(go env GOPATH)/bin
+          gomobile init
+
+      - name: Clone sing-box (pinned)
+        if: steps.cache-libbox.outputs.cache-hit != 'true'
+        run: |
+          git clone --depth 1 --branch ${{ env.SINGBOX_VERSION }} \
+            https://github.com/SagerNet/sing-box.git sing-box-src
+
+      - name: Build libbox.aar
+        if: steps.cache-libbox.outputs.cache-hit != 'true'
+        run: |
+          export PATH=$PATH:$(go env GOPATH)/bin
+          export ANDROID_NDK_HOME=${{ steps.setup-ndk.outputs.ndk-path }}
+          cd sing-box-src
+          # NOTE: newer gomobile removed -libname (the native lib is now
+          # always libgojni.so, loaded by the regenerated Java stubs) —
+          # use -o to name the AAR instead. -buildvcs is also no longer a
+          # bind flag (harmless to drop: -trimpath + -buildid= already
+          # keep the build reproducible).
+          gomobile bind -v -target android -androidapi 21 \
+            -javapkg=io.nekohasekai -o libbox.aar \
+            -trimpath \
+            -ldflags "-X github.com/sagernet/sing-box/constant.Version=${{ env.SINGBOX_VERSION }} -s -w -buildid=" \
+            -tags "with_gvisor,with_quic,with_wireguard,with_ech,with_utls,with_clash_api" \
+            ./experimental/libbox
+          ls -lh libbox.aar
+          cp libbox.aar ../libbox.aar
+
+      - name: Upload libbox.aar
+        uses: actions/upload-artifact@v4
+        with:
+          name: libbox-aar-${{ env.SINGBOX_VERSION }}
+          path: libbox.aar
+          retention-days: 90

@@ -72,6 +72,7 @@ fun BrowserMenuSheet(
     onFindInPage: () -> Unit,
     onTranslate: () -> Unit,
     onToggleDesktopSite: () -> Unit,
+    onVpn: () -> Unit = {},
     onSettings: () -> Unit,
     onCustomizeMenu: () -> Unit,
     onDismiss: () -> Unit
@@ -171,6 +172,10 @@ fun BrowserMenuSheet(
                                 )
                             },
                             onClick = onToggleDesktopSite
+                        )
+                        MenuCustomization.MenuItemId.VPN -> MenuRow(
+                            theme = theme, icon = Icons.Default.VpnKey,
+                            label = "Click VPN", onClick = onVpn
                         )
                         MenuCustomization.MenuItemId.SETTINGS -> {
                             MenuDivider(theme)
