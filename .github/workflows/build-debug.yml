@@ -22,6 +22,13 @@ on:
     branches: [ main ]
   workflow_dispatch:
 
+# The tag build creates a GitHub Release via softprops/action-gh-release,
+# which needs write access to repo contents. Without this block the default
+# GITHUB_TOKEN is read-only and the tag run fails with
+# "Resource not accessible by integration".
+permissions:
+  contents: write
+
 jobs:
   build-libbox:
     name: Build libbox.aar
