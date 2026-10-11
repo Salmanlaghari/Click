@@ -49,8 +49,6 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.click.browser.engine.MlKitTranslator
-import com.click.browser.engine.ModeTheme
 import com.google.mlkit.nl.translate.TranslateLanguage
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -95,10 +93,15 @@ fun TranslateSheet(
                 if (!ok) {
                     status = "Couldn't download the language model. Check your connection."
                 } else {
-                    translatePageInPlace(webView, sourceLang, target) { done, total ->
-                        pageProgress = if (total == 0) 1f else done.toFloat() / total
+                    val wv = webView
+                    if (wv == null) {
+                        status = "No page loaded to translate."
+                    } else {
+                        translatePageInPlace(wv, sourceLang, target) { done, total ->
+                            pageProgress = if (total == 0) 1f else done.toFloat() / total
+                        }
+                        status = "Page translated ✓"
                     }
-                    status = "Page translated ✓"
                 }
             } catch (e: Exception) {
                 status = "Page translation failed: ${e.message?.take(80)}"
