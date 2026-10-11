@@ -115,6 +115,9 @@ fun SettingsScreen(
     // --- UI animations ---
     animationsEnabled: Boolean,
     onToggleAnimations: (Boolean) -> Unit,
+    // --- Advance Mode intro animation ---
+    advanceIntroEnabled: Boolean,
+    onToggleAdvanceIntro: (Boolean) -> Unit,
     // --- AI Assistant ---
     aiApiKey: String,
     onAiApiKeyChange: (String) -> Unit,
@@ -158,7 +161,7 @@ fun SettingsScreen(
         currentSearchEngineSetting, addressBarPosition,
         adBlockerEnabled, forceNightMode,
         httpsMode, httpsStrictExceptions, jsEnabled, dataSaver, perModeDark, historyModeTarget,
-        aiApiKey, aiProvider, aiModel, showAiKey, animationsEnabled, isDefaultBrowser
+        aiApiKey, aiProvider, aiModel, showAiKey, animationsEnabled, isDefaultBrowser, advanceIntroEnabled
     ) {
         buildList {
             // ================= GENERAL =================
@@ -279,6 +282,12 @@ fun SettingsScreen(
                         "UI Animations",
                         "Tab close & page transition effects",
                         animationsEnabled, onToggleAnimations, theme
+                    )
+                    HorizontalDivider(color = theme.onSurface.copy(alpha = 0.1f))
+                    ToggleRow(
+                        "Advance intro animation",
+                        "5-second intro when entering Advance mode (tap skips)",
+                        advanceIntroEnabled, onToggleAdvanceIntro, theme
                     )
                 }
             })

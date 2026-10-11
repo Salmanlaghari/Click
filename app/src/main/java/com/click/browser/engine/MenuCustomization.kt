@@ -24,6 +24,7 @@ object MenuCustomization {
         DELETE_DATA("Delete browsing data"),
         DOWNLOADS("Downloads"),
         PLAYLIST("Playlist"),
+        STREAM_PLAYER("Live Stream"),
         BOOKMARKS("Bookmarks"),
         GAMES("Games"),
         RECENT_TABS("Recent tabs"),
