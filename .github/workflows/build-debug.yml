@@ -8,7 +8,8 @@ name: Build and Package APKs
 #
 # Job 1 builds libbox.aar (sing-box VPN core) from official SagerNet
 # source with a version-pinned cache — a fast no-op when the pin in
-# app/libs/libbox.version hasn't changed.
+# app/libs/libbox.version hasn't changed. Built arm64-only (~28MB vs
+# 112MB universal) since 99%+ of phones are arm64.
 # Job 2 builds and signs the app. No cross-workflow artifact races:
 # everything happens inside this one run.
 
@@ -38,7 +39,9 @@ jobs:
         uses: actions/cache@v4
         with:
           path: libbox.aar
-          key: libbox-${{ steps.libbox-version.outputs.version }}-aar
+          # arm64-only build (Phase 1 slimming): 4-ABI universal was 112MB,
+          # arm64-only is ~28MB. Cache key includes ABI to avoid stale hits.
+          key: libbox-${{ steps.libbox-version.outputs.version }}-arm64-aar
 
       - name: Set up Go
         if: steps.cache-libbox.outputs.cache-hit != 'true'
@@ -77,9 +80,14 @@ jobs:
           # sing-box's own supported build path (same as their release CI):
           # their build_libbox tool drives their gomobile fork with the
           # exact flags/tags the libbox Java API expects.
+          #
+          # PHASE 1 SLIMMING: -platform android/arm64 builds for arm64 only.
+          # The default ("android") builds all 4 ABIs (arm64, armv7, x86,
+          # x86_64) = ~112MB. arm64-only = ~28MB. 99%+ of modern phones are
+          # arm64; Play App Bundle handles the rest if needed later.
           make -C sing-box-src lib_install
           cd sing-box-src
-          go run ./cmd/internal/build_libbox -target android
+          go run ./cmd/internal/build_libbox -target android -platform android/arm64
           ls -lh libbox.aar
           cp libbox.aar ../libbox.aar
 
