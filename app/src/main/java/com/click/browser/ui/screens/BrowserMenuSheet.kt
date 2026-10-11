@@ -63,6 +63,7 @@ fun BrowserMenuSheet(
     onDeleteBrowsingData: () -> Unit,
     onDownloads: () -> Unit,
     onPlaylist: () -> Unit,
+    onStreamPlayer: () -> Unit,
     onBookmarks: () -> Unit,
     onGames: () -> Unit,
     onRecentTabs: () -> Unit,
@@ -71,6 +72,7 @@ fun BrowserMenuSheet(
     onFindInPage: () -> Unit,
     onTranslate: () -> Unit,
     onToggleDesktopSite: () -> Unit,
+    onVpn: () -> Unit = {},
     onSettings: () -> Unit,
     onCustomizeMenu: () -> Unit,
     onDismiss: () -> Unit
@@ -124,6 +126,10 @@ fun BrowserMenuSheet(
                             theme = theme, icon = Icons.Default.QueueMusic,
                             label = "Playlist", onClick = onPlaylist
                         )
+                        MenuCustomization.MenuItemId.STREAM_PLAYER -> MenuRow(
+                            theme = theme, icon = Icons.Default.LiveTv,
+                            label = "Live Stream", onClick = onStreamPlayer
+                        )
                         MenuCustomization.MenuItemId.BOOKMARKS -> MenuRow(
                             theme = theme, icon = Icons.Default.Bookmark,
                             label = "Bookmarks", onClick = onBookmarks
@@ -166,6 +172,10 @@ fun BrowserMenuSheet(
                                 )
                             },
                             onClick = onToggleDesktopSite
+                        )
+                        MenuCustomization.MenuItemId.VPN -> MenuRow(
+                            theme = theme, icon = Icons.Default.VpnKey,
+                            label = "Click VPN", onClick = onVpn
                         )
                         MenuCustomization.MenuItemId.SETTINGS -> {
                             MenuDivider(theme)

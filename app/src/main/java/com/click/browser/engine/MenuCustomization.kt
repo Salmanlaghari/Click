@@ -24,6 +24,7 @@ object MenuCustomization {
         DELETE_DATA("Delete browsing data"),
         DOWNLOADS("Downloads"),
         PLAYLIST("Playlist"),
+        STREAM_PLAYER("Live Stream"),
         BOOKMARKS("Bookmarks"),
         GAMES("Games"),
         RECENT_TABS("Recent tabs"),
@@ -32,6 +33,7 @@ object MenuCustomization {
         FIND_IN_PAGE("Find in page"),
         TRANSLATE("Translate"),
         DESKTOP_SITE("Desktop site"),
+        VPN("Click VPN"),
         SETTINGS("Settings"),
     }
 

@@ -7,6 +7,7 @@ import android.graphics.Bitmap
 import android.os.Bundle
 import android.speech.tts.TextToSpeech
 import android.webkit.WebChromeClient
+import android.webkit.ConsoleMessage
 import android.webkit.GeolocationPermissions
 import android.webkit.WebResourceError
 import android.webkit.WebResourceRequest
@@ -171,6 +172,8 @@ class MainActivity : FragmentActivity() {
     private var liveAntiDetection = true
     private var liveNightMode = false
     private var liveDataSaver = false
+    // Advance Mode intro animation toggle (Settings; default ON).
+    private var liveAdvanceIntroEnabled = true
     // Live copies for the privacy-guard features (see PrivacyGuards).
     private var liveHeaderSpoof = false
     // Fingerprint mode: "off" | "standard" | "strict" (Brave-hardening).
@@ -336,6 +339,14 @@ class MainActivity : FragmentActivity() {
     }
 
     private var ttsEngine: TextToSpeech? = null
+
+    /**
+     * Fullscreen video exit hook. Set by the active WebChromeClient when a
+     * page enters fullscreen video (onShowCustomView); cleared on exit.
+     * The BackHandler invokes this first so back exits fullscreen video
+     * instead of navigating back.
+     */
+    var exitFullscreenVideo: (() -> Unit)? by androidx.compose.runtime.mutableStateOf(null)
 
     override fun onPause() {
         super.onPause()
@@ -1142,6 +1153,8 @@ class MainActivity : FragmentActivity() {
             var httpsStrictExceptions by remember { mutableStateOf(emptyList<String>()) }
             var javaScriptEnabledGlobal by remember { mutableStateOf(true) }
             var dataSaverEnabled by remember { mutableStateOf(false) }
+            // Advance Mode 5s intro animation on engine boot (default ON).
+            var advanceIntroEnabled by remember { mutableStateOf(true) }
             // Brave-inspired privacy quick wins (DataStore-persisted below).
             var stripTrackingParams by remember { mutableStateOf(true) }
             var forgetfulBrowsing by remember { mutableStateOf(false) }
@@ -1166,6 +1179,7 @@ class MainActivity : FragmentActivity() {
             var showHistory by remember { mutableStateOf(false) }
             var showDownloads by remember { mutableStateOf(false) }
             var showPlaylist by remember { mutableStateOf(false) }
+            var showStreamPlayer by remember { mutableStateOf(false) }
             // One-shot URL from the long-press menu ("Add to Playlist").
             var playlistSeedUrl by remember { mutableStateOf<String?>(null) }
             // Generic "background audio for web pages" setting (default off).
@@ -1276,12 +1290,14 @@ class MainActivity : FragmentActivity() {
             // V9: Shield screen (VPN + DNS + engines) and the Hack Mode
             // Markhor intro animation (shown once after a Hack engine boot).
             var showV9Shield by remember { mutableStateOf(false) }
+            // Click VPN screen (full IP tunnel via sing-box).
+            var showVpn by remember { mutableStateOf(false) }
             // Help & Feedback screen.
             var showHelp by remember { mutableStateOf(false) }
             var showHackIntro by remember {
                 mutableStateOf(intent.getBooleanExtra(V9Engine.EXTRA_HACK_INTRO, false))
             }
-            // Advance Mode signature moment: full-screen 5s blue-light intro
+            // Advance Mode signature moment: full-screen 5s teal intro
             // after an Advance engine boot. Tap to skip.
             var showAdvanceIntro by remember {
                 mutableStateOf(intent.getBooleanExtra(V9Engine.EXTRA_ADVANCE_INTRO, false))
@@ -1567,6 +1583,7 @@ class MainActivity : FragmentActivity() {
             LaunchedEffect(gpcEnabled) { liveGpcEnabled = gpcEnabled }
             LaunchedEffect(forceNightModeWebsites) { liveNightMode = forceNightModeWebsites }
             LaunchedEffect(dataSaverEnabled) { liveDataSaver = dataSaverEnabled }
+            LaunchedEffect(advanceIntroEnabled) { liveAdvanceIntroEnabled = advanceIntroEnabled }
             LaunchedEffect(headerSpoofEnabled) { liveHeaderSpoof = headerSpoofEnabled }
             LaunchedEffect(fingerprintMode) { liveFingerprintMode = fingerprintMode }
             // Privacy quick wins: keep WebViewClient-safe live copies in sync.
@@ -1680,11 +1697,13 @@ class MainActivity : FragmentActivity() {
                         ?: LocationGuard.DEFAULT_PRESET.label
                     customHeaders = AppSettings.parseHeaders(prefs[AppSettings.CUSTOM_HEADERS_JSON])
                     backgroundAudioEnabled = prefs[AppSettings.BACKGROUND_AUDIO_ENABLED] == true
+                    backgroundAudioEnabled = prefs[AppSettings.BACKGROUND_AUDIO_ENABLED] == true
                     // Background news notifications (opt-in, default OFF).
                     newsNotificationsEnabled = prefs[AppSettings.NEWS_NOTIFICATIONS_ENABLED] == true
                     newsTopics = prefs[AppSettings.NEWS_NOTIFICATION_TOPICS]
                         ?.takeIf { it.isNotEmpty() }
                         ?: NewsNotifications.DEFAULT_TOPICS
+                    advanceIntroEnabled = prefs[AppSettings.ADVANCE_INTRO_ENABLED] ?: true
                     // Brave-inspired privacy quick wins.
                     stripTrackingParams = prefs[AppSettings.STRIP_TRACKING_PARAMS] ?: true
                     forgetfulBrowsing = prefs[AppSettings.FORGETFUL_BROWSING] == true
@@ -1746,6 +1765,10 @@ class MainActivity : FragmentActivity() {
             }
 
             // Back Press Handling
+            // Fullscreen video: back exits fullscreen first.
+            BackHandler(enabled = exitFullscreenVideo != null) {
+                exitFullscreenVideo?.invoke()
+            }
             BackHandler(enabled = currentTab.url != "about:blank") {
                 val wv = currentTab.webView
                 if (wv != null && wv.canGoBack()) {
@@ -2617,6 +2640,10 @@ class MainActivity : FragmentActivity() {
                                                 onReload = { currentTab.webView?.reload() },
                                                 onMenuClick = { showBrowserMenu = true },
                                                 onSiteSettingsClick = { showSiteSettings = true },
+                                                // 2026 style: sidebar (drawer) accessible from top bar.
+                                                onDrawerClick = { scope.launch { drawerState.open() } },
+                                                tabCount = tabs.size,
+                                                onTabsClick = { showTabsManager = true },
                                                 // LocationGuard indicator: show when this site's
                                                 // location is blocked or spoofed.
                                                 locationMode = run {
@@ -3102,6 +3129,91 @@ class MainActivity : FragmentActivity() {
                                                         }
 
                                                         webChromeClient = object : WebChromeClient() {
+
+                                                            // DevTools Console: capture ALL page console messages
+                                                            // natively (console.log/warn/error/info + uncaught
+                                                            // exceptions). This is the reliable path — the JS
+                                                            // console-hijack injection can miss early/late logs
+                                                            // and cross-frame messages; onConsoleMessage sees
+                                                            // everything at the WebView level.
+                                                            override fun onConsoleMessage(consoleMessage: ConsoleMessage?): Boolean {
+                                                                val msg = consoleMessage ?: return true
+                                                                val type = when (msg.messageLevel()) {
+                                                                    ConsoleMessage.MessageLevel.ERROR -> "error"
+                                                                    ConsoleMessage.MessageLevel.WARNING -> "warning"
+                                                                    ConsoleMessage.MessageLevel.LOG -> "success"
+                                                                    // TIP = developer tips from the page, not a
+                                                                    // success signal — show as neutral info.
+                                                                    ConsoleMessage.MessageLevel.TIP -> "info"
+                                                                    ConsoleMessage.MessageLevel.DEBUG -> "info"
+                                                                    else -> "info"
+                                                                }
+                                                                // sourceId can be a URL, a filename, or a pseudo-
+                                                                // source like "console-api". Only show it when it
+                                                                // looks like a real file (has an extension).
+                                                                // Strip query params (?a=b) and hash fragments
+                                                                // (#section) — they're noise in a log line.
+                                                                val rawSrc = msg.sourceId()
+                                                                    ?.substringAfterLast('/')
+                                                                    ?.substringBefore('?')
+                                                                    ?.substringBefore('#')
+                                                                val src = rawSrc?.takeIf { it.isNotBlank() && it.contains('.') }
+                                                                val loc = if (src != null) " ($src:${msg.lineNumber()})" else ""
+                                                                // Cap message length so a spammy page can't OOM the log list.
+                                                                val text = msg.message().take(500)
+                                                                logs.add(LogEntry(type, "$text$loc"))
+                                                                // Cap list size (drop oldest) — same guard as elsewhere.
+                                                                if (logs.size > 500) logs.removeAt(0)
+                                                                return true
+                                                            }
+
+                                                            // Fullscreen video support (YouTube, Facebook, etc.):
+                                                            // when a page requests fullscreen video, show the
+                                                            // custom view full-screen; hide it when done.
+                                                            private var customView: android.view.View? = null
+                                                            private var customViewCallback: CustomViewCallback? = null
+
+                                                            override fun onShowCustomView(
+                                                                view: android.view.View?,
+                                                                callback: CustomViewCallback?
+                                                            ) {
+                                                                if (customView != null) {
+                                                                    callback?.onCustomViewHidden()
+                                                                    return
+                                                                }
+                                                                customView = view
+                                                                customViewCallback = callback
+                                                                // Register the back-press exit hook.
+                                                                this@MainActivity.exitFullscreenVideo = {
+                                                                    onHideCustomView()
+                                                                }
+                                                                // Hide the browser UI and show video fullscreen.
+                                                                this@MainActivity.window.addFlags(
+                                                                    android.view.WindowManager.LayoutParams.FLAG_FULLSCREEN
+                                                                )
+                                                                (this@MainActivity.window.decorView as? android.view.ViewGroup)?.let { decor ->
+                                                                    val params = android.widget.FrameLayout.LayoutParams(
+                                                                        android.widget.FrameLayout.LayoutParams.MATCH_PARENT,
+                                                                        android.widget.FrameLayout.LayoutParams.MATCH_PARENT
+                                                                    )
+                                                                    decor.addView(view, params)
+                                                                }
+                                                            }
+
+                                                            override fun onHideCustomView() {
+                                                                customView?.let { v ->
+                                                                    (this@MainActivity.window.decorView as? android.view.ViewGroup)?.removeView(v)
+                                                                }
+                                                                customView = null
+                                                                this@MainActivity.exitFullscreenVideo = null
+                                                                this@MainActivity.window.clearFlags(
+                                                                    android.view.WindowManager.LayoutParams.FLAG_FULLSCREEN
+                                                                )
+                                                                customViewCallback?.onCustomViewHidden()
+                                                                customViewCallback = null
+
+                                                            }
+
                                                             override fun onReceivedTitle(view: WebView?, title: String?) {
                                                                 super.onReceivedTitle(view, title)
                                                                 currentTab.title = title ?: "Page"
@@ -3596,6 +3708,13 @@ class MainActivity : FragmentActivity() {
                                 )
                             }
 
+                            // Live Stream player (ExoPlayer for HLS/DASH live streams).
+                            if (showStreamPlayer) {
+                                StreamPlayerScreen(
+                                    onClose = { showStreamPlayer = false }
+                                )
+                            }
+
                             // DevTools bottom sheet (Developer mode): dismissible,
                             // partially-expanded by default so the website stays
                             // visible above it. Opened via the top-right corner
@@ -3623,7 +3742,37 @@ class MainActivity : FragmentActivity() {
                                         onClearLogs = { logs.clear() },
                                         onClearNetwork = { networkRequests.clear() },
                                         onEvalJs = { code ->
-                                            currentTab.webView?.evaluateJavascript(code, null)
+                                            // Echo the input, then run it and show the
+                                            // result (or error) as a console entry — no
+                                            // more silent eval.
+                                            logs.add(LogEntry("info", "> $code".take(500)))
+                                            if (logs.size > 500) logs.removeAt(0)
+                                            currentTab.webView?.evaluateJavascript(code) { result ->
+                                                val display = if (result.isNullOrBlank() || result == "null") {
+                                                    "(no return value)"
+                                                } else {
+                                                    // WebView JSON-encodes the result: strings come back
+                                                    // wrapped in quotes ("hello"), numbers/booleans/objects
+                                                    // come back unquoted (42, true, {...}). Strip quotes and
+                                                    // unescape only when they're actually present.
+                                                    // Unescape order matters: handle \\ FIRST so that an
+                                                    // escaped backslash (e.g. "\\n" meaning literal \ + n)
+                                                    // isn't misread as an escape sequence afterwards.
+                                                    val unquoted = if (result.length >= 2 &&
+                                                        result.startsWith("\"") && result.endsWith("\"")
+                                                    ) {
+                                                        result.substring(1, result.length - 1)
+                                                            .replace("\\\\", "\\")
+                                                            .replace("\\\"", "\"")
+                                                            .replace("\\n", "\n")
+                                                    } else {
+                                                        result
+                                                    }
+                                                    unquoted.take(500)
+                                                }
+                                                logs.add(LogEntry("success", "< $display"))
+                                                if (logs.size > 500) logs.removeAt(0)
+                                            }
                                         },
                                         inspectorEnabled = elementInspectorEnabled,
                                         onToggleInspector = {
@@ -4157,6 +4306,11 @@ class MainActivity : FragmentActivity() {
                                             flagsUi = liveFlags
                                         }
                                     },
+                                    advanceIntroEnabled = advanceIntroEnabled,
+                                    onToggleAdvanceIntro = { v ->
+                                        advanceIntroEnabled = v
+                                        scope.launch { dataStore.edit { prefs -> prefs[AppSettings.ADVANCE_INTRO_ENABLED] = v } }
+                                    },
                                     onClearHistoryForMode = { mode ->
                                         scope.launch {
                                             repository.clearHistoryFor(mode)
@@ -4260,6 +4414,11 @@ class MainActivity : FragmentActivity() {
                             if (showV9Shield) {
                                 V9ShieldScreen(onClose = { showV9Shield = false })
                             }
+                            // Click VPN screen (full IP tunnel via sing-box).
+                            if (showVpn) {
+                                com.click.browser.ui.screens.VpnScreen(
+                                    onClose = { showVpn = false })
+                            }
                             // Help & Feedback (FAQ + email to Prince).
                             if (showHelp) {
                                 com.click.browser.ui.screens.HelpFeedbackScreen(
@@ -4338,7 +4497,7 @@ class MainActivity : FragmentActivity() {
                                 HackIntroOverlay(onDone = { showHackIntro = false })
                             }
                             // V9: Advance Mode signature moment — full-screen 5s
-                            // blue-light intro after an Advance engine boot. Tap to skip.
+                            // teal intro after an Advance engine boot. Tap to skip.
                             if (showAdvanceIntro) {
                                 AdvanceIntroOverlay(onDone = { showAdvanceIntro = false })
                             }
@@ -4824,6 +4983,10 @@ class MainActivity : FragmentActivity() {
                                         playlistSeedUrl = null
                                         showPlaylist = true
                                     },
+                                    onStreamPlayer = {
+                                        showBrowserMenu = false
+                                        showStreamPlayer = true
+                                    },
                                     onBookmarks = { showBrowserMenu = false; showBookmarks = true },
                                     onGames = { showBrowserMenu = false; showClickPage = "games" },
                                     onRecentTabs = { showBrowserMenu = false; showRecentTabs = true },
@@ -4878,6 +5041,7 @@ class MainActivity : FragmentActivity() {
                                         }
                                     },
                                     onSettings = { showBrowserMenu = false; showSettings = true },
+                                    onVpn = { showBrowserMenu = false; showVpn = true },
                                     visibleItems = MenuCustomization.effectiveVisibleItems(menuOrder, menuHidden),
                                     onCustomizeMenu = { showBrowserMenu = false; showMenuCustomize = true },
                                     onDismiss = { showBrowserMenu = false }
@@ -5298,7 +5462,7 @@ class MainActivity : FragmentActivity() {
         val restarted = V9Engine.restartForEngineSwitch(
             this, modeManager, mode,
             hackIntro = (mode == BrowserMode.HACK),
-            advanceIntro = (mode == BrowserMode.ADVANCED)
+            advanceIntro = (mode == BrowserMode.ADVANCED) && liveAdvanceIntroEnabled
         )
         if (!restarted) {
             // Restart wasn't possible (alarm unavailable etc.) — apply the
