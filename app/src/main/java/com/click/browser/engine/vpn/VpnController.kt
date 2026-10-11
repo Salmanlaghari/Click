@@ -5,9 +5,8 @@ import android.content.Intent
 import android.net.VpnService
 import android.os.Build
 import android.util.Log
+import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.stringPreferencesKey
-import androidx.datastore.preferences.core.toMutablePreferences
-import androidx.datastore.preferences.core.toPreferences
 import com.click.browser.engine.dataStore
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.first
@@ -107,8 +106,7 @@ object VpnController {
 
     suspend fun selectServer(context: Context, id: String) {
         withContext(Dispatchers.IO) {
-            context.dataStore.updateData { it.toMutablePreferences()
-                .apply { set(KEY_SELECTED_SERVER, id) }.toPreferences() }
+            context.dataStore.edit { it[KEY_SELECTED_SERVER] = id }
         }
     }
 
@@ -137,9 +135,7 @@ object VpnController {
             // Fall back to WARP if the selected server was removed.
             val prefs = context.dataStore.data.first()
             if (prefs[KEY_SELECTED_SERVER] == id) {
-                context.dataStore.updateData { it.toMutablePreferences()
-                    .apply { set(KEY_SELECTED_SERVER, VpnServer.WARP_ID) }
-                    .toPreferences() }
+                context.dataStore.edit { it[KEY_SELECTED_SERVER] = VpnServer.WARP_ID }
             }
         }
     }
@@ -160,10 +156,8 @@ object VpnController {
     private suspend fun saveCustomServers(context: Context, servers: List<VpnServer>) {
         val arr = JSONArray()
         servers.forEach { arr.put(it.toJson()) }
-        context.dataStore.updateData { prefs ->
-            prefs.toMutablePreferences().apply {
-                set(KEY_CUSTOM_SERVERS, arr.toString())
-            }.toPreferences()
+        context.dataStore.edit { prefs ->
+            prefs[KEY_CUSTOM_SERVERS] = arr.toString()
         }
     }
 
@@ -200,10 +194,8 @@ object VpnController {
             .put("endpoint_port", creds.endpointPort)
             .put("addrs", JSONArray(creds.localAddresses))
             .put("reserved", JSONArray(creds.reserved))
-        context.dataStore.updateData { prefs ->
-            prefs.toMutablePreferences().apply {
-                set(KEY_WARP_CREDS, o.toString())
-            }.toPreferences()
+        context.dataStore.edit { prefs ->
+            prefs[KEY_WARP_CREDS] = o.toString()
         }
     }
 
@@ -221,10 +213,8 @@ object VpnController {
 
     suspend fun ackDisclosure(context: Context) {
         withContext(Dispatchers.IO) {
-            context.dataStore.updateData { prefs ->
-                prefs.toMutablePreferences().apply {
-                    set(KEY_VPN_DISCLOSURE_ACK, "1")
-                }.toPreferences()
+            context.dataStore.edit { prefs ->
+                prefs[KEY_VPN_DISCLOSURE_ACK] = "1"
             }
         }
     }
