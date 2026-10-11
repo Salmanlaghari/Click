@@ -74,6 +74,9 @@ jobs:
           export PATH=$PATH:$(go env GOPATH)/bin
           export ANDROID_NDK_HOME=${{ steps.setup-ndk.outputs.ndk-path }}
           cd sing-box-src
+          # Newer gomobile requires golang.org/x/mobile in the module graph.
+          go get -tool golang.org/x/mobile/cmd/gomobile@latest
+          go get -tool golang.org/x/mobile/cmd/gobind@latest
           # NOTE: newer gomobile removed -libname (the native lib is now
           # always libgojni.so, loaded by the regenerated Java stubs) —
           # use -o to name the AAR instead. -buildvcs is also no longer a
