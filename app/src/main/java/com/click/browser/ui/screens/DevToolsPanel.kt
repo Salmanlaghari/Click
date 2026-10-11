@@ -193,9 +193,13 @@ fun ConsoleTab(
                 .weight(1f)
         ) {
             // Cache the date formatter — creating one per log entry per
-            // composition is wasteful (SimpleDateFormat init is expensive).
-            val timeFormat = remember {
-                java.text.SimpleDateFormat("HH:mm:ss", java.util.Locale.getDefault())
+            // composition is wasteful, and SimpleDateFormat is not
+            // thread-safe. DateTimeFormatter (java.time) is immutable
+            // and thread-safe (minSdk 26 has full java.time support).
+            val timeFormatter = remember {
+                java.time.format.DateTimeFormatter.ofPattern(
+                    "HH:mm:ss", java.util.Locale.getDefault()
+                )
             }
             LazyColumn(
                 modifier = Modifier.fillMaxSize(),
@@ -209,7 +213,11 @@ fun ConsoleTab(
                         "error" -> Color(0xFFEF5350) // error red
                         else -> Color.White
                     }
-                    val time = timeFormat.format(java.util.Date(log.timestamp))
+                    val time = timeFormatter.format(
+                        java.time.Instant.ofEpochMilli(log.timestamp)
+                            .atZone(java.time.ZoneId.systemDefault())
+                            .toLocalTime()
+                    )
                     Text(
                         text = "[$time] [${log.type.uppercase()}] ${log.message}",
                         color = color,

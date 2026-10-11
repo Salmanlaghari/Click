@@ -2976,7 +2976,12 @@ class MainActivity : FragmentActivity() {
                                                                 // sourceId can be a URL, a filename, or a pseudo-
                                                                 // source like "console-api". Only show it when it
                                                                 // looks like a real file (has an extension).
-                                                                val rawSrc = msg.sourceId()?.substringAfterLast('/')
+                                                                // Strip query params (?a=b) and hash fragments
+                                                                // (#section) — they're noise in a log line.
+                                                                val rawSrc = msg.sourceId()
+                                                                    ?.substringAfterLast('/')
+                                                                    ?.substringBefore('?')
+                                                                    ?.substringBefore('#')
                                                                 val src = rawSrc?.takeIf { it.isNotBlank() && it.contains('.') }
                                                                 val loc = if (src != null) " ($src:${msg.lineNumber()})" else ""
                                                                 // Cap message length so a spammy page can't OOM the log list.
@@ -3521,13 +3526,16 @@ class MainActivity : FragmentActivity() {
                                                     // wrapped in quotes ("hello"), numbers/booleans/objects
                                                     // come back unquoted (42, true, {...}). Strip quotes and
                                                     // unescape only when they're actually present.
+                                                    // Unescape order matters: handle \\ FIRST so that an
+                                                    // escaped backslash (e.g. "\\n" meaning literal \ + n)
+                                                    // isn't misread as an escape sequence afterwards.
                                                     val unquoted = if (result.length >= 2 &&
                                                         result.startsWith("\"") && result.endsWith("\"")
                                                     ) {
                                                         result.substring(1, result.length - 1)
-                                                            .replace("\\n", "\n")
-                                                            .replace("\\\"", "\"")
                                                             .replace("\\\\", "\\")
+                                                            .replace("\\\"", "\"")
+                                                            .replace("\\n", "\n")
                                                     } else {
                                                         result
                                                     }
