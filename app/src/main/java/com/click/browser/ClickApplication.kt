@@ -25,6 +25,9 @@ class ClickApplication : Application() {
     override fun onCreate() {
         V9Engine.applyDataDirectorySuffix(this)
         super.onCreate()
+        // Crash + OOM reports: capture to files dir, user sends them from
+        // Settings → Reports. Never uploads silently.
+        com.click.browser.engine.CrashReporter.install(this)
         // Initialize Google AdMob (news-feed banner + native ads).
         // Initialization is async and safe on the main thread.
         MobileAds.initialize(this) { status ->

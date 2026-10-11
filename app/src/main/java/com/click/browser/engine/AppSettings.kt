@@ -76,6 +76,27 @@ object AppSettings {
     /** Offer / use Android autofill (Credential Manager + system service). Default ON. */
     val AUTOFILL_ENABLED = booleanPreferencesKey("autofill_enabled")
 
+    // ---- Settings/Reports/Themes suite (PR: feature/settings-reports-themes) ----
+    /** Theme mode: "auto" (follow system) | "light" | "dark" | "scheduled". */
+    val THEME_MODE = stringPreferencesKey("theme_mode")
+    /** Scheduled light-theme window, hours 0-23. Light between START (incl) and END (excl). */
+    val THEME_SCHEDULE_START_HOUR = intPreferencesKey("theme_schedule_start_hour")
+    val THEME_SCHEDULE_END_HOUR = intPreferencesKey("theme_schedule_end_hour")
+    /** Accessibility. */
+    val FORCE_ZOOM = booleanPreferencesKey("force_zoom")
+    val READER_MODE = booleanPreferencesKey("reader_mode")
+    val REDUCED_MOTION = booleanPreferencesKey("reduced_motion")
+    /** Language: "en" | "ur" | "roman" (Roman Urdu). */
+    val APP_LANGUAGE = stringPreferencesKey("app_language")
+    /** Page translate: ML Kit target language code + auto-translate toggle. */
+    val TRANSLATE_TARGET = stringPreferencesKey("translate_target")
+    val TRANSLATE_AUTO = booleanPreferencesKey("translate_auto")
+    /** Downloads: "phone" (public Downloads, default) | "app" (private) | "custom" (SAF tree). */
+    val DOWNLOAD_LOCATION = stringPreferencesKey("download_location")
+    val DOWNLOAD_CUSTOM_URI = stringPreferencesKey("download_custom_uri")
+    /** Tab groups JSON: [{id,name,color,tabIds[]}]. */
+    val TAB_GROUPS_JSON = stringPreferencesKey("tab_groups_json")
+
     // Biometric private-tab lock: when ON, private/incognito tabs re-lock
     // with the device biometric (or device PIN/pattern fallback) every time
     // the app goes to background and returns.

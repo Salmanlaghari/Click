@@ -31,19 +31,24 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextFieldDefaults
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.platform.LocalContext
+import com.click.browser.engine.AppSettings
+import com.click.browser.engine.MlKitTranslator
+import com.click.browser.engine.ModeTheme
+import com.click.browser.engine.dataStore
+import kotlinx.coroutines.flow.first
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.click.browser.engine.MlKitTranslator
-import com.click.browser.engine.ModeTheme
 import com.google.mlkit.nl.translate.TranslateLanguage
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -66,6 +71,7 @@ fun TranslateSheet(
     modifier: Modifier = Modifier
 ) {
     val scope = rememberCoroutineScope()
+    val context = LocalContext.current
     var sourceLang by remember { mutableStateOf(TranslateLanguage.ENGLISH) }
     var targetLang by remember { mutableStateOf(MlKitTranslator.defaultTargetLanguage()) }
     var inputText by remember { mutableStateOf("") }
@@ -73,6 +79,54 @@ fun TranslateSheet(
     var status by remember { mutableStateOf("") }
     var busy by remember { mutableStateOf(false) }
     var pageProgress by remember { mutableStateOf<Float?>(null) }
+
+    fun startPageTranslation(target: String = targetLang) {
+        if (busy) return
+        busy = true
+        pageProgress = 0f
+        status = ""
+        scope.launch {
+            try {
+                val ok = MlKitTranslator.ensureModel(sourceLang, target) { s ->
+                    status = s
+                }
+                if (!ok) {
+                    status = "Couldn't download the language model. Check your connection."
+                } else {
+                    val wv = webView
+                    if (wv == null) {
+                        status = "No page loaded to translate."
+                    } else {
+                        translatePageInPlace(wv, sourceLang, target) { done, total ->
+                            pageProgress = if (total == 0) 1f else done.toFloat() / total
+                        }
+                        status = "Page translated ✓"
+                    }
+                }
+            } catch (e: Exception) {
+                status = "Page translation failed: ${e.message?.take(80)}"
+            } finally {
+                busy = false
+                pageProgress = null
+            }
+        }
+    }
+
+    // Settings → Language: honor the saved "Translate to" language, then
+    // auto-start page translation when "Auto-translate pages" is on.
+    var autoStarted by remember { mutableStateOf(false) }
+    LaunchedEffect(Unit) {
+        if (!autoStarted) {
+            autoStarted = true
+            try {
+                val prefs = context.dataStore.data.first()
+                val saved = prefs[AppSettings.TRANSLATE_TARGET]
+                val effectiveTarget = if (!saved.isNullOrBlank()) saved else targetLang
+                if (!saved.isNullOrBlank()) targetLang = saved
+                if (prefs[AppSettings.TRANSLATE_AUTO] == true) startPageTranslation(effectiveTarget)
+            } catch (_: Exception) { }
+        }
+    }
 
     ModalBottomSheet(
         onDismissRequest = onDismiss,
@@ -206,32 +260,7 @@ fun TranslateSheet(
                     )
                 }
                 Button(
-                    onClick = {
-                        if (busy) return@Button
-                        busy = true
-                        pageProgress = 0f
-                        status = ""
-                        scope.launch {
-                            try {
-                                val ok = MlKitTranslator.ensureModel(sourceLang, targetLang) { s ->
-                                    status = s
-                                }
-                                if (!ok) {
-                                    status = "Couldn't download the language model. Check your connection."
-                                } else {
-                                    translatePageInPlace(webView, sourceLang, targetLang) { done, total ->
-                                        pageProgress = if (total == 0) 1f else done.toFloat() / total
-                                    }
-                                    status = "Page translated ✓"
-                                }
-                            } catch (e: Exception) {
-                                status = "Page translation failed: ${e.message?.take(80)}"
-                            } finally {
-                                busy = false
-                                pageProgress = null
-                            }
-                        }
-                    },
+                    onClick = { startPageTranslation() },
                     enabled = !busy,
                     modifier = Modifier.fillMaxWidth(),
                     colors = ButtonDefaults.buttonColors(containerColor = theme.secondary),
