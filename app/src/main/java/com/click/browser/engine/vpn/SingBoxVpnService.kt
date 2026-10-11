@@ -12,14 +12,27 @@ import android.os.ParcelFileDescriptor
 import android.util.Log
 import androidx.core.app.NotificationCompat
 import com.click.browser.R
-import io.nekohasekai.libbox.Libbox
-import io.nekohasekai.libbox.BoxService
+import io.nekohasekai.libbox.BridgeOptions
+import io.nekohasekai.libbox.BridgeSession
+import io.nekohasekai.libbox.CommandServer
+import io.nekohasekai.libbox.CommandServerHandler
+import io.nekohasekai.libbox.ConnectionOwner
 import io.nekohasekai.libbox.InterfaceUpdateListener
-import io.nekohasekai.libbox.NetworkInterface
+import io.nekohasekai.libbox.Libbox
+import io.nekohasekai.libbox.LocalDNSTransport
+import io.nekohasekai.libbox.NeighborUpdateListener
+import io.nekohasekai.libbox.NetworkInterfaceIterator
+import io.nekohasekai.libbox.OverrideOptions
 import io.nekohasekai.libbox.PlatformInterface
+import io.nekohasekai.libbox.PlatformUser
 import io.nekohasekai.libbox.SetupOptions
-import io.nekohasekai.libbox.StringBox
+import io.nekohasekai.libbox.ShellSession
+import io.nekohasekai.libbox.StringIterator
+import io.nekohasekai.libbox.SystemProxyStatus
 import io.nekohasekai.libbox.TunOptions
+import io.nekohasekai.libbox.WIFIState
+import io.nekohasekai.libbox.NetworkInterface as LibboxNetworkInterface
+import io.nekohasekai.libbox.Notification as LibboxNotification
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -41,15 +54,15 @@ import java.io.File
  *
  * Architecture:
  * - Android owns the TUN: [VpnService.Builder.establish] in [openTun].
- * - libbox owns the sing-box core: config lifecycle, TUN packet pump
- *   (gVisor stack), outbound sockets.
+ * - libbox owns the sing-box core via [CommandServer]: config lifecycle,
+ *   TUN packet pump (gVisor stack), outbound sockets.
  * - [autoDetectInterfaceControl] calls [VpnService.protect] so libbox's own
  *   outbound sockets bypass the TUN (no routing loop).
  *
  * Play policy: the VPN screen carries a prominent disclosure that traffic is
  * routed through third-party servers.
  */
-class SingBoxVpnService : VpnService(), PlatformInterface {
+class SingBoxVpnService : VpnService(), PlatformInterface, CommandServerHandler {
 
     companion object {
         const val ACTION_START = "com.teampkai.clickbrowser.vpn.START"
@@ -84,9 +97,6 @@ class SingBoxVpnService : VpnService(), PlatformInterface {
                     tempPath = temp
                 }
                 Libbox.setup(opts)
-                // Redirect Go stderr into logcat for diagnostics.
-                try { Libbox.redirectStderr(File(working, "stderr.log").absolutePath) }
-                catch (t: Throwable) { Log.w(TAG, "redirectStderr failed", t) }
                 libboxReady = true
                 Log.i(TAG, "libbox setup done")
             }
@@ -94,7 +104,7 @@ class SingBoxVpnService : VpnService(), PlatformInterface {
     }
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
-    private var boxService: BoxService? = null
+    private var commandServer: CommandServer? = null
     @Volatile private var tunFd: ParcelFileDescriptor? = null
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -157,12 +167,13 @@ class SingBoxVpnService : VpnService(), PlatformInterface {
                         "Invalid VPN config: ${t.message}", t)
                 }
 
-                val svc = Libbox.newService(
-                    StringBox(configJson),
-                    this@SingBoxVpnService,
+                val server = CommandServer(
+                    this@SingBoxVpnService, // CommandServerHandler
+                    this@SingBoxVpnService, // PlatformInterface
                 )
-                boxService = svc
-                svc.start()
+                server.start()
+                server.startOrReloadService(configJson, OverrideOptions())
+                commandServer = server
 
                 _state.value = VpnState.CONNECTED
                 startForegroundCompat(buildNotification("Connected — $serverName"))
@@ -178,10 +189,13 @@ class SingBoxVpnService : VpnService(), PlatformInterface {
     }
 
     private fun stopTunnel() {
-        try { boxService?.close() } catch (t: Throwable) {
-            Log.w(TAG, "boxService.close failed", t)
+        try { commandServer?.closeService() } catch (t: Throwable) {
+            Log.w(TAG, "commandServer.closeService failed", t)
         }
-        boxService = null
+        try { commandServer?.close() } catch (t: Throwable) {
+            Log.w(TAG, "commandServer.close failed", t)
+        }
+        commandServer = null
         try { tunFd?.close() } catch (_: Throwable) {}
         tunFd = null
         _state.value = VpnState.DISCONNECTED
@@ -190,17 +204,61 @@ class SingBoxVpnService : VpnService(), PlatformInterface {
         Log.i(TAG, "Tunnel stopped")
     }
 
+    // ---------- CommandServerHandler ----------
+
+    override fun serviceStop() {
+        Log.i(TAG, "CommandServer requested serviceStop")
+        stopTunnel()
+    }
+
+    override fun serviceReload() {
+        Log.i(TAG, "CommandServer requested serviceReload — not supported, ignoring")
+    }
+
+    override fun getSystemProxyStatus(): SystemProxyStatus? = null
+
+    override fun setSystemProxyEnabled(enabled: Boolean) {
+        // Not used: we are a TUN VPN, not a system proxy.
+    }
+
+    override fun triggerNativeCrash() {
+        throw UnsupportedOperationException("triggerNativeCrash not supported")
+    }
+
+    override fun writeDebugMessage(message: String?) {
+        if (!message.isNullOrBlank()) Log.d("libbox", message)
+    }
+
+    override fun connectSSHAgent(): Int {
+        throw UnsupportedOperationException("SSH agent not supported")
+    }
+
     // ---------- PlatformInterface (called by libbox/Go) ----------
+
+    override fun localDNSTransport(): LocalDNSTransport? = null
+
+    override fun usePlatformAutoDetectInterfaceControl(): Boolean = true
+
+    /**
+     * libbox calls this for every outbound socket it creates. We MUST
+     * protect() them so they bypass the TUN — otherwise the tunnel's own
+     * traffic loops back into the TUN forever.
+     */
+    override fun autoDetectInterfaceControl(fd: Int) {
+        val ok = protect(fd)
+        if (!ok) Log.w(TAG, "protect($fd) failed")
+    }
 
     /**
      * libbox asks us to open the TUN. We build it with Android's
      * VpnService.Builder: full default route so ALL traffic enters the
      * tunnel. Returns the raw fd number for Go.
      */
-    override fun openTun(options: TunOptions): Long {
+    override fun openTun(options: TunOptions?): Int {
+        val mtu = options?.mtu ?: 9000
         val builder = Builder()
             .setSession("Click VPN")
-            .setMtu(options.mtu)
+            .setMtu(mtu)
             .addAddress("172.19.0.1", 30)
             .addAddress("fdfe:dcba:9876::1", 126)
             // FULL tunnel: default routes (this is what changes the IP).
@@ -208,92 +266,124 @@ class SingBoxVpnService : VpnService(), PlatformInterface {
             .addRoute("::", 0)
             .addDnsServer("172.19.0.1")
             .setBlocking(false)
-        // Let Android know this is metered-safe; keep underlying networks.
         if (Build.VERSION.SDK_INT >= 29) {
             try { builder.setMetered(false) } catch (_: Throwable) {}
         }
         val pfd = builder.establish()
             ?: throw IllegalStateException("VpnService.Builder.establish() returned null")
         tunFd = pfd
-        Log.i(TAG, "TUN established (fd=${pfd.fd}, mtu=${options.mtu})")
-        return pfd.fd.toLong()
-    }
-
-    /**
-     * libbox calls this for every outbound socket it creates. We MUST
-     * protect() them so they bypass the TUN — otherwise the tunnel's own
-     * traffic loops back into the TUN forever.
-     */
-    override fun autoDetectInterfaceControl(fd: Int): Boolean {
-        val ok = protect(fd)
-        if (!ok) Log.w(TAG, "protect($fd) failed")
-        return ok
-    }
-
-    override fun getInterfaces(): String {
-        // Minimal interface list; libbox uses it for auto_detect_interface.
-        // Returning empty is acceptable — libbox falls back to passive
-        // detection — but we provide the basics when available.
-        return try {
-            val sb = StringBuilder()
-            sb.append("[")
-            var first = true
-            val ifaces = java.net.NetworkInterface.getNetworkInterfaces()
-            while (ifaces.hasMoreElements()) {
-                val ni = ifaces.nextElement()
-                if (!ni.isUp || ni.isLoopback) continue
-                if (!first) sb.append(",")
-                first = false
-                sb.append("{\"name\":\"").append(ni.name).append("\",")
-                sb.append("\"index\":").append(ni.index).append("}")
-            }
-            sb.append("]")
-            sb.toString()
-        } catch (t: Throwable) {
-            Log.w(TAG, "getInterfaces failed", t)
-            "[]"
-        }
-    }
-
-    override fun usePlatformAutoDetect(): Boolean = true
-
-    override fun openURL(url: String?) {
-        // libbox occasionally asks to open a URL (e.g. for captive portals).
-        if (url.isNullOrBlank()) return
-        try {
-            val i = Intent(Intent.ACTION_VIEW, android.net.Uri.parse(url))
-            i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-            startActivity(i)
-        } catch (t: Throwable) {
-            Log.w(TAG, "openURL failed", t)
-        }
-    }
-
-    override fun writeLog(message: String?) {
-        if (!message.isNullOrBlank()) Log.i("libbox", message)
+        Log.i(TAG, "TUN established (fd=${pfd.fd}, mtu=$mtu)")
+        return pfd.fd
     }
 
     override fun useProcFS(): Boolean = false
 
-    // Unused on Android for our config (kept for interface completeness).
     override fun findConnectionOwner(
         ipProtocol: Int, sourceAddress: String?, sourcePort: Int,
         destinationAddress: String?, destinationPort: Int,
-    ): Int = -1
+    ): ConnectionOwner {
+        // Not used: our config has no per-app / connection-owner routing.
+        throw UnsupportedOperationException("findConnectionOwner not supported")
+    }
 
-    override fun packageNameByUid(uid: Int): String = ""
+    override fun startDefaultInterfaceMonitor(listener: InterfaceUpdateListener?) {
+        // Interface monitoring not wired; libbox falls back to GetInterfaces().
+    }
 
-    override fun uidByPackageName(packageName: String?): Int = -1
+    override fun closeDefaultInterfaceMonitor(listener: InterfaceUpdateListener?) {}
 
-    override fun startLocalHTTPServer(): StringBox = StringBox("")
+    override fun getInterfaces(): NetworkInterfaceIterator {
+        val result = mutableListOf<LibboxNetworkInterface>()
+        try {
+            val ifaces = java.net.NetworkInterface.getNetworkInterfaces()
+            while (ifaces.hasMoreElements()) {
+                val ni = ifaces.nextElement()
+                if (!ni.isUp || ni.isLoopback) continue
+                val boxIface = LibboxNetworkInterface()
+                boxIface.name = ni.name
+                boxIface.index = ni.index
+                try { boxIface.mtu = ni.mtu } catch (_: Throwable) {}
+                val addrs = ni.interfaceAddresses.mapNotNull {
+                    val host = it.address?.hostAddress ?: return@mapNotNull null
+                    "$host/${it.networkPrefixLength}"
+                }
+                boxIface.addresses = StringArray(addrs.iterator())
+                boxIface.type = Libbox.InterfaceTypeOther
+                result.add(boxIface)
+            }
+        } catch (t: Throwable) {
+            Log.w(TAG, "getInterfaces failed", t)
+        }
+        return InterfaceArray(result.iterator())
+    }
 
-    override fun stopLocalHTTPServer() {}
+    override fun underNetworkExtension(): Boolean = false
 
-    override fun useSystemProxy(): Boolean = false
+    override fun includeAllNetworks(): Boolean = false
 
-    override fun systemProxyStatus(): String = ""
+    override fun readWIFIState(): WIFIState? = null
 
-    override fun setInterfaceUpdateListener(listener: InterfaceUpdateListener?) {}
+    override fun clearDNSCache() {}
+
+    override fun sendNotification(notification: LibboxNotification?) {
+        // We manage our own foreground notification; nothing to do.
+    }
+
+    override fun cancelNotification(identifier: String?, typeID: Int) {}
+
+    override fun startNeighborMonitor(listener: NeighborUpdateListener?) {}
+
+    override fun closeNeighborMonitor(listener: NeighborUpdateListener?) {}
+
+    override fun registerMyInterface(name: String?) {}
+
+    override fun usePlatformShell(): Boolean = false
+
+    override fun checkPlatformShell() {}
+
+    override fun openShellSession(
+        user: PlatformUser?, command: String?, environ: StringIterator?,
+        term: String?, rows: Int, cols: Int,
+    ): ShellSession {
+        throw UnsupportedOperationException("shell not supported")
+    }
+
+    override fun lookupUser(username: String?): PlatformUser {
+        throw UnsupportedOperationException("lookupUser not supported")
+    }
+
+    override fun lookupSFTPServer(): String {
+        throw UnsupportedOperationException("SFTP not supported")
+    }
+
+    override fun readSystemSSHHostKey(): String {
+        throw UnsupportedOperationException("SSH not supported")
+    }
+
+    override fun tailscaleHostname(): String = ""
+
+    override fun usePlatformBridge(): Boolean = false
+
+    override fun createBridge(options: BridgeOptions?): BridgeSession {
+        throw UnsupportedOperationException("bridge not supported")
+    }
+
+    // ---------- helpers ----------
+
+    /** Minimal [StringIterator] over a Kotlin iterator. */
+    private class StringArray(private val iterator: Iterator<String>) : StringIterator {
+        override fun len(): Int = 0 // not used by core
+        override fun hasNext(): Boolean = iterator.hasNext()
+        override fun next(): String = iterator.next()
+    }
+
+    /** Minimal [NetworkInterfaceIterator] over a Kotlin iterator. */
+    private class InterfaceArray(
+        private val iterator: Iterator<LibboxNetworkInterface>,
+    ) : NetworkInterfaceIterator {
+        override fun hasNext(): Boolean = iterator.hasNext()
+        override fun next(): LibboxNetworkInterface = iterator.next()
+    }
 
     // ---------- notification ----------
 

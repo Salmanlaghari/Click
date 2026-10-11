@@ -37,8 +37,8 @@ data class VpnServer(
         const val WARP_ID = "warp-auto"
         const val CANADA_VPS_ID = "canada-vps-oracle"
 
-        /** Prince's own Oracle VPS in Canada — VLESS + Reality, live & tested. */
-        fun canadaVps(): VpnServer = VpnServer(
+        /** Built-in VLESS + Reality server (Canada). */
+        fun builtInVless(): VpnServer = VpnServer(
             id = CANADA_VPS_ID,
             name = "Canada VPS (Oracle)",
             countryCode = "CA",

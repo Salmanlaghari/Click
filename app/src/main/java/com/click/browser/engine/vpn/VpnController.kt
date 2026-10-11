@@ -92,7 +92,7 @@ object VpnController {
         withContext(Dispatchers.IO) {
             val list = mutableListOf(
                 VpnServer.warpPlaceholder(),
-                VpnServer.canadaVps(),
+                VpnServer.builtInVless(),
             )
             list.addAll(getCustomServers(context))
             list
