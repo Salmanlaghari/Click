@@ -2488,6 +2488,10 @@ class MainActivity : FragmentActivity() {
                                                 onReload = { currentTab.webView?.reload() },
                                                 onMenuClick = { showBrowserMenu = true },
                                                 onSiteSettingsClick = { showSiteSettings = true },
+                                                // 2026 style: sidebar (drawer) accessible from top bar.
+                                                onDrawerClick = { scope.launch { drawerState.open() } },
+                                                tabCount = tabs.size,
+                                                onTabsClick = { showTabsManager = true },
                                                 // LocationGuard indicator: show when this site's
                                                 // location is blocked or spoofed.
                                                 locationMode = run {
