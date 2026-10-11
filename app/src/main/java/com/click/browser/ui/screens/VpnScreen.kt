@@ -45,6 +45,7 @@ import kotlinx.coroutines.launch
  * Play policy: prominent disclosure + explicit acknowledge before first use.
  */
 @Composable
+@OptIn(ExperimentalMaterial3Api::class)
 fun VpnScreen(onClose: () -> Unit) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
