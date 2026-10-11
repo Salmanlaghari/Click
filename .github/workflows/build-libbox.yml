@@ -49,7 +49,8 @@ jobs:
         uses: nttld/setup-ndk@v1
         id: setup-ndk
         with:
-          ndk-version: r26d
+          # sing-box's own CI uses r28 (their cronet prebuilt libs need it).
+          ndk-version: r28
 
       - name: Clone sing-box (pinned)
         if: steps.cache-libbox.outputs.cache-hit != 'true'
