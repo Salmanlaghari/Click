@@ -3495,9 +3495,9 @@ class MainActivity : FragmentActivity() {
                                             }
                                             // Skeleton shimmer overlay while the page is
                                             // loading (no blank white screen). Per-mode
-                                            // themed. Fades out when load completes.
+                                            // themed via `theme`. Fades out on complete.
                                             com.click.browser.ui.screens.LoadingSkeleton(
-                                                theme = themed,
+                                                theme = theme,
                                                 visible = currentTab.loadProgress in 1..99,
                                                 modifier = Modifier.fillMaxSize()
                                             )
