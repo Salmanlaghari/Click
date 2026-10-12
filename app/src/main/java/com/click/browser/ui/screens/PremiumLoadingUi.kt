@@ -146,8 +146,8 @@ fun LoadingSkeleton(
                 theme.surfaceVariant.copy(alpha = 0.55f),
                 theme.surfaceVariant
             ),
-            startX = shimmer * 900f - 300f,
-            endX = shimmer * 900f + 300f
+            start = androidx.compose.ui.geometry.Offset(shimmer * 900f - 300f, 0f),
+            end = androidx.compose.ui.geometry.Offset(shimmer * 900f + 300f, 0f)
         )
         Column(
             modifier = Modifier
