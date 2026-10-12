@@ -180,7 +180,8 @@ class MainActivity : FragmentActivity() {
     // Advance Mode intro animation toggle (Settings; default ON).
     private var liveAdvanceIntroEnabled = true
     // Live copies for the privacy-guard features (see PrivacyGuards).
-    private var liveHeaderSpoof = false
+    // NOTE (v1.2.1): liveHeaderSpoof removed — subresource re-fetch was the
+    // #1 page-load slowdown. Custom headers apply to main-frame navigations only.
     // Fingerprint mode: "off" | "standard" | "strict" (Brave-hardening).
     private var liveFingerprintMode = "standard"
     private var liveSecureDns = false
@@ -349,36 +350,10 @@ class MainActivity : FragmentActivity() {
         }
     }
 
-    /**
-     * Re-fetches [url] with the user's spoofed custom headers.
-     * Returns null when the fetch fails — the caller then lets WebView load
-     * the resource normally (honest degradation, never a fake response).
-     */
-    private fun fetchWithSpoofedHeaders(url: String): WebResourceResponse? {
-        return try {
-            val req = Request.Builder().url(url).apply {
-                liveCustomHeaders.forEach { (name, value) -> header(name, value) }
-                // Privacy signals ride on re-fetched subresources too.
-                if (liveFlags.dntHeader || liveDntEnabled) header("DNT", "1")
-                if (liveGpcEnabled) header("Sec-GPC", "1")
-            }.build()
-            val resp = getHeaderFetchClient().newCall(req).execute()
-            val body = resp.body ?: return null
-            val contentType = resp.header("Content-Type") ?: "text/html"
-            val mime = contentType.substringBefore(";").trim().ifEmpty { "text/html" }
-            val charset = contentType.substringAfter("charset=", "").substringBefore(";").trim()
-            WebResourceResponse(
-                mime,
-                charset.ifEmpty { "UTF-8" },
-                resp.code,
-                "OK",
-                mapOf("Content-Type" to contentType),
-                body.byteStream()
-            )
-        } catch (_: Exception) {
-            null
-        }
-    }
+    // NOTE (v1.2.1 speed fix): fetchWithSpoofedHeaders was removed. It
+    // re-fetched every subresource through OkHttp, bypassing WebView's
+    // native networking — the #1 page-load slowdown. Custom headers now
+    // apply only to main-frame navigations via loadUrl(url, extraHeaders).
 
     private var ttsEngine: TextToSpeech? = null
 
@@ -1645,7 +1620,6 @@ class MainActivity : FragmentActivity() {
             LaunchedEffect(forceNightModeWebsites) { liveNightMode = forceNightModeWebsites }
             LaunchedEffect(dataSaverEnabled) { liveDataSaver = dataSaverEnabled }
             LaunchedEffect(advanceIntroEnabled) { liveAdvanceIntroEnabled = advanceIntroEnabled }
-            LaunchedEffect(headerSpoofEnabled) { liveHeaderSpoof = headerSpoofEnabled }
             LaunchedEffect(fingerprintMode) { liveFingerprintMode = fingerprintMode }
             // Privacy quick wins: keep WebViewClient-safe live copies in sync.
             LaunchedEffect(stripTrackingParams) { liveStripTrackingParams = stripTrackingParams }
@@ -2740,22 +2714,13 @@ class MainActivity : FragmentActivity() {
                                                 locationSpoofLabel = locationSpoofLabel,
                                                 onLocationClick = { showLocationSettings = true }
                                             )
-                                            // Thin page-load progress indicator.
-                                            val progress = currentTab.loadProgress
-                                            androidx.compose.animation.AnimatedVisibility(
-                                                visible = progress in 1..99,
-                                                enter = fadeIn(),
-                                                exit = fadeOut()
-                                            ) {
-                                                LinearProgressIndicator(
-                                                    progress = progress / 100f,
-                                                    modifier = Modifier
-                                                        .fillMaxWidth()
-                                                        .height(2.dp),
-                                                    color = themed.primary,
-                                                    trackColor = themed.topBarBg
-                                                )
-                                            }
+                                            // Premium page-load progress line: per-mode themed
+                                            // gradient (primary -> secondary) with animated
+                                            // shimmer + glow. Driven by onProgressChanged.
+                                            com.click.browser.ui.screens.PremiumLoadingBar(
+                                                theme = themed,
+                                                progress = currentTab.loadProgress
+                                            )
                                         }
                                     }
                                 }
@@ -3215,17 +3180,13 @@ class MainActivity : FragmentActivity() {
                                                                 ) {
                                                                     return WebResourceResponse("text/plain", "UTF-8", null)
                                                                 }
-                                                                // Header spoofing: re-fetch subresources with the
-                                                                // user's custom headers. Main-frame navigations
-                                                                // already carry them via loadUrl(url, extraHeaders).
-                                                                if (liveHeaderSpoof && liveCustomHeaders.isNotEmpty()
-                                                                    && request?.isForMainFrame == false
-                                                                ) {
-                                                                    val resUrl = request.url?.toString().orEmpty()
-                                                                    if (resUrl.startsWith("http://") || resUrl.startsWith("https://")) {
-                                                                        this@MainActivity.fetchWithSpoofedHeaders(resUrl)?.let { return it }
-                                                                    }
-                                                                }
+                                                                // SPEED FIX (v1.2.1): header spoofing used to re-fetch
+                                                                // EVERY subresource (images/CSS/JS) through OkHttp,
+                                                                // bypassing WebView's native HTTP/2 connection
+                                                                // pooling and cache — the #1 page-load slowdown.
+                                                                // Custom headers now apply ONLY to main-frame
+                                                                // navigations via loadUrl(url, extraHeaders); all
+                                                                // subresources use WebView's fast native stack.
                                                                 return super.shouldInterceptRequest(view, request)
                                                             }
 
@@ -3532,6 +3493,14 @@ class MainActivity : FragmentActivity() {
                                                     }
                                                 )
                                             }
+                                            // Skeleton shimmer overlay while the page is
+                                            // loading (no blank white screen). Per-mode
+                                            // themed. Fades out when load completes.
+                                            com.click.browser.ui.screens.LoadingSkeleton(
+                                                theme = themed,
+                                                visible = currentTab.loadProgress in 1..99,
+                                                modifier = Modifier.fillMaxSize()
+                                            )
                                         }
                                         }
                                         } // PageTransitionWrapper
