@@ -700,9 +700,12 @@ class MainActivity : FragmentActivity() {
      * - JavaScript: real WebSettings toggle per WebView.
      * - Text zoom: real WebSettings.textZoom per WebView.
      * - Third-party cookies: real per-WebView CookieManager toggle.
-     * - Ad-block / location: stored here for the WebViewClient /
-     *   WebChromeClient callbacks (see shouldInterceptRequest +
-     *   onGeolocationPermissionsShowPrompt).
+     * - Images: loadsImagesAutomatically per WebView.
+     * - Pop-ups: javaScriptCanOpenWindowsAutomatically per WebView.
+     * - Ad-block / location / camera / mic: stored here for the
+     *   WebViewClient / WebChromeClient callbacks (see
+     *   shouldInterceptRequest + onGeolocationPermissionsShowPrompt +
+     *   onPermissionRequest).
      * Desktop mode stays in the existing desktop-hosts path.
      */
     private fun applyPerSiteSettings(
@@ -729,6 +732,36 @@ class MainActivity : FragmentActivity() {
             } catch (_: Exception) {
             }
         }
+        // Chrome-style v2: per-site images + pop-ups.
+        site.images?.let {
+            s.loadsImagesAutomatically = it
+            s.blockNetworkImage = !it
+        }
+        site.popups?.let { allowPopups ->
+            s.javaScriptCanOpenWindowsAutomatically = allowPopups
+            try {
+                s.setSupportMultipleWindows(allowPopups)
+            } catch (_: Exception) {
+            }
+        }
+    }
+
+    /**
+     * Per-site camera/mic decision for an origin host: ALLOW / BLOCK are
+     * enforced silently in onPermissionRequest, ASK (or unset) falls through
+     * to the default WebView prompt behavior.
+     */
+
+    /** Per-site camera pref (null = ASK/default). */
+    private fun siteCameraPref(host: String?): com.click.browser.engine.SitePermissionPref? {
+        if (host.isNullOrEmpty()) return null
+        return liveSiteSettings.forHost(host.lowercase())?.camera
+    }
+
+    /** Per-site microphone pref (null = ASK/default). */
+    private fun siteMicPref(host: String?): com.click.browser.engine.SitePermissionPref? {
+        if (host.isNullOrEmpty()) return null
+        return liveSiteSettings.forHost(host.lowercase())?.microphone
     }
 
     /**
@@ -3371,6 +3404,38 @@ class MainActivity : FragmentActivity() {
                                                                 super.onGeolocationPermissionsHidePrompt()
                                                                 showLocationPrompt = false
                                                                 locationPromptCallback = null
+                                                            }
+
+                                                            // Camera / microphone: per-site SiteSettings pref
+                                                            // (ALLOW/BLOCK from the site sheet) wins when set;
+                                                            // ASK or unset falls through to the default WebView
+                                                            // prompt. Deny takes precedence if either is BLOCK.
+                                                            override fun onPermissionRequest(request: android.webkit.PermissionRequest?) {
+                                                                if (request == null) {
+                                                                    super.onPermissionRequest(request)
+                                                                    return
+                                                                }
+                                                                val host = try {
+                                                                    android.net.Uri.parse(request.origin?.toString() ?: "").host
+                                                                } catch (_: Exception) { null }
+                                                                val wantsVideo = request.resources.any {
+                                                                    it == android.webkit.PermissionRequest.RESOURCE_VIDEO_CAPTURE
+                                                                }
+                                                                val wantsAudio = request.resources.any {
+                                                                    it == android.webkit.PermissionRequest.RESOURCE_AUDIO_CAPTURE
+                                                                }
+                                                                val camPref = if (wantsVideo) this@MainActivity.siteCameraPref(host) else null
+                                                                val micPref = if (wantsAudio) this@MainActivity.siteMicPref(host) else null
+                                                                val deny = camPref == com.click.browser.engine.SitePermissionPref.BLOCK ||
+                                                                        micPref == com.click.browser.engine.SitePermissionPref.BLOCK
+                                                                val allow = (camPref == com.click.browser.engine.SitePermissionPref.ALLOW || !wantsVideo) &&
+                                                                        (micPref == com.click.browser.engine.SitePermissionPref.ALLOW || !wantsAudio) &&
+                                                                        (wantsVideo || wantsAudio)
+                                                                when {
+                                                                    deny -> request.deny()
+                                                                    allow -> request.grant(request.resources)
+                                                                    else -> super.onPermissionRequest(request)
+                                                                }
                                                             }
                                                         }
 

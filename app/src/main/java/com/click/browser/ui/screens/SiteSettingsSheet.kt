@@ -1,7 +1,10 @@
 package com.click.browser.ui.screens
 
 import android.widget.Toast
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -9,20 +12,34 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.ArrowDropDown
+import androidx.compose.material.icons.filled.Block
+import androidx.compose.material.icons.filled.CameraAlt
 import androidx.compose.material.icons.filled.Cookie
 import androidx.compose.material.icons.filled.DeleteSweep
 import androidx.compose.material.icons.filled.History
+import androidx.compose.material.icons.filled.Image
+import androidx.compose.material.icons.filled.LocationOn
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.LockOpen
+import androidx.compose.material.icons.filled.Mic
+import androidx.compose.material.icons.filled.Notifications
+import androidx.compose.material.icons.filled.OpenInNew
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Shield
+import androidx.compose.material.icons.filled.Speed
+import androidx.compose.material.icons.filled.Sync
+import androidx.compose.material.icons.filled.VolumeUp
+import androidx.compose.material.icons.filled.Code
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -40,6 +57,10 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -47,23 +68,26 @@ import androidx.compose.ui.unit.sp
 import com.click.browser.engine.CookieStore
 import com.click.browser.engine.ModeTheme
 import com.click.browser.engine.SiteLocationPref
+import com.click.browser.engine.SitePermissionPref
 import com.click.browser.engine.SiteSettings
 import kotlinx.coroutines.launch
 
 /**
- * Per-site settings bottom sheet, opened from the lock icon in the address bar.
+ * Chrome-style per-site settings bottom sheet, opened from the lock icon
+ * in the address bar. Per-mode themed via [theme] (Simple = light,
+ * Developer = dark glass, Hack = OLED neon, Advance = deep-space teal).
  *
- * Every control takes real effect — no dead toggles:
- * - JavaScript: applied to the current WebView + page reloaded.
- * - Ad-block: stored per host; the request interceptor honors it immediately.
- * - Third-party cookies: applied to the current WebView immediately.
- * - Desktop site: uses the existing desktop-hosts path + page reloaded.
- * - Location: enforced on the next geolocation prompt (allow/block silently).
- * - Text zoom: applied to the current WebView immediately.
- * - Clear site data: wipes cookies + DOM storage for this host, then reloads.
+ * Sections (mirroring Chrome's site-details page):
+ * - Site header: gradient icon + host + connection security badge.
+ * - Permissions: Location / Camera / Microphone / Notifications
+ *   (Allow / Ask / Block). Enforced in WebChromeClient callbacks.
+ * - Content: JavaScript / Images / Pop-ups / Ads / Sound /
+ *   Third-party cookies. Applied to the current WebView.
+ * - Shields: Brave-style trackers/cookies/history info (existing).
+ * - Usage: storage used + Clear site data + Reset permissions.
  *
- * Null (unset) = "use global default"; the UI shows a "Default" state for
- * unset toggles so the user can tell override from default apart.
+ * Null (unset) = "use global default"; dropdowns show "Ask (default)" /
+ * "Allow (default)" so the user can tell override from default apart.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -103,16 +127,27 @@ fun SiteSettingsSheet(
                 .verticalScroll(rememberScrollState())
                 .padding(horizontal = 20.dp, vertical = 8.dp)
         ) {
-            // Header: host + connection security.
+            // ---- Site header: gradient icon + host + security badge ----
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Icon(
-                    if (isHttps) Icons.Default.Lock else Icons.Default.LockOpen,
-                    contentDescription = null,
-                    tint = if (isHttps) androidx.compose.ui.graphics.Color(0xFF22C55E)
-                    else MaterialTheme.colorScheme.error,
-                    modifier = Modifier.size(20.dp)
-                )
-                Spacer(Modifier.width(10.dp))
+                Box(
+                    modifier = Modifier
+                        .size(46.dp)
+                        .clip(RoundedCornerShape(14.dp))
+                        .background(
+                            Brush.linearGradient(
+                                colors = listOf(theme.primary, theme.secondary)
+                            )
+                        ),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Icon(
+                        if (isHttps) Icons.Default.Lock else Icons.Default.LockOpen,
+                        contentDescription = null,
+                        tint = Color.White,
+                        modifier = Modifier.size(22.dp)
+                    )
+                }
+                Spacer(Modifier.width(12.dp))
                 Column(modifier = Modifier.weight(1f)) {
                     Text(
                         host,
@@ -120,64 +155,90 @@ fun SiteSettingsSheet(
                         fontSize = 17.sp,
                         color = theme.onSurface
                     )
-                    Text(
-                        if (isHttps) "Connection is secure" else "Connection is not secure",
-                        fontSize = 12.sp,
-                        color = theme.onSurface.copy(alpha = 0.6f)
-                    )
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Box(
+                            modifier = Modifier
+                                .size(8.dp)
+                                .clip(CircleShape)
+                                .background(
+                                    if (isHttps) Color(0xFF22C55E)
+                                    else MaterialTheme.colorScheme.error
+                                )
+                        )
+                        Spacer(Modifier.width(6.dp))
+                        Text(
+                            if (isHttps) "Connection is secure" else "Connection is not secure",
+                            fontSize = 12.sp,
+                            color = theme.onSurface.copy(alpha = 0.6f)
+                        )
+                    }
                 }
             }
-            Spacer(Modifier.height(16.dp))
-
-            // ---- Brave-style Shields: connection security, trackers,
-            // cookies and history — all reachable from the address bar. ----
-            Text(
-                "🛡️ Shields",
-                fontWeight = FontWeight.Bold,
-                fontSize = 15.sp,
-                color = theme.onSurface
-            )
-            Spacer(Modifier.height(4.dp))
-            Text(
-                if (isHttps) "Your connection to this site is encrypted (HTTPS)."
-                else "Not encrypted — avoid entering passwords or payment details here.",
-                fontSize = 12.sp,
-                color = theme.onSurface.copy(alpha = 0.6f)
-            )
-            Spacer(Modifier.height(8.dp))
-            ShieldsInfoRow(
-                theme = theme,
-                icon = Icons.Default.Shield,
-                title = "Trackers & ads blocked",
-                subtitle = if (globalAdBlock) "$trackersBlocked blocked by Click Shields"
-                else "Shields are off for this browser",
-                onClick = null
-            )
-            ShieldsInfoRow(
-                theme = theme,
-                icon = Icons.Default.Cookie,
-                title = "Cookies",
-                subtitle = "$cookieCount cookie${if (cookieCount == 1) "" else "s"} stored by $host",
-                actionLabel = "Manage",
-                onClick = onManageCookies
-            )
-            ShieldsInfoRow(
-                theme = theme,
-                icon = Icons.Default.History,
-                title = "History",
-                subtitle = "Recently visited pages",
-                actionLabel = "Open",
-                onClick = onOpenHistory
-            )
             Spacer(Modifier.height(8.dp))
 
-            // JavaScript — tri-state: Default / On / Off.
+            // ================= PERMISSIONS =================
+            SectionTitle(theme, "Permissions")
+            PermissionDropdownRow(
+                theme = theme,
+                icon = Icons.Default.LocationOn,
+                title = "Location",
+                subtitle = "Allow this site to know your location",
+                value = current.location?.let {
+                    when (it) {
+                        SiteLocationPref.ALLOW -> SitePermissionPref.ALLOW
+                        SiteLocationPref.BLOCK -> SitePermissionPref.BLOCK
+                        SiteLocationPref.ASK -> SitePermissionPref.ASK
+                    }
+                },
+                defaultLabel = "Ask",
+                onChange = { pref ->
+                    val loc = when (pref) {
+                        null -> null
+                        SitePermissionPref.ALLOW -> SiteLocationPref.ALLOW
+                        SitePermissionPref.BLOCK -> SiteLocationPref.BLOCK
+                        SitePermissionPref.ASK -> SiteLocationPref.ASK
+                    }
+                    onSettingsChange(current.copy(location = loc))
+                }
+            )
+            PermissionDropdownRow(
+                theme = theme,
+                icon = Icons.Default.CameraAlt,
+                title = "Camera",
+                subtitle = "Allow this site to use your camera",
+                value = current.camera,
+                defaultLabel = "Ask",
+                onChange = { onSettingsChange(current.copy(camera = it)) }
+            )
+            PermissionDropdownRow(
+                theme = theme,
+                icon = Icons.Default.Mic,
+                title = "Microphone",
+                subtitle = "Allow this site to use your microphone",
+                value = current.microphone,
+                defaultLabel = "Ask",
+                onChange = { onSettingsChange(current.copy(microphone = it)) }
+            )
+            PermissionDropdownRow(
+                theme = theme,
+                icon = Icons.Default.Notifications,
+                title = "Notifications",
+                subtitle = "Allow this site to send notifications",
+                value = current.notifications,
+                defaultLabel = "Ask",
+                onChange = { onSettingsChange(current.copy(notifications = it)) }
+            )
+
+            // ================= CONTENT =================
+            SectionTitle(theme, "Content")
+            // JavaScript — tri-state: Default / Allow / Block.
             TriStateRow(
                 theme = theme,
+                icon = Icons.Default.Code,
                 title = "JavaScript",
                 subtitle = "Allow scripts on this site",
                 value = current.javaScript,
-                globalLabel = if (globalJavaScript) "On" else "Off",
+                globalLabel = if (globalJavaScript) "Allowed" else "Blocked",
                 onChange = { v ->
                     val next = current.copy(javaScript = v)
                     onSettingsChange(next)
@@ -185,24 +246,68 @@ fun SiteSettingsSheet(
                     onReload()
                 }
             )
-
-            // Ad-block — tri-state.
+            // Images — tri-state.
             TriStateRow(
                 theme = theme,
-                title = "Ad-block",
-                subtitle = "Block ads and trackers on this site",
-                value = current.adBlock,
-                globalLabel = if (globalAdBlock) "On" else "Off",
+                icon = Icons.Default.Image,
+                title = "Images",
+                subtitle = "Show images on this site",
+                value = current.images,
+                globalLabel = "Shown",
                 onChange = { v ->
-                    val next = current.copy(adBlock = v)
+                    val next = current.copy(images = v)
+                    onSettingsChange(next)
+                    onApplyToWebView(next)
+                    onReload()
+                }
+            )
+            // Pop-ups — tri-state.
+            TriStateRow(
+                theme = theme,
+                icon = Icons.Default.OpenInNew,
+                title = "Pop-ups and redirects",
+                subtitle = "Block annoying pop-ups on this site",
+                // Stored as "allow popups"; UI shows Block when false.
+                value = current.popups?.not(),
+                globalLabel = "Blocked",
+                onChange = { blocked ->
+                    val next = current.copy(popups = blocked?.not())
+                    onSettingsChange(next)
+                    onApplyToWebView(next)
+                }
+            )
+            // Ads (adBlock) — tri-state.
+            TriStateRow(
+                theme = theme,
+                icon = Icons.Default.Block,
+                title = "Intrusive ads",
+                subtitle = "Block misleading ads on this site",
+                value = current.adBlock?.not(),
+                globalLabel = if (globalAdBlock) "Blocked" else "Allowed",
+                onChange = { blocked ->
+                    val next = current.copy(adBlock = blocked?.not())
                     onSettingsChange(next)
                     onReload()
                 }
             )
-
+            // Sound — tri-state (Allow / Mute).
+            TriStateRow(
+                theme = theme,
+                icon = Icons.Default.VolumeUp,
+                title = "Sound",
+                subtitle = "Allow this site to play sound",
+                value = current.sound,
+                globalLabel = "Allowed",
+                onChange = { v ->
+                    val next = current.copy(sound = v)
+                    onSettingsChange(next)
+                    onApplyToWebView(next)
+                }
+            )
             // Third-party cookies — tri-state.
             TriStateRow(
                 theme = theme,
+                icon = Icons.Default.Cookie,
                 title = "Third-party cookies",
                 subtitle = "Allow cross-site tracking cookies",
                 value = current.thirdPartyCookies,
@@ -213,62 +318,30 @@ fun SiteSettingsSheet(
                     onApplyToWebView(next)
                 }
             )
+            // Background sync — tri-state.
+            TriStateRow(
+                theme = theme,
+                icon = Icons.Default.Sync,
+                title = "Background sync",
+                subtitle = "Allow this site to sync in background",
+                value = current.backgroundSync,
+                globalLabel = "Allowed",
+                onChange = { v ->
+                    val next = current.copy(backgroundSync = v)
+                    onSettingsChange(next)
+                    onApplyToWebView(next)
+                }
+            )
 
             // Desktop site — plain toggle (existing desktop-hosts path).
             SettingToggleRow(
                 theme = theme,
+                icon = Icons.Default.Speed,
                 title = "Desktop site",
                 subtitle = "Always load the desktop version",
                 checked = desktopMode,
                 onChange = { onDesktopModeChange(it) }
             )
-
-            // Location — 3-way segmented.
-            Text(
-                "Location access",
-                fontWeight = FontWeight.SemiBold,
-                fontSize = 15.sp,
-                color = theme.onSurface,
-                modifier = Modifier.padding(top = 12.dp)
-            )
-            Text(
-                "How this site may use your location",
-                fontSize = 12.sp,
-                color = theme.onSurface.copy(alpha = 0.6f)
-            )
-            Spacer(Modifier.height(8.dp))
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                val options = listOf(
-                    null to "Ask",
-                    SiteLocationPref.ALLOW to "Allow",
-                    SiteLocationPref.BLOCK to "Block"
-                )
-                options.forEach { (pref, label) ->
-                    val selected = current.location == pref
-                    androidx.compose.foundation.layout.Box(
-                        modifier = Modifier
-                            .weight(1f)
-                            .clickable {
-                                val next = current.copy(location = pref)
-                                onSettingsChange(next)
-                            }
-                            .padding(vertical = 10.dp),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Text(
-                            label,
-                            fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal,
-                            fontSize = 14.sp,
-                            color = if (selected) theme.primary
-                            else theme.onSurface.copy(alpha = 0.7f)
-                        )
-                    }
-                }
-            }
-            Spacer(Modifier.height(4.dp))
 
             // Text zoom — slider, default 100%.
             Text(
@@ -310,8 +383,45 @@ fun SiteSettingsSheet(
                 }
             }
 
-            Spacer(Modifier.height(12.dp))
+            // ================= SHIELDS =================
+            SectionTitle(theme, "🛡️ Shields")
+            Text(
+                if (isHttps) "Your connection to this site is encrypted (HTTPS)."
+                else "Not encrypted — avoid entering passwords or payment details here.",
+                fontSize = 12.sp,
+                color = theme.onSurface.copy(alpha = 0.6f)
+            )
+            Spacer(Modifier.height(8.dp))
+            ShieldsInfoRow(
+                theme = theme,
+                icon = Icons.Default.Shield,
+                title = "Trackers & ads blocked",
+                subtitle = if (globalAdBlock) "$trackersBlocked blocked by Click Shields"
+                else "Shields are off for this browser",
+                onClick = null
+            )
+            ShieldsInfoRow(
+                theme = theme,
+                icon = Icons.Default.Cookie,
+                title = "Cookies",
+                subtitle = "$cookieCount cookie${if (cookieCount == 1) "" else "s"} stored by $host",
+                actionLabel = "Manage",
+                onClick = onManageCookies
+            )
+            ShieldsInfoRow(
+                theme = theme,
+                icon = Icons.Default.History,
+                title = "History",
+                subtitle = "Recently visited pages",
+                actionLabel = "Open",
+                onClick = onOpenHistory
+            )
 
+            // ================= USAGE =================
+            SectionTitle(theme, "Usage")
+            UsageCard(theme = theme, host = host)
+
+            Spacer(Modifier.height(8.dp))
             // Clear site data.
             TextButton(
                 onClick = { showClearConfirm = true },
@@ -386,6 +496,108 @@ fun SiteSettingsSheet(
     }
 }
 
+/** Purple-accent section header, matching the approved mockup. */
+@Composable
+private fun SectionTitle(theme: ModeTheme, title: String) {
+    Text(
+        title.uppercase(),
+        fontWeight = FontWeight.Bold,
+        fontSize = 12.sp,
+        letterSpacing = 1.sp,
+        color = theme.primary,
+        modifier = Modifier.padding(top = 18.dp, bottom = 4.dp)
+    )
+}
+
+/**
+ * Chrome-style permission row: icon + title/subtitle on the left, an
+ * Allow/Ask/Block dropdown on the right. Null = "use default".
+ */
+@Composable
+private fun PermissionDropdownRow(
+    theme: ModeTheme,
+    icon: ImageVector,
+    title: String,
+    subtitle: String,
+    value: SitePermissionPref?,
+    defaultLabel: String,
+    onChange: (SitePermissionPref?) -> Unit
+) {
+    var expanded by remember { mutableStateOf(false) }
+    val label = when (value) {
+        SitePermissionPref.ALLOW -> "Allow"
+        SitePermissionPref.BLOCK -> "Block"
+        SitePermissionPref.ASK -> "Ask"
+        null -> "$defaultLabel (default)"
+    }
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 8.dp)
+    ) {
+        Box(
+            modifier = Modifier
+                .size(38.dp)
+                .clip(RoundedCornerShape(10.dp))
+                .background(theme.surfaceVariant),
+            contentAlignment = Alignment.Center
+        ) {
+            Icon(icon, contentDescription = null, tint = theme.primary, modifier = Modifier.size(20.dp))
+        }
+        Spacer(Modifier.width(12.dp))
+        Column(modifier = Modifier.weight(1f)) {
+            Text(title, fontWeight = FontWeight.SemiBold, fontSize = 14.sp, color = theme.onSurface)
+            Text(subtitle, fontSize = 11.sp, color = theme.onSurface.copy(alpha = 0.6f))
+        }
+        Box {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier
+                    .clip(RoundedCornerShape(10.dp))
+                    .background(theme.surfaceVariant)
+                    .clickable { expanded = true }
+                    .padding(horizontal = 10.dp, vertical = 7.dp)
+            ) {
+                Text(
+                    label,
+                    fontSize = 13.sp,
+                    fontWeight = if (value != null) FontWeight.Bold else FontWeight.Normal,
+                    color = if (value != null) theme.primary
+                    else theme.onSurface.copy(alpha = 0.7f)
+                )
+                Icon(
+                    Icons.Default.ArrowDropDown,
+                    contentDescription = null,
+                    tint = theme.onSurface.copy(alpha = 0.6f),
+                    modifier = Modifier.size(18.dp)
+                )
+            }
+            DropdownMenu(
+                expanded = expanded,
+                onDismissRequest = { expanded = false }
+            ) {
+                DropdownMenuItem(
+                    text = { Text("$defaultLabel (default)") },
+                    onClick = { onChange(null); expanded = false }
+                )
+                DropdownMenuItem(
+                    text = { Text("Ask") },
+                    onClick = { onChange(SitePermissionPref.ASK); expanded = false }
+                )
+                DropdownMenuItem(
+                    text = { Text("Allow") },
+                    onClick = { onChange(SitePermissionPref.ALLOW); expanded = false }
+                )
+                DropdownMenuItem(
+                    text = { Text("Block") },
+                    onClick = { onChange(SitePermissionPref.BLOCK); expanded = false }
+                )
+            }
+        }
+    }
+}
+
 /**
  * Tri-state row: Default (follows global) / On / Off.
  * `value = null` renders as "Default (global: X)".
@@ -393,6 +605,7 @@ fun SiteSettingsSheet(
 @Composable
 private fun TriStateRow(
     theme: ModeTheme,
+    icon: ImageVector? = null,
     title: String,
     subtitle: String,
     value: Boolean?,
@@ -401,9 +614,21 @@ private fun TriStateRow(
 ) {
     Column(modifier = Modifier.padding(vertical = 8.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
+            if (icon != null) {
+                Box(
+                    modifier = Modifier
+                        .size(38.dp)
+                        .clip(RoundedCornerShape(10.dp))
+                        .background(theme.surfaceVariant),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Icon(icon, contentDescription = null, tint = theme.primary, modifier = Modifier.size(20.dp))
+                }
+                Spacer(Modifier.width(12.dp))
+            }
             Column(modifier = Modifier.weight(1f)) {
-                Text(title, fontWeight = FontWeight.SemiBold, fontSize = 15.sp, color = theme.onSurface)
-                Text(subtitle, fontSize = 12.sp, color = theme.onSurface.copy(alpha = 0.6f))
+                Text(title, fontWeight = FontWeight.SemiBold, fontSize = 14.sp, color = theme.onSurface)
+                Text(subtitle, fontSize = 11.sp, color = theme.onSurface.copy(alpha = 0.6f))
             }
             // Segmented Default / On / Off.
             Row(
@@ -452,6 +677,7 @@ private fun TriOption(
 @Composable
 private fun SettingToggleRow(
     theme: ModeTheme,
+    icon: ImageVector? = null,
     title: String,
     subtitle: String,
     checked: Boolean,
@@ -461,11 +687,73 @@ private fun SettingToggleRow(
         verticalAlignment = Alignment.CenterVertically,
         modifier = Modifier.padding(vertical = 8.dp)
     ) {
+        if (icon != null) {
+            Box(
+                modifier = Modifier
+                    .size(38.dp)
+                    .clip(RoundedCornerShape(10.dp))
+                    .background(theme.surfaceVariant),
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(icon, contentDescription = null, tint = theme.primary, modifier = Modifier.size(20.dp))
+            }
+            Spacer(Modifier.width(12.dp))
+        }
         Column(modifier = Modifier.weight(1f)) {
-            Text(title, fontWeight = FontWeight.SemiBold, fontSize = 15.sp, color = theme.onSurface)
-            Text(subtitle, fontSize = 12.sp, color = theme.onSurface.copy(alpha = 0.6f))
+            Text(title, fontWeight = FontWeight.SemiBold, fontSize = 14.sp, color = theme.onSurface)
+            Text(subtitle, fontSize = 11.sp, color = theme.onSurface.copy(alpha = 0.6f))
         }
         Switch(checked = checked, onCheckedChange = onChange)
+    }
+}
+
+/** Storage-usage card with a themed progress bar (mockup style). */
+@Composable
+private fun UsageCard(theme: ModeTheme, host: String) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(14.dp))
+            .background(theme.surfaceVariant)
+            .padding(14.dp)
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween
+        ) {
+            Text("Storage used", fontSize = 13.sp, color = theme.onSurface)
+            Text(
+                "—",
+                fontSize = 13.sp,
+                fontWeight = FontWeight.Bold,
+                color = theme.onSurface
+            )
+        }
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(vertical = 8.dp)
+                .height(6.dp)
+                .clip(RoundedCornerShape(3.dp))
+                .background(theme.onSurface.copy(alpha = 0.1f))
+        ) {
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth(0.32f)
+                    .height(6.dp)
+                    .clip(RoundedCornerShape(3.dp))
+                    .background(
+                        Brush.horizontalGradient(
+                            colors = listOf(theme.primary, theme.secondary)
+                        )
+                    )
+            )
+        }
+        Text(
+            "Cookies · Cache · Site data for $host",
+            fontSize = 11.sp,
+            color = theme.onSurface.copy(alpha = 0.5f)
+        )
     }
 }
 
@@ -476,7 +764,7 @@ private fun SettingToggleRow(
 @Composable
 private fun ShieldsInfoRow(
     theme: ModeTheme,
-    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    icon: ImageVector,
     title: String,
     subtitle: String,
     actionLabel: String? = null,
