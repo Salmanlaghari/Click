@@ -28,7 +28,8 @@ object ThemeController {
         val prefs = context.dataStore.data.first()
         prefs[AppSettings.THEME_MODE]?.let { return normalize(it) }
         // Migrate legacy boolean: UI_DARK_MODE=false -> light, else dark.
-        val legacyDark = prefs[AppSettings.UI_DARK_MODE] ?: true
+        // Fresh installs (no legacy key) start LIGHT — Prince: white default.
+        val legacyDark = prefs[AppSettings.UI_DARK_MODE] ?: false
         val migrated = if (legacyDark) MODE_DARK else MODE_LIGHT
         try {
             context.dataStore.edit { it[AppSettings.THEME_MODE] = migrated }
@@ -45,7 +46,7 @@ object ThemeController {
 
     fun normalize(mode: String?): String = when (mode?.lowercase()) {
         MODE_AUTO, MODE_LIGHT, MODE_DARK, MODE_SCHEDULED -> mode.lowercase()
-        else -> MODE_DARK // historical default was Dark
+        else -> MODE_LIGHT // default is Light (white) — Prince: white default in all modes
     }
 
     fun displayName(mode: String): String = when (normalize(mode)) {

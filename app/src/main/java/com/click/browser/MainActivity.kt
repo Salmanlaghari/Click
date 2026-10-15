@@ -180,8 +180,7 @@ class MainActivity : FragmentActivity() {
     // Advance Mode intro animation toggle (Settings; default ON).
     private var liveAdvanceIntroEnabled = true
     // Live copies for the privacy-guard features (see PrivacyGuards).
-    // NOTE (v1.2.1): liveHeaderSpoof removed — subresource re-fetch was the
-    // #1 page-load slowdown. Custom headers apply to main-frame navigations only.
+    private var liveHeaderSpoof = false
     // Fingerprint mode: "off" | "standard" | "strict" (Brave-hardening).
     private var liveFingerprintMode = "standard"
     private var liveSecureDns = false
@@ -195,6 +194,8 @@ class MainActivity : FragmentActivity() {
     private var liveForceZoom = false
     private var liveReaderMode = false
     private var liveReducedMotion = false
+    // Sharp View: full-density WebView rendering. Default ON.
+    private var liveSharpViewEnabled = true
     // HTTPS mode: "off" | "standard" | "strict" + per-site Strict exceptions.
     private var liveHttpsMode = "standard"
     private var liveHttpsStrictExceptions: Set<String> = emptySet()
@@ -350,10 +351,36 @@ class MainActivity : FragmentActivity() {
         }
     }
 
-    // NOTE (v1.2.1 speed fix): fetchWithSpoofedHeaders was removed. It
-    // re-fetched every subresource through OkHttp, bypassing WebView's
-    // native networking — the #1 page-load slowdown. Custom headers now
-    // apply only to main-frame navigations via loadUrl(url, extraHeaders).
+    /**
+     * Re-fetches [url] with the user's spoofed custom headers.
+     * Returns null when the fetch fails — the caller then lets WebView load
+     * the resource normally (honest degradation, never a fake response).
+     */
+    private fun fetchWithSpoofedHeaders(url: String): WebResourceResponse? {
+        return try {
+            val req = Request.Builder().url(url).apply {
+                liveCustomHeaders.forEach { (name, value) -> header(name, value) }
+                // Privacy signals ride on re-fetched subresources too.
+                if (liveFlags.dntHeader || liveDntEnabled) header("DNT", "1")
+                if (liveGpcEnabled) header("Sec-GPC", "1")
+            }.build()
+            val resp = getHeaderFetchClient().newCall(req).execute()
+            val body = resp.body ?: return null
+            val contentType = resp.header("Content-Type") ?: "text/html"
+            val mime = contentType.substringBefore(";").trim().ifEmpty { "text/html" }
+            val charset = contentType.substringAfter("charset=", "").substringBefore(";").trim()
+            WebResourceResponse(
+                mime,
+                charset.ifEmpty { "UTF-8" },
+                resp.code,
+                "OK",
+                mapOf("Content-Type" to contentType),
+                body.byteStream()
+            )
+        } catch (_: Exception) {
+            null
+        }
+    }
 
     private var ttsEngine: TextToSpeech? = null
 
@@ -1138,6 +1165,31 @@ class MainActivity : FragmentActivity() {
             // is not a reliable signal).
             var flagsLoaded by remember { mutableStateOf(false) }
 
+            // LRU tab unloading (memory): with more than 10 tabs open,
+            // destroy the WebViews of the oldest background (non-active,
+            // non-incognito) tabs. Tab entries (URL/title/thumbnail) are
+            // kept; selecting an unloaded tab recreates its WebView and
+            // reloads the URL (the AndroidView factory already handles
+            // webView == null). Incognito tabs are never unloaded.
+            LaunchedEffect(tabs.size, activeTabIndex) {
+                if (tabs.size > 10) {
+                    val excess = tabs.size - 10
+                    tabs.indices
+                        .filter { it != activeTabIndex && !tabs[it].isIncognito && tabs[it].webView != null }
+                        .take(excess)
+                        .forEach { idx ->
+                            val tab = tabs.getOrNull(idx) ?: return@forEach
+                            val wv = tab.webView ?: return@forEach
+                            try {
+                                (wv.parent as? android.view.ViewGroup)?.removeView(wv)
+                                liveWebViews.remove(wv)
+                                wv.destroy()
+                            } catch (_: Exception) { }
+                            tab.webView = null
+                        }
+                }
+            }
+
             // Crash-restore startup check: if the previous run for THIS boot
             // mode did not exit cleanly and a tab snapshot exists, offer to
             // restore it. Never crosses modes — each mode keeps its own
@@ -1208,6 +1260,8 @@ class MainActivity : FragmentActivity() {
             var dataSaverEnabled by remember { mutableStateOf(false) }
             // Advance Mode 5s intro animation on engine boot (default ON).
             var advanceIntroEnabled by remember { mutableStateOf(true) }
+            // Sharp View: full-density WebView rendering (default ON).
+            var sharpViewEnabled by remember { mutableStateOf(true) }
             // Brave-inspired privacy quick wins (DataStore-persisted below).
             var stripTrackingParams by remember { mutableStateOf(true) }
             var forgetfulBrowsing by remember { mutableStateOf(false) }
@@ -1361,6 +1415,25 @@ class MainActivity : FragmentActivity() {
             }
             // "About Advance Mode" specifications sheet.
             var showAdvanceSpecs by remember { mutableStateOf(false) }
+            // First entry into Advance mode: show the specs sheet once
+            // (after the intro overlay closes, if it is showing), so the
+            // user learns what is special about Advance mode. The intro
+            // overlay is full-screen, so the sheet waits for it.
+            LaunchedEffect(activeMode, showAdvanceIntro) {
+                if (activeMode == BrowserMode.ADVANCED && !showAdvanceIntro) {
+                    val seen = try {
+                        dataStore.data.first()[AppSettings.ADVANCE_SPECS_SEEN] == true
+                    } catch (_: Exception) { true }
+                    if (!seen) {
+                        try {
+                            dataStore.edit { prefs ->
+                                prefs[AppSettings.ADVANCE_SPECS_SEEN] = true
+                            }
+                        } catch (_: Exception) { }
+                        showAdvanceSpecs = true
+                    }
+                }
+            }
             // Password manager: save-offer dialog state.
             var showPasswordSaveDialog by remember { mutableStateOf(false) }
             var pendingPasswordSave by remember {
@@ -1578,12 +1651,61 @@ class MainActivity : FragmentActivity() {
                             Toast.LENGTH_SHORT
                         ).show()
                     }
-                    FeatureId.READER -> Toast.makeText(
-                        this@MainActivity, "Reader mode coming soon.", Toast.LENGTH_SHORT
-                    ).show()
-                    FeatureId.SCREENSHOT -> Toast.makeText(
-                        this@MainActivity, "Screenshot coming soon.", Toast.LENGTH_SHORT
-                    ).show()
+                    // Reader mode is real: AccessibilityJs.READER_MODE_JS is
+                    // injected on page load when liveReaderMode is true
+                    // (see the WebViewClient). Toggle + persist + reload.
+                    FeatureId.READER -> {
+                        readerModeEnabled = !readerModeEnabled
+                        scope.launch {
+                            dataStore.edit { prefs ->
+                                prefs[AppSettings.READER_MODE] = readerModeEnabled
+                            }
+                        }
+                        currentTab.webView?.reload()
+                        Toast.makeText(
+                            this@MainActivity,
+                            if (readerModeEnabled) "Reader mode ON" else "Reader mode OFF",
+                            Toast.LENGTH_SHORT
+                        ).show()
+                    }
+                    // Real screenshot: capture the visible WebView into
+                    // Pictures/ClickBrowser via MediaStore (no permission
+                    // needed on API 29+).
+                    FeatureId.SCREENSHOT -> {
+                        val wv = currentTab.webView
+                        if (wv == null || wv.width == 0 || wv.height == 0) {
+                            Toast.makeText(this@MainActivity, "Nothing to capture yet.", Toast.LENGTH_SHORT).show()
+                        } else {
+                            try {
+                                val bmp = Bitmap.createBitmap(wv.width, wv.height, Bitmap.Config.ARGB_8888)
+                                wv.draw(android.graphics.Canvas(bmp))
+                                val name = "Click_${System.currentTimeMillis()}.png"
+                                val values = android.content.ContentValues().apply {
+                                    put(android.provider.MediaStore.Images.Media.DISPLAY_NAME, name)
+                                    put(android.provider.MediaStore.Images.Media.MIME_TYPE, "image/png")
+                                    put(android.provider.MediaStore.Images.Media.RELATIVE_PATH, "Pictures/ClickBrowser")
+                                }
+                                val uri = contentResolver.insert(
+                                    android.provider.MediaStore.Images.Media.EXTERNAL_CONTENT_URI, values
+                                )
+                                if (uri != null) {
+                                    contentResolver.openOutputStream(uri)?.use { out ->
+                                        bmp.compress(Bitmap.CompressFormat.PNG, 100, out)
+                                    }
+                                    Toast.makeText(
+                                        this@MainActivity,
+                                        "Screenshot saved to Pictures/ClickBrowser",
+                                        Toast.LENGTH_LONG
+                                    ).show()
+                                } else {
+                                    Toast.makeText(this@MainActivity, "Could not save screenshot.", Toast.LENGTH_SHORT).show()
+                                }
+                                bmp.recycle()
+                            } catch (_: Exception) {
+                                Toast.makeText(this@MainActivity, "Screenshot failed.", Toast.LENGTH_SHORT).show()
+                            }
+                        }
+                    }
                     FeatureId.SAVE_PDF -> {
                         val printManager = getSystemService(Context.PRINT_SERVICE) as? android.print.PrintManager
                         val adapter = currentTab.webView?.createPrintDocumentAdapter("Click Browser Print Job")
@@ -1593,9 +1715,41 @@ class MainActivity : FragmentActivity() {
                             Toast.makeText(this@MainActivity, "Printing not available.", Toast.LENGTH_SHORT).show()
                         }
                     }
-                    FeatureId.ADD_HOME -> Toast.makeText(
-                        this@MainActivity, "Add to Home coming soon.", Toast.LENGTH_SHORT
-                    ).show()
+                    // Real Add to Home: pinned shortcut to the current page
+                    // via ShortcutManagerCompat. The launcher asks the user
+                    // to confirm; tapping the shortcut opens the URL here
+                    // (ACTION_VIEW is handled in onNewIntent).
+                    FeatureId.ADD_HOME -> {
+                        val url = currentTab.url
+                        if (url.isBlank() || url == "about:blank") {
+                            Toast.makeText(this@MainActivity, "Open a page first.", Toast.LENGTH_SHORT).show()
+                        } else if (!androidx.core.content.pm.ShortcutManagerCompat.isRequestPinShortcutSupported(this@MainActivity)) {
+                            Toast.makeText(this@MainActivity, "Home shortcuts not supported on this launcher.", Toast.LENGTH_SHORT).show()
+                        } else {
+                            try {
+                                val shortcutIntent = Intent(Intent.ACTION_VIEW, android.net.Uri.parse(url)).apply {
+                                    setPackage(packageName)
+                                }
+                                val shortcut = androidx.core.content.pm.ShortcutInfoCompat.Builder(
+                                    this@MainActivity, "click_home_${url.hashCode()}"
+                                )
+                                    .setShortLabel(currentTab.title.take(20).ifBlank { url })
+                                    .setLongLabel(currentTab.title.ifBlank { url })
+                                    .setIcon(
+                                        androidx.core.graphics.drawable.IconCompat.createWithResource(
+                                            this@MainActivity, R.mipmap.ic_launcher
+                                        )
+                                    )
+                                    .setIntent(shortcutIntent)
+                                    .build()
+                                androidx.core.content.pm.ShortcutManagerCompat.requestPinShortcut(
+                                    this@MainActivity, shortcut, null
+                                )
+                            } catch (_: Exception) {
+                                Toast.makeText(this@MainActivity, "Could not add shortcut.", Toast.LENGTH_SHORT).show()
+                            }
+                        }
+                    }
                     FeatureId.SITE_INFO -> {
                         val host = try { android.net.Uri.parse(currentTab.url).host ?: currentTab.url } catch (_: Exception) { currentTab.url }
                         Toast.makeText(this@MainActivity, host, Toast.LENGTH_LONG).show()
@@ -1653,6 +1807,7 @@ class MainActivity : FragmentActivity() {
             LaunchedEffect(forceNightModeWebsites) { liveNightMode = forceNightModeWebsites }
             LaunchedEffect(dataSaverEnabled) { liveDataSaver = dataSaverEnabled }
             LaunchedEffect(advanceIntroEnabled) { liveAdvanceIntroEnabled = advanceIntroEnabled }
+            LaunchedEffect(headerSpoofEnabled) { liveHeaderSpoof = headerSpoofEnabled }
             LaunchedEffect(fingerprintMode) { liveFingerprintMode = fingerprintMode }
             // Privacy quick wins: keep WebViewClient-safe live copies in sync.
             LaunchedEffect(stripTrackingParams) { liveStripTrackingParams = stripTrackingParams }
@@ -1663,6 +1818,7 @@ class MainActivity : FragmentActivity() {
             LaunchedEffect(forceZoomEnabled) { liveForceZoom = forceZoomEnabled }
             LaunchedEffect(readerModeEnabled) { liveReaderMode = readerModeEnabled }
             LaunchedEffect(reducedMotionEnabled) { liveReducedMotion = reducedMotionEnabled }
+            LaunchedEffect(sharpViewEnabled) { liveSharpViewEnabled = sharpViewEnabled }
             LaunchedEffect(secureDnsEnabled) { liveSecureDns = secureDnsEnabled }
             LaunchedEffect(customHeaders) { liveCustomHeaders = customHeaders.associate { it.name to it.value } }
             LaunchedEffect(desktopHosts) { liveDesktopHosts = desktopHosts }
@@ -1776,6 +1932,7 @@ class MainActivity : FragmentActivity() {
                         ?.takeIf { it.isNotEmpty() }
                         ?: NewsNotifications.DEFAULT_TOPICS
                     advanceIntroEnabled = prefs[AppSettings.ADVANCE_INTRO_ENABLED] ?: true
+                    sharpViewEnabled = prefs[AppSettings.SHARP_VIEW_ENABLED] != false
                     // Brave-inspired privacy quick wins.
                     stripTrackingParams = prefs[AppSettings.STRIP_TRACKING_PARAMS] ?: true
                     forgetfulBrowsing = prefs[AppSettings.FORGETFUL_BROWSING] == true
@@ -1798,7 +1955,7 @@ class MainActivity : FragmentActivity() {
                                 "light" -> "Light"
                                 "dark" -> "Dark"
                                 "scheduled" -> "Scheduled"
-                                else -> if (prefs[AppSettings.UI_DARK_MODE] == true) "Dark" else "Auto"
+                                else -> if (prefs[AppSettings.UI_DARK_MODE] == true) "Dark" else "Light"
                             }
                         }
                     }
@@ -2747,13 +2904,22 @@ class MainActivity : FragmentActivity() {
                                                 locationSpoofLabel = locationSpoofLabel,
                                                 onLocationClick = { showLocationSettings = true }
                                             )
-                                            // Premium page-load progress line: per-mode themed
-                                            // gradient (primary -> secondary) with animated
-                                            // shimmer + glow. Driven by onProgressChanged.
-                                            com.click.browser.ui.screens.PremiumLoadingBar(
-                                                theme = themed,
-                                                progress = currentTab.loadProgress
-                                            )
+                                            // Thin page-load progress indicator.
+                                            val progress = currentTab.loadProgress
+                                            androidx.compose.animation.AnimatedVisibility(
+                                                visible = progress in 1..99,
+                                                enter = fadeIn(),
+                                                exit = fadeOut()
+                                            ) {
+                                                LinearProgressIndicator(
+                                                    progress = progress / 100f,
+                                                    modifier = Modifier
+                                                        .fillMaxWidth()
+                                                        .height(2.dp),
+                                                    color = themed.primary,
+                                                    trackColor = themed.topBarBg
+                                                )
+                                            }
                                         }
                                     }
                                 }
@@ -2799,9 +2965,6 @@ class MainActivity : FragmentActivity() {
                                             },
                                             onTranslate = { handleFeature(FeatureId.TRANSLATE) },
                                             onReaderMode = { handleFeature(FeatureId.READER) },
-                                            onQrClick = {
-                                                Toast.makeText(this@MainActivity, "QR scanner coming soon.", Toast.LENGTH_SHORT).show()
-                                            },
                                             onProfileClick = { showSettings = true }
                                         )
                                     } else {
@@ -3213,13 +3376,17 @@ class MainActivity : FragmentActivity() {
                                                                 ) {
                                                                     return WebResourceResponse("text/plain", "UTF-8", null)
                                                                 }
-                                                                // SPEED FIX (v1.2.1): header spoofing used to re-fetch
-                                                                // EVERY subresource (images/CSS/JS) through OkHttp,
-                                                                // bypassing WebView's native HTTP/2 connection
-                                                                // pooling and cache — the #1 page-load slowdown.
-                                                                // Custom headers now apply ONLY to main-frame
-                                                                // navigations via loadUrl(url, extraHeaders); all
-                                                                // subresources use WebView's fast native stack.
+                                                                // Header spoofing: re-fetch subresources with the
+                                                                // user's custom headers. Main-frame navigations
+                                                                // already carry them via loadUrl(url, extraHeaders).
+                                                                if (liveHeaderSpoof && liveCustomHeaders.isNotEmpty()
+                                                                    && request?.isForMainFrame == false
+                                                                ) {
+                                                                    val resUrl = request.url?.toString().orEmpty()
+                                                                    if (resUrl.startsWith("http://") || resUrl.startsWith("https://")) {
+                                                                        this@MainActivity.fetchWithSpoofedHeaders(resUrl)?.let { return it }
+                                                                    }
+                                                                }
                                                                 return super.shouldInterceptRequest(view, request)
                                                             }
 
@@ -3473,6 +3640,12 @@ class MainActivity : FragmentActivity() {
                                                         settings.displayZoomControls = false
 
                                                                 modeManager.applySettings(this, activeMode, forceDesktopMode || liveFlags.desktopDefault)
+                                                                // Sharp View: full-density rendering
+                                                                // (no artificial scale-down) so text
+                                                                // & images stay crisp on high-DPI
+                                                                // screens. Vector icons are already
+                                                                // used throughout the UI.
+                                                                if (liveSharpViewEnabled) setInitialScale(0)
                                                                 // Experimental flags (click://flags) — AFTER mode settings
                                                                 // so custom UA / zoom / etc. override the mode defaults.
                                                                 // Consistent with the desktopDefault OR above: the flag
@@ -3558,16 +3731,6 @@ class MainActivity : FragmentActivity() {
                                                     }
                                                 )
                                             }
-                                            // Skeleton shimmer overlay during EARLY page load
-                                            // only (progress 1..40) — covers the blank
-                                            // white screen before first paint, then gets
-                                            // out of the way so partially-rendered content
-                                            // stays visible. Per-mode themed.
-                                            com.click.browser.ui.screens.LoadingSkeleton(
-                                                theme = theme,
-                                                visible = currentTab.loadProgress in 1..40,
-                                                modifier = Modifier.fillMaxSize()
-                                            )
                                         }
                                         }
                                         } // PageTransitionWrapper
@@ -4480,6 +4643,14 @@ class MainActivity : FragmentActivity() {
                                     onToggleAdvanceIntro = { v ->
                                         advanceIntroEnabled = v
                                         scope.launch { dataStore.edit { prefs -> prefs[AppSettings.ADVANCE_INTRO_ENABLED] = v } }
+                                    },
+                                    sharpViewEnabled = sharpViewEnabled,
+                                    onToggleSharpView = { v ->
+                                        sharpViewEnabled = v
+                                        scope.launch { dataStore.edit { prefs -> prefs[AppSettings.SHARP_VIEW_ENABLED] = v } }
+                                        // Applies on next page load; reload now so the
+                                        // user sees the change immediately.
+                                        currentTab.webView?.reload()
                                     },
                                     onClearHistoryForMode = { mode ->
                                         scope.launch {

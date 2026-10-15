@@ -130,6 +130,9 @@ fun SettingsScreen(
     // --- UI animations ---
     animationsEnabled: Boolean,
     onToggleAnimations: (Boolean) -> Unit,
+    // --- Sharp View (full-density rendering) ---
+    sharpViewEnabled: Boolean,
+    onToggleSharpView: (Boolean) -> Unit,
     // --- Advance Mode intro animation ---
     advanceIntroEnabled: Boolean,
     onToggleAdvanceIntro: (Boolean) -> Unit,
@@ -182,6 +185,7 @@ fun SettingsScreen(
         adBlockerEnabled, forceNightMode,
         httpsMode, httpsStrictExceptions, jsEnabled, dataSaver, perModeDark, historyModeTarget,
         aiApiKey, aiProvider, aiModel, showAiKey, animationsEnabled, isDefaultBrowser, advanceIntroEnabled,
+        sharpViewEnabled,
         newsNotificationsEnabled, newsTopics
     ) {
         buildList {
@@ -350,6 +354,12 @@ fun SettingsScreen(
                         "Advance intro animation",
                         "5-second intro when entering Advance mode (tap skips)",
                         advanceIntroEnabled, onToggleAdvanceIntro, theme
+                    )
+                    HorizontalDivider(color = theme.onSurface.copy(alpha = 0.1f))
+                    ToggleRow(
+                        "Sharp View",
+                        "Full-density page rendering for crisp text & images (applies on next page load)",
+                        sharpViewEnabled, onToggleSharpView, theme
                     )
                 }
             })

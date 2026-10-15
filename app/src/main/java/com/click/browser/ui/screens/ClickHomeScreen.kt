@@ -60,7 +60,6 @@ import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Person
-import androidx.compose.material.icons.filled.QrCodeScanner
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Shield
 import androidx.compose.material.icons.filled.Tab
@@ -145,7 +144,6 @@ fun ClickHomeScreen(
     onOpenAiChat: () -> Unit,
     onTranslate: () -> Unit,
     onReaderMode: () -> Unit,
-    onQrClick: () -> Unit,
     onProfileClick: () -> Unit,
     onV9ShieldClick: () -> Unit = {},
     onGamesClick: () -> Unit = {},
@@ -225,8 +223,7 @@ fun ClickHomeScreen(
         SmartSearchBar(
             theme = theme,
             neon = isHackNeon,
-            onNavigate = onNavigate,
-            onQrClick = onQrClick
+            onNavigate = onNavigate
         )
 
         // V9 Shield: big prominent VPN toggle card (Prince couldn't find it).
@@ -440,14 +437,15 @@ private fun HomeTopRow(
     }
 }
 
-/** Pill search bar: G icon · hint · mic · QR. */
+/** Pill search bar: G icon · hint · mic. (QR scanner removed: no CameraX /
+ * MLKit-barcode stack in the app — the button only showed a "coming soon"
+ * toast, so the dead control is gone instead of fake.) */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun SmartSearchBar(
     theme: ModeTheme,
     neon: Boolean,
-    onNavigate: (String) -> Unit,
-    onQrClick: () -> Unit
+    onNavigate: (String) -> Unit
 ) {
     var query by remember { mutableStateOf("") }
     val submit = {
@@ -500,9 +498,6 @@ private fun SmartSearchBar(
             VoiceMicButton(theme = theme, onHeard = { heard ->
                 onNavigate(heard)
             })
-            IconButton(onClick = onQrClick) {
-                Icon(Icons.Default.QrCodeScanner, contentDescription = "Scan QR", tint = theme.primary, modifier = Modifier.size(22.dp))
-            }
         }
     }
 }
@@ -1286,6 +1281,8 @@ fun CompactBrowseBar(
                 )
             }
             // URL field: elevated pill with soft shadow, 2026 premium look.
+            // animateContentSize smooths the bar when the location
+            // indicator appears/disappears or the URL length changes.
             Surface(
                 shape = RoundedCornerShape(28.dp),
                 color = theme.surfaceVariant.copy(alpha = 0.65f),
@@ -1293,7 +1290,9 @@ fun CompactBrowseBar(
                 border = androidx.compose.foundation.BorderStroke(
                     1.dp, theme.primary.copy(alpha = 0.18f)
                 ),
-                modifier = Modifier.weight(1f)
+                modifier = Modifier
+                    .weight(1f)
+                    .animateContentSize()
             ) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     IconButton(

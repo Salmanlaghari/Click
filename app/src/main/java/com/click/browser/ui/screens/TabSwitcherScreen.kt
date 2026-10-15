@@ -3,6 +3,10 @@ package com.click.browser.ui.screens
 import android.graphics.Bitmap
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.MutableTransitionState
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -308,9 +312,23 @@ fun TabSwitcherScreen(
                                         modifier = Modifier.fillMaxSize()
                                     )
                                 } else {
-                                    // Placeholder: shimmer-ish tinted box with an icon
+                                    // Shimmer loading placeholder: animated
+                                    // alpha pulse while the thumbnail loads,
+                                    // instead of a static tinted box.
+                                    val shimmer = rememberInfiniteTransition(label = "tabThumbShimmer")
+                                    val shimmerAlpha by shimmer.animateFloat(
+                                        initialValue = 0.12f,
+                                        targetValue = 0.30f,
+                                        animationSpec = infiniteRepeatable(
+                                            animation = tween(900),
+                                            repeatMode = RepeatMode.Reverse
+                                        ),
+                                        label = "tabThumbShimmerAlpha"
+                                    )
                                     Box(
-                                        modifier = Modifier.fillMaxSize(),
+                                        modifier = Modifier
+                                            .fillMaxSize()
+                                            .background(theme.onSurface.copy(alpha = shimmerAlpha)),
                                         contentAlignment = Alignment.Center
                                     ) {
                                         Icon(
