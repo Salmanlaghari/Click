@@ -148,6 +148,7 @@ fun ClickHomeScreen(
     onQrClick: () -> Unit,
     onProfileClick: () -> Unit,
     onV9ShieldClick: () -> Unit = {},
+    onVpnToggle: () -> Unit = {},
     onGamesClick: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
@@ -237,7 +238,8 @@ fun ClickHomeScreen(
             neon = isHackNeon,
             cardBg = cardBg,
             cardBorder = cardBorder,
-            onClick = onV9ShieldClick
+            onClick = onV9ShieldClick,
+            onToggle = onVpnToggle
         )
 
         QuickSitesGrid(
@@ -287,7 +289,8 @@ private fun V9ShieldCard(
     neon: Boolean,
     cardBg: Color,
     cardBorder: Color,
-    onClick: () -> Unit
+    onClick: () -> Unit,
+    onToggle: () -> Unit = {}
 ) {
     val accent = if (active) Color(0xFF22C55E) else theme.primary
     Card(
@@ -331,18 +334,20 @@ private fun V9ShieldCard(
                 )
                 Text(
                     if (active) "● Protected — encrypted DNS active"
-                    else "Tap to enable private browsing protection",
+                    else "Tap toggle to enable protection",
                     color = if (active) Color(0xFF22C55E) else theme.onSurface.copy(alpha = 0.6f),
                     fontSize = 12.sp
                 )
             }
-            // Toggle pill.
+            // Toggle pill: tapping toggles VPN ON/OFF directly (does NOT
+            // just open the Shield screen — the card body does that).
             Box(
                 modifier = Modifier
                     .background(
                         if (active) Color(0xFF22C55E) else theme.onSurface.copy(alpha = 0.15f),
                         RoundedCornerShape(50)
                     )
+                    .clickable(onClick = onToggle)
                     .padding(horizontal = 14.dp, vertical = 8.dp)
             ) {
                 Text(
@@ -1296,15 +1301,17 @@ fun CompactBrowseBar(
                 modifier = Modifier.weight(1f)
             ) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
+                    // Shield icon: tap opens Site Settings (per-site permissions).
+                    // Green shield = HTTPS secure, amber shield = HTTP warning.
                     IconButton(
                         onClick = onSiteSettingsClick,
                         modifier = Modifier.padding(start = 4.dp).size(34.dp)
                     ) {
                         Icon(
-                            Icons.Default.Lock,
-                            contentDescription = if (isHttps) "Secure connection — site settings" else "Connection — site settings",
-                            tint = if (isHttps) Color(0xFF22C55E) else theme.onSurface.copy(alpha = 0.5f),
-                            modifier = Modifier.size(16.dp)
+                            Icons.Default.Shield,
+                            contentDescription = if (isHttps) "Secure site — tap for site settings" else "Not secure (HTTP) — tap for site settings",
+                            tint = if (isHttps) Color(0xFF22C55E) else Color(0xFFF59E0B),
+                            modifier = Modifier.size(18.dp)
                         )
                     }
                     // LocationGuard indicator: shows when this site's location is

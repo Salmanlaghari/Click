@@ -834,6 +834,59 @@ class MainActivity : FragmentActivity() {
     }
 
     /**
+     * Returns true if [url] is a Google OAuth / sign-in URL.
+     * Google blocks OAuth in embedded WebViews ("disallowed_useragent").
+     * These URLs must open in a Chrome Custom Tab instead, which shares
+     * cookies with Chrome and is allowed by Google.
+     */
+    private fun isGoogleAuthUrl(url: String): Boolean {
+        if (!url.startsWith("https://")) return false
+        val host = hostOfUrl(url)
+        if (host == "accounts.google.com" || host.endsWith(".accounts.google.com")) return true
+        // OAuth authorize endpoints on Google domains.
+        if (host.endsWith(".google.com") && url.contains("/o/oauth2/")) return true
+        if (host == "accounts.youtube.com") return true
+        return false
+    }
+
+    /**
+     * Opens [url] in a Chrome Custom Tab. Used for Google Sign-in / OAuth
+     * (WebView is blocked by Google) and any other auth flow that needs a
+     * real browser context.
+     */
+    private fun openInCustomTab(url: String) {
+        try {
+            val intent = androidx.browser.customtabs.CustomTabsIntent.Builder()
+                .setShowTitle(true)
+                .build()
+            intent.launchUrl(this, android.net.Uri.parse(url))
+        } catch (e: Exception) {
+            // Fallback: open in external browser.
+            try {
+                startActivity(android.content.Intent(android.content.Intent.ACTION_VIEW, android.net.Uri.parse(url)))
+            } catch (_: Exception) {
+                android.widget.Toast.makeText(this, "Could not open sign-in page", android.widget.Toast.LENGTH_SHORT).show()
+            }
+        }
+    }
+
+    /**
+     * Returns true if [host] is an IPv4 address (e.g. 182.180.50.52).
+     * IP-address hosts must NEVER be upgraded to HTTPS — most IP servers
+     * have no TLS certificate, so the upgrade breaks them. HTTP is loaded
+     * directly with a warning (not blocked).
+     */
+    private fun isIpAddress(host: String): Boolean {
+        if (host.isBlank()) return false
+        val parts = host.split(".")
+        if (parts.size != 4) return false
+        return parts.all { part ->
+            part.isNotEmpty() && part.all { it.isDigit() } &&
+                try { part.toInt() in 0..255 } catch (_: Exception) { false }
+        }
+    }
+
+    /**
      * HTTPS-Strict block page: shown instead of loading a plain-http URL
      * when HTTPS mode is Strict and the host has no exception. Offers a
      * one-tap HTTPS retry and points at the per-site exception list in
@@ -1281,6 +1334,43 @@ class MainActivity : FragmentActivity() {
                     ).show()
                 }
             }
+            // VPN permission launcher: VpnService.prepare() returns an intent
+            // when permission is not yet granted. On RESULT_OK, start VPN.
+            val vpnPermissionLauncher = rememberLauncherForActivityResult(
+                ActivityResultContracts.StartActivityForResult()
+            ) { result ->
+                if (result.resultCode == android.app.Activity.RESULT_OK) {
+                    com.click.browser.engine.V9VpnController.start(this@MainActivity)
+                    scope.launch {
+                        dataStore.edit { it[com.click.browser.engine.AppSettings.V9_VPN_ENABLED] = true }
+                    }
+                    Toast.makeText(this@MainActivity, "V9 Shield VPN ON", Toast.LENGTH_SHORT).show()
+                } else {
+                    Toast.makeText(this@MainActivity, "VPN permission denied", Toast.LENGTH_SHORT).show()
+                }
+            }
+            // Toggles V9 Shield VPN ON/OFF from the home shield card.
+            fun toggleVpnShield() {
+                val isOn = com.click.browser.engine.V9VpnController.isRunning.value
+                if (isOn) {
+                    com.click.browser.engine.V9VpnController.stop(this@MainActivity)
+                    scope.launch {
+                        dataStore.edit { it[com.click.browser.engine.AppSettings.V9_VPN_ENABLED] = false }
+                    }
+                    Toast.makeText(this@MainActivity, "V9 Shield VPN OFF", Toast.LENGTH_SHORT).show()
+                } else {
+                    val intent = com.click.browser.engine.V9VpnController.prepareIntent(this@MainActivity)
+                    if (intent == null) {
+                        com.click.browser.engine.V9VpnController.start(this@MainActivity)
+                        scope.launch {
+                            dataStore.edit { it[com.click.browser.engine.AppSettings.V9_VPN_ENABLED] = true }
+                        }
+                        Toast.makeText(this@MainActivity, "V9 Shield VPN ON", Toast.LENGTH_SHORT).show()
+                    } else {
+                        vpnPermissionLauncher.launch(intent)
+                    }
+                }
+            }
             /**
              * Settings toggle handler: enabling on Android 13+ goes through
              * the runtime permission first (the toggle only flips once the
@@ -1381,6 +1471,10 @@ class MainActivity : FragmentActivity() {
             var showPaymentMethods by remember { mutableStateOf(false) }
             // Per-site settings sheet (opened from the lock icon in the address bar).
             var showSiteSettings by remember { mutableStateOf(false) }
+            // Mode-switch confirmation: pending target mode, null = no dialog.
+            // Mode changes require a process restart (WebView data dir is pinned
+            // at boot), so the user must confirm before switching.
+            var pendingModeSwitch by remember { mutableStateOf<BrowserMode?>(null) }
             // Built-in engines (Safe Browsing / Translate / PDF)
             var showTranslateSheet by remember { mutableStateOf(false) }
             var pdfOfferUrl by remember { mutableStateOf<String?>(null) }
@@ -2053,9 +2147,14 @@ class MainActivity : FragmentActivity() {
                                     ) {
                                         scope.launch {
                                             drawerState.close()
-                                            // V9: engine switch (restarts when the engine changes).
-                                            val restarting = v9SwitchMode(BrowserMode.SIMPLE, currentTab.webView, forceDesktopMode)
-                                            if (!restarting) Toast.makeText(this@MainActivity, "Simple Mode Activated", Toast.LENGTH_SHORT).show()                                        }
+                                            // Mode switch needs a restart — ask first.
+                                            // Same-mode taps are a no-op (no dialog).
+                                            if (activeMode != BrowserMode.SIMPLE) {
+                                                pendingModeSwitch = BrowserMode.SIMPLE
+                                            } else {
+                                                Toast.makeText(this@MainActivity, "Already in Simple Mode", Toast.LENGTH_SHORT).show()
+                                            }
+                                        }
                                     }
                                 }
                                 item {
@@ -2066,9 +2165,12 @@ class MainActivity : FragmentActivity() {
                                     ) {
                                         scope.launch {
                                             drawerState.close()
-                                            // V9: engine switch (restarts when the engine changes).
-                                            val restarting = v9SwitchMode(BrowserMode.DEVELOPER, currentTab.webView, forceDesktopMode)
-                                            if (!restarting) Toast.makeText(this@MainActivity, "Developer Mode Activated", Toast.LENGTH_SHORT).show()                                        }
+                                            if (activeMode != BrowserMode.DEVELOPER) {
+                                                pendingModeSwitch = BrowserMode.DEVELOPER
+                                            } else {
+                                                Toast.makeText(this@MainActivity, "Already in Developer Mode", Toast.LENGTH_SHORT).show()
+                                            }
+                                        }
                                     }
                                 }
                                 item {
@@ -2079,9 +2181,12 @@ class MainActivity : FragmentActivity() {
                                     ) {
                                         scope.launch {
                                             drawerState.close()
-                                            // V9: engine switch (restarts when the engine changes).
-                                            val restarting = v9SwitchMode(BrowserMode.HACK, currentTab.webView, forceDesktopMode)
-                                            if (!restarting) Toast.makeText(this@MainActivity, "Hack Mode Activated", Toast.LENGTH_SHORT).show()                                        }
+                                            if (activeMode != BrowserMode.HACK) {
+                                                pendingModeSwitch = BrowserMode.HACK
+                                            } else {
+                                                Toast.makeText(this@MainActivity, "Already in Hack Mode", Toast.LENGTH_SHORT).show()
+                                            }
+                                        }
                                     }
                                 }
                                 item {
@@ -2093,11 +2198,14 @@ class MainActivity : FragmentActivity() {
                                     ) {
                                         scope.launch {
                                             drawerState.close()
-                                            // V9: engine switch (restarts when the engine changes).
                                             // Advance enters a fresh isolated space — nothing
                                             // carries over from the other modes.
-                                            val restarting = v9SwitchMode(BrowserMode.ADVANCED, currentTab.webView, forceDesktopMode)
-                                            if (!restarting) Toast.makeText(this@MainActivity, "Advance Mode Activated — fresh isolated space", Toast.LENGTH_SHORT).show()                                        }
+                                            if (activeMode != BrowserMode.ADVANCED) {
+                                                pendingModeSwitch = BrowserMode.ADVANCED
+                                            } else {
+                                                Toast.makeText(this@MainActivity, "Already in Advance Mode", Toast.LENGTH_SHORT).show()
+                                            }
+                                        }
                                     }
                                 }
 
@@ -2788,6 +2896,7 @@ class MainActivity : FragmentActivity() {
                                             wallpaperUri = wallpaperUri,
                                             shieldActive = shieldActive,
                                             onV9ShieldClick = { showV9Shield = true },
+                                            onVpnToggle = { toggleVpnShield() },
                                             onGamesClick = { showClickPage = "games" },
                                             onNavigate = { input ->
                                                 val destination = cleanTrackingUrl(formatUrl(input, currentSearchEngineSetting, activeMode))
@@ -2888,21 +2997,33 @@ class MainActivity : FragmentActivity() {
                                                                             return true
                                                                         }
                                                                         if (request != null && request.isRedirect) return false
+                                                                        // Google OAuth / sign-in: Google blocks embedded
+                                                                        // WebViews. Open in a Chrome Custom Tab instead.
+                                                                        if (isGoogleAuthUrl(urlStr)) {
+                                                                            openInCustomTab(urlStr)
+                                                                            return true
+                                                                        }
                                                                         // HTTPS mode handling FIRST (so http://click://
                                                                         // can't bypass it). Standard upgrades http->https;
                                                                         // Strict BLOCKS plain-http unless the host is
                                                                         // in the per-site exception list; Off allows it.
+                                                                        // IP-ADDRESS hosts are NEVER upgraded or blocked:
+                                                                        // most IP servers (e.g. 182.180.50.52) have no TLS
+                                                                        // cert, so upgrading breaks them. HTTP loads directly.
                                                                         if (urlStr.startsWith("http://")) {
-                                                                            when (liveHttpsMode) {
-                                                                                "strict" -> {
-                                                                                    val host = hostOfUrl(urlStr)
-                                                                                    if (!liveHttpsStrictExceptions.contains(host)) {
-                                                                                        showHttpsBlockedPage(view, urlStr, host)
-                                                                                        return true
+                                                                            val ipHost = hostOfUrl(urlStr)
+                                                                            if (!isIpAddress(ipHost)) {
+                                                                                when (liveHttpsMode) {
+                                                                                    "strict" -> {
+                                                                                        val host = ipHost
+                                                                                        if (!liveHttpsStrictExceptions.contains(host)) {
+                                                                                            showHttpsBlockedPage(view, urlStr, host)
+                                                                                            return true
+                                                                                        }
                                                                                     }
-                                                                                }
-                                                                                "standard" -> {
-                                                                                    urlStr = "https://" + urlStr.removePrefix("http://")
+                                                                                    "standard" -> {
+                                                                                        urlStr = "https://" + urlStr.removePrefix("http://")
+                                                                                    }
                                                                                 }
                                                                             }
                                                                         }
@@ -2944,6 +3065,11 @@ class MainActivity : FragmentActivity() {
                                                                         var urlStr = url ?: ""
                                                                         // Query-param stripping (Brave-style).
                                                                         urlStr = cleanTrackingUrl(urlStr)
+                                                                        // Google OAuth / sign-in: open in Custom Tab (see above).
+                                                                        if (isGoogleAuthUrl(urlStr)) {
+                                                                            openInCustomTab(urlStr)
+                                                                            return true
+                                                                        }
                                                                         // HTTPS mode handling FIRST (see above).
                                                                         // PDF: offer in-app viewing instead of navigating.
                                                                         if (isPdfUrl(urlStr)) {
@@ -2951,16 +3077,20 @@ class MainActivity : FragmentActivity() {
                                                                             return true
                                                                         }
                                                                         if (urlStr.startsWith("http://")) {
-                                                                            when (liveHttpsMode) {
-                                                                                "strict" -> {
-                                                                                    val host = hostOfUrl(urlStr)
-                                                                                    if (!liveHttpsStrictExceptions.contains(host)) {
-                                                                                        showHttpsBlockedPage(view, urlStr, host)
-                                                                                        return true
+                                                                            // IP hosts never upgraded/blocked (see above).
+                                                                            val ipHost2 = hostOfUrl(urlStr)
+                                                                            if (!isIpAddress(ipHost2)) {
+                                                                                when (liveHttpsMode) {
+                                                                                    "strict" -> {
+                                                                                        val host = ipHost2
+                                                                                        if (!liveHttpsStrictExceptions.contains(host)) {
+                                                                                            showHttpsBlockedPage(view, urlStr, host)
+                                                                                            return true
+                                                                                        }
                                                                                     }
-                                                                                }
-                                                                                "standard" -> {
-                                                                                    urlStr = "https://" + urlStr.removePrefix("http://")
+                                                                                    "standard" -> {
+                                                                                        urlStr = "https://" + urlStr.removePrefix("http://")
+                                                                                    }
                                                                                 }
                                                                             }
                                                                         }
@@ -3083,7 +3213,13 @@ class MainActivity : FragmentActivity() {
                                                                                 val js = "window.__clickFillLogin(" +
                                                                                     "'${saved.username.replace("'", "\\'")}', " +
                                                                                     "'${saved.password.replace("'", "\\'")}')"
+                                                                                // Fill immediately, then retry after a
+                                                                                // delay — SPA login forms often render
+                                                                                // after onPageFinished.
                                                                                 wv.post { wv.evaluateJavascript(js, null) }
+                                                                                wv.postDelayed({
+                                                                                    wv.evaluateJavascript(js, null)
+                                                                                }, 1500)
                                                                             }
                                                                         }
                                                                     }
@@ -3760,21 +3896,11 @@ class MainActivity : FragmentActivity() {
                                     onDismiss = { showFeatureMenu = false },
                                     onModeChange = { mode ->
                                         showFeatureMenu = false
-                                        scope.launch {
-                                            // V9: engine switch (restarts when the engine changes).
-                                            val restarting = v9SwitchMode(mode, currentTab.webView, forceDesktopMode)
-                                            if (!restarting) {
-                                                val label = when (mode) {
-                                                    BrowserMode.SIMPLE -> "Simple"
-                                                    BrowserMode.DEVELOPER -> "Developer"
-                                                    BrowserMode.HACK -> "Hack"
-                                                    BrowserMode.ADVANCED -> "Advance"
-                                                }
-                                                Toast.makeText(
-                                                    this@MainActivity, "$label Mode Activated",
-                                                    Toast.LENGTH_SHORT
-                                                ).show()
-                                            }
+                                        // Mode switch needs restart — ask first via dialog.
+                                        if (activeMode != mode) {
+                                            pendingModeSwitch = mode
+                                        } else {
+                                            Toast.makeText(this@MainActivity, "Already in ${mode.display().title}", Toast.LENGTH_SHORT).show()
                                         }
                                     },
                                     onFeature = { id -> handleFeature(id) },
@@ -4326,10 +4452,11 @@ class MainActivity : FragmentActivity() {
                                     },
                                     activeMode = activeMode,
                                     onModeChange = { mode ->
-                                        scope.launch {
-                                            // V9: engine switch (restarts when the engine changes).
-                                            val restarting = v9SwitchMode(mode, currentTab.webView, forceDesktopMode)
-                                            if (!restarting) currentTab.webView?.reload()
+                                        // Mode switch needs restart — ask first via dialog.
+                                        if (activeMode != mode) {
+                                            pendingModeSwitch = mode
+                                        } else {
+                                            Toast.makeText(this@MainActivity, "Already in ${mode.display().title}", Toast.LENGTH_SHORT).show()
                                         }
                                     },
                                     currentSearchEngineSetting = currentSearchEngineSetting,
@@ -4665,6 +4792,45 @@ class MainActivity : FragmentActivity() {
                                 )
                             }
                             // Per-site settings sheet (lock icon in the address bar).
+                            // Mode-switch confirmation: mode changes need a process
+                            // restart (WebView data dir pinned at boot). The user
+                            // confirms, then we save + restart. Cancel = stay.
+                            pendingModeSwitch?.let { targetMode ->
+                                androidx.compose.material3.AlertDialog(
+                                    onDismissRequest = { pendingModeSwitch = null },
+                                    title = {
+                                        androidx.compose.material3.Text("Switch to ${targetMode.display().title}?")
+                                    },
+                                    text = {
+                                        androidx.compose.material3.Text(
+                                            "Mode change requires a restart. Your tabs will be restored. Restart now?"
+                                        )
+                                    },
+                                    confirmButton = {
+                                        androidx.compose.material3.TextButton(onClick = {
+                                            val mode = targetMode
+                                            pendingModeSwitch = null
+                                            scope.launch {
+                                                val restarting = v9SwitchMode(mode, currentTab.webView, forceDesktopMode)
+                                                if (!restarting) {
+                                                    Toast.makeText(
+                                                        this@MainActivity,
+                                                        "${mode.display().title} Activated",
+                                                        Toast.LENGTH_SHORT
+                                                    ).show()
+                                                }
+                                            }
+                                        }) {
+                                            androidx.compose.material3.Text("Restart")
+                                        }
+                                    },
+                                    dismissButton = {
+                                        androidx.compose.material3.TextButton(onClick = { pendingModeSwitch = null }) {
+                                            androidx.compose.material3.Text("Cancel")
+                                        }
+                                    }
+                                )
+                            }
                             if (showSiteSettings) {
                                 val siteHost = try {
                                     android.net.Uri.parse(currentTab.url).host?.lowercase().orEmpty()
@@ -4749,12 +4915,12 @@ class MainActivity : FragmentActivity() {
                                     onClose = { showAdvanceSpecs = false },
                                     onEnterAdvance = {
                                         showAdvanceSpecs = false
-                                        scope.launch {
-                                            drawerState.close()
-                                            // Same feedback contract as the drawer's Advance entry:
-                                            // if the engine restart wasn't possible, say so.
-                                            val restarting = v9SwitchMode(BrowserMode.ADVANCED, currentTab.webView, forceDesktopMode)
-                                            if (!restarting) Toast.makeText(this@MainActivity, "Advance Mode Activated — fresh isolated space", Toast.LENGTH_SHORT).show()
+                                        scope.launch { drawerState.close() }
+                                        // Mode switch needs restart — ask first via dialog.
+                                        if (activeMode != BrowserMode.ADVANCED) {
+                                            pendingModeSwitch = BrowserMode.ADVANCED
+                                        } else {
+                                            Toast.makeText(this@MainActivity, "Already in Advance Mode", Toast.LENGTH_SHORT).show()
                                         }
                                     }
                                 )
@@ -5931,7 +6097,8 @@ fun BrowserTopBar(
     elementInspectorEnabled: Boolean,
     onToggleInspector: () -> Unit,
     deviceEmulatorMode: String,
-    onToggleEmulator: () -> Unit
+    onToggleEmulator: () -> Unit,
+    onShieldClick: () -> Unit = {}
 ) {
     var textInput by remember(currentUrl) { mutableStateOf(currentUrl) }
     val accent = theme.primary
@@ -6030,19 +6197,27 @@ fun BrowserTopBar(
                 keyboardOptions = KeyboardOptions(imeAction = ImeAction.Go),
                 keyboardActions = KeyboardActions(onGo = { onNavigate(textInput) }),
                 leadingIcon = {
-                    if (currentUrl.startsWith("https")) {
+                    // Shield icon: tap opens Site Settings (per-site permissions).
+                    // Green shield = HTTPS secure, amber shield = HTTP warning,
+                    // grey = internal/about page.
+                    val isHttps = currentUrl.startsWith("https://")
+                    val isHttp = currentUrl.startsWith("http://")
+                    val shieldTint = when {
+                        isHttps -> Color(0xFF22C55E)
+                        isHttp -> Color(0xFFF59E0B)
+                        else -> theme.onSurface.copy(alpha = 0.5f)
+                    }
+                    androidx.compose.material3.IconButton(
+                        onClick = onShieldClick,
+                        modifier = Modifier.size(28.dp)
+                    ) {
                         Icon(
-                            Icons.Default.Lock,
-                            contentDescription = "Secure",
-                            tint = Color(0xFF22C55E),
-                            modifier = Modifier.size(16.dp)
-                        )
-                    } else {
-                        Icon(
-                            Icons.Default.Search,
-                            contentDescription = "Search",
-                            tint = theme.onSurface.copy(alpha = 0.5f),
-                            modifier = Modifier.size(16.dp)
+                            Icons.Default.Shield,
+                            contentDescription = if (isHttps) "Secure site — tap for site settings"
+                                else if (isHttp) "Not secure (HTTP) — tap for site settings"
+                                else "Site settings",
+                            tint = shieldTint,
+                            modifier = Modifier.size(18.dp)
                         )
                     }
                 }
