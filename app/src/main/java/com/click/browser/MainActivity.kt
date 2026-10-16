@@ -840,7 +840,10 @@ class MainActivity : FragmentActivity() {
      * cookies with Chrome and is allowed by Google.
      */
     private fun isGoogleAuthUrl(url: String): Boolean {
-        if (!url.startsWith("https://")) return false
+        // Accept BOTH http:// and https:// — an http:// Google OAuth URL must
+        // still route to Custom Tab, not WebView (Google blocks OAuth there).
+        // Reject non-HTTP(S) schemes (e.g. intent://, about:) outright.
+        if (!url.startsWith("https://") && !url.startsWith("http://")) return false
         val host = hostOfUrl(url)
         if (host == "accounts.google.com" || host.endsWith(".accounts.google.com")) return true
         // OAuth authorize endpoints on Google domains.
@@ -1336,36 +1339,55 @@ class MainActivity : FragmentActivity() {
             }
             // VPN permission launcher: VpnService.prepare() returns an intent
             // when permission is not yet granted. On RESULT_OK, start VPN.
+            // Kilo fix: verify the service actually started before setting the
+            // V9_VPN_ENABLED flag — start() is async (Intent to service), so
+            // the flag must reflect the true running state, not the request.
             val vpnPermissionLauncher = rememberLauncherForActivityResult(
                 ActivityResultContracts.StartActivityForResult()
             ) { result ->
                 if (result.resultCode == android.app.Activity.RESULT_OK) {
                     com.click.browser.engine.V9VpnController.start(this@MainActivity)
                     scope.launch {
-                        dataStore.edit { it[com.click.browser.engine.AppSettings.V9_VPN_ENABLED] = true }
+                        kotlinx.coroutines.delay(800)
+                        if (com.click.browser.engine.V9VpnService.running.value) {
+                            dataStore.edit { it[com.click.browser.engine.AppSettings.V9_VPN_ENABLED] = true }
+                            Toast.makeText(this@MainActivity, "V9 Shield VPN ON", Toast.LENGTH_SHORT).show()
+                        } else {
+                            Toast.makeText(this@MainActivity, "VPN failed to start — try again", Toast.LENGTH_SHORT).show()
+                        }
                     }
-                    Toast.makeText(this@MainActivity, "V9 Shield VPN ON", Toast.LENGTH_SHORT).show()
                 } else {
                     Toast.makeText(this@MainActivity, "VPN permission denied", Toast.LENGTH_SHORT).show()
                 }
             }
             // Toggles V9 Shield VPN ON/OFF from the home shield card.
+            // Kilo fix: verify actual service state before updating the flag.
             fun toggleVpnShield() {
                 val isOn = com.click.browser.engine.V9VpnController.isRunning.value
                 if (isOn) {
                     com.click.browser.engine.V9VpnController.stop(this@MainActivity)
                     scope.launch {
-                        dataStore.edit { it[com.click.browser.engine.AppSettings.V9_VPN_ENABLED] = false }
+                        kotlinx.coroutines.delay(800)
+                        if (!com.click.browser.engine.V9VpnService.running.value) {
+                            dataStore.edit { it[com.click.browser.engine.AppSettings.V9_VPN_ENABLED] = false }
+                            Toast.makeText(this@MainActivity, "V9 Shield VPN OFF", Toast.LENGTH_SHORT).show()
+                        } else {
+                            Toast.makeText(this@MainActivity, "VPN failed to stop — try again", Toast.LENGTH_SHORT).show()
+                        }
                     }
-                    Toast.makeText(this@MainActivity, "V9 Shield VPN OFF", Toast.LENGTH_SHORT).show()
                 } else {
                     val intent = com.click.browser.engine.V9VpnController.prepareIntent(this@MainActivity)
                     if (intent == null) {
                         com.click.browser.engine.V9VpnController.start(this@MainActivity)
                         scope.launch {
-                            dataStore.edit { it[com.click.browser.engine.AppSettings.V9_VPN_ENABLED] = true }
+                            kotlinx.coroutines.delay(800)
+                            if (com.click.browser.engine.V9VpnService.running.value) {
+                                dataStore.edit { it[com.click.browser.engine.AppSettings.V9_VPN_ENABLED] = true }
+                                Toast.makeText(this@MainActivity, "V9 Shield VPN ON", Toast.LENGTH_SHORT).show()
+                            } else {
+                                Toast.makeText(this@MainActivity, "VPN failed to start — try again", Toast.LENGTH_SHORT).show()
+                            }
                         }
-                        Toast.makeText(this@MainActivity, "V9 Shield VPN ON", Toast.LENGTH_SHORT).show()
                     } else {
                         vpnPermissionLauncher.launch(intent)
                     }
