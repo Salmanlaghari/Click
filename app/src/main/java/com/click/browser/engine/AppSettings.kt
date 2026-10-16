@@ -133,6 +133,10 @@ object AppSettings {
     val V9_VPN_ENABLED = booleanPreferencesKey("v9_vpn_enabled")
     /** Advance Mode 5s intro animation on engine boot. Default ON; tap skips. */
     val ADVANCE_INTRO_ENABLED = booleanPreferencesKey("advance_intro_enabled")
+    /** True once the "About Advance Mode" specs sheet has been shown (first entry). */
+    val ADVANCE_SPECS_SEEN = booleanPreferencesKey("advance_specs_seen")
+    /** Sharp View: full-density WebView rendering (setInitialScale(0)). Default ON. */
+    val SHARP_VIEW_ENABLED = booleanPreferencesKey("sharp_view_enabled")
 
     // Brave-inspired privacy quick wins.
     /** Strip tracking query params (utm_*, gclid, fbclid, ...) on navigation. Default ON. */
