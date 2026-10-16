@@ -181,6 +181,10 @@ dependencies {
     implementation(libs.androidx.credentials.play.services.auth)
     // EncryptedSharedPreferences for payment-method storage.
     implementation(libs.androidx.security.crypto)
+    // Chrome Custom Tabs: Google Sign-in / OAuth must open in a Custom Tab,
+    // NOT in WebView — Google blocks OAuth in embedded WebViews. Custom Tabs
+    // share cookies with Chrome, so the user stays signed in.
+    implementation(libs.androidx.browser)
 
     testImplementation(libs.junit)
     androidTestImplementation(libs.androidx.junit)
