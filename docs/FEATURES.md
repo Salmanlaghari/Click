@@ -5,8 +5,8 @@ Every user-facing feature in the app, grouped by category. Count is shown in
 
 ## Core browsing (10)
 1. System WebView engine (Chromium, always up to date via Play)
-2. 3 browser modes: Simple / Developer / Hack
-3. Per-mode themes: Simple=light, Developer=dark glass, Hack=OLED neon
+2. 3 browser modes: Simple / Developer / Power
+3. Per-mode themes: Simple=light, Developer=dark glass, Power=OLED neon
 4. Visual tab switcher (Mises-style 2-column grid)
 5. Animated tab open/close with staggered entry
 6. Tab-close UNDO snackbar (4s, restores at index)
@@ -21,7 +21,7 @@ Every user-facing feature in the app, grouped by category. Count is shown in
 21. Desktop toggle 22. New Tab 23. Private Tab 24. Tabs 25. Recent Tabs
 26. Share 27. Find in Page 28. Extensions 29. AdBlock toggle 30. Reader Mode
 31. Screenshot 32. Save as PDF 33. Add to Home 34. Site Info 35. Privacy Guards
-36. UA Spoofer 37. UA Switcher 38. Fullscreen 39. Text Size 40. Night Mode
+36. Custom User Agent 37. UA Switcher 38. Fullscreen 39. Text Size 40. Night Mode
 41. Clear Data 42. About 43. Experiments (click://flags) 44. Version (click://version)
 
 ## AI Premium Assist (10)
@@ -40,7 +40,7 @@ Every user-facing feature in the app, grouped by category. Count is shown in
 55. Ad-blocker with live blocked counter
 56. "Protected · N trackers blocked" badge + privacy strip
 57. Fingerprint protection toggle
-58. Custom header spoofing (per-request headers)
+58. Custom request headers (per-request headers)
 59. Secure DNS toggle
 60. HTTPS-only auto-upgrade
 61. Privacy Guards dashboard screen
@@ -71,7 +71,7 @@ Every user-facing feature in the app, grouped by category. Count is shown in
 ## Userscripts / extensions (17)
 96. Userscript engine (page-level JS injection)
 97. Per-script enable/disable + delete + add custom
-98. Force-dark-pages 99. Video speed controller 100. Enable copy/right-click
+98. Force-dark-pages 99. Video speed controller 100. Copy & right-click restore
 101. Scroll-to-top 102. Reader mode 103. Disable video autoplay
 104. Cosmetic ad hider 105. Image zoom 106. Direct links
 107. JSON formatter 108. Code copy buttons 109. YouTube volume booster
@@ -102,7 +102,7 @@ Every user-facing feature in the app, grouped by category. Count is shown in
 130. Network + Sources tabs
 
 ## Media & tools (7)
-131. In-page video detector/grabber
+131. In-page video detector/downloader
 132. Download manager screen
 133. Text-to-speech engine hooks
 134. Page screenshot

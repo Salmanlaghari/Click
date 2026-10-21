@@ -22,8 +22,8 @@ import kotlin.math.sin
 import kotlin.random.Random
 
 /**
- * Hack Mode signature moment: full-screen 5-second dramatic intro shown when
- * the user switches to Hack Mode (a new V9 engine boot).
+ * Power Mode signature moment: full-screen 5-second dramatic intro shown when
+ * the user switches to Power Mode (a new V9 engine boot).
  *
  * "Revenge type" aggressive feel: blood-red pulse, glitch slices, rising
  * embers, flared markhor horns, and the TEAM PK AI ERA mark.
@@ -39,14 +39,14 @@ import kotlin.random.Random
  * Pure vector/Compose — no video asset, no licensing issues, tiny footprint.
  * Tap anywhere to skip; auto-dismisses after [durationMs].
  *
- * @param title Main headline (default "HACK MODE").
+ * @param title Main headline (default "POWER MODE").
  * @param subtitle Sub-headline (default "V9 ENGINE ENGAGED").
  */
 @Composable
 fun HackIntroOverlay(
     onDone: () -> Unit,
     durationMs: Long = 5000L,
-    title: String = "HACK MODE",
+    title: String = "POWER MODE",
     subtitle: String = "V9 ENGINE ENGAGED",
 ) {
     LaunchedEffect(Unit) {

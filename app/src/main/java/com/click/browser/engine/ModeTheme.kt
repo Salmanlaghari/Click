@@ -6,7 +6,7 @@ import androidx.compose.ui.graphics.Color
  * Per-mode premium theme, adapted from the three approved design references:
  * - SIMPLE: clean white + royal blue
  * - DEVELOPER: dark + electric purple DevTools
- * - HACK: matrix cyber black + neon red/green HUD
+ * - POWER: matrix cyber black + neon red/green HUD
  * - ADVANCE: deep-space teal/cyan "fresh space" identity
  *
  * Every mode has a light and a dark variant; the global Day/Night toggle
@@ -112,7 +112,7 @@ object ModeThemes {
         topBarBg = Color(0xFF000000),
         onTopBar = Color(0xFF5B8CFF),
         glow = Color(0xFF7C6CFF),
-        modePillText = "HACK MODE • ACTIVE"
+        modePillText = "POWER MODE • ACTIVE"
     )
 
     private fun hackLight() = ModeTheme(
@@ -127,7 +127,7 @@ object ModeThemes {
         topBarBg = Color(0xFFFFFFFF),
         onTopBar = Color(0xFFDC2626),
         glow = Color(0xFF16A34A),
-        modePillText = "HACK MODE • ACTIVE"
+        modePillText = "POWER MODE • ACTIVE"
     )
 
     // Click Advance: deep-space teal/cyan "fresh space" identity.

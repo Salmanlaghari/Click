@@ -55,12 +55,12 @@ import com.click.browser.engine.ModeTheme
  * LocationGuard UI — Prince's request: "User apni location hide kar ke surf kar sake".
  *
  * - [LocationPromptDialog]: ASK-mode dialog shown when a website requests
- *   geolocation. Block / Spoof / remember-per-site.
- * - [LocationSettingsSheet]: full settings — global mode, spoof target
+ *   geolocation. Block / Custom / remember-per-site.
+ * - [LocationSettingsSheet]: full settings — global mode, custom target
  *   (presets + custom lat/lng), per-site overrides list.
  *
  * Honest labels throughout: BLOCK = "Websites will see: Denied",
- * SPOOF = "Websites will see: <label>".
+ * CUSTOM = "Websites will see: <label>".
  */
 
 /** ASK-mode dialog: a website wants the device location. */
@@ -86,7 +86,7 @@ fun LocationPromptDialog(
                 )
                 Spacer(Modifier.height(8.dp))
                 Text(
-                    "Block = site sees Denied. Spoof = site sees $spoofLabel.",
+                    "Block = site sees Denied. Custom = site sees $spoofLabel.",
                     fontSize = 12.sp,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
@@ -103,7 +103,7 @@ fun LocationPromptDialog(
         confirmButton = {
             Row {
                 TextButton(onClick = { onBlock(rememberChoice) }) { Text("Block") }
-                TextButton(onClick = { onSpoof(rememberChoice) }) { Text("Spoof") }
+                TextButton(onClick = { onSpoof(rememberChoice) }) { Text("Custom") }
             }
         },
         dismissButton = {
@@ -181,7 +181,7 @@ fun LocationSettingsSheet(
                                 when (m) {
                                     LocationGuard.LocationMode.ASK -> "Ask every time"
                                     LocationGuard.LocationMode.BLOCK -> "Block location"
-                                    LocationGuard.LocationMode.SPOOF -> "Spoof location"
+                                    LocationGuard.LocationMode.SPOOF -> "Custom location"
                                 },
                                 fontWeight = FontWeight.Medium,
                                 color = theme.onSurface
@@ -213,7 +213,7 @@ fun LocationSettingsSheet(
             if (mode == LocationGuard.LocationMode.SPOOF) {
                 item {
                     HorizontalDivider(color = theme.onSurface.copy(alpha = 0.1f))
-                    Text("Spoof location", fontWeight = FontWeight.SemiBold, color = theme.onSurface)
+                    Text("Custom location", fontWeight = FontWeight.SemiBold, color = theme.onSurface)
                     Text(
                         "Websites will see: $spoofLabel ($spoofLat, $spoofLng)",
                         fontSize = 12.sp,
@@ -305,7 +305,7 @@ fun LocationSettingsSheet(
     }
 }
 
-/** Custom lat/lng editor for the spoof target. */
+/** Custom lat/lng editor for the custom location target. */
 @Composable
 private fun CustomSpoofEditor(
     theme: ModeTheme,

@@ -361,7 +361,7 @@ fun InteractiveVideoPlayerDialog(onClose: () -> Unit, initialVideoUrl: String? =
                         Text("Pick a video file")
                     }
                     Text(
-                        "Tip: in Hack mode the floating download button grabs videos detected on the page.",
+                        "Tip: in Power mode the floating download button saves videos detected on the page.",
                         fontSize = 11.sp,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         modifier = Modifier.padding(top = 12.dp)
@@ -778,7 +778,7 @@ fun PrivacyPolicyDialog(onClose: () -> Unit) {
                         "• Your bookmarks, history and download records are stored only on this device (app-private storage). Nothing is uploaded to our servers — we operate no analytics or account backend.\n\n" +
                         "• Pages load through Android's system WebView; network requests go directly to the websites you visit.\n\n" +
                         "• HTTPS-Only mode (when enabled) upgrades http:// links to https:// and blocks mixed content. It is enforced per navigation.\n\n" +
-                        "• The Anti-Detection Guard (Hack mode) spoofs fingerprintable browser values locally with JavaScript (user-agent, screen, WebGL, canvas and audio noise). It does not route traffic through any proxy, VPN or DNS tunnel.\n\n" +
+                        "• The Privacy Guard (Power mode) adjusts fingerprintable browser values locally with JavaScript (user-agent, screen, WebGL, canvas and audio) to reduce tracking. It does not route traffic through any proxy, VPN or DNS tunnel.\n\n" +
                         "• Incognito tabs skip history recording on this device.",
                     fontSize = 12.sp
                 )
@@ -807,7 +807,7 @@ fun AboutAppDialog(onClose: () -> Unit) {
                 Text("UI Design Built By: Prince Laghari", fontSize = 13.sp, fontWeight = FontWeight.ExtraBold)
                 Spacer(modifier = Modifier.height(12.dp))
                 Text(
-                    "A multi-mode Android browser (Simple / Developer / Hack) with ad-blocking, devtools, anti-detection spoofing and a real video downloader.",
+                    "A multi-mode Android browser (Simple / Developer / Power) with ad-blocking, devtools, privacy protection tools and a video downloader.",
                     fontSize = 11.sp,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )

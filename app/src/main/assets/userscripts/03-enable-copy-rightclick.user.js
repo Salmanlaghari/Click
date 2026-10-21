@@ -2,7 +2,7 @@
 // @name         Enable Copy & Right-Click
 // @namespace    https://click.browser/userscripts
 // @version      1.0.0
-// @description  Re-enables text selection, copying and the right-click menu on sites that block them.
+// @description  Accessibility helper: restores text selection, copying and the right-click menu where sites disable them.
 // @match        *://*/*
 // @grant        GM_addStyle
 // @run-at       document-end

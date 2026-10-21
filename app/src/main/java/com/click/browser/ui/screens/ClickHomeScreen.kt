@@ -1328,7 +1328,7 @@ fun CompactBrowseBar(
                                 contentDescription =
                                     if (locationMode == LocationGuard.LocationMode.BLOCK)
                                         "Location blocked for this site"
-                                    else "Location spoofed for this site: $locationSpoofLabel",
+                                    else "Custom location active for this site: $locationSpoofLabel",
                                 tint = Color(0xFF22C55E),
                                 modifier = Modifier.size(16.dp)
                             )

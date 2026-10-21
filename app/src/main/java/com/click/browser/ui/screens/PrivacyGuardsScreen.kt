@@ -46,7 +46,7 @@ import com.click.browser.engine.AppSettings
  * Privacy Guards screen. Every control here does exactly what its label
  * claims — there are no toast-only fakes:
  *
- * - Spoof HTTP Headers: adds YOUR header list to page navigations
+ * - Custom HTTP Headers: adds YOUR header list to page navigations
  *   (loadUrl extraHeaders) and re-fetches page resources with those headers
  *   via shouldInterceptRequest. Hop-by-hop headers can't be overridden.
  * - Fingerprint Protection: injects per-session randomized canvas + audio
@@ -111,10 +111,10 @@ fun PrivacyGuardsScreen(
                 .padding(16.dp),
             verticalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(16.dp)
         ) {
-            // ---- Spoof HTTP Headers ----
+            // ---- Custom HTTP Headers ----
             item {
                 GuardToggleRow(
-                    title = "Spoof HTTP Headers",
+                    title = "Custom HTTP Headers",
                     subtitle = "Adds your header list to page navigations and re-fetches page " +
                         "resources with those headers. Hop-by-hop headers (Host, " +
                         "Content-Length, Connection) cannot be overridden.",
@@ -193,7 +193,7 @@ fun PrivacyGuardsScreen(
                         fontWeight = FontWeight.SemiBold
                     )
                     Text(
-                        "Poisons canvas + AudioContext fingerprint reads with noise " +
+                        "Protects canvas + AudioContext fingerprint reads with noise " +
                             "re-randomized every app launch. Strict adds font/toBlob/audio " +
                             "hooks and stronger noise — may break some sites. " +
                             "Runs in all browsing modes.",
@@ -202,7 +202,7 @@ fun PrivacyGuardsScreen(
                     Spacer(modifier = Modifier.height(4.dp))
                     GuardModeOption(
                         value = "off", title = "Off",
-                        desc = "No fingerprint poisoning",
+                        desc = "No fingerprint protection",
                         selected = fingerprintMode == "off",
                         onSelect = { onFingerprintModeChange("off") }
                     )
@@ -256,7 +256,7 @@ fun PrivacyGuardsScreen(
             }
 
             // ---- WebRTC Leak Guard (opt-in bundled userscript) ----
-            // Userscripts only inject in Developer/Hack modes; in Simple
+            // Userscripts only inject in Developer/Power modes; in Simple
             // mode the toggle is shown disabled so it never implies
             // protection that isn't happening.
             item {
@@ -270,7 +270,7 @@ fun PrivacyGuardsScreen(
                             "system-wide VPN remains the real mitigation. Verify " +
                             "with the leak test below."
                     else
-                        "Userscript extensions only run in Developer and Hack " +
+                        "Userscript extensions only run in Developer and Power " +
                             "modes — switch modes to use this guard. It stays " +
                             "installed but inactive in Simple mode.",
                     checked = webrtcGuardEnabled && webrtcGuardApplies,

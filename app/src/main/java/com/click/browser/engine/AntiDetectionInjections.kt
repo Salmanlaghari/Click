@@ -2,48 +2,48 @@ package com.click.browser.engine
 
 object AntiDetectionInjections {
 
-    // Spoofs navigator/screen/WebGL values AND poisons canvas + AudioContext
-    // fingerprinting surfaces with tiny per-read noise. Injected on page finish
-    // in HACK mode when the Anti-Detection Guard is enabled.
+    // Adjusts navigator/screen/WebGL values and adds tiny per-read noise to canvas
+    // + AudioContext fingerprinting surfaces to reduce tracking. Injected on page
+    // finish in POWER mode when the Privacy Guard is enabled.
     const val INJECT_SPOOF_LAYERS = """
         (function() {
             if (window.antiDetectionInjected) return;
             window.antiDetectionInjected = true;
 
-            // 1. User Agent Spoofing (Win11 Desktop Chrome)
+            // 1. User Agent (Win11 Desktop Chrome)
             const fakeUA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36";
             Object.defineProperty(navigator, 'userAgent', { get: () => fakeUA });
             Object.defineProperty(navigator, 'appVersion', { get: () => fakeUA });
 
-            // 2. Platform Spoofing
+            // 2. Platform
             Object.defineProperty(navigator, 'platform', { get: () => 'Win32' });
 
-            // 3. Touch Support Spoofing
+            // 3. Touch Support
             Object.defineProperty(navigator, 'maxTouchPoints', { get: () => 0 });
             Object.defineProperty(navigator, 'msMaxTouchPoints', { get: () => 0 });
             // Remove ontouchstart/ontouchend
             delete window.ontouchstart;
             delete window.ontouchend;
 
-            // 4. Screen Size Spoofing (1920x1080)
+            // 4. Screen Size (1920x1080)
             Object.defineProperty(window.screen, 'width', { get: () => 1920 });
             Object.defineProperty(window.screen, 'height', { get: () => 1080 });
             Object.defineProperty(window.screen, 'availWidth', { get: () => 1920 });
             Object.defineProperty(window.screen, 'availHeight', { get: () => 1040 });
 
-            // 5. Device Pixel Ratio Spoofing
+            // 5. Device Pixel Ratio
             Object.defineProperty(window, 'devicePixelRatio', { get: () => 1 });
 
-            // 6. Hardware Concurrency Spoofing
+            // 6. Hardware Concurrency
             Object.defineProperty(navigator, 'hardwareConcurrency', { get: () => 8 });
 
-            // 7. Pointer Type / Mouse-only detection spoofing
+            // 7. Pointer Type
             if (window.PointerEvent) {
                 const originalGetParameter = WebGLRenderingContext.prototype.getParameter;
                 // Add hooks if needed
             }
 
-            // 8. WebGL Renderer Spoofing (Desktop GPU)
+            // 8. WebGL Renderer (Desktop GPU)
             const getParameterProxy = function(parameter) {
                 // UNMASKED_VENDOR_WEBGL = 37445, UNMASKED_RENDERER_WEBGL = 37446
                 if (parameter === 37445) {
@@ -60,18 +60,18 @@ object AntiDetectionInjections {
                 WebGL2RenderingContext.prototype.getParameter = getParameterProxy;
             }
 
-            // 9. Plugins List Spoofing
+            // 9. Plugins List
             const fakePlugins = [
                 { name: "PDF Viewer", filename: "internal-pdf-viewer", description: "Portable Document Format" },
                 { name: "Chrome PDF Viewer", filename: "internal-pdf-viewer", description: "Portable Document Format" }
             ];
             Object.defineProperty(navigator, 'plugins', { get: () => fakePlugins });
 
-            // 10. Language Spoofing
+            // 10. Language
             Object.defineProperty(navigator, 'language', { get: () => 'en-US' });
             Object.defineProperty(navigator, 'languages', { get: () => ['en-US', 'en'] });
 
-            // 11. Canvas fingerprint noise: poison getImageData / toDataURL reads
+            // 11. Canvas fingerprint protection: small noise on getImageData / toDataURL reads
             // with imperceptible per-pixel noise so canvas hashes are unstable.
             (function() {
                 function addNoise(imageData) {

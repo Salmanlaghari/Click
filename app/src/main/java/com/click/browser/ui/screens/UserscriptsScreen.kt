@@ -47,7 +47,7 @@ import androidx.compose.ui.unit.sp
 import com.click.browser.engine.UserscriptInfo
 
 /**
- * Userscript Extensions management UI (HACK mode only).
+ * Userscript Extensions management UI (Power mode only).
  *
  * Honest framing, stated on-screen: these are Tampermonkey-style
  * `.user.js` userscripts — NOT Chrome Web Store / .crx extensions, which
@@ -121,7 +121,7 @@ fun UserscriptsScreen(
                         Text(
                             "These are userscripts — not Chrome Web Store extensions. " +
                                 "Android WebView cannot run .crx files. Scripts inject on " +
-                                "matching pages in HACK mode. GM_setValue / GM_getValue / " +
+                                "matching pages in POWER mode. GM_setValue / GM_getValue / " +
                                 "GM_addStyle / GM_log are supported.",
                             fontSize = 12.sp,
                             color = Color.Gray
