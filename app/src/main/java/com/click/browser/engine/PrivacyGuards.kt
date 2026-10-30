@@ -10,20 +10,15 @@ import java.net.InetAddress
  * Real privacy-guard building blocks.
  *
  * HONESTY NOTES (also documented in the PR description):
- * - Secure DNS: Android WebView page loads ALWAYS use the system DNS
- *   resolver — there is no WebView API to change that. The DoH client here
- *   is used for the APP's own network requests (AI chat, header re-fetch).
+ * - Secure DNS: Android WebView page loads use the system DNS resolver —
+ *   there is no WebView API to change that. This DoH helper is for the app's
+ *   own network requests only; it does not change website traffic.
  * - WebRTC: WebView exposes NO API to disable WebRTC, and STUN runs over
  *   UDP so shouldInterceptRequest cannot block it. The strongest real thing
  *   the app can do is run a genuine STUN-based leak TEST in the current tab
  *   and show the user exactly which IPs a site could see (see
  *   WEBRTC_LEAK_TEST_JS + WebRtcTestBridge). A system-wide VPN remains the
  *   real mitigation; the UI says so plainly.
- * - Header spoofing: applied to navigations via loadUrl(url, extraHeaders)
- *   and to subresources by re-fetching them with OkHttp + the custom headers
- *   in shouldInterceptRequest. Hop-by-hop headers (Host, Content-Length,
- *   Connection…) cannot be overridden — OkHttp/WebView will refuse or
- *   replace them; the UI warns about this.
  */
 object PrivacyGuards {
 

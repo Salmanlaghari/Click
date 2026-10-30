@@ -14,42 +14,24 @@ import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
 
 /**
- * V9 — "1 Browser, 4 Engines".
- *
- * Prince's signature feature: one Click Browser app that behaves as four
- * completely separate browsers (Simple / Developer / Hack / Advance). Each
- * engine has:
- *  - its own WebView data directory (separate cookies, cache, localStorage,
- *    history, permissions) via [WebView.setDataDirectorySuffix]
- *  - its own app-data profile (bookmarks, history, passwords, userscripts —
- *    see [profileDataStore]; Advance starts empty by design)
- *  - its own User-Agent + JS fingerprint profile, so websites (e.g. Google)
- *    see four different browsers/devices
- *
- * HONEST LIMIT: the renderer in every mode is the system WebView (Chromium).
- * "Advance" is an isolated, performance-tuned profile — not a new engine
- * technology. OS-level identifiers (ANDROID_ID, ro.build.fingerprint)
- * cannot be spoofed per-mode without root. Websites identify browsers via
- * cookies + User-Agent + JS fingerprint — all three ARE fully distinct
- * per engine here, which achieves the goal.
- *
- * Because the data-directory suffix is process-wide and can only be set once
- * before any WebView exists, switching engines restarts the app process
- * ([restartForEngineSwitch]). The suffix is applied in [ClickApplication.onCreate].
+ * Manages browser-data profiles backed by Android System WebView.
+ * Each profile has a separate WebView data directory for cookies/cache. Advance
+ * also has separate app-level browsing data; Simple, Developer and Power share
+ * app-level data. Profiles do not substitute the device's User-Agent or fingerprint.
+ * Because WebView's data-directory suffix is process-wide and can only be set
+ * before any WebView exists, switching profiles restarts the app process.
  */
 object V9Engine {
 
     private const val TAG = "V9Engine"
     const val VERSION = "V9"
-    const val BRAND_LINE = "V9 · 1 Browser · 4 Engines"
+    const val BRAND_LINE = "V9 · 1 Browser · 4 Profiles"
     const val TAGLINE = "First time in the World We Present A Superior Testing Future"
 
-    /** The engine this process booted with (set in [applyDataDirectorySuffix]).
+    /** The profile this process booted with (set in [applyDataDirectorySuffix]).
      *
-     * SINGLE SOURCE OF TRUTH for the process's engine identity. Every
-     * profile decision — the WebView data-directory suffix, [profileDataStore],
-     * [UserscriptManager]'s script folder — keys off this value, so they can
-     * never disagree with each other. It is pinned once in
+     * SINGLE SOURCE OF TRUTH for the active browser-data profile. The WebView
+     * data-directory suffix and [profileDataStore] use this value. It is pinned once in
      * [ClickApplication.onCreate] and never changes afterwards: a mode switch
      * restarts the process rather than mutating it (see [restartForEngineSwitch];
      * the in-place fallback is a documented degraded mode with no isolation).
@@ -61,7 +43,7 @@ object V9Engine {
     /**
      * True once [applyDataDirectorySuffix] has run (called first thing in
      * [ClickApplication.onCreate]). Code that resolves per-profile state
-     * ([profileDataStore], [UserscriptManager.dir]) must only run after this
+     * ([profileDataStore]) must only run after this
      * is true; they fail fast otherwise instead of silently touching the
      * wrong profile.
      */
@@ -73,115 +55,17 @@ object V9Engine {
 
     data class EngineProfile(
         val mode: BrowserMode,
-        val userAgent: String,
-        val platform: String,
-        val vendor: String,
-        val languages: List<String>,
-        val hardwareConcurrency: Int,
-        val deviceMemory: Int,
-        val screenW: Int,
-        val screenH: Int,
-        val devicePixelRatio: Double,
-        val maxTouchPoints: Int,
-        val webglVendor: String,
-        val webglRenderer: String,
-        /** Seed for canvas noise: stable within an engine, distinct across engines. */
-        val canvasSeed: Long,
-        /** Human-readable device identity shown in the V9 Shield screen. */
         val deviceLabel: String,
-        /** Spoofed timezone (IANA name) — distinct per engine. */
-        val timezone: String,
-        /** Spoofed timezone offset in minutes (for Date.getTimezoneOffset). */
-        val timezoneOffsetMinutes: Int,
     )
 
-    fun profileFor(mode: BrowserMode): EngineProfile = when (mode) {
-        BrowserMode.SIMPLE -> EngineProfile(
-            mode = mode,
-            userAgent = ModeManager.UA_SIMPLE,
-            platform = "Linux armv8l",
-            vendor = "Google Inc.",
-            languages = listOf("en-US", "en"),
-            hardwareConcurrency = 8,
-            deviceMemory = 8,
-            screenW = 1080,
-            screenH = 2400,
-            devicePixelRatio = 2.625,
-            maxTouchPoints = 5,
-            webglVendor = "Google Inc. (ARM)",
-            webglRenderer = "ANGLE (ARM, Mali-G715 MC7, OpenGL ES 3.2)",
-            canvasSeed = 5101151L,
-            deviceLabel = "Pixel 8 · Android 14 · Chrome Mobile",
-            timezone = "America/New_York",
-            timezoneOffsetMinutes = 300,
-        )
-        BrowserMode.DEVELOPER -> EngineProfile(
-            mode = mode,
-            userAgent = ModeManager.UA_DEVELOPER,
-            platform = "Linux armv8l",
-            vendor = "Google Inc.",
-            languages = listOf("en-GB", "en"),
-            hardwareConcurrency = 8,
-            deviceMemory = 12,
-            screenW = 1080,
-            screenH = 2340,
-            devicePixelRatio = 3.0,
-            maxTouchPoints = 5,
-            webglVendor = "Google Inc. (Qualcomm)",
-            webglRenderer = "ANGLE (Qualcomm, Adreno 750, OpenGL ES 3.2)",
-            canvasSeed = 90231117L,
-            deviceLabel = "Galaxy S24 · Android 14 · Chrome Mobile",
-            timezone = "Europe/London",
-            timezoneOffsetMinutes = 0,
-        )
-        BrowserMode.HACK -> EngineProfile(
-            mode = mode,
-            userAgent = ModeManager.UA_HACK,
-            platform = "Win32",
-            vendor = "Google Inc.",
-            languages = listOf("en-US", "en"),
-            hardwareConcurrency = 16,
-            deviceMemory = 16,
-            screenW = 1920,
-            screenH = 1080,
-            devicePixelRatio = 1.0,
-            maxTouchPoints = 0,
-            webglVendor = "Google Inc. (NVIDIA)",
-            webglRenderer = "ANGLE (NVIDIA, NVIDIA GeForce RTX 4070 Ti/PCIe/SSE2, OpenGL 4.5)",
-            canvasSeed = 90031991L,
-            deviceLabel = "Windows 11 · Chrome Desktop",
-            timezone = "America/Los_Angeles",
-            // UTC-8 (standard time); getTimezoneOffset() counts minutes west of UTC.
-            timezoneOffsetMinutes = 480,
-        )
-        // Click Advance: desktop-class like Hack, but a DISTINCT identity
-        // (newer Chrome build, different GPU/timezone/seed) so sites see a
-        // fourth, separate browser. Performance-tuned profile — the renderer
-        // is still the system WebView; this is isolation + tuning, not a new
-        // engine.
-        BrowserMode.ADVANCED -> EngineProfile(
-            mode = mode,
-            userAgent = ModeManager.UA_ADVANCED,
-            platform = "Win32",
-            vendor = "Google Inc.",
-            languages = listOf("en-US", "en"),
-            hardwareConcurrency = 12,
-            deviceMemory = 16,
-            screenW = 1920,
-            screenH = 1080,
-            devicePixelRatio = 1.0,
-            maxTouchPoints = 0,
-            webglVendor = "Google Inc. (AMD)",
-            webglRenderer = "ANGLE (AMD, AMD Radeon RX 7800 XT Direct3D11 vs_5_0 ps_5_0, D3D11)",
-            canvasSeed = 77120408L,
-            deviceLabel = "Click Advance · Desktop-class isolated profile",
-            timezone = "Asia/Dubai",
-            // Sign convention: JS Date.getTimezoneOffset() returns minutes WEST of
-            // UTC, so UTC+4 (Asia/Dubai) = -240. (America/Los_Angeles above is
-            // UTC-8 in standard time = +480 for the same reason.)
-            timezoneOffsetMinutes = -240,
-        )
-    }
+    fun profileFor(mode: BrowserMode): EngineProfile = EngineProfile(
+        mode = mode,
+        deviceLabel = if (mode == BrowserMode.ADVANCED) {
+            "Android System WebView · separate cookies, cache and app data"
+        } else {
+            "Android System WebView · separate cookies/cache; shared app data"
+        }
+    )
 
     fun suffixFor(mode: BrowserMode): String = "v9_" + mode.name.lowercase()
 
@@ -202,7 +86,7 @@ object V9Engine {
             }
             bootMode = mode
             WebView.setDataDirectorySuffix(suffixFor(mode))
-            Log.i(TAG, "V9 engine online: ${suffixFor(mode)} (${profileFor(mode).deviceLabel})")
+            Log.i(TAG, "V9 browser profile online: ${suffixFor(mode)} (${profileFor(mode).deviceLabel})")
         } catch (t: Throwable) {
             Log.e(TAG, "V9 data-directory suffix failed; engines share storage", t)
             // Fall back consistently: the WebView is now on SHARED storage, so
@@ -217,11 +101,11 @@ object V9Engine {
         }
     }
 
-    /** True when switching to [mode] requires a process restart (engine change). */
+    /** True when switching to [mode] requires a process restart (profile change). */
     fun needsRestart(mode: BrowserMode): Boolean = mode != bootMode
 
     /**
-     * Persists [mode] then restarts the app process so the new engine's data
+     * Persists [mode] then restarts the app process so the new profile's data
      * directory takes effect. setMode() is suspend and returns after the
      * DataStore write completes, so the new mode is durable before we die.
      *
@@ -238,8 +122,8 @@ object V9Engine {
      *     trick; needs no SCHEDULE_EXACT_ALARM permission) with a 1s delay.
      *  3. Also starts the relaunch intent directly as a backup before dying.
      *
-     * @param hackIntro when true, the relaunched process shows the Hack Mode
-     *   Markhor intro animation once (see HackIntroOverlay).
+     * @param hackIntro legacy flag name; when true, the relaunched process shows
+     *   the Power Mode Markhor intro animation once (see HackIntroOverlay).
      * @param advanceIntro when true, the relaunched process shows the Advance
      *   Mode teal intro animation once (see AdvanceIntroOverlay).
      * @return true if a restart was triggered; false if we stayed alive
@@ -338,7 +222,7 @@ object V9Engine {
         return true // unreachable
     }
 
-    /** Intent extra: show the Hack Mode intro animation on launch. */
+    /** Legacy intent extra: show the Power Mode intro animation on launch. */
     const val EXTRA_HACK_INTRO = "v9_hack_intro"
 
     /** Intent extra: show the Advance Mode intro animation on launch. */
@@ -347,11 +231,4 @@ object V9Engine {
     private const val RESTART_REQUEST_CODE = 9001
     private const val RESTART_DELAY_MS = 1000L
 
-    /**
-     * Per-mode JS identity spoofing removed for Play policy compliance;
-     * modes differ by UI and standard WebSettings only.
-     */
-    fun fingerprintJs(mode: BrowserMode): String {
-        return ""
-    }
 }

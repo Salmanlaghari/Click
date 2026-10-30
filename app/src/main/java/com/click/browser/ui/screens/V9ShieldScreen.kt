@@ -33,7 +33,7 @@ import kotlinx.coroutines.launch
 
 /**
  * V9 Shield — built-in VPN (encrypted DNS + DNS threat blocking), DNS
- * provider settings, and the 3-engine identity overview.
+ * provider settings, and an overview of the browser-data profiles.
  *
  * Includes the responsible-use notice: V9 Shield is a privacy tool, not a
  * tool for illegal activity. Click Browser applies no political censorship —
@@ -201,11 +201,17 @@ fun V9ShieldScreen(onClose: () -> Unit) {
             )
 
             Spacer(Modifier.height(20.dp))
-            Text("V9 Engines — 1 Browser, 4 Engines", fontWeight = FontWeight.Bold, color = Color.White, fontSize = 14.sp)
+            Text("Browser profiles", fontWeight = FontWeight.Bold, color = Color.White, fontSize = 14.sp)
             Spacer(Modifier.height(8.dp))
             BrowserMode.values().forEach { mode ->
                 val p = V9Engine.profileFor(mode)
                 val isBoot = mode == V9Engine.bootMode
+                val profileName = when (mode) {
+                    BrowserMode.SIMPLE -> "Simple"
+                    BrowserMode.DEVELOPER -> "Developer"
+                    BrowserMode.HACK -> "Power"
+                    BrowserMode.ADVANCED -> "Advance"
+                }
                 Card(
                     colors = CardDefaults.cardColors(
                         containerColor = if (isBoot) Color(0xFF1B2340) else Color(0xFF14141F)
@@ -221,7 +227,7 @@ fun V9ShieldScreen(onClose: () -> Unit) {
                     ) {
                         Column(Modifier.weight(1f)) {
                             Text(
-                                mode.name.lowercase().replaceFirstChar { it.uppercase() } + " Engine",
+                                "$profileName profile",
                                 fontWeight = FontWeight.Bold, color = Color.White, fontSize = 13.sp
                             )
                             Text(p.deviceLabel, fontSize = 11.sp, color = Color(0xFF8E8EA3))

@@ -28,8 +28,8 @@ data class SavedTab(
  * - On the next launch, if the flag says the previous run was NOT clean
  *   and a snapshot exists, the UI offers "Restore N tabs?".
  *
- * ISOLATION (Prince's requirement): everything is keyed per [BrowserMode] —
- * a snapshot saved in Simple is never offered in Hack, and Click Advance
+ * SESSION ISOLATION (Prince's requirement): snapshots are keyed per [BrowserMode] —
+ * a snapshot saved in Simple is never offered in Power, and Click Advance
  * (its own DataStore) can never see another mode's session. The store is
  * chosen with [profileDataStoreFor], which — unlike [profileDataStore] —
  * takes the mode explicitly and needs no boot-pinning, so this can run

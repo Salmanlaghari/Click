@@ -98,7 +98,6 @@ private fun FlagsScreen(
     onFlagToggle: (ExperimentalFlags.Meta, Boolean) -> Unit,
     onStringFlag: (androidx.datastore.preferences.core.Preferences.Key<String>, String) -> Unit,
 ) {
-    var uaText by remember(flags.customUserAgent) { mutableStateOf(flags.customUserAgent) }
     var homeText by remember(flags.customHomepage) { mutableStateOf(flags.customHomepage) }
     Column(
         modifier = Modifier
@@ -144,28 +143,6 @@ private fun FlagsScreen(
                 }
             }
         }
-        // String flags: custom UA + custom homepage.
-        Card(
-            colors = CardDefaults.cardColors(containerColor = theme.surface),
-            shape = RoundedCornerShape(14.dp),
-            modifier = Modifier.fillMaxWidth()
-        ) {
-            Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                Text("Custom User-Agent", color = theme.onSurface, fontWeight = FontWeight.Bold, fontSize = 14.sp)
-                Text("Empty = mode default. Applied to every page load.",
-                    color = theme.onSurface.copy(alpha = 0.6f), fontSize = 12.sp)
-                OutlinedTextField(
-                    value = uaText,
-                    onValueChange = {
-                        uaText = it
-                        onStringFlag(ExperimentalFlags.K_CUSTOM_UA, it)
-                    },
-                    placeholder = { Text("e.g. Mozilla/5.0 …") },
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth()
-                )
-            }
-        }
         Card(
             colors = CardDefaults.cardColors(containerColor = theme.surface),
             shape = RoundedCornerShape(14.dp),
@@ -206,10 +183,10 @@ private fun VersionScreen(
         verticalArrangement = Arrangement.spacedBy(10.dp)
     ) {
         Text("⚡ Click Browser", color = theme.onBackground, fontSize = 24.sp, fontWeight = FontWeight.ExtraBold)
-        Text("V9 System — 1 Browser, 4 Engines", color = theme.primary, fontSize = 15.sp, fontWeight = FontWeight.Bold)
+        Text("V9 System — 1 Browser, 4 Profiles", color = theme.primary, fontSize = 15.sp, fontWeight = FontWeight.Bold)
         VersionRow(theme, "Version", "$versionName ($versionCode)")
-        VersionRow(theme, "Engines", "Simple · Developer · Power (isolated)")
-        VersionRow(theme, "Features", "${ClickInternalPages.FEATURE_COUNT} built-in")
+        VersionRow(theme, "Profiles", "Simple · Developer · Power · Advance (Android System WebView)")
+        VersionRow(theme, "Browser", "Android System WebView")
         VersionRow(theme, "AI", "Premium Assist (Groq)")
         Spacer(Modifier.height(8.dp))
         Text("Internal pages", color = theme.onBackground, fontWeight = FontWeight.Bold, fontSize = 16.sp)

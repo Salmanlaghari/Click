@@ -23,16 +23,13 @@ object AppSettings {
     val AI_MODEL = stringPreferencesKey("ai_model")
     val AI_REPORTS_JSON = stringPreferencesKey("ai_reports_json") // flagged AI responses (Play policy)
 
-    val CUSTOM_HEADERS_JSON = stringPreferencesKey("custom_headers_json")
-    val HEADER_SPOOF_ENABLED = booleanPreferencesKey("header_spoof_enabled")
-    val FINGERPRINT_PROTECTION = booleanPreferencesKey("fingerprint_protection")
     val SECURE_DNS_ENABLED = booleanPreferencesKey("secure_dns_enabled")
     // Playlist-adjacent: let web-page audio keep playing when the app is
     // backgrounded. Default OFF (standard browser behavior = pause).
     // Generic media setting — never marketed for any specific site/service.
     val BACKGROUND_AUDIO_ENABLED = booleanPreferencesKey("background_audio_enabled")
 
-    // ---- Brave-hardening: HTTPS Strict / Fingerprint Strict / DNT+GPC ----
+    // ---- HTTPS Strict / DNT+GPC ----
     // HTTPS mode: "off" | "standard" | "strict". Default "standard" matches
     // the historical HTTPS-Only default-on behavior (upgrade http -> https).
     // "strict" BLOCKS plain-http navigations instead of upgrading them.
@@ -40,11 +37,6 @@ object AppSettings {
     // HTTPS-Strict per-site exceptions: JSON array of host strings that are
     // allowed over plain http even in Strict mode.
     val HTTPS_STRICT_EXCEPTIONS = stringPreferencesKey("https_strict_exceptions")
-    // Fingerprint mode: "off" | "standard" | "strict". Default "standard"
-    // (canvas + AudioContext noise, re-randomized every launch). "strict"
-    // adds font-measurement jitter, toBlob/getChannelData hooks and
-    // stronger noise — may break some sites, the UI says so.
-    val FINGERPRINT_MODE = stringPreferencesKey("fingerprint_mode")
     // Do-Not-Track + Global Privacy Control. OPT-IN, default OFF.
     // Honest labeling: these are voluntary signals — most sites ignore
     // them; they are requests, not enforcement.
@@ -145,20 +137,9 @@ object AppSettings {
     val FORGETFUL_BROWSING = booleanPreferencesKey("forgetful_browsing")
     /** Hosts exempted from Forgetful Browsing (kept data). */
     val FORGETFUL_BROWSING_EXCEPTIONS = stringSetPreferencesKey("forgetful_browsing_exceptions")
-    /** Auto-hide cookie-consent / GDPR banners. Default ON. */
-    val BLOCK_CONSENT_BANNERS = booleanPreferencesKey("block_consent_banners")
-
     // Default-browser prompt: true once the one-time "Make Click your
     // default browser?" prompt has been shown (or acted on), so it never nags.
     val DEFAULT_BROWSER_PROMPT_SHOWN = booleanPreferencesKey("default_browser_prompt_shown")
-
-    // LocationGuard: hide/spoof browser geolocation.
-    // LOCATION_MODE: "ask" | "block" | "spoof" (default "ask").
-    val LOCATION_MODE = stringPreferencesKey("location_mode")
-    // Spoof target stored as strings (DataStore has no double key).
-    val LOCATION_SPOOF_LAT = stringPreferencesKey("location_spoof_lat")
-    val LOCATION_SPOOF_LNG = stringPreferencesKey("location_spoof_lng")
-    val LOCATION_SPOOF_LABEL = stringPreferencesKey("location_spoof_label")
 
     // ---- Background news notifications (WhatsApp-style alerts) ----
     // Opt-in, default OFF (Play-policy friendly): the user enables them in
@@ -175,36 +156,11 @@ object AppSettings {
     /** Wall-clock ms of the last successful news check. */
     val NEWS_LAST_CHECK_MS = longPreferencesKey("news_last_check_ms")
 
-    data class CustomHeader(val name: String, val value: String)
-
     /** Auto-detect provider from the key prefix. `gsk_` -> Groq, `sk-or-` -> OpenRouter. */
     fun detectProvider(apiKey: String): String = when {
         apiKey.startsWith("sk-or-") -> "openrouter"
         apiKey.startsWith("gsk_") -> "groq"
         else -> "groq"
-    }
-
-    fun parseHeaders(json: String?): List<CustomHeader> {
-        if (json.isNullOrBlank()) return emptyList()
-        return try {
-            val arr = JSONArray(json)
-            (0 until arr.length()).mapNotNull { i ->
-                val o = arr.optJSONObject(i) ?: return@mapNotNull null
-                val name = o.optString("name").trim()
-                val value = o.optString("value")
-                if (name.isEmpty()) null else CustomHeader(name, value)
-            }
-        } catch (_: Exception) {
-            emptyList()
-        }
-    }
-
-    fun headersToJson(headers: List<CustomHeader>): String {
-        val arr = JSONArray()
-        headers.forEach { h ->
-            arr.put(JSONObject().put("name", h.name).put("value", h.value))
-        }
-        return arr.toString()
     }
 
     /** Parses the HTTPS-Strict exception host list (JSON array of strings). */

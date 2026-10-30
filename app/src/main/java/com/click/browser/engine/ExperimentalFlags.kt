@@ -33,7 +33,6 @@ data class ExperimentalFlags(
     val mixedContentAllow: Boolean = false,
     val cookieAccept: Boolean = true,
     val overscrollGlow: Boolean = true,
-    val customUserAgent: String = "",
     val customHomepage: String = "",
 ) {
     companion object {
@@ -57,7 +56,6 @@ data class ExperimentalFlags(
         val K_MIXED_CONTENT_ALLOW = booleanPreferencesKey("flag_mixed_content_allow")
         val K_COOKIE_ACCEPT = booleanPreferencesKey("flag_cookie_accept")
         val K_OVERSCROLL_GLOW = booleanPreferencesKey("flag_overscroll_glow")
-        val K_CUSTOM_UA = stringPreferencesKey("flag_custom_ua")
         val K_CUSTOM_HOMEPAGE = stringPreferencesKey("flag_custom_homepage")
 
         fun load(prefs: Preferences): ExperimentalFlags = ExperimentalFlags(
@@ -81,15 +79,14 @@ data class ExperimentalFlags(
             mixedContentAllow = prefs[K_MIXED_CONTENT_ALLOW] == true,
             cookieAccept = prefs[K_COOKIE_ACCEPT] != false,
             overscrollGlow = prefs[K_OVERSCROLL_GLOW] != false,
-            customUserAgent = prefs[K_CUSTOM_UA].orEmpty(),
             customHomepage = prefs[K_CUSTOM_HOMEPAGE].orEmpty(),
         )
     }
 
     /**
      * Metadata for the flags lab UI — BOOLEAN flags only.
-     * The two string flags ([K_CUSTOM_UA], [K_CUSTOM_HOMEPAGE]) are intentionally
-     * NOT in this enum; they use the separate [ClickPageHost.onStringFlag] callback
+     * The custom-homepage string setting is intentionally NOT in this enum;
+     * it uses the separate [ClickPageHost.onStringFlag] callback
      * which is typed `(Preferences.Key<String>, String) -> Unit`. This keeps the
      * boolean/string key types from ever mixing (the enum's [key] is always
      * `Key<Boolean>`, the string callback's key is always `Key<String>`).

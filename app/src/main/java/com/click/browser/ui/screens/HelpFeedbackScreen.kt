@@ -35,19 +35,19 @@ private data class Faq(val q: String, val a: String)
 private val FAQS = listOf(
     Faq(
         "What are the 4 modes (Simple / Developer / Power / Advance)?",
-        "Click is 1 browser with 4 isolated engines. Simple is the everyday " +
+        "Click is one browser with four data profiles. Simple is the everyday " +
             "light mode (Google search). Developer is the dark-glass mode for " +
-            "coders (DuckDuckGo search, dev tools). Power is the OLED-neon " +
-            "desktop-class mode (Brave search, desktop sites). Advance is a " +
+            "coders (DuckDuckGo search, dev tools). Power includes additional " +
+            "browser controls and desktop-layout browsing. Advance is a " +
             "fresh isolated space — its own cookies, history, bookmarks, " +
-            "passwords and userscripts that start empty, so nothing carries " +
-            "over from the other modes. Each engine has separate cookies, " +
-            "cache, and presents a different device identity to websites."
+            "passwords that start empty, so nothing carries over from the " +
+            "other modes. All profiles use Android System WebView and do not " +
+            "substitute device identity."
     ),
     Faq(
         "How do I switch modes?",
         "Open the menu (☰) and tap Simple, Developer, Power, or Advance. The app " +
-            "restarts into the new engine — your logins stay separate per mode."
+            "restarts into that browser profile — your logins stay separate per mode."
     ),
     Faq(
         "What is V9 Shield?",
@@ -76,9 +76,10 @@ private val FAQS = listOf(
     ),
     Faq(
         "Is my browsing private?",
-        "Each mode isolates cookies/cache/storage. Fingerprint protection " +
-            "poisons canvas and audio fingerprinting. Secure DNS encrypts " +
-            "lookups. Nothing is uploaded — AI prompts go to the AI provider " +
+        "Modes keep separate local browser data, but all use Android System " +
+            "WebView and sites may still identify the browser. Secure DNS, when " +
+            "enabled, applies to AI chat requests only. Page requests go directly " +
+            "to the sites you visit; AI prompts go to the selected AI provider " +
             "only when you use AI chat."
     ),
 )

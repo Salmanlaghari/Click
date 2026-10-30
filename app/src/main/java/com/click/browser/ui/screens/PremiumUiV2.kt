@@ -70,20 +70,20 @@ import com.click.browser.engine.ModeTheme
  *   address bar, tab-count badge, ⋮ browser menu. Replaces the old 2-row
  *   BrowserTopBar + separate TabStrip.
  * - [FeatureMenuFabOverlay]: always-visible bottom-left circular menu button.
- *   Expands an animated 32-feature grid panel (scale + fade, spring feel).
- *   Mode chips (Simple / Developer / Hack) sit above the grid.
+ *   Expands an animated feature grid panel (scale + fade, spring feel).
+ *   Mode chips (Simple / Developer / Power) sit above the grid.
  */
 
 // ---------------------------------------------------------------------------
-// 32-feature catalogue
+// Feature catalogue
 // ---------------------------------------------------------------------------
 
 enum class FeatureId {
     HISTORY, SETTINGS, STORAGE, PASSWORDS, COOKIES, TOOLS, DEVTOOLS,
     DOWNLOADS, BOOKMARKS, AI_CHAT, TRANSLATE, DESKTOP, NEW_TAB,
-    PRIVATE_TAB, TABS, RECENT_TABS, SHARE, FIND_IN_PAGE, EXTENSIONS,
+    PRIVATE_TAB, TABS, RECENT_TABS, SHARE, FIND_IN_PAGE,
     ADBLOCK, READER, SCREENSHOT, SAVE_PDF, ADD_HOME, SITE_INFO,
-    PRIVACY_GUARDS, UA_SPOOFER, UA_SWITCHER, FULLSCREEN, TEXT_SIZE,
+    PRIVACY_GUARDS, FULLSCREEN, TEXT_SIZE,
     NIGHT_MODE, CLEAR_DATA, ABOUT, V9_SHIELD, FLAGS, VERSION, HELP_FEEDBACK, GAMES
 }
 
@@ -112,7 +112,6 @@ val ALL_FEATURES: List<FeatureDef> = listOf(
     FeatureDef(FeatureId.RECENT_TABS, "Recent", Icons.Default.Restore),
     FeatureDef(FeatureId.SHARE, "Share", Icons.Default.Share),
     FeatureDef(FeatureId.FIND_IN_PAGE, "Find", Icons.Default.Search),
-    FeatureDef(FeatureId.EXTENSIONS, "Extensions", Icons.Default.Extension),
     FeatureDef(FeatureId.ADBLOCK, "AdBlock", Icons.Default.Block),
     FeatureDef(FeatureId.READER, "Reader", Icons.Default.MenuBook),
     FeatureDef(FeatureId.SCREENSHOT, "Shot", Icons.Default.PhotoCamera),
@@ -120,8 +119,6 @@ val ALL_FEATURES: List<FeatureDef> = listOf(
     FeatureDef(FeatureId.ADD_HOME, "Add Home", Icons.Default.Home),
     FeatureDef(FeatureId.SITE_INFO, "Site Info", Icons.Default.Info),
     FeatureDef(FeatureId.PRIVACY_GUARDS, "Guards", Icons.Default.Shield),
-    FeatureDef(FeatureId.UA_SPOOFER, "Spoofer", Icons.Default.Fingerprint),
-    FeatureDef(FeatureId.UA_SWITCHER, "UA Switch", Icons.Default.SwapHoriz),
     FeatureDef(FeatureId.FULLSCREEN, "Fullscreen", Icons.Default.Fullscreen),
     FeatureDef(FeatureId.TEXT_SIZE, "Text Size", Icons.Default.TextFields),
     FeatureDef(FeatureId.NIGHT_MODE, "Night", Icons.Default.DarkMode),

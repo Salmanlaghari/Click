@@ -43,7 +43,7 @@ import com.click.browser.engine.ModeTheme
  * - Image: Save image (Downloads) / Copy image URL / Share image / Open image in new tab
  * - Linked image (anchor wrapping an <img>): both sections are shown.
  *
- * Works in all browser modes (Simple / Developer / Hack / Advance) because the
+ * Works in all browser profiles (Simple / Developer / Power / Advance) because the
  * listener is attached at WebView creation in MainActivity.
  */
 @OptIn(ExperimentalMaterial3Api::class)

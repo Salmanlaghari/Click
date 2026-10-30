@@ -1,0 +1,34 @@
+# Google Publisher Policy Remediation Checklist
+
+**Status:** Source and repository metadata have been updated. The local Android build could not start compilation because `app/libs/libbox.aar` is absent; the repository's main GitHub Actions workflow builds that dependency from pinned official sing-box source before the app build. CI and a released-app review are still required.
+
+## Implemented in this repository
+
+- Removed the userscript engine, extension screen, bundled page-modification scripts, consent-banner suppression and their execution paths. Upgrade cleanup deletes previously stored scripts and related preferences.
+- Removed fake geolocation and all per-site location grants. Click now denies website geolocation requests and requests no Android device-location permission; an upgrade migration removes old fake-location settings.
+- Removed custom identity headers and browser-side fabricated/custom User-Agent and fingerprint settings. All WebView profiles use the real Android System WebView identity; normal desktop layout controls remain.
+- Replaced the Power profile's old cybersecurity-training shortcuts and Ahmia search option with ordinary browsing tools. Upgrade cleanup removes only the old app-provided Power shortcuts and Ahmia preference, preserving unrelated custom shortcuts.
+- Removed page media extraction/download claims and stale extension, spoofing, fingerprint and feature-count claims from the repository's feature catalog, README, draft store metadata and future GitHub Release description. Standard user-initiated downloads and local media playback remain.
+- Replaced fixed Pixel/Chrome and Android 14 User-Agent strings in app-side requests: browser downloads use the actual System WebView UA; news-feed/image requests identify ClickBrowser instead of impersonating a device.
+- Corrected profile-separation copy: all profiles separate WebView cookies/cache; Simple, Developer and Power share app-level history/bookmarks/passwords, while Advance also has separate app-level data.
+
+**Residual review item:** a generic direct-URL stream player remains for playback of user-supplied HLS/DASH/progressive URLs; it does not extract a stream from a website or download it. Before appeal, verify the live app and store copy clearly limit this to content the user is authorized to access, or remove the player if Google's notice specifically objects to stream playback.
+
+**Separate VPN consideration:** imported VLESS Reality URLs can still supply `fp` (the built-in profile uses `fp=chrome`), which the VPN parser maps to sing-box uTLS client fingerprinting. This is transport-layer behavior, not WebView page spoofing, but may still look like identity mimicry in a policy review. It is retained for VPN compatibility; disabling it could break some Reality profiles. Decide whether to remove it before any future appeal.
+
+## Still required before a future appeal
+
+- [ ] Push the changes and confirm the repository's build workflow passes. It builds `libbox.aar` from pinned official source before compiling the app; the local build did not reach Kotlin compilation.
+- [ ] Install the built APK and test both a clean install and an upgrade from the previously published version. Confirm old scripts and Power shortcuts are gone, location requests are denied, and normal browser features still work.
+- [ ] Review the direct-URL stream player in the installed build: it is playback-only, but remove or further constrain it if it could be read as facilitating unauthorized streaming.
+- [ ] Decide whether to retain or disable the VLESS Reality uTLS fingerprint option; test VPN profiles after any change.
+- [ ] Review and update the actual Play listing, screenshots, promotional videos, website and any other public claims. The repository's ASO file is only a draft; updating it does not change the live listing.
+- [ ] Compare the exact released app and every public surface with Google's notice, preserve test/build evidence, and appeal only through the product-specific route if it is still available. Reinstatement is not assured.
+
+The previous appeal was denied on **October 28, 2026**. If the notice was specifically an AdSense account-closed-for-policy-reasons decision, Google's guidance says account-closure appeals must be at least 90 days apart; 90 days after that denial is **January 26, 2027**. Do not apply that timing to AdMob or another publisher product unless its notice uses that same appeal process; verify the applicable flow in the denial notice.
+
+## Official policy references
+
+- Google's [Enabling dishonest behavior policy](https://support.google.com/publisherpolicies/answer/10436828?hl=en) describes prohibited assistance with misleading behavior, hacking/cracking, unauthorized access, bypassing copyright protection, and prohibited streaming-video downloads.
+- Google's [AdMob disabled-app/account guidance](https://support.google.com/admob/answer/6195033?hl=en) describes account-level policy actions and the review/appeal process; it does not promise reinstatement.
+- Google's [AdSense account-closure guidance](https://support.google.com/adsense/answer/2576043?hl=en) gives the 90-day interval for that specific appeal flow.

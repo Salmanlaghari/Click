@@ -94,22 +94,7 @@ object SafetyCheck {
             )
         )
 
-        // 4. Fingerprint protection.
-        val fpOn = prefs[AppSettings.FINGERPRINT_PROTECTION] ?: false
-        checks.add(
-            Check(
-                id = "fingerprint",
-                title = "Fingerprint protection",
-                description = if (fpOn)
-                    "Canvas and audio fingerprinting are poisoned with per-launch noise."
-                else
-                    "Sites can fingerprint this browser via canvas/audio signals.",
-                passed = fpOn,
-                fixLabel = if (!fpOn) "Turn on" else null
-            )
-        )
-
-        // 5. Tracking-param stripping.
+        // Tracking-param stripping.
         val stripOn = prefs[AppSettings.STRIP_TRACKING_PARAMS] ?: true
         checks.add(
             Check(
@@ -124,7 +109,7 @@ object SafetyCheck {
             )
         )
 
-        // 6. App updates (manual — opens the real Play listing).
+        // App updates (manual — opens the real Play listing).
         checks.add(
             Check(
                 id = "updates",
@@ -148,7 +133,6 @@ object SafetyCheck {
                     // setEnabled reports success — verify it, don't assume.
                     if (!PasswordManager.setEnabled(context, true)) return false
                 }
-                "fingerprint" -> context.dataStore.edit { it[AppSettings.FINGERPRINT_PROTECTION] = true }
                 "strip_params" -> context.dataStore.edit { it[AppSettings.STRIP_TRACKING_PARAMS] = true }
                 else -> return false
             }

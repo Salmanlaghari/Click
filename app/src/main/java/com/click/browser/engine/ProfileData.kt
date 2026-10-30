@@ -9,13 +9,13 @@ import androidx.datastore.preferences.preferencesDataStore
  * Per-profile (per-mode) app data — the foundation of Click Advance.
  *
  * Prince's requirement: "whatever the user signs into on Simple / Developer /
- * Hack must NOT show in Advance." Cookies / cache / localStorage are isolated
+ * Power must NOT show in Advance." Cookies / cache / localStorage are isolated
  * for free by the WebView data-directory suffix ([V9Engine.suffixFor]).
  * The app-level data (bookmarks, history, downloads, saved passwords,
- * userscripts, quick sites, search-engine prefs, per-site desktop
+ * quick sites, search-engine prefs, per-site desktop
  * preferences) is split here:
  *
- * - SIMPLE / DEVELOPER / HACK keep using the legacy shared `browser_settings`
+ * - SIMPLE / DEVELOPER / POWER keep using the legacy shared `browser_settings`
  *   store — zero migration, existing data untouched.
  * - ADVANCED uses `browser_settings_advanced`, which starts EMPTY by design.
  *   Entering Advance is always a fresh space.

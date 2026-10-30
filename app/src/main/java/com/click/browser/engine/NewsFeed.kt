@@ -160,10 +160,9 @@ object NewsFeed {
             }
         }
 
-    /** Browser-like UA: some publishers (Cloudflare-protected) reject unknown
-     * bot-style agents such as "ClickBrowser/1.0". */
-    internal const val FEED_USER_AGENT =
-        "Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Mobile Safari/537.36"
+    /** Honest app identifier for feed/image requests; does not impersonate a device or browser. */
+    internal val FEED_USER_AGENT =
+        "ClickBrowser/${com.click.browser.BuildConfig.VERSION_NAME} (Android)"
 
     private fun fetchFeed(feed: FeedDef): List<NewsArticle> {
         val request = Request.Builder()

@@ -332,8 +332,7 @@ fun InteractiveMusicPlayerDialog(onClose: () -> Unit) {
 }
 
 // ---------------------------------------------------------------------------
-// Real video player: plays a video file picked from the device (or a supplied
-// URL, e.g. from the video grabber) using VideoView + MediaController.
+// Local media player: plays a video file selected from the device.
 // ---------------------------------------------------------------------------
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -360,12 +359,6 @@ fun InteractiveVideoPlayerDialog(onClose: () -> Unit, initialVideoUrl: String? =
                     Button(onClick = { picker.launch("video/*") }) {
                         Text("Pick a video file")
                     }
-                    Text(
-                        "Tip: in Power mode the floating download button saves videos detected on the page.",
-                        fontSize = 11.sp,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.padding(top = 12.dp)
-                    )
                 } else {
                     key(uri) {
                         AndroidView(
@@ -778,7 +771,7 @@ fun PrivacyPolicyDialog(onClose: () -> Unit) {
                         "• Your bookmarks, history and download records are stored only on this device (app-private storage). Nothing is uploaded to our servers — we operate no analytics or account backend.\n\n" +
                         "• Pages load through Android's system WebView; network requests go directly to the websites you visit.\n\n" +
                         "• HTTPS-Only mode (when enabled) upgrades http:// links to https:// and blocks mixed content. It is enforced per navigation.\n\n" +
-                        "• The Privacy Guard (Power mode) adjusts fingerprintable browser values locally with JavaScript (user-agent, screen, WebGL, canvas and audio) to reduce tracking. It does not route traffic through any proxy, VPN or DNS tunnel.\n\n" +
+                        "• All modes use Android System WebView. They can keep separate local browser data, but do not substitute device identity or inject fingerprint-changing scripts. Optional DNT/GPC settings send voluntary privacy signals.\n\n" +
                         "• Incognito tabs skip history recording on this device.",
                     fontSize = 12.sp
                 )
@@ -807,21 +800,21 @@ fun AboutAppDialog(onClose: () -> Unit) {
                 Text("UI Design Built By: Prince Laghari", fontSize = 13.sp, fontWeight = FontWeight.ExtraBold)
                 Spacer(modifier = Modifier.height(12.dp))
                 Text(
-                    "A multi-mode Android browser (Simple / Developer / Power) with ad-blocking, devtools, privacy protection tools and a video downloader.",
+                    "A multi-mode Android browser (Simple / Developer / Power) with ad-blocking, developer inspection tools, privacy settings and local media playback.",
                     fontSize = 11.sp,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
                 Spacer(modifier = Modifier.height(12.dp))
                 // V9 — Prince's signature feature.
                 Text(
-                    "V9 — 1 Browser, 4 Engines",
+                    "V9 — 1 Browser, 4 Profiles",
                     fontSize = 13.sp,
                     fontWeight = FontWeight.ExtraBold,
                     color = MaterialTheme.colorScheme.primary
                 )
                 Spacer(modifier = Modifier.height(4.dp))
                 Text(
-                    "Each mode is a fully separate engine: its own cookies, storage, device identity and fingerprint — websites see three different browsers.",
+                    "Each mode uses Android System WebView and can keep separate cookies, storage and app data. Device identity is not substituted.",
                     fontSize = 11.sp,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
@@ -848,7 +841,7 @@ fun AboutAppDialog(onClose: () -> Unit) {
                 )
                 Spacer(modifier = Modifier.height(8.dp))
                 Text(
-                    "${com.click.browser.engine.ClickInternalPages.FEATURE_COUNT} built-in features — see click://version",
+                    "See click://version for build and browser-profile information.",
                     fontSize = 11.sp,
                     fontWeight = FontWeight.Bold,
                     color = MaterialTheme.colorScheme.primary

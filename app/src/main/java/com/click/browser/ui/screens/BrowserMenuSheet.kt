@@ -67,7 +67,6 @@ fun BrowserMenuSheet(
     onBookmarks: () -> Unit,
     onGames: () -> Unit,
     onRecentTabs: () -> Unit,
-    onExtensions: () -> Unit,
     onShare: () -> Unit,
     onFindInPage: () -> Unit,
     onTranslate: () -> Unit,
@@ -141,10 +140,6 @@ fun BrowserMenuSheet(
                         MenuCustomization.MenuItemId.RECENT_TABS -> MenuRow(
                             theme = theme, icon = Icons.Default.Restore,
                             label = "Recent tabs", onClick = onRecentTabs
-                        )
-                        MenuCustomization.MenuItemId.EXTENSIONS -> MenuRow(
-                            theme = theme, icon = Icons.Default.Extension,
-                            label = "Extensions", onClick = onExtensions
                         )
                         MenuCustomization.MenuItemId.SHARE -> {
                             MenuDivider(theme)

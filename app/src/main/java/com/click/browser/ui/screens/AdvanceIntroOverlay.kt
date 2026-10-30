@@ -49,7 +49,7 @@ import kotlin.random.Random
  * user enters Advance mode (a new V9 engine boot into the isolated space).
  *
  * Deep-space TEAL identity — deliberately distinct from the app splash's
- * blue/purple look and Hack Mode's blood-red ember look: twinkling starfield
+ * blue/purple look and Power Mode's OLED-neon look: twinkling starfield
  * (~18% teal-tinted), glowing teal grid, rising "CLICK" letters with a teal
  * halo, "ADVANCE" condensing in, tagline "ISOLATED · FAST · FRESH SPACE",
  * and a shield checkmark drawing itself.
@@ -99,7 +99,7 @@ fun AdvanceIntroOverlay(
 
     val density = LocalDensity.current
     // Teal identity from the approved mockup (#14b8a6 / #5eead4) — distinct
-    // from the app splash's blue/purple and Hack's ember red.
+    // from the app splash's blue/purple and Power's ember red.
     val teal = Color(0xFF14B8A6)      // teal primary
     val tealDeep = Color(0xFF0D9488)  // deeper teal
     val tealLight = Color(0xFF5EEAD4) // light teal (check mark, progress)

@@ -3,11 +3,6 @@ package com.click.browser.engine
 import org.json.JSONObject
 
 /**
- * Per-site location permission. ASK = default browser behavior (prompt the user).
- */
-enum class SiteLocationPref { ASK, ALLOW, BLOCK }
-
-/**
  * Generic per-site device permission (camera, microphone, notifications).
  * ASK = default browser behavior (system prompt), ALLOW = grant silently,
  * BLOCK = deny silently.
@@ -25,7 +20,6 @@ enum class SitePermissionPref { ASK, ALLOW, BLOCK }
 data class SiteSettings(
     val javaScript: Boolean? = null,
     val adBlock: Boolean? = null,
-    val location: SiteLocationPref? = null,
     val thirdPartyCookies: Boolean? = null,
     val textZoom: Int? = null,
     // Chrome-style expanded permissions (v2). All nullable = "use global default".
@@ -39,7 +33,7 @@ data class SiteSettings(
 ) {
     /** True when nothing is overridden — such entries are pruned from storage. */
     fun isEmpty(): Boolean =
-        javaScript == null && adBlock == null && location == null &&
+        javaScript == null && adBlock == null &&
             thirdPartyCookies == null && textZoom == null &&
             camera == null && microphone == null && notifications == null &&
             images == null && popups == null && sound == null &&
@@ -48,7 +42,6 @@ data class SiteSettings(
     fun toJson(): JSONObject = JSONObject().apply {
         javaScript?.let { put("js", it) }
         adBlock?.let { put("adblock", it) }
-        location?.let { put("location", it.name) }
         thirdPartyCookies?.let { put("tpc", it) }
         textZoom?.let { put("zoom", it) }
         camera?.let { put("cam", it.name) }
@@ -73,13 +66,6 @@ data class SiteSettings(
         fun fromJson(obj: JSONObject): SiteSettings = SiteSettings(
             javaScript = if (obj.has("js")) obj.optBoolean("js") else null,
             adBlock = if (obj.has("adblock")) obj.optBoolean("adblock") else null,
-            location = if (obj.has("location")) {
-                try {
-                    SiteLocationPref.valueOf(obj.getString("location"))
-                } catch (_: Exception) {
-                    null
-                }
-            } else null,
             thirdPartyCookies = if (obj.has("tpc")) obj.optBoolean("tpc") else null,
             textZoom = if (obj.has("zoom")) obj.optInt("zoom").takeIf { it in 50..300 } else null,
             camera = readPermissionPref(obj, "cam"),

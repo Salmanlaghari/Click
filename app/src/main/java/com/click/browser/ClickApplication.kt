@@ -10,6 +10,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.runBlocking
 
 /**
  * Application entry point.
@@ -22,6 +23,11 @@ class ClickApplication : Application() {
     override fun onCreate() {
         V9Engine.applyDataDirectorySuffix(this)
         super.onCreate()
+        // Finish the local policy-remediation migration before any Activity can
+        // observe legacy shortcuts or settings during its first composition.
+        runBlocking {
+            com.click.browser.engine.LegacyPolicyFeatureCleanup.run(this@ClickApplication)
+        }
         // Crash + OOM reports: capture to files dir, user sends them from
         // Settings → Reports. Never uploads silently.
         com.click.browser.engine.CrashReporter.install(this)

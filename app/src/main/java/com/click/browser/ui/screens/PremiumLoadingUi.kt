@@ -30,7 +30,7 @@ import com.click.browser.engine.ModeTheme
 /**
  * Premium page-load progress line, shown under the address bar while a
  * page loads. Per-mode themed: the gradient runs from the mode's primary
- * to secondary color (Simple = blue, Developer = purple, Hack = neon,
+ * to secondary color (Simple = blue, Developer = purple, Power = neon,
  * Advance = teal), with an animated shimmer sweep and a soft glow.
  *
  * Driven by WebChromeClient.onProgressChanged; fades out smoothly when

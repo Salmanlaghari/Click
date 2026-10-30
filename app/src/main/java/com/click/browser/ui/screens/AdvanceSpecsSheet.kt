@@ -140,7 +140,7 @@ fun AdvanceSpecsSheet(
             AdvanceSpecRow(
                 icon = Icons.Filled.FolderSpecial,
                 title = "Own data profile",
-                body = "Bookmarks, history, saved passwords and userscripts start empty. Nothing carries over from your other modes.",
+                body = "Bookmarks, history and saved passwords start empty. Nothing carries over from your other modes.",
                 accent = blue
             )
             AdvanceSpecRow(

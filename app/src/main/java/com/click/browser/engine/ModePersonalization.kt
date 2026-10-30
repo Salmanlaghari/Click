@@ -10,16 +10,16 @@ import org.json.JSONArray
 import org.json.JSONObject
 
 /**
- * Per-mode personalization (V9 "1 Browser, 4 Engines" identity).
+ * Per-mode personalization for the four browser-data profiles.
  *
- * Each browsing mode feels like a DIFFERENT browser:
+ * Each profile can have its own home shortcuts and search preference:
  * - its own home quick-sites (Simple = everyday sites, Developer = dev tools,
- *   Hack = ethical-hacking learning platforms — legitimate educational sites only,
+ *   Power = general browsing and productivity sites,
  *   Advance = minimal fresh-space starter set)
  * - its own default search engine (user-changeable per mode)
  *
  * Storage is per-profile (see [profileDataStoreFor]): Simple / Developer /
- * Hack share the legacy store keyed by mode, Advance has its own store that
+ * Power share the legacy store keyed by mode, Advance has its own store that
  * starts from these defaults.
  *
  * Quick sites are fully user-customizable (add / edit / remove); the stored
@@ -51,7 +51,7 @@ object ModePersonalization {
     fun searchEngines(mode: BrowserMode): List<String> = when (mode) {
         BrowserMode.SIMPLE -> listOf("Google", "Bing", "Yahoo", "DuckDuckGo")
         BrowserMode.DEVELOPER -> listOf("DuckDuckGo", "Google", "Bing", "Yandex")
-        BrowserMode.HACK -> listOf("Brave Search", "Startpage", "Ahmia", "Perplexity")
+        BrowserMode.HACK -> listOf("Brave Search", "Startpage", "DuckDuckGo", "Perplexity")
         BrowserMode.ADVANCED -> listOf("Google", "Brave Search", "DuckDuckGo", "Startpage")
     }
 
@@ -68,7 +68,6 @@ object ModePersonalization {
         "Baidu" -> "https://www.baidu.com/s?wd=$encodedQuery"
         "Brave Search" -> "https://search.brave.com/search?q=$encodedQuery"
         "Startpage", "Deep Search" -> "https://www.startpage.com/sp/search?query=$encodedQuery"
-        "Ahmia", "Ahmia Search" -> "https://ahmia.fi/search/?q=$encodedQuery"
         "Perplexity", "AI Search", "integrated AI search" -> "https://www.perplexity.ai/search?q=$encodedQuery"
         else -> "https://www.google.com/search?q=$encodedQuery"
     }
@@ -93,19 +92,18 @@ object ModePersonalization {
             QuickSiteDef("MDN", "https://developer.mozilla.org", 0xFF1B1B1B, "M", 0xFFFFFFFF),
             QuickSiteDef("Android", "https://developer.android.com", 0xFF3DDC84, "A", 0xFF111111),
             QuickSiteDef("Kotlin", "https://kotlinlang.org", 0xFF7F52FF, "K", 0xFFFFFFFF),
-            QuickSiteDef("Hacker News", "https://news.ycombinator.com", 0xFFFF6600, "H", 0xFFFFFFFF),
+            QuickSiteDef("Android Studio", "https://developer.android.com/studio", 0xFF3DDC84, "A", 0xFF111111),
             QuickSiteDef("CodePen", "https://codepen.io", 0xFF131417, "C", 0xFFFFFFFF)
         )
-        // Ethical-hacking THEME only: legitimate cybersecurity LEARNING
-        // platforms. Nothing illegal, no attack tools, no illicit content.
+        // Power mode uses general-purpose productivity and learning shortcuts.
         BrowserMode.HACK -> listOf(
-            QuickSiteDef("TryHackMe", "https://tryhackme.com", 0xFFC11130, "T", 0xFFFFFFFF),
-            QuickSiteDef("HackTheBox", "https://www.hackthebox.com", 0xFF9FEF00, "H", 0xFF111111),
-            QuickSiteDef("OWASP", "https://owasp.org", 0xFF255A7C, "O", 0xFFFFFFFF),
-            QuickSiteDef("PortSwigger", "https://portswigger.net/web-security", 0xFFFF6633, "P", 0xFFFFFFFF),
-            QuickSiteDef("OverTheWire", "https://overthewire.org", 0xFF1A1A1A, "W", 0xFF00FF00),
-            QuickSiteDef("PicoCTF", "https://picoctf.org", 0xFF4B2E83, "C", 0xFFFFFFFF),
-            QuickSiteDef("Cybrary", "https://www.cybrary.it", 0xFF0056D2, "C", 0xFFFFFFFF)
+            QuickSiteDef("Google", "https://google.com", 0xFF4285F4, "G", 0xFFFFFFFF),
+            QuickSiteDef("DuckDuckGo", "https://duckduckgo.com", 0xFFDE5833, "D", 0xFFFFFFFF),
+            QuickSiteDef("GitHub", "https://github.com", 0xFF24292F, "G", 0xFFFFFFFF),
+            QuickSiteDef("Wikipedia", "https://wikipedia.org", 0xFFF5F5F5, "W", 0xFF333333),
+            QuickSiteDef("MDN", "https://developer.mozilla.org", 0xFF1B1B1B, "M", 0xFFFFFFFF),
+            QuickSiteDef("YouTube", "https://youtube.com", 0xFFFF0000, "▶", 0xFFFFFFFF),
+            QuickSiteDef("Stack Overflow", "https://stackoverflow.com", 0xFFF48024, "S", 0xFFFFFFFF)
         )
         // Click Advance: minimal fresh-space starter set.
         BrowserMode.ADVANCED -> listOf(

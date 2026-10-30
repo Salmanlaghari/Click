@@ -257,9 +257,10 @@ jobs:
           body: |
             ## Click Browser ${{ github.ref_name }}
             - API 36 (Android 16), edge-to-edge, predictive back
-            - Simple / Developer / Hack modes with per-mode premium themes
+            - Simple / Developer / Power / Advance browser-data profiles on Android System WebView
             - Real AI chat (Groq/OpenRouter, user-provided key)
-            - Privacy guards, userscript extensions (.user.js)
+            - Ad blocking, HTTPS settings, private browsing and standard downloads
+            - Page inspection with a read-only console
             - Pull-to-refresh, fullscreen view, per-site desktop toggle
           files: |
             app/build/outputs/apk/debug/app-debug.apk

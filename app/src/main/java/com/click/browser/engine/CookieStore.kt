@@ -24,9 +24,9 @@ data class SiteCookies(val host: String, val cookies: List<CookieEntry>)
  * Honest notes (kept in UI copy too):
  * - WebView exposes NO per-cookie delete API. Deletion works by expiring the
  *   cookie (setCookie with an Expires date in the past) — the standard trick.
- * - Cookies live in the per-engine WebView data directory
- *   (v9_simple / v9_developer / v9_hack), so this manager shows the cookies of
- *   the CURRENT engine mode only.
+ * - Cookies live in the per-profile WebView data directory
+ *   (v9_simple / v9_developer / v9_hack; v9_hack is retained as the Power
+ *   profile's legacy storage suffix), so this manager shows the CURRENT profile.
  *
  * Threading: getCookie() blocks and runs on Dispatchers.IO. setCookie() /
  * removeAllCookies() are async and must be invoked from a thread with a

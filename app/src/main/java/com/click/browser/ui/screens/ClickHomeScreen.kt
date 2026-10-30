@@ -130,7 +130,7 @@ import java.util.Calendar
  *  news cards (hero + list) · 2×2 quick actions.
  *
  * The caller passes a mode-wired [ModeTheme]:
- *  SIMPLE → light, DEVELOPER → dark glass, HACK → OLED black neon.
+ *  SIMPLE → light, DEVELOPER → dark glass, POWER → OLED black neon.
  */
 @Composable
 fun ClickHomeScreen(
@@ -152,7 +152,7 @@ fun ClickHomeScreen(
 ) {
     val isHackNeon = activeMode == BrowserMode.HACK
     val isGlass = activeMode == BrowserMode.DEVELOPER
-    // Frosted-glass surfaces for Developer; flat soft cards for Simple; pure black for Hack.
+    // Frosted-glass surfaces for Developer; flat soft cards for Simple; pure black for Power.
     val cardBg = when {
         isHackNeon -> Color(0xFF0A0A12)
         isGlass -> theme.surface.copy(alpha = 0.72f)
@@ -166,7 +166,7 @@ fun ClickHomeScreen(
 
     // Custom wallpaper (decoded off the main thread). When set, it replaces
     // the theme background with a dimmed photo so content stays readable
-    // in all 3 modes.
+    // in all four profiles.
     val context = LocalContext.current
     var wallpaperBitmap by remember(wallpaperUri) { mutableStateOf<Bitmap?>(null) }
     LaunchedEffect(wallpaperUri) {
@@ -1240,10 +1240,8 @@ fun CompactBrowseBar(
     tabCount: Int,
     onTabsClick: () -> Unit,
     modifier: Modifier = Modifier,
-    // LocationGuard indicator: null = no indicator; otherwise the effective
-    // mode for the current site (BLOCK/Spoof shown, ASK hidden).
+    // Location indicator: null = no indicator; otherwise the effective mode.
     locationMode: LocationGuard.LocationMode? = null,
-    locationSpoofLabel: String = "",
     onLocationClick: () -> Unit = {}
 ) {
     var textInput by remember(currentUrl) { mutableStateOf(currentUrl) }
@@ -1301,22 +1299,15 @@ fun CompactBrowseBar(
                             modifier = Modifier.size(18.dp)
                         )
                     }
-                    // LocationGuard indicator: shows when this site's location is
-                    // blocked or spoofed, so the user always knows the state.
-                    if (locationMode == LocationGuard.LocationMode.BLOCK ||
-                        locationMode == LocationGuard.LocationMode.SPOOF
-                    ) {
+                    // Show an indicator only when location requests are blocked.
+                    if (locationMode == LocationGuard.LocationMode.BLOCK) {
                         IconButton(
                             onClick = onLocationClick,
                             modifier = Modifier.size(32.dp)
                         ) {
                             Icon(
-                                if (locationMode == LocationGuard.LocationMode.BLOCK)
-                                    Icons.Default.LocationOff else Icons.Default.LocationOn,
-                                contentDescription =
-                                    if (locationMode == LocationGuard.LocationMode.BLOCK)
-                                        "Location blocked for this site"
-                                    else "Custom location active for this site: $locationSpoofLabel",
+                                Icons.Default.LocationOff,
+                                contentDescription = "Location requests blocked for this site",
                                 tint = Color(0xFF22C55E),
                                 modifier = Modifier.size(16.dp)
                             )

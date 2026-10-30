@@ -1,1 +1,37 @@
-{"items":[{"desc":"5 offline mini-games — Snake, Breakout, Memory, Tic-Tac-Toe, Sky Hopper. No internet needed.","icon":"🎮","title":"Games tab is here"},{"desc":"A 4th fully-isolated browsing space with its own engine, tuned for performance.","icon":"🚀","title":"Click Advance space"},{"desc":"Built-in secure tunnel with DNS-over-HTTPS and multi-layer privacy protection.","icon":"🛡","title":"V9 Shield"},{"desc":"Real IP stays hidden even when sites probe WebRTC.","icon":"🔒","title":"WebRTC leak guard"},{"desc":"See and clear cookies per site, right from the browser.","icon":"🍪","title":"Cookie manager"},{"desc":"Categories, hero cards and faster offline-friendly loading.","icon":"📰","title":"News feed upgrades"}],"updated":"2026-10-10","version":"1.1.0","versionCode":3}
+{
+  "items": [
+    {
+      "desc": "5 offline mini-games — Snake, Breakout, Memory, Tic-Tac-Toe, Sky Hopper. No internet needed.",
+      "icon": "🎮",
+      "title": "Games tab is here"
+    },
+    {
+      "desc": "A fourth browsing profile with its own WebView cookies/cache and app data, powered by Android System WebView.",
+      "icon": "🚀",
+      "title": "Click Advance space"
+    },
+    {
+      "desc": "Built-in secure tunnel with DNS-over-HTTPS and multi-layer privacy protection.",
+      "icon": "🛡",
+      "title": "V9 Shield"
+    },
+    {
+      "desc": "See which network addresses WebRTC can expose on the current connection. This is an informational test; it does not block traffic or guarantee that an address is hidden.",
+      "icon": "🔒",
+      "title": "WebRTC visibility test"
+    },
+    {
+      "desc": "See and clear cookies per site, right from the browser.",
+      "icon": "🍪",
+      "title": "Cookie manager"
+    },
+    {
+      "desc": "Categories, hero cards and faster offline-friendly loading.",
+      "icon": "📰",
+      "title": "News feed upgrades"
+    }
+  ],
+  "updated": "2026-10-30",
+  "version": "1.1.0",
+  "versionCode": 3
+}

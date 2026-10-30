@@ -43,10 +43,8 @@ private const val PLAY_STORE_PACKAGE = "com.teampkai.clickbrowser"
  * Replaces the old fragmented settings (PremiumSettingsScreen). Every
  * toggle and button here is wired to a real action — no dead controls.
  *
- * 4-mode isolation is respected throughout:
- * - history can be cleared per-mode (per-profile DataStore),
- * - cookies / cache clearing applies to the CURRENT mode only (WebView data
- *   directories are pinned per boot mode), and the labels say so.
+ * WebView cookies/cache are separate per profile. Simple, Developer and Power
+ * share app-level history/bookmarks/passwords; Advance has a separate app-data store.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -109,8 +107,6 @@ fun SettingsScreen(
     onToggleStripTrackingParams: (Boolean) -> Unit,
     forgetfulBrowsing: Boolean,
     onToggleForgetfulBrowsing: (Boolean) -> Unit,
-    blockConsentBanners: Boolean,
-    onToggleBlockConsentBanners: (Boolean) -> Unit,
     forgetfulExceptions: Set<String>,
     onForgetfulExceptionsChange: (Set<String>) -> Unit,
     // --- Clear browsing data ---
@@ -320,7 +316,7 @@ fun SettingsScreen(
                 CardRow(theme) {
                     Text("Default Search Engine", color = theme.onSurface, fontWeight = FontWeight.SemiBold, fontSize = 14.sp)
                     Text(
-                        "Applies to ${activeMode.name.lowercase().replaceFirstChar { it.uppercase() }} mode.",
+                        "Applies to the ${activeMode.display().title} profile.",
                         fontSize = 11.sp, color = theme.onSurface.copy(alpha = 0.6f)
                     )
                     val engines = ModePersonalization.searchEngines(activeMode)
@@ -644,13 +640,7 @@ fun SettingsScreen(
                         )
                     }
                     HorizontalDivider(color = theme.onSurface.copy(alpha = 0.1f))
-                    ToggleRow(
-                        "Block Cookie Banners",
-                        "Auto-hide cookie-consent / GDPR popups",
-                        blockConsentBanners, onToggleBlockConsentBanners, theme
-                    )
-                    HorizontalDivider(color = theme.onSurface.copy(alpha = 0.1f))
-                    // LocationGuard: hide/spoof browser geolocation.
+                    // Location permission behavior is transparent and never fabricates coordinates.
                     ActionRow(
                         "Location",
                         "Websites will see: $locationSummary",
@@ -664,7 +654,7 @@ fun SettingsScreen(
                 CardRow(theme) {
                     Text("Clear Browsing Data", color = theme.onSurface, fontWeight = FontWeight.SemiBold, fontSize = 14.sp)
                     Text(
-                        "Cookies & cache clear for the CURRENT mode (${activeMode.name.lowercase().replaceFirstChar { it.uppercase() }}) — each mode has its own isolated storage.",
+                        "Cookies and cache are separate per profile. History is shared by Simple, Developer and Power; Advance has separate app data.",
                         fontSize = 11.sp, color = theme.onSurface.copy(alpha = 0.6f)
                     )
                     Spacer(Modifier.height(8.dp))
@@ -677,11 +667,18 @@ fun SettingsScreen(
                     Text("Clear history for:", color = theme.onSurface, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
                     Spacer(Modifier.height(4.dp))
                     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                        BrowserMode.values().forEach { mode ->
+                        listOf(BrowserMode.SIMPLE, BrowserMode.ADVANCED).forEach { mode ->
+                            val isShared = mode != BrowserMode.ADVANCED
                             FilterChip(
-                                selected = historyModeTarget == mode,
-                                onClick = { historyModeTarget = mode },
-                                label = { Text(mode.name.lowercase().replaceFirstChar { it.uppercase() }, fontSize = 11.sp) }
+                                selected = if (isShared) historyModeTarget != BrowserMode.ADVANCED
+                                    else historyModeTarget == BrowserMode.ADVANCED,
+                                onClick = { historyModeTarget = if (isShared) BrowserMode.SIMPLE else BrowserMode.ADVANCED },
+                                label = {
+                                    Text(
+                                        if (isShared) "Simple / Developer / Power" else "Advance",
+                                        fontSize = 11.sp
+                                    )
+                                }
                             )
                         }
                     }
@@ -692,7 +689,7 @@ fun SettingsScreen(
                     ) {
                         Icon(Icons.Default.History, contentDescription = null, modifier = Modifier.size(18.dp))
                         Spacer(Modifier.width(4.dp))
-                        Text("Clear ${historyModeTarget.name.lowercase().replaceFirstChar { it.uppercase() }} history")
+                        Text(if (historyModeTarget == BrowserMode.ADVANCED) "Clear Advance history" else "Clear shared-profile history")
                     }
                     Spacer(Modifier.height(8.dp))
                     Button(
@@ -700,7 +697,7 @@ fun SettingsScreen(
                         colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error),
                         modifier = Modifier.fillMaxWidth()
                     ) {
-                        Text("Clear ALL data (current mode)", color = MaterialTheme.colorScheme.onError)
+                        Text("Clear cookies, cache & history", color = MaterialTheme.colorScheme.onError)
                     }
                 }
             })
@@ -739,7 +736,7 @@ fun SettingsScreen(
             add(Row(null) {
                 CardRow(theme) {
                     Text(
-                        "Each mode is fully isolated — own cookies, cache, history, bookmarks, passwords. Switching restarts the app into that engine.",
+                        "Each profile has separate WebView cookies/cache. Simple, Developer and Power share app-level history, bookmarks and passwords; Advance also isolates app data. Switching restarts into that profile.",
                         fontSize = 11.sp, color = theme.onSurface.copy(alpha = 0.6f)
                     )
                     Spacer(Modifier.height(8.dp))
@@ -764,7 +761,7 @@ fun SettingsScreen(
                                     verticalAlignment = Alignment.CenterVertically
                                 ) {
                                     Text(
-                                        mode.name.lowercase().replaceFirstChar { it.uppercase() } +
+                                        mode.display().title +
                                             if (isActive) " • active" else "",
                                         color = theme.onSurface,
                                         fontWeight = FontWeight.SemiBold,
@@ -814,8 +811,8 @@ fun SettingsScreen(
             add(Row(null) {
                 CardRow(theme) {
                     InfoLine("App version", "${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE})", theme)
-                    InfoLine("V9 engine", "Chromium WebView · 4 isolated profiles", theme)
-                    InfoLine("Features", "${ClickInternalPages.FEATURE_COUNT} built-in", theme)
+                    InfoLine("Browser profiles", "Android System WebView · 4 data profiles", theme)
+                    InfoLine("Feature details", "See click://version", theme)
                     InfoLine("Developer", "TEAM PK AI", theme)
                 }
             })

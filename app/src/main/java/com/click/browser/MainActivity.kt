@@ -178,15 +178,10 @@ class MainActivity : FragmentActivity() {
     private var liveDataSaver = false
     // Advance Mode intro animation toggle (Settings; default ON).
     private var liveAdvanceIntroEnabled = true
-    // Live copies for the privacy-guard features (see PrivacyGuards).
-    private var liveHeaderSpoof = false
-    private var liveSecureDns = false
-    private var liveCustomHeaders: Map<String, String> = emptyMap()
     // Brave-inspired privacy quick wins (live copies for WebViewClient callbacks).
     private var liveStripTrackingParams = true
     private var liveForgetfulBrowsing = false
     private var liveForgetfulExceptions: Set<String> = emptySet()
-    private var liveBlockConsentBanners = true
     // Accessibility: force zoom / reader mode / reduced motion.
     private var liveForceZoom = false
     private var liveReaderMode = false
@@ -206,13 +201,6 @@ class MainActivity : FragmentActivity() {
     private var liveSiteSettings: Map<String, com.click.browser.engine.SiteSettings> = emptyMap()
     // Live copy of the global ad-block toggle for WebViewClient callbacks.
     private var liveAdBlockerEnabled: Boolean = true
-    // LocationGuard live copies (WebViewClient/WebChromeClient run off the UI
-    // thread and can't read composable state — same pattern as above).
-    private var liveLocationMode: LocationGuard.LocationMode = LocationGuard.LocationMode.ASK
-    private var liveLocationSpoofLat: Double = LocationGuard.DEFAULT_PRESET.lat
-    private var liveLocationSpoofLng: Double = LocationGuard.DEFAULT_PRESET.lng
-    private var liveLocationSpoofLabel: String = LocationGuard.DEFAULT_PRESET.label
-    private var liveLocationSiteModes: Map<String, String> = emptyMap()
     // Live copy of experimental flags (click://flags) for WebViewClient callbacks.
     private var liveFlags = ExperimentalFlags()
     // Biometric private-tab lock: live copies for onPause(), which runs
@@ -296,66 +284,6 @@ class MainActivity : FragmentActivity() {
     }
     // Registry of live WebViews for flag-driven cleanup (clear-on-exit).
     private val liveWebViews = mutableListOf<android.webkit.WebView>()
-
-    // Userscript extensions (HACK mode). Live caches are refreshed whenever
-    // the script list changes so WebViewClient always sees current data.
-    private val userscriptManager by lazy { UserscriptManager(this) }
-    private var liveUserscripts: List<UserscriptInfo> = emptyList()
-    private var liveUserscriptCode: Map<String, String> = emptyMap()
-
-    // OkHttp client used to re-fetch page resources with spoofed headers.
-    // Rebuilt when the Secure-DNS mode changes.
-    private var headerFetchClient: OkHttpClient? = null
-    private var headerFetchClientSecureDns = false
-
-    private fun getHeaderFetchClient(): OkHttpClient {
-        val wantSecure = liveSecureDns
-        val cached = headerFetchClient
-        if (cached != null && headerFetchClientSecureDns == wantSecure) return cached
-        val builder = OkHttpClient.Builder()
-            .connectTimeout(20, TimeUnit.SECONDS)
-            .readTimeout(30, TimeUnit.SECONDS)
-        if (wantSecure) {
-            // Secure DNS covers the app's own requests (this re-fetch is one
-            // of them). WebView page loads still use the system DNS resolver.
-            try { builder.dns(PrivacyGuards.buildSecureDns()) } catch (_: Exception) { }
-        }
-        return builder.build().also {
-            headerFetchClient = it
-            headerFetchClientSecureDns = wantSecure
-        }
-    }
-
-    /**
-     * Re-fetches [url] with the user's spoofed custom headers.
-     * Returns null when the fetch fails — the caller then lets WebView load
-     * the resource normally (honest degradation, never a fake response).
-     */
-    private fun fetchWithSpoofedHeaders(url: String): WebResourceResponse? {
-        return try {
-            val req = Request.Builder().url(url).apply {
-                liveCustomHeaders.forEach { (name, value) -> header(name, value) }
-                // Privacy signals ride on re-fetched subresources too.
-                if (liveFlags.dntHeader || liveDntEnabled) header("DNT", "1")
-                if (liveGpcEnabled) header("Sec-GPC", "1")
-            }.build()
-            val resp = getHeaderFetchClient().newCall(req).execute()
-            val body = resp.body ?: return null
-            val contentType = resp.header("Content-Type") ?: "text/html"
-            val mime = contentType.substringBefore(";").trim().ifEmpty { "text/html" }
-            val charset = contentType.substringAfter("charset=", "").substringBefore(";").trim()
-            WebResourceResponse(
-                mime,
-                charset.ifEmpty { "UTF-8" },
-                resp.code,
-                "OK",
-                mapOf("Content-Type" to contentType),
-                body.byteStream()
-            )
-        } catch (_: Exception) {
-            null
-        }
-    }
 
     private var ttsEngine: TextToSpeech? = null
 
@@ -496,7 +424,7 @@ class MainActivity : FragmentActivity() {
 
     /**
      * Saves a long-pressed image to Downloads/ClickBrowser via DownloadManager
-     * (same established pattern as the video downloader — no storage permission
+     * (same established pattern as other browser downloads — no storage permission
      * needed on API 29+). blob:/data: URLs can't be fetched by DownloadManager,
      * so those get an honest toast instead of a dead button.
      */
@@ -532,7 +460,7 @@ class MainActivity : FragmentActivity() {
                 .readTimeout(60, java.util.concurrent.TimeUnit.SECONDS)
                 .build()
             val req = okhttp3.Request.Builder().url(url).get()
-                .header("User-Agent", "Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36")
+                .header("User-Agent", android.webkit.WebSettings.getDefaultUserAgent(applicationContext))
                 .build()
             client.newCall(req).execute().use { resp ->
                 if (!resp.isSuccessful) return null
@@ -610,8 +538,6 @@ class MainActivity : FragmentActivity() {
     private fun applyExperimentalFlags(webView: WebView) {
         val s = webView.settings
         val f = liveFlags
-        // Custom UA overrides the mode default (applied after modeManager.applySettings).
-        if (f.customUserAgent.isNotBlank()) s.userAgentString = f.customUserAgent
         // OR with dataSaver: the flag adds blocking, never removes it.
         s.blockNetworkImage = s.blockNetworkImage || f.blockImages
         s.javaScriptCanOpenWindowsAutomatically = !f.blockPopups
@@ -753,79 +679,6 @@ class MainActivity : FragmentActivity() {
 
     /** Reads the global ad-block toggle without touching composable state. */
     private fun adBlockerEnabledGlobal(): Boolean = liveAdBlockerEnabled
-
-    /**
-     * Per-site location decision for an origin host: ALLOW / BLOCK are
-     * enforced silently, ASK (or unset) falls through to the default prompt.
-     */
-    private fun siteLocationPref(host: String?): com.click.browser.engine.SiteLocationPref? {
-        if (host.isNullOrEmpty()) return null
-        return liveSiteSettings.forHost(host.lowercase())?.location
-    }
-
-    /**
-     * LocationGuard: resolves the effective location mode for a URL —
-     * per-site override wins, else the global mode. Matches subdomains too
-     * (same rule as per-site desktop).
-     */
-    private fun effectiveLocationMode(url: String?): LocationGuard.LocationMode {
-        val host = LocationGuard.hostFromUrl(url).orEmpty()
-        if (host.isNotEmpty()) {
-            val override = liveLocationSiteModes[host]
-                ?: liveLocationSiteModes.entries.firstOrNull { (h, _) ->
-                    host == h || host.endsWith(".$h")
-                }?.value
-            if (!override.isNullOrBlank()) return LocationGuard.LocationMode.fromKey(override)
-        }
-        return liveLocationMode
-    }
-
-    /**
-     * LocationGuard: handles a WebView geolocation permission request.
-     * Must be called on the UI thread (WebChromeClient callbacks are).
-     *
-     * - BLOCK → deny immediately (website gets PERMISSION_DENIED).
-     * - SPOOF → inject the JS override, then grant (the page's
-     *   navigator.geolocation now returns spoofed coordinates; the native
-     *   prompt path is bypassed). No Android location permission is used.
-     * - ASK → stash the callback and show the in-app dialog (handled by the
-     *   composable via showLocationPrompt state).
-     */
-    private fun handleGeolocationPrompt(
-        origin: String?,
-        callback: GeolocationPermissions.Callback?,
-        onAsk: (origin: String, host: String?, callback: GeolocationPermissions.Callback) -> Unit
-    ) {
-        if (callback == null) return
-        // The requesting page's URL gives us the host for per-site lookup.
-        // WebChromeClient doesn't hand us the WebView here, so callers pass
-        // the current tab URL via onAsk; for BLOCK/SPOOF we resolve from origin.
-        val host = try {
-            android.net.Uri.parse(origin ?: "").host?.lowercase()
-        } catch (_: Exception) {
-            null
-        }
-        val mode = if (!host.isNullOrEmpty()) {
-            val override = liveLocationSiteModes[host]
-                ?: liveLocationSiteModes.entries.firstOrNull { (h, _) ->
-                    host == h || host.endsWith(".$h")
-                }?.value
-            if (!override.isNullOrBlank()) LocationGuard.LocationMode.fromKey(override)
-            else liveLocationMode
-        } else {
-            liveLocationMode
-        }
-        when (mode) {
-            LocationGuard.LocationMode.BLOCK -> callback.invoke(origin, false, false)
-            LocationGuard.LocationMode.SPOOF -> {
-                // Best-effort: the page-start injection usually already
-                // replaced navigator.geolocation; granting here keeps the
-                // WebView contract satisfied for any late requests.
-                callback.invoke(origin, true, false)
-            }
-            LocationGuard.LocationMode.ASK -> onAsk(origin ?: "", host, callback)
-        }
-    }
 
     /** Shared pretty error page used by both onReceivedError variants. */
     /** Extracts the lowercase host from a URL ("" on failure). */
@@ -1297,23 +1150,12 @@ class MainActivity : FragmentActivity() {
             var stripTrackingParams by remember { mutableStateOf(true) }
             var forgetfulBrowsing by remember { mutableStateOf(false) }
             var forgetfulExceptions by remember { mutableStateOf(setOf<String>()) }
-            var blockConsentBanners by remember { mutableStateOf(true) }
             // Accessibility settings (Settings → Browser → Accessibility).
             var forceZoomEnabled by remember { mutableStateOf(false) }
             var readerModeEnabled by remember { mutableStateOf(false) }
             var reducedMotionEnabled by remember { mutableStateOf(false) }
 
-            // LocationGuard: hide/spoof browser geolocation (Prince request).
-            var locationMode by remember { mutableStateOf(LocationGuard.LocationMode.ASK) }
-            var locationSpoofLat by remember { mutableStateOf(LocationGuard.DEFAULT_PRESET.lat) }
-            var locationSpoofLng by remember { mutableStateOf(LocationGuard.DEFAULT_PRESET.lng) }
-            var locationSpoofLabel by remember { mutableStateOf(LocationGuard.DEFAULT_PRESET.label) }
-            val locationSiteModes by repository.locationModeHostsFlow.collectAsState(initial = emptyMap())
-            // Pending geolocation permission request (ASK mode dialog).
-            var locationPromptOrigin by remember { mutableStateOf<String?>(null) }
-            var locationPromptCallback by remember { mutableStateOf<GeolocationPermissions.Callback?>(null) }
-            var locationPromptHost by remember { mutableStateOf<String?>(null) }
-            var showLocationPrompt by remember { mutableStateOf(false) }
+            // Click does not request device location; the sheet explains that all site requests are blocked.
             var showLocationSettings by remember { mutableStateOf(false) }
 
             // Common overlays
@@ -1485,8 +1327,7 @@ class MainActivity : FragmentActivity() {
             var flagsUi by remember { mutableStateOf(ExperimentalFlags()) }
             // Confirm-exit dialog (flag).
             var showExitConfirm by remember { mutableStateOf(false) }
-            // V9: Shield screen (VPN + DNS + engines) and the Hack Mode
-            // Markhor intro animation (shown once after a Hack engine boot).
+            // V9 Shield and Power Mode intro animation states.
             var showV9Shield by remember { mutableStateOf(false) }
             // Click VPN screen (full IP tunnel via sing-box).
             var showVpn by remember { mutableStateOf(false) }
@@ -1563,7 +1404,6 @@ class MainActivity : FragmentActivity() {
             var aiApiKey by remember { mutableStateOf("") }
             var aiProvider by remember { mutableStateOf("groq") }
             var aiModel by remember { mutableStateOf("") }
-            var headerSpoofEnabled by remember { mutableStateOf(false) }
             // DNT + GPC privacy signals (opt-in, default off).
             var dntEnabled by remember { mutableStateOf(false) }
             var gpcEnabled by remember { mutableStateOf(false) }
@@ -1576,15 +1416,10 @@ class MainActivity : FragmentActivity() {
             var showTextScaleSheet by remember { mutableStateOf(false) }
             var sheetScale by remember { mutableStateOf(com.click.browser.engine.TextScaleStore.DEFAULT) }
             val privateLocked by privateLockedFlow.collectAsState()
-            var customHeaders by remember { mutableStateOf(listOf<AppSettings.CustomHeader>()) }
             var webrtcTestRunning by remember { mutableStateOf(false) }
             var webrtcTested by remember { mutableStateOf(false) }
             var webrtcIps by remember { mutableStateOf<List<String>?>(null) }
 
-            // Userscript extensions (HACK mode)
-            var showUserscripts by remember { mutableStateOf(false) }
-            var userscripts by remember { mutableStateOf(listOf<UserscriptInfo>()) }
-            var userscriptNotice by remember { mutableStateOf<String?>(null) }
 
             // Dev tools states
             var elementInspectorEnabled by remember { mutableStateOf(false) }
@@ -1600,13 +1435,9 @@ class MainActivity : FragmentActivity() {
             val domHtml: String by devToolsDomHtml
             val sourcesList = devToolsSources
 
-            // Hack tools states
-            // UA consistency: HACK mode is desktop UA by mode design, SIMPLE/DEVELOPER
-            // are mobile UA. The global force-desktop defaults OFF — desktop UA
-            // comes from the mode or the per-site Desktop toggle only, and the
-            // UA is never switched mid-page-load (see onToggleForceDesktop reload).
+            // Power-mode desktop layout controls. The system WebView User-Agent
+            // is used in every profile; desktop layout does not impersonate a device.
             var forceDesktopMode by remember { mutableStateOf(false) }
-            var spoofedUAIndex by remember { mutableStateOf(0) }
             // Long-press context menu (links + images on web pages).
             // Set from the WebView's OnLongClickListener via requestFocusNodeHref.
             var longPressLinkUrl by remember { mutableStateOf<String?>(null) }
@@ -1727,7 +1558,6 @@ class MainActivity : FragmentActivity() {
                         findQuery = ""
                         showFindInPageDialog = true
                     }
-                    FeatureId.EXTENSIONS -> showUserscripts = true
                     FeatureId.ADBLOCK -> {
                         adBlockerEnabled = !adBlockerEnabled
                         Toast.makeText(
@@ -1840,20 +1670,9 @@ class MainActivity : FragmentActivity() {
                         Toast.makeText(this@MainActivity, host, Toast.LENGTH_LONG).show()
                     }
                     FeatureId.PRIVACY_GUARDS -> showPrivacyGuards = true
-                    // V9: Shield screen (built-in VPN + DNS + 3-engine identities).
+                    // V9: Shield screen (built-in VPN and DNS controls).
                     FeatureId.V9_SHIELD -> showV9Shield = true
                     FeatureId.HELP_FEEDBACK -> showHelp = true
-                    FeatureId.UA_SPOOFER, FeatureId.UA_SWITCHER -> {
-                        spoofedUAIndex = (spoofedUAIndex + 1) % 4
-                        val uaStr = when (spoofedUAIndex) {
-                            0 -> ModeManager.UA_HACK
-                            1 -> "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Safari/605.1.15"
-                            2 -> "Mozilla/5.0 (X11; Linux x86_64; rv:109.0) Gecko/20100101 Firefox/125.0"
-                            else -> ModeManager.UA_SIMPLE
-                        }
-                        currentTab.webView?.settings?.userAgentString = uaStr
-                        Toast.makeText(this@MainActivity, "User-Agent switched ($spoofedUAIndex)", Toast.LENGTH_SHORT).show()
-                    }
                     FeatureId.FULLSCREEN -> immersiveMode = !immersiveMode
                     FeatureId.TEXT_SIZE -> {
                         // Open the text-size sheet: live slider + optional
@@ -1891,42 +1710,18 @@ class MainActivity : FragmentActivity() {
             LaunchedEffect(forceNightModeWebsites) { liveNightMode = forceNightModeWebsites }
             LaunchedEffect(dataSaverEnabled) { liveDataSaver = dataSaverEnabled }
             LaunchedEffect(advanceIntroEnabled) { liveAdvanceIntroEnabled = advanceIntroEnabled }
-            LaunchedEffect(headerSpoofEnabled) { liveHeaderSpoof = headerSpoofEnabled }
             // Privacy quick wins: keep WebViewClient-safe live copies in sync.
             LaunchedEffect(stripTrackingParams) { liveStripTrackingParams = stripTrackingParams }
             LaunchedEffect(forgetfulBrowsing) { liveForgetfulBrowsing = forgetfulBrowsing }
             LaunchedEffect(forgetfulExceptions) { liveForgetfulExceptions = forgetfulExceptions }
-            LaunchedEffect(blockConsentBanners) { liveBlockConsentBanners = blockConsentBanners }
             // Accessibility: keep WebViewClient-safe live copies in sync.
             LaunchedEffect(forceZoomEnabled) { liveForceZoom = forceZoomEnabled }
             LaunchedEffect(readerModeEnabled) { liveReaderMode = readerModeEnabled }
             LaunchedEffect(reducedMotionEnabled) { liveReducedMotion = reducedMotionEnabled }
             LaunchedEffect(sharpViewEnabled) { liveSharpViewEnabled = sharpViewEnabled }
-            LaunchedEffect(secureDnsEnabled) { liveSecureDns = secureDnsEnabled }
-            LaunchedEffect(customHeaders) { liveCustomHeaders = customHeaders.associate { it.name to it.value } }
             LaunchedEffect(desktopHosts) { liveDesktopHosts = desktopHosts }
             LaunchedEffect(adBlockerEnabled) { liveAdBlockerEnabled = adBlockerEnabled }
             LaunchedEffect(siteSettings) { liveSiteSettings = siteSettings }
-            LaunchedEffect(locationMode) { liveLocationMode = locationMode }
-            LaunchedEffect(locationSpoofLat) { liveLocationSpoofLat = locationSpoofLat }
-            LaunchedEffect(locationSpoofLng) { liveLocationSpoofLng = locationSpoofLng }
-            LaunchedEffect(locationSpoofLabel) { liveLocationSpoofLabel = locationSpoofLabel }
-            LaunchedEffect(locationSiteModes) { liveLocationSiteModes = locationSiteModes }
-
-            // Reloads the userscript list + code cache (DataStore + files).
-            fun refreshUserscripts() {
-                scope.launch(Dispatchers.IO) {
-                    val scripts = userscriptManager.listScripts()
-                    val codes = scripts
-                        .filter { it.enabled }
-                        .associate { it.id to (userscriptManager.getCode(it.id).orEmpty()) }
-                    withContext(Dispatchers.Main) {
-                        userscripts = scripts
-                        liveUserscripts = scripts
-                        liveUserscriptCode = codes
-                    }
-                }
-            }
 
             // Runs the real WebRTC leak test in the current tab.
             fun runWebrtcLeakTest() {
@@ -1952,28 +1747,18 @@ class MainActivity : FragmentActivity() {
                 }
             }
 
-            // Load AI + privacy-guard + appearance settings from DataStore once at startup.
+            // Load AI + privacy + appearance settings after the application-level migration.
             LaunchedEffect(Unit) {
                 dataStore.data.first().let { prefs ->
                     aiApiKey = prefs[AppSettings.AI_API_KEY].orEmpty()
                     aiProvider = prefs[AppSettings.AI_PROVIDER] ?: "groq"
                     aiModel = prefs[AppSettings.AI_MODEL].orEmpty()
-                    headerSpoofEnabled = prefs[AppSettings.HEADER_SPOOF_ENABLED] == true
                     // HTTPS mode (default "standard" = historical HTTPS-Only upgrade behavior).
                     httpsMode = AppSettings.normalizeMode(prefs[AppSettings.HTTPS_MODE])
                     httpsStrictExceptions = AppSettings.parseHostList(prefs[AppSettings.HTTPS_STRICT_EXCEPTIONS])
                     dntEnabled = prefs[AppSettings.DNT_ENABLED] == true || prefs[ExperimentalFlags.K_DNT_HEADER] == true
                     gpcEnabled = prefs[AppSettings.GPC_ENABLED] == true
                     secureDnsEnabled = prefs[AppSettings.SECURE_DNS_ENABLED] == true
-                    // LocationGuard: hide/spoof browser geolocation.
-                    locationMode = LocationGuard.LocationMode.fromKey(prefs[AppSettings.LOCATION_MODE])
-                    locationSpoofLat = prefs[AppSettings.LOCATION_SPOOF_LAT]?.toDoubleOrNull()
-                        ?: LocationGuard.DEFAULT_PRESET.lat
-                    locationSpoofLng = prefs[AppSettings.LOCATION_SPOOF_LNG]?.toDoubleOrNull()
-                        ?: LocationGuard.DEFAULT_PRESET.lng
-                    locationSpoofLabel = prefs[AppSettings.LOCATION_SPOOF_LABEL]
-                        ?: LocationGuard.DEFAULT_PRESET.label
-                    customHeaders = AppSettings.parseHeaders(prefs[AppSettings.CUSTOM_HEADERS_JSON])
                     backgroundAudioEnabled = prefs[AppSettings.BACKGROUND_AUDIO_ENABLED] == true
                     backgroundAudioEnabled = prefs[AppSettings.BACKGROUND_AUDIO_ENABLED] == true
                     // Background news notifications (opt-in, default OFF).
@@ -1987,7 +1772,6 @@ class MainActivity : FragmentActivity() {
                     stripTrackingParams = prefs[AppSettings.STRIP_TRACKING_PARAMS] ?: true
                     forgetfulBrowsing = prefs[AppSettings.FORGETFUL_BROWSING] == true
                     forgetfulExceptions = prefs[AppSettings.FORGETFUL_BROWSING_EXCEPTIONS] ?: emptySet()
-                    blockConsentBanners = prefs[AppSettings.BLOCK_CONSENT_BANNERS] ?: true
                     // Accessibility settings.
                     forceZoomEnabled = prefs[AppSettings.FORCE_ZOOM] == true
                     readerModeEnabled = prefs[AppSettings.READER_MODE] == true
@@ -2036,13 +1820,6 @@ class MainActivity : FragmentActivity() {
                     flagsUi = liveFlags
                     applyScreenshotFlag()
                 }
-                // First run: install the bundled pre-installed userscript
-                // extensions (most enabled by default; the WebRTC Leak Guard
-                // seeds disabled/opt-in because it breaks video calls). The
-                // user can enable, disable, or delete any of them, or add
-                // their own, in the Extensions screen.
-                userscriptManager.seedBundledScripts()
-                refreshUserscripts()
             }
 
             // Keep the activity-level cache in sync for onPause/onResume.
@@ -2057,7 +1834,7 @@ class MainActivity : FragmentActivity() {
                 val engines = when (activeMode) {
                     BrowserMode.SIMPLE -> listOf("Google", "Yahoo", "Bing")
                     BrowserMode.DEVELOPER -> listOf("Yandex", "DuckDuckGo", "Baidu")
-                    BrowserMode.HACK -> listOf("Ahmia Search", "Deep Search", "AI Search")
+                    BrowserMode.HACK -> listOf("Google", "DuckDuckGo", "Bing")
                     BrowserMode.ADVANCED -> listOf("Google", "Brave Search", "DuckDuckGo")
                 }
                 if (currentSearchEngineSetting !in engines) {
@@ -2735,43 +2512,12 @@ class MainActivity : FragmentActivity() {
                                     }
                                 }
                                 item {
-                                    DrawerItem(label = "Embedded Resource Sniffer", icon = Icons.Default.OfflineShare, color = Color(0xFFFBBF24)) {
+                                    DrawerItem(label = "Page Resources", icon = Icons.Default.OfflineShare, color = Color(0xFFFBBF24)) {
                                         openDevToolsTab(3)
-                                    }
-                                }
-                                item {
-                                    DrawerItem(label = "JavaScript Interactive Console", icon = Icons.Default.Terminal, color = Color(0xFF34D399)) {
-                                        openDevToolsTab(1)
                                     }
                                 }
 
                                 item { DrawerCategoryHeader(title = "7. Power Mode") }
-                                item {
-                                    DrawerItem(label = "Rotate Spoofed User-Agent", icon = Icons.Default.Computer, color = Color(0xFF10B981)) {
-                                        scope.launch {
-                                            drawerState.close()
-                                            spoofedUAIndex = (spoofedUAIndex + 1) % 4
-                                            val uaStr = when (spoofedUAIndex) {
-                                                0 -> ModeManager.UA_HACK
-                                                1 -> "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Safari/605.1.15"
-                                                2 -> "Mozilla/5.0 (X11; Linux x86_64; rv:109.0) Gecko/20100101 Firefox/125.0"
-                                                else -> ModeManager.UA_SIMPLE
-                                            }
-                                            currentTab.webView?.settings?.userAgentString = uaStr
-                                            Toast.makeText(this@MainActivity, "User-Agent Spoofed successfully to Index $spoofedUAIndex", Toast.LENGTH_SHORT).show()
-                                        }
-                                    }
-                                }
-                                // Userscript extensions — HACK, DEVELOPER and ADVANCE
-                                // modes (Advance keeps its own script folder).
-                                if (activeMode == BrowserMode.HACK || activeMode == BrowserMode.DEVELOPER ||
-                                    activeMode == BrowserMode.ADVANCED) {
-                                    item {
-                                        DrawerItem(label = "Userscript Extensions", icon = Icons.Default.Extension, color = Color(0xFF39FF14)) {
-                                            scope.launch { drawerState.close(); showUserscripts = true }
-                                        }
-                                    }
-                                }
                                 item { DrawerCategoryHeader(title = "8. AI & Privacy Guards") }
                                 item {
                                     DrawerItem(label = "AI Chat Assistant", icon = Icons.Default.AutoAwesome, color = Color(0xFF4FC3FF)) {
@@ -2941,13 +2687,8 @@ class MainActivity : FragmentActivity() {
                                                 onDrawerClick = { scope.launch { drawerState.open() } },
                                                 tabCount = tabs.size,
                                                 onTabsClick = { showTabsManager = true },
-                                                // LocationGuard indicator: show when this site's
-                                                // location is blocked or spoofed.
-                                                locationMode = run {
-                                                    val m = effectiveLocationMode(currentTab.url)
-                                                    if (m == LocationGuard.LocationMode.ASK) null else m
-                                                },
-                                                locationSpoofLabel = locationSpoofLabel,
+                                                // Location requests are always blocked by Click.
+                                                locationMode = LocationGuard.LocationMode.BLOCK,
                                                 onLocationClick = { showLocationSettings = true }
                                             )
                                             // Thin page-load progress indicator.
@@ -3128,10 +2869,10 @@ class MainActivity : FragmentActivity() {
                                                                                 }
                                                                             }
                                                                         }
-                                                                        // HACK mode desktop persistence: sites like YouTube
+                                                                        // Power mode desktop host preference: sites like YouTube
                                                                         // redirect to their mobile domain (m.youtube.com)
                                                                         // even with a desktop UA. Force the desktop host
-                                                                        // so Hack mode STAYS in desktop view.
+                                                                        // so Power mode stays on the desktop host.
                                                                         if (liveMode == BrowserMode.HACK) {
                                                                             urlStr = forceDesktopHost(urlStr)
                                                                         }
@@ -3144,11 +2885,9 @@ class MainActivity : FragmentActivity() {
                                                                             // Per-site desktop override BEFORE loading (UA must be set first).
                                                                             if (view != null) this@MainActivity.applyPerSiteDesktop(view, urlStr)
                                                                             if (view != null) this@MainActivity.applyPerSiteSettings(view, urlStr)
-                                                                            // Privacy signals + header spoofing: navigations
-                                                                            // carry DNT/GPC whenever enabled (not gated
-                                                                            // on the header-spoof toggle — the toggles
-                                                                            // must measurably change behavior).
-                                                                            val navHeaders = liveCustomHeaders.toMutableMap()
+                                                                            // Optional DNT/GPC privacy signals ride on
+                                                                            // navigations when enabled.
+                                                                            val navHeaders = mutableMapOf<String, String>()
                                                                             if (liveFlags.dntHeader || liveDntEnabled) navHeaders["DNT"] = "1"
                                                                             if (liveGpcEnabled) navHeaders["Sec-GPC"] = "1"
                                                                             if (navHeaders.isNotEmpty()) {
@@ -3195,7 +2934,7 @@ class MainActivity : FragmentActivity() {
                                                                                 }
                                                                             }
                                                                         }
-                                                                        // HACK mode desktop persistence (see above).
+                                                                        // Power mode desktop host preference (see above).
                                                                         if (liveMode == BrowserMode.HACK) {
                                                                             urlStr = forceDesktopHost(urlStr)
                                                                         }
@@ -3207,9 +2946,9 @@ class MainActivity : FragmentActivity() {
                                                                         if (urlStr.startsWith("http://") || urlStr.startsWith("https://")) {
                                                                             if (view != null) this@MainActivity.applyPerSiteDesktop(view, urlStr)
                                                                             if (view != null) this@MainActivity.applyPerSiteSettings(view, urlStr)
-                                                                            // Privacy signals: DNT/GPC ride on navigations
-                                                                            // whenever enabled (not gated on header-spoof).
-                                                                            val navHeaders = liveCustomHeaders.toMutableMap()
+                                                                            // Optional DNT/GPC signals ride on navigations
+                                                                            // whenever enabled.
+                                                                            val navHeaders = mutableMapOf<String, String>()
                                                                             if (liveFlags.dntHeader || liveDntEnabled) navHeaders["DNT"] = "1"
                                                                             if (liveGpcEnabled) navHeaders["Sec-GPC"] = "1"
                                                                             if (navHeaders.isNotEmpty()) {
@@ -3234,32 +2973,7 @@ class MainActivity : FragmentActivity() {
                                                                 networkRequests.clear()
                                                                 sourcesList.clear()
 
-                                                                // LocationGuard: when the effective mode for this
-                                                                // page is SPOOF, replace navigator.geolocation
-                                                                // BEFORE page scripts run, so getCurrentPosition /
-                                                                // watchPosition return the spoofed coordinates and
-                                                                // the native permission prompt never fires.
-                                                                if (effectiveLocationMode(url) == LocationGuard.LocationMode.SPOOF) {
-                                                                    view?.evaluateJavascript(
-                                                                        LocationGuard.geolocationSpoofJs(
-                                                                            liveLocationSpoofLat,
-                                                                            liveLocationSpoofLng
-                                                                        ),
-                                                                        null
-                                                                    )
-                                                                }
 
-                                                                // V9: per-engine fingerprint for ALL modes — each engine
-                                                                // presents a distinct device/browser identity (navigator,
-                                                                // screen, WebGL vendor/renderer, seeded canvas noise)
-                                                                // so websites see Simple / Developer / Hack as three
-                                                                // different browsers.
-                                                                try {
-                                                                    view?.evaluateJavascript(
-                                                                        V9Engine.fingerprintJs(liveMode),
-                                                                        null
-                                                                    )
-                                                                } catch (_: Exception) { /* non-fatal */ }
                                                             }
 
                                                             override fun onPageFinished(view: WebView?, url: String?) {
@@ -3268,18 +2982,6 @@ class MainActivity : FragmentActivity() {
                                                                 pageLoadTime = System.currentTimeMillis() - lastPageStart
                                                                 // Pull-to-refresh completes when the page finishes loading.
                                                                 if (isRefreshing) isRefreshing = false
-
-                                                                // Cookie-consent banner blocking (Brave-style): hide
-                                                                // GDPR/consent banners via cosmetic selectors.
-                                                                if (liveBlockConsentBanners) {
-                                                                    try {
-                                                                        ConsentBannerBlocker.buildScript(
-                                                                            FilterListManager.currentConsentSelectors()
-                                                                        )?.let { script ->
-                                                                            view?.evaluateJavascript(script, null)
-                                                                        }
-                                                                    } catch (_: Exception) { /* non-fatal */ }
-                                                                }
 
                                                                 // Password manager: inject form detection + auto-fill
                                                                 // saved credentials for this host (if any).
@@ -3384,28 +3086,7 @@ class MainActivity : FragmentActivity() {
                                                                     view?.evaluateJavascript(DevToolsInjections.GET_SOURCES, null)
                                                                 }
 
-                                                                // Userscript extensions (HACK + DEVELOPER + ADVANCE modes):
-                                                                // inject every enabled script whose @match/@include
-                                                                // fits this URL. Advance uses its own script folder.
-                                                                // NOTE: WebView has no true document-start hook, so
-                                                                // @run-at document-start scripts also run here at
-                                                                // page finish — the earliest reliable point. The UI
-                                                                // states this plainly.
-                                                                if (liveMode == BrowserMode.HACK || liveMode == BrowserMode.DEVELOPER ||
-                                                                    liveMode == BrowserMode.ADVANCED) {
-                                                                    val pageUrl = url.orEmpty()
-                                                                    liveUserscripts.forEach { script ->
-                                                                        if (script.enabled && UserscriptEngine.matchesUrl(script.meta, pageUrl)) {
-                                                                            val code = liveUserscriptCode[script.id]
-                                                                            if (!code.isNullOrBlank()) {
-                                                                                view?.evaluateJavascript(
-                                                                                    UserscriptEngine.buildInjection(script.id, script.meta.name, code),
-                                                                                    null
-                                                                                )
-                                                                            }
-                                                                        }
-                                                                    }
-                                                                }
+
                                                             }
 
                                                             override fun shouldInterceptRequest(view: WebView?, request: WebResourceRequest?): WebResourceResponse? {
@@ -3418,17 +3099,6 @@ class MainActivity : FragmentActivity() {
                                                                     AdBlocker.shouldBlock(request?.url?.toString())
                                                                 ) {
                                                                     return WebResourceResponse("text/plain", "UTF-8", null)
-                                                                }
-                                                                // Header spoofing: re-fetch subresources with the
-                                                                // user's custom headers. Main-frame navigations
-                                                                // already carry them via loadUrl(url, extraHeaders).
-                                                                if (liveHeaderSpoof && liveCustomHeaders.isNotEmpty()
-                                                                    && request?.isForMainFrame == false
-                                                                ) {
-                                                                    val resUrl = request.url?.toString().orEmpty()
-                                                                    if (resUrl.startsWith("http://") || resUrl.startsWith("https://")) {
-                                                                        this@MainActivity.fetchWithSpoofedHeaders(resUrl)?.let { return it }
-                                                                    }
                                                                 }
                                                                 return super.shouldInterceptRequest(view, request)
                                                             }
@@ -3541,40 +3211,17 @@ class MainActivity : FragmentActivity() {
                                                                 tabs.firstOrNull { it.webView === view }?.loadProgress = newProgress
                                                             }
 
-                                                            // Geolocation: per-site SiteSettings location pref
-                                                            // (ALLOW/BLOCK from the site sheet) wins when set;
-                                                            // otherwise LocationGuard handles it (global mode +
-                                                            // per-site overrides + ASK dialog). Both features
-                                                            // stay fully functional.
+                                                            // Click does not request Android location permission.
+                                                            // Fail closed for every origin; no fake coordinates or Allow UI.
                                                             override fun onGeolocationPermissionsShowPrompt(
                                                                 origin: String?,
                                                                 callback: GeolocationPermissions.Callback?
                                                             ) {
-                                                                if (callback == null) {
-                                                                    super.onGeolocationPermissionsShowPrompt(origin, callback)
-                                                                    return
-                                                                }
-                                                                val host = try {
-                                                                    android.net.Uri.parse(origin ?: "").host
-                                                                } catch (_: Exception) { null }
-                                                                when (this@MainActivity.siteLocationPref(host)) {
-                                                                    com.click.browser.engine.SiteLocationPref.ALLOW ->
-                                                                        callback.invoke(origin, true, false)
-                                                                    com.click.browser.engine.SiteLocationPref.BLOCK ->
-                                                                        callback.invoke(origin, false, false)
-                                                                    else -> handleGeolocationPrompt(origin, callback) { o, h, cb ->
-                                                                        locationPromptOrigin = o
-                                                                        locationPromptHost = h
-                                                                        locationPromptCallback = cb
-                                                                        showLocationPrompt = true
-                                                                    }
-                                                                }
+                                                                callback?.invoke(origin, false, false)
                                                             }
 
                                                             override fun onGeolocationPermissionsHidePrompt() {
                                                                 super.onGeolocationPermissionsHidePrompt()
-                                                                showLocationPrompt = false
-                                                                locationPromptCallback = null
                                                             }
 
                                                             // Camera / microphone: per-site SiteSettings pref
@@ -3641,11 +3288,6 @@ class MainActivity : FragmentActivity() {
                                                             "WebRtcTestBridge"
                                                         )
 
-                                                        // GM_* storage bridge for userscript extensions.
-                                                        addJavascriptInterface(
-                                                            UserscriptBridge(ctx),
-                                                            "UserscriptBridge"
-                                                        )
 
                                                         // Password manager: detects login forms, offers to save.
                                                         addJavascriptInterface(
@@ -3680,7 +3322,7 @@ class MainActivity : FragmentActivity() {
                                                                 // used throughout the UI.
                                                                 if (liveSharpViewEnabled) setInitialScale(0)
                                                                 // Experimental flags (click://flags) — AFTER mode settings
-                                                                // so custom UA / zoom / etc. override the mode defaults.
+                                                                // so user-selected layout/zoom options override mode defaults.
                                                                 // Consistent with the desktopDefault OR above: the flag
                                                                 // participates in the mode decision, then fine-tunes it.
                                                                 this@MainActivity.applyExperimentalFlags(this)
@@ -3694,7 +3336,7 @@ class MainActivity : FragmentActivity() {
 
                                                                 // Long-press context menu (links + images).
                                                                 // Attached once at WebView creation, so it works in
-                                                                // every mode (Simple / Developer / Hack / Advance).
+                                                                // every mode (Simple / Developer / Power / Advance).
                                                                 // requestFocusNodeHref gives both the anchor URL
                                                                 // ("url") and the image source ("src") for the
                                                                 // long-pressed node; HitTestResult is the fallback.
@@ -3882,7 +3524,7 @@ class MainActivity : FragmentActivity() {
 
                             // Premium bottom nav (Phase 1): Home · Tabs (count badge) · big glowing
                             // AI center · Bookmarks · Menu. Mode-wired theme: Simple=light,
-                            // Developer=dark glass, Hack=OLED black neon.
+                            // Developer=dark glass, Power=OLED black neon.
                             if (showOverlays && !immersiveMode) {
                                 ClickBottomNav(
                                     theme = ModeThemes.forMode(activeMode, dark = activeMode != BrowserMode.SIMPLE),
@@ -4062,39 +3704,6 @@ class MainActivity : FragmentActivity() {
                                         },
                                         onClearLogs = { logs.clear() },
                                         onClearNetwork = { networkRequests.clear() },
-                                        onEvalJs = { code ->
-                                            // Echo the input, then run it and show the
-                                            // result (or error) as a console entry — no
-                                            // more silent eval.
-                                            logs.add(LogEntry("info", "> $code".take(500)))
-                                            if (logs.size > 500) logs.removeAt(0)
-                                            currentTab.webView?.evaluateJavascript(code) { result ->
-                                                val display = if (result.isNullOrBlank() || result == "null") {
-                                                    "(no return value)"
-                                                } else {
-                                                    // WebView JSON-encodes the result: strings come back
-                                                    // wrapped in quotes ("hello"), numbers/booleans/objects
-                                                    // come back unquoted (42, true, {...}). Strip quotes and
-                                                    // unescape only when they're actually present.
-                                                    // Unescape order matters: handle \\ FIRST so that an
-                                                    // escaped backslash (e.g. "\\n" meaning literal \ + n)
-                                                    // isn't misread as an escape sequence afterwards.
-                                                    val unquoted = if (result.length >= 2 &&
-                                                        result.startsWith("\"") && result.endsWith("\"")
-                                                    ) {
-                                                        result.substring(1, result.length - 1)
-                                                            .replace("\\\\", "\\")
-                                                            .replace("\\\"", "\"")
-                                                            .replace("\\n", "\n")
-                                                    } else {
-                                                        result
-                                                    }
-                                                    unquoted.take(500)
-                                                }
-                                                logs.add(LogEntry("success", "< $display"))
-                                                if (logs.size > 500) logs.removeAt(0)
-                                            }
-                                        },
                                         inspectorEnabled = elementInspectorEnabled,
                                         onToggleInspector = {
                                             elementInspectorEnabled = !elementInspectorEnabled
@@ -4145,10 +3754,7 @@ class MainActivity : FragmentActivity() {
                                     onStringFlag = { key, value ->
                                         scope.launch {
                                             dataStore.edit { prefs -> prefs[key] = value }
-                                            liveFlags = liveFlags.copy(
-                                                customUserAgent = if (key == ExperimentalFlags.K_CUSTOM_UA) value else liveFlags.customUserAgent,
-                                                customHomepage = if (key == ExperimentalFlags.K_CUSTOM_HOMEPAGE) value else liveFlags.customHomepage
-                                            )
+                                            liveFlags = liveFlags.copy(customHomepage = value)
                                             flagsUi = liveFlags
                                             liveWebViews.forEach { wv ->
                                                 try { applyExperimentalFlags(wv) } catch (_: Exception) { }
@@ -4207,101 +3813,9 @@ class MainActivity : FragmentActivity() {
                                 )
                             }
 
-                            // LocationGuard: ASK-mode dialog — a website wants geolocation.
-                            if (showLocationPrompt && locationPromptCallback != null) {
-                                LocationPromptDialog(
-                                    origin = locationPromptOrigin.orEmpty(),
-                                    host = locationPromptHost,
-                                    spoofLabel = locationSpoofLabel,
-                                    onBlock = { rememberForSite ->
-                                        locationPromptCallback?.invoke(locationPromptOrigin, false, false)
-                                        if (rememberForSite && locationPromptHost != null) {
-                                            scope.launch {
-                                                repository.setLocationModeHost(
-                                                    locationPromptHost!!,
-                                                    LocationGuard.LocationMode.BLOCK.key
-                                                )
-                                            }
-                                        }
-                                        showLocationPrompt = false
-                                        locationPromptCallback = null
-                                    },
-                                    onSpoof = { rememberForSite ->
-                                        // Inject the spoof JS now (page-start injection may
-                                        // have missed if the prompt fired first), then grant.
-                                        currentTab.webView?.evaluateJavascript(
-                                            LocationGuard.geolocationSpoofJs(
-                                                locationSpoofLat, locationSpoofLng
-                                            ),
-                                            null
-                                        )
-                                        locationPromptCallback?.invoke(locationPromptOrigin, true, false)
-                                        if (rememberForSite && locationPromptHost != null) {
-                                            scope.launch {
-                                                repository.setLocationModeHost(
-                                                    locationPromptHost!!,
-                                                    LocationGuard.LocationMode.SPOOF.key
-                                                )
-                                            }
-                                        }
-                                        showLocationPrompt = false
-                                        locationPromptCallback = null
-                                    },
-                                    onDismiss = {
-                                        // "Not now" = deny this request without remembering.
-                                        locationPromptCallback?.invoke(locationPromptOrigin, false, false)
-                                        showLocationPrompt = false
-                                        locationPromptCallback = null
-                                    }
-                                )
-                            }
-
-                            // LocationGuard: full settings sheet.
                             if (showLocationSettings) {
                                 LocationSettingsSheet(
                                     theme = theme,
-                                    mode = locationMode,
-                                    onModeChange = { m ->
-                                        locationMode = m
-                                        scope.launch {
-                                            dataStore.edit { prefs ->
-                                                prefs[AppSettings.LOCATION_MODE] = m.key
-                                            }
-                                        }
-                                    },
-                                    spoofLat = locationSpoofLat,
-                                    spoofLng = locationSpoofLng,
-                                    spoofLabel = locationSpoofLabel,
-                                    onSpoofPreset = { preset ->
-                                        locationSpoofLat = preset.lat
-                                        locationSpoofLng = preset.lng
-                                        locationSpoofLabel = preset.label
-                                        scope.launch {
-                                            dataStore.edit { prefs ->
-                                                prefs[AppSettings.LOCATION_SPOOF_LAT] = preset.lat.toString()
-                                                prefs[AppSettings.LOCATION_SPOOF_LNG] = preset.lng.toString()
-                                                prefs[AppSettings.LOCATION_SPOOF_LABEL] = preset.label
-                                            }
-                                        }
-                                    },
-                                    onCustomSpoof = { lat, lng, label ->
-                                        locationSpoofLat = lat
-                                        locationSpoofLng = lng
-                                        locationSpoofLabel = label
-                                        scope.launch {
-                                            dataStore.edit { prefs ->
-                                                prefs[AppSettings.LOCATION_SPOOF_LAT] = lat.toString()
-                                                prefs[AppSettings.LOCATION_SPOOF_LNG] = lng.toString()
-                                                prefs[AppSettings.LOCATION_SPOOF_LABEL] = label
-                                            }
-                                        }
-                                    },
-                                    siteModes = locationSiteModes,
-                                    onClearSiteMode = { host ->
-                                        scope.launch {
-                                            repository.setLocationModeHost(host, null)
-                                        }
-                                    },
                                     onClose = { showLocationSettings = false }
                                 )
                             }
@@ -4628,11 +4142,6 @@ class MainActivity : FragmentActivity() {
                                         forgetfulBrowsing = v
                                         scope.launch { dataStore.edit { prefs -> prefs[AppSettings.FORGETFUL_BROWSING] = v } }
                                     },
-                                    blockConsentBanners = blockConsentBanners,
-                                    onToggleBlockConsentBanners = { v ->
-                                        blockConsentBanners = v
-                                        scope.launch { dataStore.edit { prefs -> prefs[AppSettings.BLOCK_CONSENT_BANNERS] = v } }
-                                    },
                                     forgetfulExceptions = forgetfulExceptions,
                                     onForgetfulExceptionsChange = { v ->
                                         forgetfulExceptions = v
@@ -4664,9 +4173,14 @@ class MainActivity : FragmentActivity() {
                                     onClearHistoryForMode = { mode ->
                                         scope.launch {
                                             repository.clearHistoryFor(mode)
+                                            val historyScope = if (mode == BrowserMode.ADVANCED) {
+                                                "Advance"
+                                            } else {
+                                                "Simple/Developer/Power shared"
+                                            }
                                             Toast.makeText(
                                                 this@MainActivity,
-                                                "${mode.name.lowercase().replaceFirstChar { it.uppercase() }} history cleared",
+                                                "$historyScope history cleared",
                                                 Toast.LENGTH_SHORT
                                             ).show()
                                         }
@@ -4675,18 +4189,27 @@ class MainActivity : FragmentActivity() {
                                         // CookieManager is pinned to the current engine's data
                                         // directory — this clears the CURRENT mode's cookies only.
                                         CookieStore.clearAll {
-                                            Toast.makeText(this@MainActivity, "Cookies cleared (current mode)", Toast.LENGTH_SHORT).show()
+                                            Toast.makeText(this@MainActivity, "Cookies cleared (current profile)", Toast.LENGTH_SHORT).show()
                                         }
                                     },
                                     onClearCache = {
                                         currentTab.webView?.clearCache(true)
-                                        Toast.makeText(this@MainActivity, "Cache cleared (current mode)", Toast.LENGTH_SHORT).show()
+                                        Toast.makeText(this@MainActivity, "Cache cleared (current profile)", Toast.LENGTH_SHORT).show()
                                     },
                                     onClearAllCurrentMode = {
                                         scope.launch { repository.clearHistory() }
                                         CookieStore.clearAll()
                                         currentTab.webView?.clearCache(true)
-                                        Toast.makeText(this@MainActivity, "All browsing data cleared (current mode)", Toast.LENGTH_SHORT).show()
+                                        val historyScope = if (activeMode == BrowserMode.ADVANCED) {
+                                            "Advance"
+                                        } else {
+                                            "Simple/Developer/Power shared"
+                                        }
+                                        Toast.makeText(
+                                            this@MainActivity,
+                                            "Cookies/cache cleared for ${activeMode.display().title}; $historyScope history cleared",
+                                            Toast.LENGTH_SHORT
+                                        ).show()
                                     },
                                     onOpenCookieManager = { showSettings = false; showCookieManager = true },
                                     onOpenTabGroups = { showSettings = false; showTabGroups = true },
@@ -4695,7 +4218,7 @@ class MainActivity : FragmentActivity() {
                                     onOpenDownloadSettings = { showSettings = false; showDownloadSettings = true },
                                     onOpenReports = { showSettings = false; showReports = true },
                                     onOpenPrivacySecurity = { showSettings = false; showPrivacySecurity = true },
-                                    locationSummary = LocationGuard.websitesWillSee(locationMode, locationSpoofLabel),
+                                    locationSummary = LocationGuard.websitesWillSee(),
                                     onOpenLocationSettings = { showLocationSettings = true },
                                     perModeDark = perModeDark,
                                     onPerModeThemeChange = { mode, dark ->
@@ -4952,8 +4475,8 @@ class MainActivity : FragmentActivity() {
                                     showSiteSettings = false
                                 }
                             }
-                            // V9: Hack Mode signature moment — full-screen 5s
-                            // Markhor intro after a Hack engine boot. Tap to skip.
+                            // V9: Power Mode signature moment — full-screen 5s
+                            // Markhor intro after a Power profile boot. Tap to skip.
                             if (showHackIntro) {
                                 HackIntroOverlay(onDone = { showHackIntro = false })
                             }
@@ -5257,87 +4780,26 @@ class MainActivity : FragmentActivity() {
                             } // AnimatedVisibility (AI chat slide/spring)
                             if (showPrivacyGuards) {
                                 PrivacyGuardsScreen(
-                                    headerSpoofEnabled = headerSpoofEnabled,
-                                    onToggleHeaderSpoof = { v ->
-                                        headerSpoofEnabled = v
-                                        scope.launch { dataStore.edit { prefs -> prefs[AppSettings.HEADER_SPOOF_ENABLED] = v } }
-                                    },
-                                    customHeaders = customHeaders,
-                                    onAddHeader = { name, value ->
-                                        customHeaders = customHeaders + AppSettings.CustomHeader(name, value)
-                                        scope.launch {
-                                            dataStore.edit { prefs ->
-                                                prefs[AppSettings.CUSTOM_HEADERS_JSON] = AppSettings.headersToJson(customHeaders)
-                                            }
-                                        }
-                                    },
-                                    onRemoveHeader = { index ->
-                                        customHeaders = customHeaders.filterIndexed { i, _ -> i != index }
-                                        scope.launch {
-                                            dataStore.edit { prefs ->
-                                                prefs[AppSettings.CUSTOM_HEADERS_JSON] = AppSettings.headersToJson(customHeaders)
-                                            }
-                                        }
-                                    },
                                     dntEnabled = dntEnabled,
-                                    onToggleDnt = { v ->
-                                        dntEnabled = v
-                                        scope.launch { dataStore.edit { prefs -> prefs[AppSettings.DNT_ENABLED] = v } }
+                                    onToggleDnt = { value ->
+                                        dntEnabled = value
+                                        scope.launch { dataStore.edit { prefs -> prefs[AppSettings.DNT_ENABLED] = value } }
                                     },
                                     gpcEnabled = gpcEnabled,
-                                    onToggleGpc = { v ->
-                                        gpcEnabled = v
-                                        scope.launch { dataStore.edit { prefs -> prefs[AppSettings.GPC_ENABLED] = v } }
+                                    onToggleGpc = { value ->
+                                        gpcEnabled = value
+                                        scope.launch { dataStore.edit { prefs -> prefs[AppSettings.GPC_ENABLED] = value } }
                                     },
                                     secureDns = secureDnsEnabled,
-                                    onToggleSecureDns = { v ->
-                                        secureDnsEnabled = v
-                                        scope.launch { dataStore.edit { prefs -> prefs[AppSettings.SECURE_DNS_ENABLED] = v } }
+                                    onToggleSecureDns = { value ->
+                                        secureDnsEnabled = value
+                                        scope.launch { dataStore.edit { prefs -> prefs[AppSettings.SECURE_DNS_ENABLED] = value } }
                                     },
                                     webrtcRunning = webrtcTestRunning,
                                     webrtcIps = webrtcIps,
                                     webrtcTested = webrtcTested,
                                     onRunWebrtcTest = { runWebrtcLeakTest() },
-                                    webrtcGuardEnabled = userscripts.any {
-                                        it.meta.name == UserscriptManager.WEBRTC_GUARD_NAME && it.enabled
-                                    },
-                                    // Userscripts inject in Developer/Hack modes only —
-                                    // never imply protection in Simple mode.
-                                    webrtcGuardApplies = activeMode == BrowserMode.DEVELOPER ||
-                                        activeMode == BrowserMode.HACK ||
-                                        activeMode == BrowserMode.ADVANCED,
-                                    onToggleWebrtcGuard = { v ->
-                                        scope.launch(Dispatchers.IO) {
-                                            userscriptManager.setWebrtcGuardEnabled(v)
-                                            withContext(Dispatchers.Main) { refreshUserscripts() }
-                                        }
-                                    },
                                     onClose = { showPrivacyGuards = false }
-                                )
-                            }
-                            if (showUserscripts) {
-                                UserscriptsScreen(
-                                    scripts = userscripts,
-                                    notice = userscriptNotice,
-                                    onToggleScript = { id, enabled ->
-                                        scope.launch(Dispatchers.IO) {
-                                            userscriptManager.setEnabled(id, enabled)
-                                            withContext(Dispatchers.Main) { refreshUserscripts() }
-                                        }
-                                    },
-                                    onDeleteScript = { id ->
-                                        scope.launch(Dispatchers.IO) {
-                                            userscriptManager.delete(id)
-                                            withContext(Dispatchers.Main) {
-                                                userscriptNotice = "Script deleted."
-                                                refreshUserscripts()
-                                            }
-                                        }
-                                    },
-                                    onClose = {
-                                        showUserscripts = false
-                                        userscriptNotice = null
-                                    }
                                 )
                             }
 
@@ -5385,7 +4847,7 @@ class MainActivity : FragmentActivity() {
                             // Chrome/Mises-style browser menu (bottom sheet). Every item
                             // works — New tab, New private tab, Tabs switcher,
                             // History, Delete browsing data, Downloads, Bookmarks,
-                            // Recent tabs, Extensions (userscripts), Share,
+                            // Recent tabs, Share,
                             // Find in page, Translate, Desktop site, Settings.
                             if (showBrowserMenu) {
                                 val menuPageHost = try {
@@ -5433,7 +4895,6 @@ class MainActivity : FragmentActivity() {
                                     onBookmarks = { showBrowserMenu = false; showBookmarks = true },
                                     onGames = { showBrowserMenu = false; showClickPage = "games" },
                                     onRecentTabs = { showBrowserMenu = false; showRecentTabs = true },
-                                    onExtensions = { showBrowserMenu = false; showUserscripts = true },
                                     onShare = {
                                         showBrowserMenu = false
                                         val url = currentTab.url
@@ -5670,8 +5131,8 @@ class MainActivity : FragmentActivity() {
     }
 
     /**
-     * HACK mode desktop persistence: rewrites known mobile hosts to their
-     * desktop equivalents so sites can't flip Hack mode back to mobile view.
+     * Power-mode desktop host preference: rewrites known mobile hosts to their
+     * desktop equivalents so sites remain on the selected desktop host.
      * e.g. m.youtube.com -> www.youtube.com, m.facebook.com -> www.facebook.com
      */
     private fun forceDesktopHost(url: String): String {
@@ -5733,9 +5194,10 @@ class MainActivity : FragmentActivity() {
             }
             BrowserMode.HACK -> {
                 when (searchEngine) {
-                    "Deep Search" -> "https://www.startpage.com/sp/search?query=$query"
-                    "AI Search", "integrated AI search" -> "https://perplexity.ai/search?q=$query"
-                    else -> "https://ahmia.fi/search/?q=$query"
+                    "Startpage", "Deep Search" -> "https://www.startpage.com/sp/search?query=$query"
+                    "Perplexity", "AI Search", "integrated AI search" -> "https://www.perplexity.ai/search?q=$query"
+                    "DuckDuckGo" -> "https://duckduckgo.com/?q=$query"
+                    else -> "https://search.brave.com/search?q=$query"
                 }
             }
             BrowserMode.ADVANCED -> {
@@ -5751,8 +5213,8 @@ class MainActivity : FragmentActivity() {
     }
 
     /**
-     * V9: switching modes = switching engines. Each engine (Simple / Developer
-     * / Hack / Advance) owns an isolated WebView data directory, so when the
+     * Switching modes selects browser-data profiles. Each profile (Simple /
+     * Developer / Power / Advance) owns an isolated WebView data directory, so when the
      * selected mode differs from the engine this process booted with, the mode
      * is persisted and the process restarts into the new engine. Advance
      * additionally owns an isolated app-data profile that starts empty —
@@ -5773,14 +5235,14 @@ class MainActivity : FragmentActivity() {
             // Honest copy: a fresh isolated space, not a new engine.
             "Entering Click Advance — fresh isolated space, restarting…"
         } else {
-            "Switching V9 engine — restarting…"
+            "Switching browser profile — restarting…"
         }
         android.widget.Toast.makeText(
             this, toastMsg, android.widget.Toast.LENGTH_LONG
         ).show()
         // Crash-restore: an intentional engine switch is a CLEAN exit of the
         // source mode — persist its final tab snapshot and mark it clean so
-        // switching Simple→Hack→Simple restores Simple's tabs instead of
+        // switching Simple→Power→Simple restores Simple's tabs instead of
         // offering a phantom "crash" restore. Per-mode keys keep isolation.
         // liveRestoreTabs is refreshed synchronously on every tab change
         // (only the DataStore write is debounced), so this is never stale.
@@ -6001,11 +5463,11 @@ fun DrawerItem(
 
 /**
  * Unified top bar — fixed at the very top in every mode (Prince's requirement).
- * Styled per the three approved mode designs:
+ * Styled per the four current browser-profile designs:
  *   Row 1: [hamburger] "Click" wordmark + SMALL stylish mode pill ..... [settings]
  *   Row 2: [back][forward] [ full-width rounded address/search field ] [refresh][bookmark]
  *   Row 3 (Developer mode only): element inspector + device emulator toggles.
- * The big HACK pill button is gone — the mode shows only as the small pill,
+ * The large mode button is gone — the profile shows only as the small pill,
  * like the "SIMPLE MODE" pill in the approved Simple design.
  */
 @OptIn(ExperimentalMaterial3Api::class)
@@ -6318,13 +5780,9 @@ fun PremiumHomeScreen(
     onVideoClick: () -> Unit,
     onPdfClick: () -> Unit,
     onImagesClick: () -> Unit,
-    // Hack mode controls
-    @Suppress("UNUSED_PARAMETER") antiDetectionEnabled: Boolean,
-    @Suppress("UNUSED_PARAMETER") onToggleAntiDetection: () -> Unit,
+    // Power mode layout control
     forceDesktopMode: Boolean,
     onToggleForceDesktop: () -> Unit,
-    spoofedUAIndex: Int,
-    onCycleUA: () -> Unit,
     // Settings controllers
     adBlockerEnabled: Boolean,
     onToggleAdBlocker: (Boolean) -> Unit,
@@ -6395,9 +5853,6 @@ fun PremiumHomeScreen(
                     .fillMaxSize()
                     .background(theme.background)
             )
-        }
-        if (activeMode == BrowserMode.HACK) {
-            MatrixGridAnimation()
         }
 
         Column(

@@ -17,7 +17,7 @@ object ClickInternalPages {
 
     val PAGES: List<Page> = listOf(
         Page("flags", "Experiments", "Experimental features lab — 20+ real toggles"),
-        Page("version", "Version", "V9 engine info & feature count"),
+        Page("version", "Version", "Build and browser profile information"),
         Page("settings", "Settings", "Open app settings"),
         Page("history", "History", "Browsing history"),
         Page("downloads", "Downloads", "Downloaded files"),
@@ -28,9 +28,6 @@ object ClickInternalPages {
         Page("newtab", "New Tab", "Premium home page"),
         Page("games", "Games", "Offline mini-games + Today Update"),
     )
-
-    /** Total user-facing features, kept in sync with docs/FEATURES.md. */
-    const val FEATURE_COUNT = 142
 
     fun isInternalUrl(url: String): Boolean =
         url.trim().lowercase().startsWith(SCHEME)

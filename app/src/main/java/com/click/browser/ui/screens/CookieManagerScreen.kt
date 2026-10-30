@@ -37,7 +37,7 @@ import kotlinx.coroutines.launch
  * as-is — they are the user's own cookies.
  *
  * Cookies live in the per-engine WebView data directory, so this screen shows
- * the CURRENT engine mode's cookies only (Simple / Developer / Hack).
+ * the CURRENT profile's cookies only (Simple / Developer / Power / Advance).
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable

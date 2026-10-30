@@ -24,7 +24,7 @@ import com.click.browser.engine.BrowserMode
  * Official per-mode display names + taglines, used by every mode switcher:
  * - Simple — Clean · Fresh · Easy on Eyes
  * - Developer — Modern · Stylish · Premium
- * - Hack — Pure Black · Neon Glow · Next Level
+ * - Power — Pure Black · Neon Glow · Next Level
  * - Advance — Isolated · Fast · Fresh Space (own data profile, starts empty)
  */
 data class ModeDisplay(val title: String, val tagline: String)

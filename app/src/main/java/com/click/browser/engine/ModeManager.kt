@@ -19,21 +19,13 @@ class ModeManager(private val context: Context) {
         // Public: V9Engine reads the saved mode synchronously in Application.onCreate
         // to pin the process to the correct engine data directory.
         val MODE_KEY = stringPreferencesKey("browser_mode")
-
-        // V9 per-engine User-Agents — deliberately distinct devices/browsers so
-        // websites (e.g. Google) see four different browsers, one per engine.
-        const val UA_SIMPLE = "Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Mobile Safari/537.36"
-        const val UA_DEVELOPER = "Mozilla/5.0 (Linux; Android 14; SM-S921B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Mobile Safari/537.36"
-        const val UA_HACK = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36"
-        // Advance: desktop-class like Hack but a distinct, newer Chrome build.
-        const val UA_ADVANCED = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"
     }
 
     val modeFlow: Flow<BrowserMode> = context.dataStore.data.map { preferences ->
         val modeStr = preferences[MODE_KEY] ?: BrowserMode.SIMPLE.name
         try {
             BrowserMode.valueOf(modeStr)
-        } catch (e: Exception) {
+        } catch (_: Exception) {
             BrowserMode.SIMPLE
         }
     }
@@ -45,86 +37,37 @@ class ModeManager(private val context: Context) {
     }
 
     /**
-     * UA POLICY (Prince's requirement — no mid-load flip):
-     * - HACK / ADVANCED → DESKTOP (PC) UA, always. These are the desktop-class
-     *   modes; sites (e.g. YouTube) render the desktop layout steadily, from
-     *   the very first request.
-     * - SIMPLE / DEVELOPER → MOBILE UA, always.
-     * - Desktop UA for other modes comes ONLY from the per-site "Desktop
-     *   site" toggle ([applyDesktopOverride]).
-     * The UA is chosen once per mode (or per-site override) and applied
-     * consistently from the first request — it is never switched mid-load.
+     * Applies mode-specific WebSettings without changing the browser identity.
+     * All modes use Android System WebView's actual User-Agent. Desktop mode
+     * changes only layout/viewport behavior, as a normal browser setting.
      */
     fun applySettings(webView: WebView, mode: BrowserMode, forceDesktop: Boolean = false) {
         val settings = webView.settings
-
-        // General always-on configs as requested
         settings.javaScriptEnabled = true
         settings.domStorageEnabled = true
-        settings.mediaPlaybackRequiresUserGesture = false // Enabled media playback
+        settings.mediaPlaybackRequiresUserGesture = false
         settings.allowFileAccess = true
         settings.allowContentAccess = true
 
-        when (mode) {
-            BrowserMode.SIMPLE -> {
-                settings.userAgentString = UA_SIMPLE
-                // Wide viewport and overview mode disabled
-                settings.useWideViewPort = false
-                settings.loadWithOverviewMode = false
-                // Normal layout
-                settings.layoutAlgorithm = WebSettings.LayoutAlgorithm.NORMAL
-            }
-            BrowserMode.DEVELOPER -> {
-                settings.userAgentString = UA_DEVELOPER
-                // Optional toggle for desktop mode, if requested, we can handle via forceDesktop parameter
-                if (forceDesktop) {
-                    settings.userAgentString = UA_HACK // Spoof desktop if emulator wants desktop
-                    settings.useWideViewPort = true
-                    settings.loadWithOverviewMode = true
-                } else {
-                    settings.useWideViewPort = false
-                    settings.loadWithOverviewMode = false
-                }
-            }
-            BrowserMode.HACK -> {
-                settings.userAgentString = UA_HACK
-                // Force desktop mode enabled
-                settings.useWideViewPort = true
-                settings.loadWithOverviewMode = true
-                // Hack mode viewport specs (1920x1080) can also be controlled on layout / JS injection side
-            }
-            // Click Advance: desktop-class profile with "fast track" tuning.
-            // HONEST SCOPE: these are real WebSettings knobs (explicit cache
-            // policy, full image loading, DOM storage) — the gains are
-            // incremental. The renderer is still the system WebView; there is
-            // no separate engine, and nothing here swaps the JS engine.
-            BrowserMode.ADVANCED -> {
-                settings.userAgentString = UA_ADVANCED
-                settings.useWideViewPort = true
-                settings.loadWithOverviewMode = true
-                settings.layoutAlgorithm = WebSettings.LayoutAlgorithm.NORMAL
-                // Fast track: explicit default cache policy (HTTP cache +
-                // app cache), images always on for full-fidelity loads
-                // (the data-saver image block stays available as a toggle),
-                // DOM storage for modern web apps.
-                settings.cacheMode = WebSettings.LOAD_DEFAULT
-                settings.loadsImagesAutomatically = true
-                settings.blockNetworkImage = false
-                settings.domStorageEnabled = true
-            }
+        val desktopLayout = forceDesktop || mode == BrowserMode.HACK || mode == BrowserMode.ADVANCED
+        settings.useWideViewPort = desktopLayout
+        settings.loadWithOverviewMode = desktopLayout
+        settings.layoutAlgorithm = WebSettings.LayoutAlgorithm.NORMAL
+
+        if (mode == BrowserMode.ADVANCED) {
+            // These are genuine WebSettings controls; gains are incremental.
+            settings.cacheMode = WebSettings.LOAD_DEFAULT
+            settings.loadsImagesAutomatically = true
+            settings.blockNetworkImage = false
+            settings.domStorageEnabled = true
         }
     }
 
-    /**
-     * Applies or clears a per-site desktop override on top of the current mode settings.
-     * Desktop = desktop UA + wide viewport; Mobile = the mode's own settings.
-     */
+    /** Toggle the requested layout without substituting another device identity. */
     fun applyDesktopOverride(webView: WebView, mode: BrowserMode, desktop: Boolean) {
-        val settings = webView.settings
         if (desktop) {
-            settings.userAgentString = UA_HACK
-            settings.useWideViewPort = true
-            settings.loadWithOverviewMode = true
+            webView.settings.useWideViewPort = true
+            webView.settings.loadWithOverviewMode = true
         } else {
             applySettings(webView, mode, forceDesktop = false)
         }

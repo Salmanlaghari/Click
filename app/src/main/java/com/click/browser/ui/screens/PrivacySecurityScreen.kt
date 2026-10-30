@@ -238,8 +238,7 @@ fun PrivacySecurityScreen(
             PrivCard(theme) {
                 PrivCardTitle("Safety Check", Icons.Default.VerifiedUser, theme)
                 Text(
-                    "Scans Click's protections on this device — Safe Browsing, HTTPS, " +
-                        "password manager, fingerprint protection, tracker stripping.",
+                    "Checks Safe Browsing, HTTPS, the password manager and tracker-link stripping.",
                     fontSize = 12.sp, color = theme.onSurface.copy(alpha = 0.65f)
                 )
                 Spacer(Modifier.height(10.dp))

@@ -67,7 +67,6 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.click.browser.engine.CookieStore
 import com.click.browser.engine.ModeTheme
-import com.click.browser.engine.SiteLocationPref
 import com.click.browser.engine.SitePermissionPref
 import com.click.browser.engine.SiteSettings
 import kotlinx.coroutines.launch
@@ -75,7 +74,7 @@ import kotlinx.coroutines.launch
 /**
  * Chrome-style per-site settings bottom sheet, opened from the lock icon
  * in the address bar. Per-mode themed via [theme] (Simple = light,
- * Developer = dark glass, Hack = OLED neon, Advance = deep-space teal).
+ * Developer = dark glass, Power = OLED neon, Advance = deep-space teal).
  *
  * Sections (mirroring Chrome's site-details page):
  * - Site header: gradient icon + host + connection security badge.
@@ -178,29 +177,6 @@ fun SiteSettingsSheet(
 
             // ================= PERMISSIONS =================
             SectionTitle(theme, "Permissions")
-            PermissionDropdownRow(
-                theme = theme,
-                icon = Icons.Default.LocationOn,
-                title = "Location",
-                subtitle = "Allow this site to know your location",
-                value = current.location?.let {
-                    when (it) {
-                        SiteLocationPref.ALLOW -> SitePermissionPref.ALLOW
-                        SiteLocationPref.BLOCK -> SitePermissionPref.BLOCK
-                        SiteLocationPref.ASK -> SitePermissionPref.ASK
-                    }
-                },
-                defaultLabel = "Ask",
-                onChange = { pref ->
-                    val loc = when (pref) {
-                        null -> null
-                        SitePermissionPref.ALLOW -> SiteLocationPref.ALLOW
-                        SitePermissionPref.BLOCK -> SiteLocationPref.BLOCK
-                        SitePermissionPref.ASK -> SiteLocationPref.ASK
-                    }
-                    onSettingsChange(current.copy(location = loc))
-                }
-            )
             PermissionDropdownRow(
                 theme = theme,
                 icon = Icons.Default.CameraAlt,

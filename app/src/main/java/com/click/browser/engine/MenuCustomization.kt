@@ -28,7 +28,6 @@ object MenuCustomization {
         BOOKMARKS("Bookmarks"),
         GAMES("Games"),
         RECENT_TABS("Recent tabs"),
-        EXTENSIONS("Extensions"),
         SHARE("Share…"),
         FIND_IN_PAGE("Find in page"),
         TRANSLATE("Translate"),

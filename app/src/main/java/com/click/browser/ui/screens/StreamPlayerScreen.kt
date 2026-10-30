@@ -174,7 +174,7 @@ fun StreamPlayerScreen(
                         )
                     }
                     Text(
-                        "Paste a live stream URL (HLS .m3u8, DASH .mpd, or direct video). Playback only — nothing is downloaded.",
+                        "Paste a direct stream URL you own or are authorized to access (HLS .m3u8, DASH .mpd, or direct video). Playback only; Click does not extract streams from webpages or download content.",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )

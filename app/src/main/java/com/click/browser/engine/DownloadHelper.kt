@@ -87,7 +87,7 @@ object DownloadHelper {
             tree.findFile(fileName)?.delete()
             val doc = tree.createFile(guessMime(fileName), fileName) ?: return@withContext false
             val req = okhttp3.Request.Builder().url(url).get()
-                .header("User-Agent", "Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36")
+                .header("User-Agent", android.webkit.WebSettings.getDefaultUserAgent(context.applicationContext))
                 .build()
             httpClient.newCall(req).execute().use { resp ->
                 if (!resp.isSuccessful) return@withContext false

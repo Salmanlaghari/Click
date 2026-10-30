@@ -6,8 +6,6 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.text.KeyboardActions
-import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -16,7 +14,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.click.browser.engine.LogEntry
@@ -48,7 +45,6 @@ fun DevToolsPanel(
     onTabSelected: (Int) -> Unit,
     onClearLogs: () -> Unit,
     onClearNetwork: () -> Unit,
-    onEvalJs: (String) -> Unit,
     inspectorEnabled: Boolean,
     onToggleInspector: () -> Unit,
     deviceInfo: DeviceInfo?,
@@ -81,7 +77,7 @@ fun DevToolsPanel(
         ) {
             when (selectedTab) {
                 0 -> ElementsTab(domHtml, inspectorEnabled, onToggleInspector)
-                1 -> ConsoleTab(logs, onClearLogs, onEvalJs)
+                1 -> ConsoleTab(logs, onClearLogs)
                 2 -> NetworkTab(networkRequests, onClearNetwork)
                 3 -> SourcesTab(sourcesList)
                 4 -> DeviceTab(deviceInfo, onRefreshDeviceInfo)
@@ -169,18 +165,15 @@ fun ElementsTab(
 @Composable
 fun ConsoleTab(
     logs: List<LogEntry>,
-    onClearLogs: () -> Unit,
-    onEvalJs: (String) -> Unit
+    onClearLogs: () -> Unit
 ) {
-    var jsInput by remember { mutableStateOf("") }
-
     Column(modifier = Modifier.fillMaxSize()) {
         Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically
         ) {
-            Text("JavaScript Console", color = Color.Gray, fontSize = 12.sp)
+            Text("Page Console (read-only)", color = Color.Gray, fontSize = 12.sp)
             TextButton(onClick = onClearLogs) {
                 Text("Clear", color = Color.Red, fontSize = 12.sp)
             }
@@ -229,47 +222,6 @@ fun ConsoleTab(
             }
         }
 
-        Spacer(modifier = Modifier.height(4.dp))
-
-        // JS Input
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            OutlinedTextField(
-                value = jsInput,
-                onValueChange = { jsInput = it },
-                modifier = Modifier.weight(1f),
-                textStyle = LocalTextStyle.current.copy(fontFamily = FontFamily.Monospace, fontSize = 12.sp, color = Color.White),
-                colors = OutlinedTextFieldDefaults.colors(
-                    focusedBorderColor = Color.Magenta,
-                    unfocusedBorderColor = Color.Gray,
-                    focusedTextColor = Color.White,
-                    unfocusedTextColor = Color.White
-                ),
-                placeholder = { Text("eval(code...)", color = Color.DarkGray, fontSize = 12.sp) },
-                singleLine = true,
-                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
-                keyboardActions = KeyboardActions(onSend = {
-                    if (jsInput.isNotBlank()) {
-                        onEvalJs(jsInput)
-                        jsInput = ""
-                    }
-                })
-            )
-            Spacer(modifier = Modifier.width(4.dp))
-            Button(
-                onClick = {
-                    if (jsInput.isNotBlank()) {
-                        onEvalJs(jsInput)
-                        jsInput = ""
-                    }
-                },
-                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF7B1FA2))
-            ) {
-                Text("Run", fontSize = 11.sp)
-            }
-        }
     }
 }
 

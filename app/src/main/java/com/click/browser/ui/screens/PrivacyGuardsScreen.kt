@@ -40,35 +40,14 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.click.browser.engine.AppSettings
-
 /**
- * Privacy Guards screen. Every control here does exactly what its label
- * claims — there are no toast-only fakes:
- *
- * - Custom HTTP Headers: adds YOUR header list to page navigations
- *   (loadUrl extraHeaders) and re-fetches page resources with those headers
- *   via shouldInterceptRequest. Hop-by-hop headers can't be overridden.
- * - Secure DNS: DNS-over-HTTPS (Cloudflare) for the APP's own requests
- *   (AI chat, header re-fetch). WebView page loads still use system DNS —
- *   Android exposes no WebView DoH setting; the UI says so.
- * - WebRTC Leak Test: runs a REAL STUN-based ICE candidate gathering in the
- *   current tab and lists the IPs a site could see. It is a test, not a
- *   blocker — WebView has no API to disable WebRTC (STUN is UDP), so a
- *   system VPN remains the real mitigation; the UI says so.
- * - WebRTC Leak Guard: OPT-IN bundled userscript that stops page scripts
- *   from creating RTCPeerConnection and enumerating cameras/mics. Off by
- *   default because it breaks legitimate video calls. Reduces page-JS
- *   fingerprinting only — never presented as 100% leak-proof.
+ * Privacy controls with clear behavior: optional DNT/GPC request signals,
+ * DNS-over-HTTPS for the app's AI requests, and a WebRTC visibility test.
+ * This screen does not change page identity or run user-provided scripts.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun PrivacyGuardsScreen(
-    headerSpoofEnabled: Boolean,
-    onToggleHeaderSpoof: (Boolean) -> Unit,
-    customHeaders: List<AppSettings.CustomHeader>,
-    onAddHeader: (String, String) -> Unit,
-    onRemoveHeader: (Int) -> Unit,
     dntEnabled: Boolean,
     onToggleDnt: (Boolean) -> Unit,
     gpcEnabled: Boolean,
@@ -79,15 +58,8 @@ fun PrivacyGuardsScreen(
     webrtcIps: List<String>?,
     webrtcTested: Boolean,
     onRunWebrtcTest: () -> Unit,
-    webrtcGuardEnabled: Boolean,
-    webrtcGuardApplies: Boolean,
-    onToggleWebrtcGuard: (Boolean) -> Unit,
     onClose: () -> Unit
 ) {
-    var newHeaderName by remember { mutableStateOf("") }
-    var newHeaderValue by remember { mutableStateOf("") }
-    var headersExpanded by remember { mutableStateOf(false) }
-
     Scaffold(
         topBar = {
             TopAppBar(
@@ -107,79 +79,6 @@ fun PrivacyGuardsScreen(
                 .padding(16.dp),
             verticalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(16.dp)
         ) {
-            // ---- Custom HTTP Headers ----
-            item {
-                GuardToggleRow(
-                    title = "Custom HTTP Headers",
-                    subtitle = "Adds your header list to page navigations and re-fetches page " +
-                        "resources with those headers. Hop-by-hop headers (Host, " +
-                        "Content-Length, Connection) cannot be overridden.",
-                    checked = headerSpoofEnabled,
-                    onCheckedChange = onToggleHeaderSpoof
-                )
-            }
-            item {
-                OutlinedButton(
-                    onClick = { headersExpanded = !headersExpanded },
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    Text(if (headersExpanded) "Hide header list (${customHeaders.size})" else "Edit header list (${customHeaders.size})")
-                }
-            }
-            if (headersExpanded) {
-                itemsIndexed(customHeaders) { index, h ->
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text(h.name, fontWeight = FontWeight.SemiBold, fontSize = 13.sp)
-                            Text(h.value, fontSize = 12.sp, color = Color.Gray)
-                        }
-                        IconButton(onClick = { onRemoveHeader(index) }) {
-                            Icon(Icons.Default.Delete, contentDescription = "Remove", tint = Color.Red)
-                        }
-                    }
-                }
-                item {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        OutlinedTextField(
-                            value = newHeaderName,
-                            onValueChange = { newHeaderName = it },
-                            label = { Text("Header name") },
-                            modifier = Modifier.weight(1f),
-                            singleLine = true
-                        )
-                        Spacer(modifier = Modifier.width(8.dp))
-                        OutlinedTextField(
-                            value = newHeaderValue,
-                            onValueChange = { newHeaderValue = it },
-                            label = { Text("Value") },
-                            modifier = Modifier.weight(1f),
-                            singleLine = true
-                        )
-                    }
-                    Spacer(modifier = Modifier.height(8.dp))
-                    Button(
-                        onClick = {
-                            if (newHeaderName.isNotBlank()) {
-                                onAddHeader(newHeaderName.trim(), newHeaderValue)
-                                newHeaderName = ""
-                                newHeaderValue = ""
-                            }
-                        },
-                        modifier = Modifier.fillMaxWidth()
-                    ) {
-                        Icon(Icons.Default.Add, contentDescription = null)
-                        Spacer(modifier = Modifier.width(4.dp))
-                        Text("Add header")
-                    }
-                }
-            }
-
             // ---- Do-Not-Track + Global Privacy Control (opt-in) ----
             item {
                 GuardToggleRow(
@@ -206,35 +105,11 @@ fun PrivacyGuardsScreen(
             item {
                 GuardToggleRow(
                     title = "Secure DNS (app traffic)",
-                    subtitle = "Resolves the app's own requests (AI chat, header re-fetch) " +
+                    subtitle = "Resolves AI chat requests " +
                         "over DNS-over-HTTPS via Cloudflare. WebView page loads still use " +
                         "your system's DNS — Android WebView has no DoH setting.",
                     checked = secureDns,
                     onCheckedChange = onToggleSecureDns
-                )
-            }
-
-            // ---- WebRTC Leak Guard (opt-in bundled userscript) ----
-            // Userscripts only inject in Developer/Power modes; in Simple
-            // mode the toggle is shown disabled so it never implies
-            // protection that isn't happening.
-            item {
-                GuardToggleRow(
-                    title = "WebRTC Leak Guard (opt-in)",
-                    subtitle = if (webrtcGuardApplies)
-                        "Stops page scripts from creating RTCPeerConnection " +
-                            "and from enumerating cameras/microphones. May break " +
-                            "legitimate video calls on pages where enabled. Reduces " +
-                            "page-JS fingerprinting only — not 100% leak-proof; a " +
-                            "system-wide VPN remains the real mitigation. Verify " +
-                            "with the leak test below."
-                    else
-                        "Userscript extensions only run in Developer and Power " +
-                            "modes — switch modes to use this guard. It stays " +
-                            "installed but inactive in Simple mode.",
-                    checked = webrtcGuardEnabled && webrtcGuardApplies,
-                    enabled = webrtcGuardApplies,
-                    onCheckedChange = onToggleWebrtcGuard
                 )
             }
 
