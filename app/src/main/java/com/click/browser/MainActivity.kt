@@ -174,15 +174,12 @@ class MainActivity : FragmentActivity() {
     // Live copies of composable state for use inside WebViewClient callbacks,
     // which are created once and would otherwise capture stale values.
     private var liveMode: BrowserMode = BrowserMode.SIMPLE
-    private var liveAntiDetection = true
     private var liveNightMode = false
     private var liveDataSaver = false
     // Advance Mode intro animation toggle (Settings; default ON).
     private var liveAdvanceIntroEnabled = true
     // Live copies for the privacy-guard features (see PrivacyGuards).
     private var liveHeaderSpoof = false
-    // Fingerprint mode: "off" | "standard" | "strict" (Brave-hardening).
-    private var liveFingerprintMode = "standard"
     private var liveSecureDns = false
     private var liveCustomHeaders: Map<String, String> = emptyMap()
     // Brave-inspired privacy quick wins (live copies for WebViewClient callbacks).
@@ -300,33 +297,11 @@ class MainActivity : FragmentActivity() {
     // Registry of live WebViews for flag-driven cleanup (clear-on-exit).
     private val liveWebViews = mutableListOf<android.webkit.WebView>()
 
-    // Session salt for per-session fingerprint-noise randomization.
-    // Generated once per app launch: noise is stable within a session but
-    // differs on every launch, so hashes can't be correlated across sessions.
-    private val sessionSalt: String = java.util.UUID.randomUUID().toString()
-    /** Fingerprint-protection script for the current mode (strict adds extra hooks). */
-    private fun fingerprintScript(strict: Boolean): String =
-        PrivacyGuards.buildFingerprintScript(sessionSalt, strict)
-
     // Userscript extensions (HACK mode). Live caches are refreshed whenever
     // the script list changes so WebViewClient always sees current data.
     private val userscriptManager by lazy { UserscriptManager(this) }
     private var liveUserscripts: List<UserscriptInfo> = emptyList()
     private var liveUserscriptCode: Map<String, String> = emptyMap()
-
-    /** Downloads a text file (used for installing userscripts from URL). Null on any failure. */
-    private fun downloadText(url: String): String? {
-        return try {
-            val req = Request.Builder().url(url)
-                .header("User-Agent", "ClickBrowser/1.0").build()
-            getHeaderFetchClient().newCall(req).execute().use { resp ->
-                if (!resp.isSuccessful) return null
-                resp.body?.string()
-            }
-        } catch (_: Exception) {
-            null
-        }
-    }
 
     // OkHttp client used to re-fetch page resources with spoofed headers.
     // Rebuilt when the Secure-DNS mode changes.
@@ -1589,8 +1564,6 @@ class MainActivity : FragmentActivity() {
             var aiProvider by remember { mutableStateOf("groq") }
             var aiModel by remember { mutableStateOf("") }
             var headerSpoofEnabled by remember { mutableStateOf(false) }
-            // Fingerprint mode: "off" | "standard" | "strict" (Brave-hardening).
-            var fingerprintMode by remember { mutableStateOf("standard") }
             // DNT + GPC privacy signals (opt-in, default off).
             var dntEnabled by remember { mutableStateOf(false) }
             var gpcEnabled by remember { mutableStateOf(false) }
@@ -1628,16 +1601,12 @@ class MainActivity : FragmentActivity() {
             val sourcesList = devToolsSources
 
             // Hack tools states
-            var antiDetectionEnabled by remember { mutableStateOf(true) }
             // UA consistency: HACK mode is desktop UA by mode design, SIMPLE/DEVELOPER
             // are mobile UA. The global force-desktop defaults OFF — desktop UA
             // comes from the mode or the per-site Desktop toggle only, and the
             // UA is never switched mid-page-load (see onToggleForceDesktop reload).
             var forceDesktopMode by remember { mutableStateOf(false) }
             var spoofedUAIndex by remember { mutableStateOf(0) }
-            val detectedVideos = remember { mutableStateListOf<String>() }
-            var showDownloaderDialog by remember { mutableStateOf(false) }
-
             // Long-press context menu (links + images on web pages).
             // Set from the WebView's OnLongClickListener via requestFocusNodeHref.
             var longPressLinkUrl by remember { mutableStateOf<String?>(null) }
@@ -1915,7 +1884,6 @@ class MainActivity : FragmentActivity() {
 
             // Keep the WebViewClient-safe live copies in sync with composable state
             LaunchedEffect(activeMode) { liveMode = activeMode }
-            LaunchedEffect(antiDetectionEnabled) { liveAntiDetection = antiDetectionEnabled }
             LaunchedEffect(httpsMode) { liveHttpsMode = httpsMode }
             LaunchedEffect(httpsStrictExceptions) { liveHttpsStrictExceptions = httpsStrictExceptions.toSet() }
             LaunchedEffect(dntEnabled) { liveDntEnabled = dntEnabled }
@@ -1924,7 +1892,6 @@ class MainActivity : FragmentActivity() {
             LaunchedEffect(dataSaverEnabled) { liveDataSaver = dataSaverEnabled }
             LaunchedEffect(advanceIntroEnabled) { liveAdvanceIntroEnabled = advanceIntroEnabled }
             LaunchedEffect(headerSpoofEnabled) { liveHeaderSpoof = headerSpoofEnabled }
-            LaunchedEffect(fingerprintMode) { liveFingerprintMode = fingerprintMode }
             // Privacy quick wins: keep WebViewClient-safe live copies in sync.
             LaunchedEffect(stripTrackingParams) { liveStripTrackingParams = stripTrackingParams }
             LaunchedEffect(forgetfulBrowsing) { liveForgetfulBrowsing = forgetfulBrowsing }
@@ -1961,34 +1928,6 @@ class MainActivity : FragmentActivity() {
                 }
             }
 
-            // Installs a userscript from raw .user.js source text.
-            fun installUserscriptFromSource(source: String) {
-                scope.launch(Dispatchers.IO) {
-                    val result = userscriptManager.install(source)
-                    withContext(Dispatchers.Main) {
-                        userscriptNotice = result.fold(
-                            onSuccess = { "Installed \"${it.meta.name}\"." },
-                            onFailure = { "Install failed: ${it.message}" }
-                        )
-                    }
-                    refreshUserscripts()
-                }
-            }
-
-            // Installs a userscript by downloading it from a URL.
-            fun installUserscriptFromUrl(url: String) {
-                scope.launch(Dispatchers.IO) {
-                    val text = downloadText(url)
-                    withContext(Dispatchers.Main) {
-                        if (text.isNullOrBlank()) {
-                            userscriptNotice = "Download failed — check the URL."
-                        } else {
-                            installUserscriptFromSource(text)
-                        }
-                    }
-                }
-            }
-
             // Runs the real WebRTC leak test in the current tab.
             fun runWebrtcLeakTest() {
                 val wv = currentTab.webView
@@ -2020,11 +1959,6 @@ class MainActivity : FragmentActivity() {
                     aiProvider = prefs[AppSettings.AI_PROVIDER] ?: "groq"
                     aiModel = prefs[AppSettings.AI_MODEL].orEmpty()
                     headerSpoofEnabled = prefs[AppSettings.HEADER_SPOOF_ENABLED] == true
-                    // Fingerprint mode: migrate the legacy boolean (true->standard, false->off).
-                    fingerprintMode = AppSettings.normalizeMode(
-                        prefs[AppSettings.FINGERPRINT_MODE]
-                            ?: if (prefs[AppSettings.FINGERPRINT_PROTECTION] == false) "off" else "standard"
-                    )
                     // HTTPS mode (default "standard" = historical HTTPS-Only upgrade behavior).
                     httpsMode = AppSettings.normalizeMode(prefs[AppSettings.HTTPS_MODE])
                     httpsStrictExceptions = AppSettings.parseHostList(prefs[AppSettings.HTTPS_STRICT_EXCEPTIONS])
@@ -2363,7 +2297,7 @@ class MainActivity : FragmentActivity() {
                                             if (activeMode != BrowserMode.HACK) {
                                                 pendingModeSwitch = BrowserMode.HACK
                                             } else {
-                                                Toast.makeText(this@MainActivity, "Already in Hack Mode", Toast.LENGTH_SHORT).show()
+                                                Toast.makeText(this@MainActivity, "Already in Power Mode", Toast.LENGTH_SHORT).show()
                                             }
                                         }
                                     }
@@ -2474,15 +2408,6 @@ class MainActivity : FragmentActivity() {
                                             } catch (e: Exception) {
                                                 Toast.makeText(this@MainActivity, "No camera app found on this device.", Toast.LENGTH_SHORT).show()
                                             }
-                                        }
-                                    }
-                                }
-                                item {
-                                    DrawerItem(label = "Video Grabber Detection", icon = Icons.Default.SlowMotionVideo, color = Color(0xFFF472B6)) {
-                                        scope.launch {
-                                            drawerState.close()
-                                            showDownloaderDialog = true
-                                            Toast.makeText(this@MainActivity, "${detectedVideos.size} video stream(s) ready for download", Toast.LENGTH_SHORT).show()
                                         }
                                     }
                                 }
@@ -2820,16 +2745,7 @@ class MainActivity : FragmentActivity() {
                                     }
                                 }
 
-                                item { DrawerCategoryHeader(title = "7. Hack / Power Mode Shield") }
-                                item {
-                                    DrawerItem(label = "Anti-Detection Guard", icon = Icons.Default.BugReport, color = Color(0xFFDC2626)) {
-                                        scope.launch {
-                                            drawerState.close()
-                                            antiDetectionEnabled = !antiDetectionEnabled
-                                            Toast.makeText(this@MainActivity, "Anti-Detection Guard " + (if(antiDetectionEnabled) "ENABLED (UA, canvas + audio fingerprint spoofing)" else "DISABLED"), Toast.LENGTH_LONG).show()
-                                        }
-                                    }
-                                }
+                                item { DrawerCategoryHeader(title = "7. Power Mode") }
                                 item {
                                     DrawerItem(label = "Rotate Spoofed User-Agent", icon = Icons.Default.Computer, color = Color(0xFF10B981)) {
                                         scope.launch {
@@ -3317,20 +3233,6 @@ class MainActivity : FragmentActivity() {
                                                                 // Clear stats
                                                                 networkRequests.clear()
                                                                 sourcesList.clear()
-                                                                detectedVideos.clear()
-
-                                                                // EARLY desktop-environment spoof (Hack mode + Anti-Detection
-                                                                // Guard): applied at page START, not page finish, so sites
-                                                                // like YouTube see a consistent desktop UA / 1920x1080
-                                                                // screen / no-touch environment from the first script
-                                                                // they run — no desktop→mobile mid-load flip.
-                                                                // (The onPageFinished injection below stays as a safety net.)
-                                                                if (liveMode == BrowserMode.HACK && liveAntiDetection) {
-                                                                    view?.evaluateJavascript(
-                                                                        AntiDetectionInjections.INJECT_SPOOF_LAYERS,
-                                                                        null
-                                                                    )
-                                                                }
 
                                                                 // LocationGuard: when the effective mode for this
                                                                 // page is SPOOF, replace navigator.geolocation
@@ -3480,23 +3382,6 @@ class MainActivity : FragmentActivity() {
                                                                     view?.evaluateJavascript(DevToolsInjections.NETWORK_INTERCEPT, null)
                                                                     view?.evaluateJavascript(DevToolsInjections.GET_DOM, null)
                                                                     view?.evaluateJavascript(DevToolsInjections.GET_SOURCES, null)
-                                                                } else if (liveMode == BrowserMode.HACK) {
-                                                                    if (liveAntiDetection) {
-                                                                        view?.evaluateJavascript(AntiDetectionInjections.INJECT_SPOOF_LAYERS, null)
-                                                                    }
-                                                                    view?.evaluateJavascript(AntiDetectionInjections.VIDEO_GRABBER_JS, null)
-                                                                }
-
-                                                                // Fingerprint Protection: session-randomized canvas/audio
-                                                                // noise in EVERY mode (see PrivacyGuards). Strict mode
-                                                                // adds font/toBlob/audio-data hooks + stronger noise.
-                                                                if (liveFingerprintMode != "off") {
-                                                                    view?.evaluateJavascript(
-                                                                        this@MainActivity.fingerprintScript(
-                                                                            liveFingerprintMode == "strict"
-                                                                        ),
-                                                                        null
-                                                                    )
                                                                 }
 
                                                                 // Userscript extensions (HACK + DEVELOPER + ADVANCE modes):
@@ -3740,16 +3625,6 @@ class MainActivity : FragmentActivity() {
                                                                 }
                                                             ),
                                                             "DevToolsBridge"
-                                                        )
-
-                                                        addJavascriptInterface(
-                                                            VideoGrabberBridge(
-                                                                onVideosDetected = { list ->
-                                                                    detectedVideos.clear()
-                                                                    detectedVideos.addAll(list)
-                                                                }
-                                                            ),
-                                                            "VideoGrabberBridge"
                                                         )
 
                                                         // Receives the result of the real WebRTC leak test.
@@ -3997,21 +3872,6 @@ class MainActivity : FragmentActivity() {
                                         }
                                     }
 
-                                    // 6. FLOATING HACK VIDEO GRABBER TRIGGER
-                                    // (stacked above the AI button when both are visible)
-                                    if (activeMode == BrowserMode.HACK && detectedVideos.isNotEmpty()) {
-                                        FloatingActionButton(
-                                            onClick = { showDownloaderDialog = true },
-                                            containerColor = Color(0xFFFF5722),
-                                            contentColor = Color.White,
-                                            modifier = Modifier
-                                                .align(Alignment.BottomEnd)
-                                                .padding(end = 16.dp, bottom = 88.dp)
-                                                .scale(1.1f)
-                                        ) {
-                                            Icon(Icons.Default.Download, contentDescription = "Grab Video")
-                                        }
-                                    }
                                 }
 
                                 // 7. DevTools lives in a dismissible bottom sheet now
@@ -5419,11 +5279,6 @@ class MainActivity : FragmentActivity() {
                                             }
                                         }
                                     },
-                                    fingerprintMode = fingerprintMode,
-                                    onFingerprintModeChange = { mode ->
-                                        fingerprintMode = AppSettings.normalizeMode(mode)
-                                        scope.launch { dataStore.edit { prefs -> prefs[AppSettings.FINGERPRINT_MODE] = fingerprintMode } }
-                                    },
                                     dntEnabled = dntEnabled,
                                     onToggleDnt = { v ->
                                         dntEnabled = v
@@ -5479,8 +5334,6 @@ class MainActivity : FragmentActivity() {
                                             }
                                         }
                                     },
-                                    onInstallSource = { source -> installUserscriptFromSource(source) },
-                                    onInstallUrl = { url -> installUserscriptFromUrl(url) },
                                     onClose = {
                                         showUserscripts = false
                                         userscriptNotice = null
@@ -5699,121 +5552,6 @@ class MainActivity : FragmentActivity() {
                                     },
                                     dismissButton = {
                                         TextButton(onClick = { showDeleteBrowsingConfirm = false }) { Text("Cancel") }
-                                    }
-                                )
-                            }
-
-                            // Downloader selection overlay — REAL downloads via Android DownloadManager.
-                            // Live (blob:) streams are listed separately and NEVER auto-toast:
-                            // the "can't be downloaded" notice appears ONLY when the user
-                            // explicitly taps a live-stream row (Prince's bug report).
-                            if (showDownloaderDialog) {
-                                val downloadable = detectedVideos.filter { !it.startsWith("blob:") }
-                                val liveStreams = detectedVideos.filter { it.startsWith("blob:") }
-                                AlertDialog(
-                                    onDismissRequest = { showDownloaderDialog = false },
-                                    title = { Text("Video Downloader", color = Color(0xFFFF5722)) },
-                                    text = {
-                                        Column {
-                                            if (detectedVideos.isEmpty()) {
-                                                Text("No videos detected on this page yet. Videos are detected automatically in Hack mode.")
-                                            } else {
-                                                if (downloadable.isNotEmpty()) Text("Detected Videos on page:")
-                                            }
-                                            Spacer(modifier = Modifier.height(12.dp))
-                                            downloadable.forEachIndexed { idx, url ->
-                                                Card(
-                                                    modifier = Modifier
-                                                        .fillMaxWidth()
-                                                        .clickable {
-                                                            try {
-                                                                val dm = this@MainActivity.getSystemService(Context.DOWNLOAD_SERVICE) as android.app.DownloadManager
-                                                                val fileName = "click_video_${System.currentTimeMillis()}.mp4"
-                                                                val request = android.app.DownloadManager.Request(android.net.Uri.parse(url))
-                                                                    .setTitle("Click Browser Download")
-                                                                    .setDescription(url.take(80))
-                                                                    .setNotificationVisibility(android.app.DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED)
-                                                                    .setDestinationInExternalPublicDir(
-                                                                        android.os.Environment.DIRECTORY_DOWNLOADS,
-                                                                        "ClickBrowser/$fileName"
-                                                                    )
-                                                                    .setAllowedOverMetered(true)
-                                                                    .setAllowedOverRoaming(false)
-                                                                dm.enqueue(request)
-                                                                scope.launch {
-                                                                    repository.addDownloadItem(
-                                                                        DownloadItem(
-                                                                            fileName = fileName,
-                                                                            url = url,
-                                                                            path = "Downloads/ClickBrowser/$fileName",
-                                                                            timestamp = System.currentTimeMillis()
-                                                                        )
-                                                                    )
-                                                                }
-                                                                Toast.makeText(
-                                                                    this@MainActivity,
-                                                                    "Download started — see notification / Downloads Center",
-                                                                    Toast.LENGTH_LONG
-                                                                ).show()
-                                                            } catch (e: Exception) {
-                                                                Toast.makeText(this@MainActivity, "Download failed: ${e.message}", Toast.LENGTH_LONG).show()
-                                                            }
-                                                            showDownloaderDialog = false
-                                                        }
-                                                        .padding(vertical = 4.dp),
-                                                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
-                                                ) {
-                                                    Column(modifier = Modifier.padding(12.dp)) {
-                                                        Text("Video ${idx + 1} — tap to download", fontWeight = FontWeight.Bold, fontSize = 12.sp)
-                                                        Text(url.take(60) + "...", fontSize = 11.sp, color = Color.Gray)
-                                                    }
-                                                }
-                                            }
-                                            // Live streams: shown, never auto-downloaded, never auto-toast.
-                                            // Tapping one is the ONLY way the notice appears.
-                                            if (liveStreams.isNotEmpty()) {
-                                                Spacer(modifier = Modifier.height(8.dp))
-                                                Text(
-                                                    "Live streams (${liveStreams.size}) — can't be downloaded:",
-                                                    fontWeight = FontWeight.Bold,
-                                                    fontSize = 12.sp,
-                                                    color = Color.Gray
-                                                )
-                                                Spacer(modifier = Modifier.height(4.dp))
-                                                liveStreams.forEachIndexed { idx, url ->
-                                                    Card(
-                                                        modifier = Modifier
-                                                            .fillMaxWidth()
-                                                            .clickable {
-                                                                Toast.makeText(
-                                                                    this@MainActivity,
-                                                                    "This video is a live stream (blob) and can't be downloaded directly.",
-                                                                    Toast.LENGTH_LONG
-                                                                ).show()
-                                                            }
-                                                            .padding(vertical = 4.dp),
-                                                        colors = CardDefaults.cardColors(
-                                                            containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
-                                                        )
-                                                    ) {
-                                                        Column(modifier = Modifier.padding(12.dp)) {
-                                                            Text(
-                                                                "Live stream ${idx + 1} — tap for info",
-                                                                fontWeight = FontWeight.Bold,
-                                                                fontSize = 12.sp,
-                                                                color = Color.Gray
-                                                            )
-                                                            Text(url.take(48) + "...", fontSize = 11.sp, color = Color.Gray)
-                                                        }
-                                                    }
-                                                }
-                                            }
-                                        }
-                                    },
-                                    confirmButton = {
-                                        TextButton(onClick = { showDownloaderDialog = false }) {
-                                            Text("Close")
-                                        }
                                     }
                                 )
                             }

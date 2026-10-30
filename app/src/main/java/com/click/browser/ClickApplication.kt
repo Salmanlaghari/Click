@@ -6,13 +6,10 @@ import com.click.browser.engine.AppSettings
 import com.click.browser.engine.NewsNotificationScheduler
 import com.click.browser.engine.V9Engine
 import com.click.browser.engine.dataStore
-import com.google.android.gms.ads.MobileAds
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
-
-private const val TAG = "AdMobAds"
 
 /**
  * Application entry point.
@@ -28,11 +25,6 @@ class ClickApplication : Application() {
         // Crash + OOM reports: capture to files dir, user sends them from
         // Settings → Reports. Never uploads silently.
         com.click.browser.engine.CrashReporter.install(this)
-        // Initialize Google AdMob (news-feed banner + native ads).
-        // Initialization is async and safe on the main thread.
-        MobileAds.initialize(this) { status ->
-            Log.d(TAG, "MobileAds initialized: ${status.adapterStatusMap.keys}")
-        }
         // Background news alerts: re-schedule the battery-friendly periodic
         // check if the user previously opted in (default OFF).
         CoroutineScope(Dispatchers.IO).launch {

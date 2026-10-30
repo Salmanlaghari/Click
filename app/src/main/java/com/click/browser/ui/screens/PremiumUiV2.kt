@@ -312,7 +312,7 @@ fun FeatureMenuFabOverlay(
                         ModeChip("Developer", activeMode == BrowserMode.DEVELOPER, accent, theme) {
                             onModeChange(BrowserMode.DEVELOPER)
                         }
-                        ModeChip("Hack", activeMode == BrowserMode.HACK, accent, theme) {
+                        ModeChip("Power", activeMode == BrowserMode.HACK, accent, theme) {
                             onModeChange(BrowserMode.HACK)
                         }
                         ModeChip("Advance", activeMode == BrowserMode.ADVANCED, accent, theme) {

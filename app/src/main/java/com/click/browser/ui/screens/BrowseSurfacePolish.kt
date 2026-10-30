@@ -39,7 +39,7 @@ fun BrowserMode.display(): ModeDisplay = when (this) {
         "Modern · Stylish · Premium"
     )
     BrowserMode.HACK -> ModeDisplay(
-        "Hack",
+        "Power",
         "Pure Black · Neon Glow · Next Level"
     )
     // Honest wording: an isolated, performance-tuned profile — not a new engine.
