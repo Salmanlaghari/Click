@@ -348,74 +348,10 @@ object V9Engine {
     private const val RESTART_DELAY_MS = 1000L
 
     /**
-     * Per-engine JS fingerprint: overrides navigator/screen/WebGL values to
-     * match the engine profile and poisons canvas readback with seeded noise
-     * (stable within an engine, distinct across engines).
-     *
-     * Injected at onPageStarted so sites see a consistent identity from the
-     * first script they run.
+     * Per-mode JS identity spoofing removed for Play policy compliance;
+     * modes differ by UI and standard WebSettings only.
      */
     fun fingerprintJs(mode: BrowserMode): String {
-        val p = profileFor(mode)
-        val langs = p.languages.joinToString(",") { "'$it'" }
-        // NOTE: single-quoted JS strings — UA/profile strings contain no quotes.
-        return """
-        (function(){
-          if (window.__v9fp) return; window.__v9fp = true;
-          var seed = ${p.canvasSeed};
-          function rng(){ seed|=0; seed = seed + 0x6D2B79F5 | 0; var t = Math.imul(seed ^ seed >>> 15, 1 | seed); t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t; return ((t ^ t >>> 14) >>> 0) / 4294967296; }
-          function def(o,k,v){ try { Object.defineProperty(o,k,{ get:function(){ return v; }, configurable:true }); } catch(e){} }
-          var UA = '${p.userAgent}';
-          def(navigator,'userAgent',UA); def(navigator,'appVersion',UA);
-          def(navigator,'platform','${p.platform}'); def(navigator,'vendor','${p.vendor}');
-          def(navigator,'language','${p.languages.first()}'); def(navigator,'languages',[${langs}]);
-          def(navigator,'hardwareConcurrency',${p.hardwareConcurrency});
-          def(navigator,'deviceMemory',${p.deviceMemory});
-          def(navigator,'maxTouchPoints',${p.maxTouchPoints});
-          // Timezone spoofing: distinct per engine (IANA name + offset).
-          // Honest limit: this spoofs JS-visible timezone only; OS timezone
-          // and IP geolocation are unchanged (would need root/VPN to alter).
-          try {
-            var tzName = '${p.timezone}';
-            var tzOffset = ${p.timezoneOffsetMinutes};
-            Date.prototype.getTimezoneOffset = function(){ return tzOffset; };
-            if (typeof Intl !== 'undefined' && Intl.DateTimeFormat) {
-              var origResolved = Intl.DateTimeFormat.prototype.resolvedOptions;
-              Intl.DateTimeFormat.prototype.resolvedOptions = function(){
-                var o = origResolved.apply(this, arguments);
-                try { o.timeZone = tzName; } catch(e){}
-                return o;
-              };
-            }
-          } catch(e){}
-          def(window.screen,'width',${p.screenW}); def(window.screen,'height',${p.screenH});
-          def(window.screen,'availWidth',${p.screenW}); def(window.screen,'availHeight',${p.screenH - 40});
-          def(window,'devicePixelRatio',${p.devicePixelRatio});
-          if (${p.maxTouchPoints} === 0) { try { delete window.ontouchstart; delete window.ontouchend; } catch(e){} }
-          try {
-            var proto = WebGLRenderingContext.prototype, orig = proto.getParameter;
-            var hook = function(param){
-              if (param === 37445) return '${p.webglVendor}';
-              if (param === 37446) return '${p.webglRenderer}';
-              return orig.apply(this, arguments);
-            };
-            proto.getParameter = hook;
-            if (window.WebGL2RenderingContext) WebGL2RenderingContext.prototype.getParameter = hook;
-          } catch(e){}
-          try {
-            var origToDataURL = HTMLCanvasElement.prototype.toDataURL;
-            HTMLCanvasElement.prototype.toDataURL = function(){
-              try { var c = this.getContext('2d'); if (c) { var im = c.getImageData(0,0,this.width,this.height), d = im.data; for (var i=0;i<d.length;i+=4){ var n=(rng()-0.5)*3; d[i]+=n; d[i+1]+=n; d[i+2]+=n; } c.putImageData(im,0,0); } } catch(e){}
-              return origToDataURL.apply(this, arguments);
-            };
-            var origGetImageData = CanvasRenderingContext2D.prototype.getImageData;
-            CanvasRenderingContext2D.prototype.getImageData = function(){
-              var im = origGetImageData.apply(this, arguments), d = im.data;
-              for (var i=0;i<d.length;i+=4){ var n=(rng()-0.5)*3; d[i]+=n; d[i+1]+=n; d[i+2]+=n; }
-              return im;
-            };
-          } catch(e){}
-        })();
-        """.trimIndent()
+        return ""
     }
 }

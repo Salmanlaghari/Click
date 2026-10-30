@@ -49,8 +49,6 @@ import com.click.browser.engine.AppSettings
  * - Custom HTTP Headers: adds YOUR header list to page navigations
  *   (loadUrl extraHeaders) and re-fetches page resources with those headers
  *   via shouldInterceptRequest. Hop-by-hop headers can't be overridden.
- * - Fingerprint Protection: injects per-session randomized canvas + audio
- *   noise in every browsing mode (session salt changes each app launch).
  * - Secure DNS: DNS-over-HTTPS (Cloudflare) for the APP's own requests
  *   (AI chat, header re-fetch). WebView page loads still use system DNS —
  *   Android exposes no WebView DoH setting; the UI says so.
@@ -71,8 +69,6 @@ fun PrivacyGuardsScreen(
     customHeaders: List<AppSettings.CustomHeader>,
     onAddHeader: (String, String) -> Unit,
     onRemoveHeader: (Int) -> Unit,
-    fingerprintMode: String,
-    onFingerprintModeChange: (String) -> Unit,
     dntEnabled: Boolean,
     onToggleDnt: (Boolean) -> Unit,
     gpcEnabled: Boolean,
@@ -181,43 +177,6 @@ fun PrivacyGuardsScreen(
                         Spacer(modifier = Modifier.width(4.dp))
                         Text("Add header")
                     }
-                }
-            }
-
-            // ---- Fingerprint Protection: Off / Standard / Strict ----
-            item {
-                Column(modifier = Modifier.fillMaxWidth()) {
-                    Text(
-                        "Fingerprint Protection",
-                        style = MaterialTheme.typography.titleSmall,
-                        fontWeight = FontWeight.SemiBold
-                    )
-                    Text(
-                        "Protects canvas + AudioContext fingerprint reads with noise " +
-                            "re-randomized every app launch. Strict adds font/toBlob/audio " +
-                            "hooks and stronger noise — may break some sites. " +
-                            "Runs in all browsing modes.",
-                        fontSize = 11.sp, color = Color.Gray
-                    )
-                    Spacer(modifier = Modifier.height(4.dp))
-                    GuardModeOption(
-                        value = "off", title = "Off",
-                        desc = "No fingerprint protection",
-                        selected = fingerprintMode == "off",
-                        onSelect = { onFingerprintModeChange("off") }
-                    )
-                    GuardModeOption(
-                        value = "standard", title = "Standard",
-                        desc = "Canvas + audio noise (recommended)",
-                        selected = fingerprintMode == "standard",
-                        onSelect = { onFingerprintModeChange("standard") }
-                    )
-                    GuardModeOption(
-                        value = "strict", title = "Strict",
-                        desc = "Stronger noise + extra hooks (may break sites)",
-                        selected = fingerprintMode == "strict",
-                        onSelect = { onFingerprintModeChange("strict") }
-                    )
                 }
             }
 
@@ -347,29 +306,6 @@ fun PrivacyGuardsScreen(
                     }
                 }
             }
-        }
-    }
-}
-
-@Composable
-private fun GuardModeOption(
-    value: String,
-    title: String,
-    desc: String,
-    selected: Boolean,
-    onSelect: () -> Unit
-) {
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(vertical = 4.dp),
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        androidx.compose.material3.RadioButton(selected = selected, onClick = onSelect)
-        Spacer(modifier = Modifier.width(8.dp))
-        Column(modifier = Modifier.weight(1f)) {
-            Text(title, fontSize = 14.sp, fontWeight = FontWeight.Medium)
-            Text(desc, fontSize = 11.sp, color = Color.Gray)
         }
     }
 }

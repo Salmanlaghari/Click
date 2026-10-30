@@ -134,7 +134,7 @@ fun AdvanceSpecsSheet(
             AdvanceSpecRow(
                 icon = Icons.Filled.Lock,
                 title = "Fully isolated space",
-                body = "Own WebView data directory - cookies, cache and localStorage are completely separate from Simple, Developer and Hack.",
+                body = "Own WebView data directory - cookies, cache and localStorage are completely separate from Simple, Developer and Power.",
                 accent = blue
             )
             AdvanceSpecRow(

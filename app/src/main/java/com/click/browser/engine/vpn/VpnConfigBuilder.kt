@@ -24,25 +24,6 @@ object VpnConfigBuilder {
     private const val TAG = "VpnConfig"
 
     /**
-     * Builds a full tunnel config around a WireGuard [WarpCredentials].
-     * Used for Cloudflare WARP.
-     */
-    fun buildWarpConfig(creds: WarpCredentials): String {
-        val proxyOutbound = JSONObject()
-            .put("type", "wireguard")
-            .put("tag", "proxy")
-            .put("server", creds.endpointHost)
-            .put("server_port", creds.endpointPort)
-            .put("local_address", JSONArray(creds.localAddresses))
-            .put("private_key", creds.privateKey)
-            .put("peer_public_key", creds.peerPublicKey)
-            .put("mtu", 1280)
-            // WARP reserved bytes (from registration response).
-            .put("reserved", JSONArray(creds.reserved))
-        return wrapWithTunnel(proxyOutbound)
-    }
-
-    /**
      * Builds a tunnel config from a user-pasted proxy URL.
      * Supports: vless://, vmess://, trojan://, ss:// (Shadowsocks).
      * Returns null if the URL is not recognized.
@@ -278,16 +259,3 @@ object VpnConfigBuilder {
         }.toMap()
     }
 }
-
-/**
- * Cloudflare WARP WireGuard credentials, obtained via [WarpRegistrar].
- */
-data class WarpCredentials(
-    val privateKey: String,
-    val peerPublicKey: String,
-    val endpointHost: String,
-    val endpointPort: Int,
-    val localAddresses: List<String>,
-    /** WARP reserved bytes (3 ints) for the WireGuard handshake. */
-    val reserved: List<Int>,
-)

@@ -208,7 +208,7 @@ private fun VersionScreen(
         Text("⚡ Click Browser", color = theme.onBackground, fontSize = 24.sp, fontWeight = FontWeight.ExtraBold)
         Text("V9 System — 1 Browser, 4 Engines", color = theme.primary, fontSize = 15.sp, fontWeight = FontWeight.Bold)
         VersionRow(theme, "Version", "$versionName ($versionCode)")
-        VersionRow(theme, "Engines", "Simple · Developer · Hack (isolated)")
+        VersionRow(theme, "Engines", "Simple · Developer · Power (isolated)")
         VersionRow(theme, "Features", "${ClickInternalPages.FEATURE_COUNT} built-in")
         VersionRow(theme, "AI", "Premium Assist (Groq)")
         Spacer(Modifier.height(8.dp))

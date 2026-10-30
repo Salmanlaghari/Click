@@ -20,8 +20,8 @@ import org.json.JSONObject
  * - [prepareIntent]: null = VPN permission already granted → [start] directly.
  *   Otherwise launch the returned intent and call [start] on RESULT_OK.
  * - [start]: resolves the selected server → builds sing-box JSON → starts
- *   [SingBoxVpnService]. For WARP this registers the device on first use.
- * - Server list + WARP credentials persist in DataStore.
+ *   [SingBoxVpnService].
+ * - Server list persists in DataStore.
  */
 object VpnController {
 
@@ -29,7 +29,6 @@ object VpnController {
 
     private val KEY_SELECTED_SERVER = stringPreferencesKey("vpn_selected_server_id")
     private val KEY_CUSTOM_SERVERS = stringPreferencesKey("vpn_custom_servers_json")
-    private val KEY_WARP_CREDS = stringPreferencesKey("vpn_warp_creds_json")
     private val KEY_VPN_DISCLOSURE_ACK = stringPreferencesKey("vpn_disclosure_ack")
 
     /** Null = permission already granted, safe to [start]. */
@@ -64,15 +63,6 @@ object VpnController {
             return false
         }
         val configJson: String = when (server.kind) {
-            VpnServer.ServerKind.BUILT_IN_WARP -> {
-                val creds = WarpRegistrar.ensureCredentials(getWarpCreds(context))
-                    ?: run {
-                        Log.e(TAG, "WARP registration failed")
-                        return false
-                    }
-                saveWarpCreds(context, creds)
-                VpnConfigBuilder.buildWarpConfig(creds)
-            }
             // Built-in VLESS preset and user-added servers share the proxy-URL path.
             VpnServer.ServerKind.BUILT_IN_VLESS,
             VpnServer.ServerKind.CUSTOM -> {
@@ -104,11 +94,10 @@ object VpnController {
 
     // ---------- server list ----------
 
-    /** All servers: built-in WARP + built-in Canada VPS + user's custom entries. */
+    /** All servers: built-in Canada VPS + user's custom entries. */
     suspend fun getServers(context: Context): List<VpnServer> =
         withContext(Dispatchers.IO) {
             val list = mutableListOf(
-                VpnServer.warpPlaceholder(),
                 VpnServer.builtInVless(),
             )
             list.addAll(getCustomServers(context))
@@ -118,8 +107,11 @@ object VpnController {
     suspend fun getSelectedServer(context: Context): VpnServer? =
         withContext(Dispatchers.IO) {
             val prefs = context.dataStore.data.first()
-            val id = prefs[KEY_SELECTED_SERVER] ?: VpnServer.WARP_ID
-            getServers(context).find { it.id == id }
+            val id = prefs[KEY_SELECTED_SERVER] ?: VpnServer.CANADA_VPS_ID
+            val servers = getServers(context)
+            // Fall back to the first server if the stored id no longer exists
+            // (e.g. a built-in server removed in an app update).
+            servers.find { it.id == id } ?: servers.firstOrNull()
         }
 
     suspend fun selectServer(context: Context, id: String) {
@@ -150,10 +142,10 @@ object VpnController {
         withContext(Dispatchers.IO) {
             val updated = getCustomServers(context).filter { it.id != id }
             saveCustomServers(context, updated)
-            // Fall back to WARP if the selected server was removed.
+            // Fall back to the built-in Canada VPS if the selected server was removed.
             val prefs = context.dataStore.data.first()
             if (prefs[KEY_SELECTED_SERVER] == id) {
-                context.dataStore.edit { it[KEY_SELECTED_SERVER] = VpnServer.WARP_ID }
+                context.dataStore.edit { it[KEY_SELECTED_SERVER] = VpnServer.CANADA_VPS_ID }
             }
         }
     }
@@ -176,44 +168,6 @@ object VpnController {
         servers.forEach { arr.put(it.toJson()) }
         context.dataStore.edit { prefs ->
             prefs[KEY_CUSTOM_SERVERS] = arr.toString()
-        }
-    }
-
-    // ---------- WARP credentials ----------
-
-    private suspend fun getWarpCreds(context: Context): WarpCredentials? {
-        return try {
-            val prefs = context.dataStore.data.first()
-            val raw = prefs[KEY_WARP_CREDS] ?: return null
-            val o = JSONObject(raw)
-            WarpCredentials(
-                privateKey = o.getString("private_key"),
-                peerPublicKey = o.getString("peer_public_key"),
-                endpointHost = o.getString("endpoint_host"),
-                endpointPort = o.getInt("endpoint_port"),
-                localAddresses = List(o.getJSONArray("addrs").length()) {
-                    o.getJSONArray("addrs").getString(it)
-                },
-                reserved = List(o.getJSONArray("reserved").length()) {
-                    o.getJSONArray("reserved").getInt(it)
-                },
-            )
-        } catch (t: Throwable) {
-            Log.w(TAG, "WARP creds parse failed", t)
-            null
-        }
-    }
-
-    private suspend fun saveWarpCreds(context: Context, creds: WarpCredentials) {
-        val o = JSONObject()
-            .put("private_key", creds.privateKey)
-            .put("peer_public_key", creds.peerPublicKey)
-            .put("endpoint_host", creds.endpointHost)
-            .put("endpoint_port", creds.endpointPort)
-            .put("addrs", JSONArray(creds.localAddresses))
-            .put("reserved", JSONArray(creds.reserved))
-        context.dataStore.edit { prefs ->
-            prefs[KEY_WARP_CREDS] = o.toString()
         }
     }
 
@@ -240,7 +194,7 @@ object VpnController {
     /** Play-policy disclosure text (also shown in Settings). */
     const val DISCLOSURE_TEXT =
         "Click VPN routes ALL of your device's internet traffic through " +
-        "third-party servers (Cloudflare WARP, Prince's Canada VPS, or a " +
+        "third-party servers (Prince's Canada VPS, or a " +
         "custom server you add yourself). The server operator can see the " +
         "sites you visit. All DNS queries travel inside the encrypted " +
         "tunnel — use the DNS Leak Test to verify."

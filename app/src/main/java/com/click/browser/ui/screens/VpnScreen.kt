@@ -36,8 +36,8 @@ import kotlinx.coroutines.launch
  * Click VPN — server list, connect toggle, status, DNS leak test.
  *
  * HONEST LIMITATIONS (shown in UI, not hidden):
- * - Cloudflare WARP connects to the NEAREST datacenter; you cannot pick
- *   USA/UK with WARP. Country selection needs your own server (paste a
+ * - The built-in server sits in one country; you cannot pick a country
+ *   with it. Country selection needs your own server (paste a
  *   vless://, vmess://, trojan:// or ss:// link).
  * - Free public servers from the internet are slow and unreliable.
  * - Fast, stable USA/UK exits need a paid VPN or a self-hosted server.
@@ -254,17 +254,16 @@ fun VpnScreen(onClose: () -> Unit) {
                 Spacer(Modifier.height(8.dp))
             }
 
-            // WARP limitation note
+            // Server location note
             Card(
                 colors = CardDefaults.cardColors(
                     containerColor = MaterialTheme.colorScheme.surfaceVariant),
                 shape = RoundedCornerShape(12.dp)
             ) {
                 Text(
-                    "Note: Cloudflare WARP connects to the nearest server " +
-                    "automatically — country selection is not available " +
-                    "with WARP. For a fixed country, use the built-in " +
-                    "\"Canada VPS\" server above, or add your own below " +
+                    "Note: the built-in server is in Canada — country " +
+                    "selection is not available with it. For a fixed " +
+                    "country, add your own server below " +
                     "(vless://, vmess://, trojan://, ss://). Free public " +
                     "servers are slow; fast servers in other countries " +
                     "need a paid service or your own VPS.",
@@ -327,7 +326,6 @@ private fun ServerRow(
                 Text(server.name, fontWeight = FontWeight.SemiBold)
                 Text(
                     when (server.kind) {
-                        VpnServer.ServerKind.BUILT_IN_WARP -> "Free • Fast • Auto location"
                         VpnServer.ServerKind.BUILT_IN_VLESS -> "Fixed location • Canada"
                         VpnServer.ServerKind.CUSTOM -> "Custom server"
                     },

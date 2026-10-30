@@ -38,8 +38,8 @@ android {
         applicationId = "com.teampkai.clickbrowser"
         minSdk = 26
         targetSdk = 36
-        versionCode = 4
-        versionName = "1.2.0"
+        versionCode = 5
+        versionName = "1.3.0"
 
         // Built-in Groq key for AI chat, injected at build time from the
         // GROQ_API_KEY env var (GitHub Actions secret in CI). The key is
@@ -160,8 +160,6 @@ dependencies {
     // On-device translation (ML Kit). Language MODELS are downloaded on
     // demand at runtime — nothing is bundled, so the APK stays lean.
     implementation(libs.mlkit.translate)
-    // Google AdMob for news-feed monetization (banner + native ads).
-    implementation(libs.play.services.ads)
     // AndroidX BiometricPrompt for the private-tab lock (no custom crypto).
     implementation(libs.androidx.biometric)
     // WorkManager for battery-friendly background news checks (no exact

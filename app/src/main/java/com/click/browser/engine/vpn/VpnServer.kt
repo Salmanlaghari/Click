@@ -5,10 +5,7 @@ import org.json.JSONObject
 /**
  * A VPN server entry.
  *
- * Three kinds:
- * - [BUILT_IN_WARP]: Cloudflare WARP (free, fast, no account). Connects to the
- *   nearest Cloudflare datacenter — country selection is NOT available with
- *   WARP. Honest limitation, shown in the UI.
+ * Two kinds:
  * - [BUILT_IN_VLESS]: Prince's own Oracle VPS in Canada (VLESS + Reality).
  *   Fixed country (CA), tested working, no DNS leak.
  * - [CUSTOM]: user-pasted proxy URL (vless://, vmess://, trojan://, ss://,
@@ -17,13 +14,13 @@ import org.json.JSONObject
 data class VpnServer(
     val id: String,
     val name: String,
-    val countryCode: String, // ISO 3166-1 alpha-2, or "" for WARP-auto
+    val countryCode: String, // ISO 3166-1 alpha-2, or "" when unknown
     val flagEmoji: String,
     val kind: ServerKind,
-    /** The raw config: WireGuard params for WARP, or the user's proxy URL. */
+    /** The raw config: the user's proxy URL. */
     val config: String,
 ) {
-    enum class ServerKind { BUILT_IN_WARP, BUILT_IN_VLESS, CUSTOM }
+    enum class ServerKind { BUILT_IN_VLESS, CUSTOM }
 
     fun toJson(): JSONObject = JSONObject()
         .put("id", id)
@@ -34,7 +31,6 @@ data class VpnServer(
         .put("config", config)
 
     companion object {
-        const val WARP_ID = "warp-auto"
         const val CANADA_VPS_ID = "canada-vps-oracle"
 
         /** Built-in VLESS + Reality server (Canada). */
@@ -71,15 +67,6 @@ data class VpnServer(
             config = o.getString("config"),
         )
 
-        /** The built-in Cloudflare WARP entry (credentials filled at connect). */
-        fun warpPlaceholder(): VpnServer = VpnServer(
-            id = WARP_ID,
-            name = "Cloudflare WARP (Auto)",
-            countryCode = "",
-            flagEmoji = "\uD83C\uDF10",
-            kind = ServerKind.BUILT_IN_WARP,
-            config = "",
-        )
     }
 }
 

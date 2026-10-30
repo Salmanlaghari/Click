@@ -219,6 +219,11 @@ fun LocationSettingsSheet(
                         fontSize = 12.sp,
                         color = theme.primary
                     )
+                    Text(
+                        "Websites will receive the location you choose here instead of your real one. Only use this for privacy — using it to mislead services that require your real location may break their terms.",
+                        fontSize = 12.sp,
+                        color = theme.onSurface.copy(alpha = 0.6f)
+                    )
                     Spacer(Modifier.height(8.dp))
                 }
                 items(LocationGuard.PRESETS.chunked(2)) { row ->
