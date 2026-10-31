@@ -23,6 +23,15 @@ object ThemeController {
 
     private const val TAG = "ThemeController"
 
+    fun normalizeLightThemeVariant(id: String?): LightThemeVariant =
+        LightThemeVariant.fromId(id)
+
+    fun nextLightThemeVariant(currentId: String?): LightThemeVariant {
+        val variants = LightThemeVariant.values()
+        val currentIndex = variants.indexOf(normalizeLightThemeVariant(currentId))
+        return variants[(currentIndex + 1) % variants.size]
+    }
+
     /** Reads the theme mode, migrating the legacy boolean on first use. */
     suspend fun themeMode(context: Context): String {
         val prefs = context.dataStore.data.first()
