@@ -868,6 +868,7 @@ class MainActivity : FragmentActivity() {
         // API 35+ enforces edge-to-edge for targetSdk 35+ — opt in and handle
         // WindowInsets in Compose so no chrome is hidden behind system bars.
         enableEdgeToEdge()
+        val freshLaunch = savedInstanceState == null
 
         // News notification deep link (cold start): consume the article URL
         // once so the composable below opens it in a new tab. Skipped on
@@ -895,7 +896,7 @@ class MainActivity : FragmentActivity() {
             // on rotation. Tap skips immediately.
             var showSplash by rememberSaveable { mutableStateOf(true) }
             val scope = rememberCoroutineScope()
-            val activeMode by modeManager.modeFlow.collectAsState(initial = BrowserMode.SIMPLE)
+            val activeMode by modeManager.modeFlow.collectAsState(initial = V9Engine.bootMode)
 
             // App Layout configuration: global appearance mode.
             // "Auto" (default) follows the system night mode — light during
@@ -905,10 +906,12 @@ class MainActivity : FragmentActivity() {
             var currentThemeSetting by remember { mutableStateOf("Auto") }
             var scheduleStartHour by remember { mutableStateOf(6) }
             var scheduleEndHour by remember { mutableStateOf(19) }
+            var lightThemeVariant by remember { mutableStateOf(LightThemeVariant.CLASSIC) }
+            var autoRotateThemes by remember { mutableStateOf(false) }
             // Per-mode Day/Night overrides (null = follow the global toggle).
             var perModeDark by remember { mutableStateOf<Map<BrowserMode, Boolean?>>(emptyMap()) }
             var wallpaperUri by remember { mutableStateOf<String?>(null) }
-            val theme = remember(activeMode, currentThemeSetting, perModeDark, scheduleStartHour, scheduleEndHour) {
+            val theme = remember(activeMode, currentThemeSetting, perModeDark, scheduleStartHour, scheduleEndHour, lightThemeVariant) {
                 val dark = perModeDark[activeMode] ?: when (currentThemeSetting) {
                     "Dark" -> true
                     "Light" -> false
@@ -922,7 +925,7 @@ class MainActivity : FragmentActivity() {
                     }
                     else -> AppSettings.isSystemNightMode(this@MainActivity)
                 }
-                ModeThemes.forMode(activeMode, dark)
+                ModeThemes.forMode(activeMode, dark, lightThemeVariant)
             }
 
             val themeColors = if (theme.dark) {
@@ -1373,6 +1376,7 @@ class MainActivity : FragmentActivity() {
             var showCookieManager by remember { mutableStateOf(false) }
             // All-sites settings list (Settings -> Site settings).
             var showSiteSettingsList by remember { mutableStateOf(false) }
+            var siteSettingsReturnToAdvancedSecurity by remember { mutableStateOf(false) }
             // Settings suite: tab groups, accessibility, language, downloads, reports.
             var showTabGroups by remember { mutableStateOf(false) }
             var showAccessibility by remember { mutableStateOf(false) }
@@ -1381,6 +1385,7 @@ class MainActivity : FragmentActivity() {
             var showReports by remember { mutableStateOf(false) }
             // Privacy & Security suite (Google Sign-In, passwords, Safety Check, autofill, cards).
             var showPrivacySecurity by remember { mutableStateOf(false) }
+            var showAdvancedSecurity by remember { mutableStateOf(false) }
             var showPaymentMethods by remember { mutableStateOf(false) }
             // Per-site settings sheet (opened from the lock icon in the address bar).
             var showSiteSettings by remember { mutableStateOf(false) }
@@ -1755,6 +1760,16 @@ class MainActivity : FragmentActivity() {
                     aiApiKey = prefs[AppSettings.AI_API_KEY].orEmpty()
                     aiProvider = prefs[AppSettings.AI_PROVIDER] ?: "groq"
                     aiModel = prefs[AppSettings.AI_MODEL].orEmpty()
+                    val savedLightThemeId = prefs[AppSettings.LIGHT_THEME_VARIANT]
+                    autoRotateThemes = prefs[AppSettings.AUTO_ROTATE_THEMES] ?: false
+                    lightThemeVariant = if (freshLaunch && autoRotateThemes) {
+                        ThemeController.nextLightThemeVariant(savedLightThemeId)
+                    } else {
+                        ThemeController.normalizeLightThemeVariant(savedLightThemeId)
+                    }
+                    if (savedLightThemeId != lightThemeVariant.id) {
+                        dataStore.edit { it[AppSettings.LIGHT_THEME_VARIANT] = lightThemeVariant.id }
+                    }
                     // HTTPS mode (default "standard" = historical HTTPS-Only upgrade behavior).
                     httpsMode = AppSettings.normalizeMode(prefs[AppSettings.HTTPS_MODE])
                     httpsStrictExceptions = AppSettings.parseHostList(prefs[AppSettings.HTTPS_STRICT_EXCEPTIONS])
@@ -2736,7 +2751,7 @@ class MainActivity : FragmentActivity() {
                                     if (currentTab.url == "about:blank") {
                                         // Overhauled premium dashboard home page
                                         ClickHomeScreen(
-                                            theme = ModeThemes.forMode(activeMode, dark = activeMode != BrowserMode.SIMPLE),
+                                            theme = theme,
                                             activeMode = activeMode,
                                             adBlockerEnabled = adBlockerEnabled,
                                             blockedCount = blockedCount,
@@ -3525,11 +3540,11 @@ class MainActivity : FragmentActivity() {
                             }
 
                             // Premium bottom nav (Phase 1): Home · Tabs (count badge) · big glowing
-                            // AI center · Bookmarks · Menu. Mode-wired theme: Simple=light,
-                            // Developer=dark glass, Power=OLED black neon.
+                            // AI center · Bookmarks · Menu. Theme follows the selected palette
+                            // and per-mode light/dark choice.
                             if (showOverlays && !immersiveMode) {
                                 ClickBottomNav(
-                                    theme = ModeThemes.forMode(activeMode, dark = activeMode != BrowserMode.SIMPLE),
+                                    theme = theme,
                                     tabCount = tabs.size,
                                     onHome = { currentTab.url = "about:blank" },
                                     onTabs = { showTabsManager = true },
@@ -3990,6 +4005,21 @@ class MainActivity : FragmentActivity() {
                                         }
                                     },
                                     globalDarkEffective = theme.dark,
+                                    lightThemeVariant = lightThemeVariant.id,
+                                    onLightThemeVariantChange = { id ->
+                                        val variant = ThemeController.normalizeLightThemeVariant(id)
+                                        lightThemeVariant = variant
+                                        scope.launch {
+                                            dataStore.edit { prefs -> prefs[AppSettings.LIGHT_THEME_VARIANT] = variant.id }
+                                        }
+                                    },
+                                    autoRotateThemes = autoRotateThemes,
+                                    onAutoRotateThemesChange = { enabled ->
+                                        autoRotateThemes = enabled
+                                        scope.launch {
+                                            dataStore.edit { prefs -> prefs[AppSettings.AUTO_ROTATE_THEMES] = enabled }
+                                        }
+                                    },
                                     scheduleStartHour = scheduleStartHour,
                                     scheduleEndHour = scheduleEndHour,
                                     onScheduleChange = { start, end ->                                        scheduleStartHour = start
@@ -4214,7 +4244,12 @@ class MainActivity : FragmentActivity() {
                                         ).show()
                                     },
                                     onOpenCookieManager = { showSettings = false; showCookieManager = true },
-                                    onOpenSiteSettings = { showSettings = false; showSiteSettingsList = true },
+                                    onOpenSiteSettings = {
+                                        siteSettingsReturnToAdvancedSecurity = false
+                                        showSettings = false
+                                        showSiteSettingsList = true
+                                    },
+                                    onOpenAdvancedSecurity = { showSettings = false; showAdvancedSecurity = true },
                                     onOpenTabGroups = { showSettings = false; showTabGroups = true },
                                     onOpenAccessibility = { showSettings = false; showAccessibility = true },
                                     onOpenLanguage = { showSettings = false; showLanguage = true },
@@ -4324,6 +4359,23 @@ class MainActivity : FragmentActivity() {
                                     onClose = { showPrivacySecurity = false }
                                 )
                             }
+                            if (showAdvancedSecurity) {
+                                com.click.browser.ui.screens.AdvancedSecurityScreen(
+                                    theme = theme,
+                                    onOpenSiteSettings = {
+                                        siteSettingsReturnToAdvancedSecurity = true
+                                        showAdvancedSecurity = false
+                                        showSiteSettingsList = true
+                                    },
+                                    onClose = { showAdvancedSecurity = false },
+                                    onFixApplied = { checkId ->
+                                        when (checkId) {
+                                            "https" -> httpsMode = "standard"
+                                            "strip_params" -> stripTrackingParams = true
+                                        }
+                                    }
+                                )
+                            }
                             if (showPaymentMethods) {
                                 com.click.browser.ui.screens.PaymentMethodsScreen(
                                     theme = theme,
@@ -4343,7 +4395,13 @@ class MainActivity : FragmentActivity() {
                                 com.click.browser.ui.screens.AllSiteSettingsScreen(
                                     theme = theme,
                                     repository = repository,
-                                    onClose = { showSiteSettingsList = false }
+                                    onClose = {
+                                        showSiteSettingsList = false
+                                        if (siteSettingsReturnToAdvancedSecurity) {
+                                            siteSettingsReturnToAdvancedSecurity = false
+                                            showAdvancedSecurity = true
+                                        }
+                                    }
                                 )
                             }
                             // Settings suite: tab groups, accessibility, language, downloads, reports.
@@ -5112,12 +5170,16 @@ class MainActivity : FragmentActivity() {
                                 exit = fadeOut(animationSpec = tween(450)),
                                 modifier = Modifier.fillMaxSize()
                             ) {
-                                HackIntroOverlay(
-                                    onDone = { showSplash = false },
-                                    durationMs = 5000L,
-                                    title = "CLICK BROWSER",
-                                    subtitle = "TEAM PK AI ERA"
-                                )
+                                if (activeMode == BrowserMode.ADVANCED) {
+                                    AdvanceIntroOverlay(onDone = { showSplash = false })
+                                } else {
+                                    HackIntroOverlay(
+                                        onDone = { showSplash = false },
+                                        durationMs = 5000L,
+                                        title = "CLICK BROWSER",
+                                        subtitle = "TEAM PK AI ERA"
+                                    )
+                                }
                             }
                         }
                     }

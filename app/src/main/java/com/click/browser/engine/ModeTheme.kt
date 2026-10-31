@@ -28,14 +28,93 @@ data class ModeTheme(
     val modePillText: String
 )
 
+enum class LightThemeVariant(val id: String, val label: String) {
+    CLASSIC("classic", "Classic"),
+    MINT("mint", "Mint"),
+    ROSE("rose", "Rose"),
+    SAND("sand", "Sand");
+
+    companion object {
+        fun fromId(id: String?): LightThemeVariant =
+            values().firstOrNull { it.id == id } ?: CLASSIC
+    }
+}
+
 object ModeThemes {
 
-    fun forMode(mode: BrowserMode, dark: Boolean): ModeTheme = when (mode) {
-        BrowserMode.SIMPLE -> if (dark) simpleDark() else simpleLight()
-        BrowserMode.DEVELOPER -> if (dark) developerDark() else developerLight()
-        BrowserMode.HACK -> if (dark) hackDark() else hackLight()
-        BrowserMode.ADVANCED -> if (dark) advanceDark() else advanceLight()
+    fun forMode(
+        mode: BrowserMode,
+        dark: Boolean,
+        lightVariant: LightThemeVariant = LightThemeVariant.CLASSIC
+    ): ModeTheme {
+        if (dark) return when (mode) {
+            BrowserMode.SIMPLE -> simpleDark()
+            BrowserMode.DEVELOPER -> developerDark()
+            BrowserMode.HACK -> hackDark()
+            BrowserMode.ADVANCED -> advanceDark()
+        }
+        if (lightVariant != LightThemeVariant.CLASSIC) return themedLight(mode, lightVariant)
+        return when (mode) {
+            BrowserMode.SIMPLE -> simpleLight()
+            BrowserMode.DEVELOPER -> developerLight()
+            BrowserMode.HACK -> hackLight()
+            BrowserMode.ADVANCED -> advanceLight()
+        }
     }
+
+    private fun themedLight(mode: BrowserMode, variant: LightThemeVariant): ModeTheme {
+        val palette = when (variant) {
+            LightThemeVariant.CLASSIC -> return forMode(mode, dark = false)
+            LightThemeVariant.MINT -> LightPalette(
+                background = Color(0xFFF2FAF5), surfaceVariant = Color(0xFFE3F2E8),
+                primary = Color(0xFF26734D), secondary = Color(0xFF48A878),
+                onBackground = Color(0xFF172A1E), onSurface = Color(0xFF244332),
+                onTopBar = Color(0xFF26734D), glow = Color(0xFF48A878)
+            )
+            LightThemeVariant.ROSE -> LightPalette(
+                background = Color(0xFFFFF5F7), surfaceVariant = Color(0xFFF7E7EC),
+                primary = Color(0xFFB34463), secondary = Color(0xFFD66B89),
+                onBackground = Color(0xFF35212A), onSurface = Color(0xFF4A2935),
+                onTopBar = Color(0xFFB34463), glow = Color(0xFFD66B89)
+            )
+            LightThemeVariant.SAND -> LightPalette(
+                background = Color(0xFFFFF9EF), surfaceVariant = Color(0xFFF4EBDD),
+                primary = Color(0xFFA5651C), secondary = Color(0xFFC4863A),
+                onBackground = Color(0xFF352A1C), onSurface = Color(0xFF4B3A25),
+                onTopBar = Color(0xFFA5651C), glow = Color(0xFFC4863A)
+            )
+        }
+        return ModeTheme(
+            mode = mode, dark = false,
+            background = palette.background,
+            surface = Color(0xFFFFFFFF),
+            surfaceVariant = palette.surfaceVariant,
+            primary = palette.primary,
+            secondary = palette.secondary,
+            onBackground = palette.onBackground,
+            onSurface = palette.onSurface,
+            topBarBg = Color(0xFFFFFFFF),
+            onTopBar = palette.onTopBar,
+            glow = palette.glow,
+            modePillText = when (mode) {
+                BrowserMode.SIMPLE -> "SIMPLE MODE"
+                BrowserMode.DEVELOPER -> "DEVELOPER MODE"
+                BrowserMode.HACK -> "POWER MODE • ACTIVE"
+                BrowserMode.ADVANCED -> "ADVANCE MODE"
+            }
+        )
+    }
+
+    private data class LightPalette(
+        val background: Color,
+        val surfaceVariant: Color,
+        val primary: Color,
+        val secondary: Color,
+        val onBackground: Color,
+        val onSurface: Color,
+        val onTopBar: Color,
+        val glow: Color
+    )
 
     private fun simpleLight() = ModeTheme(
         mode = BrowserMode.SIMPLE, dark = false,
