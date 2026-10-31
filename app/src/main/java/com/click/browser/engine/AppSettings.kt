@@ -71,6 +71,10 @@ object AppSettings {
     // ---- Settings/Reports/Themes suite (PR: feature/settings-reports-themes) ----
     /** Theme mode: "auto" (follow system) | "light" | "dark" | "scheduled". */
     val THEME_MODE = stringPreferencesKey("theme_mode")
+    /** Last-applied light palette; also the starting point for launch rotation. */
+    val LIGHT_THEME_VARIANT = stringPreferencesKey("light_theme_variant")
+    /** Opt-in: advance the light palette once on each fresh app launch. */
+    val AUTO_ROTATE_THEMES = booleanPreferencesKey("auto_rotate_themes")
     /** Scheduled light-theme window, hours 0-23. Light between START (incl) and END (excl). */
     val THEME_SCHEDULE_START_HOUR = intPreferencesKey("theme_schedule_start_hour")
     val THEME_SCHEDULE_END_HOUR = intPreferencesKey("theme_schedule_end_hour")
