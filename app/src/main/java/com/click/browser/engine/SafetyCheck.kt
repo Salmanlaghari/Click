@@ -42,15 +42,18 @@ object SafetyCheck {
         // 1. Safe Browsing (WebView-level malware/phishing protection).
         val sbSupported =
             WebViewFeature.isFeatureSupported(WebViewFeature.SAFE_BROWSING_ENABLE)
+        // Use the canonical parser/default used by click://flags and WebView setup.
+        val sbEnabled = ExperimentalFlags.load(prefs).safeBrowsing
         checks.add(
             Check(
                 id = "safe_browsing",
                 title = "Safe Browsing",
-                description = if (sbSupported)
-                    "WebView Safe Browsing is active — malicious and deceptive sites are blocked."
-                else
-                    "This WebView build doesn't expose Safe Browsing controls.",
-                passed = sbSupported,
+                description = when {
+                    !sbSupported -> "This WebView build doesn't expose Safe Browsing controls."
+                    !sbEnabled -> "Safe Browsing is disabled in the browser configuration."
+                    else -> "WebView Safe Browsing is enabled — malicious and deceptive sites are blocked."
+                },
+                passed = sbSupported && sbEnabled,
                 fixLabel = null
             )
         )

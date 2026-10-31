@@ -29,6 +29,7 @@ import com.click.browser.BuildConfig
 import com.click.browser.engine.AiProviders
 import com.click.browser.engine.BrowserMode
 import com.click.browser.engine.ClickInternalPages
+import com.click.browser.engine.LightThemeVariant
 import com.click.browser.engine.ModePersonalization
 import com.click.browser.engine.ModeTheme
 import com.click.browser.engine.NewsNotifications
@@ -53,6 +54,10 @@ fun SettingsScreen(
     // --- General ---
     currentThemeSetting: String, // "Auto" | "Light" | "Dark" | "Scheduled"
     onThemeChange: (String) -> Unit,
+    lightThemeVariant: String,
+    onLightThemeVariantChange: (String) -> Unit,
+    autoRotateThemes: Boolean,
+    onAutoRotateThemesChange: (Boolean) -> Unit,
     /** Resolved global dark flag right now (auto/scheduled already resolved). */
     globalDarkEffective: Boolean,
     scheduleStartHour: Int,
@@ -116,6 +121,7 @@ fun SettingsScreen(
     onClearAllCurrentMode: () -> Unit,
     onOpenCookieManager: () -> Unit,
     onOpenSiteSettings: () -> Unit = {},
+    onOpenAdvancedSecurity: () -> Unit,
     // --- Privacy & Security suite ---
     onOpenPrivacySecurity: () -> Unit,
     // --- LocationGuard ---
@@ -177,7 +183,8 @@ fun SettingsScreen(
     // ---- Row model: each row optionally opens a named section ----
     data class Row(val section: String?, val content: @Composable () -> Unit)
     val rows = remember(
-        theme, currentThemeSetting, globalDarkEffective, scheduleStartHour, scheduleEndHour, wallpaperUri, activeMode,
+        theme, currentThemeSetting, lightThemeVariant, autoRotateThemes, globalDarkEffective,
+        scheduleStartHour, scheduleEndHour, wallpaperUri, activeMode,
         currentSearchEngineSetting, addressBarPosition,
         adBlockerEnabled, forceNightMode,
         httpsMode, httpsStrictExceptions, jsEnabled, dataSaver, perModeDark, historyModeTarget,
@@ -251,6 +258,32 @@ fun SettingsScreen(
                             )
                         }
                     }
+                    Text("Light Theme", color = theme.onSurface, fontWeight = FontWeight.SemiBold, fontSize = 14.sp)
+                    Text(
+                        "Choose the light palette used by the existing mode themes.",
+                        fontSize = 11.sp, color = theme.onSurface.copy(alpha = 0.6f)
+                    )
+                    @OptIn(ExperimentalLayoutApi::class)
+                    FlowRow(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalArrangement = Arrangement.spacedBy(4.dp)
+                    ) {
+                        LightThemeVariant.values().forEach { variant ->
+                            FilterChip(
+                                selected = lightThemeVariant == variant.id,
+                                onClick = { onLightThemeVariantChange(variant.id) },
+                                label = { Text(variant.label) }
+                            )
+                        }
+                    }
+                    ToggleRow(
+                        "Auto-rotate themes",
+                        "Advance to the next light palette on each fresh app launch",
+                        autoRotateThemes,
+                        onAutoRotateThemesChange,
+                        theme
+                    )
                 }
             })
             add(Row(null) {
@@ -716,6 +749,12 @@ fun SettingsScreen(
                         "Privacy & Security",
                         "Click account, passwords, Safety Check, autofill, payment methods",
                         Icons.Default.VerifiedUser, theme, onOpenPrivacySecurity
+                    )
+                    HorizontalDivider(color = theme.onSurface.copy(alpha = 0.1f))
+                    ActionRow(
+                        "Advanced Security",
+                        "Safety Check, Safe Browsing, site settings and app integrity",
+                        Icons.Default.Shield, theme, onOpenAdvancedSecurity
                     )
                 }
             })
