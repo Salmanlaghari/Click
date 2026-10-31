@@ -4367,7 +4367,13 @@ class MainActivity : FragmentActivity() {
                                         showAdvancedSecurity = false
                                         showSiteSettingsList = true
                                     },
-                                    onClose = { showAdvancedSecurity = false }
+                                    onClose = { showAdvancedSecurity = false },
+                                    onFixApplied = { checkId ->
+                                        when (checkId) {
+                                            "https" -> httpsMode = "standard"
+                                            "strip_params" -> stripTrackingParams = true
+                                        }
+                                    }
                                 )
                             }
                             if (showPaymentMethods) {

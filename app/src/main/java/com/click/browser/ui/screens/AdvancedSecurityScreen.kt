@@ -62,7 +62,8 @@ import kotlinx.coroutines.launch
 fun AdvancedSecurityScreen(
     theme: ModeTheme,
     onOpenSiteSettings: () -> Unit,
-    onClose: () -> Unit
+    onClose: () -> Unit,
+    onFixApplied: (String) -> Unit
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -91,13 +92,33 @@ fun AdvancedSecurityScreen(
         scope.launch {
             checking = true
             checkError = null
-            checks = try {
-                SafetyCheck.run(context)
+            try {
+                checks = SafetyCheck.run(context)
             } catch (e: Exception) {
                 checkError = "Safety Check couldn't run: ${(e.message ?: "unknown error").take(100)}"
-                null
+                checks = null
+            } finally {
+                checking = false
             }
-            checking = false
+        }
+    }
+
+    fun applySafetyFix(checkId: String, label: String) {
+        scope.launch {
+            checking = true
+            checkError = null
+            try {
+                if (SafetyCheck.applyFix(context, checkId)) {
+                    onFixApplied(checkId)
+                    checks = SafetyCheck.run(context)
+                } else {
+                    checkError = "Couldn't apply '$label'. Change this setting in Settings, then run Safety Check again."
+                }
+            } catch (e: Exception) {
+                checkError = "Couldn't apply '$label': ${(e.message ?: "unknown error").take(100)}"
+            } finally {
+                checking = false
+            }
         }
     }
 
@@ -165,8 +186,21 @@ fun AdvancedSecurityScreen(
                             Column(Modifier.padding(start = 8.dp)) {
                                 Text(check.title, color = theme.onSurface, fontWeight = FontWeight.SemiBold, fontSize = 13.sp)
                                 Text(check.description, color = theme.onSurface.copy(alpha = 0.65f), fontSize = 11.sp)
+                                if (!check.passed) {
+                                    check.fixLabel?.let { label ->
+                                        OutlinedButton(
+                                            onClick = { applySafetyFix(check.id, label) },
+                                            enabled = !checking
+                                        ) {
+                                            Text(label)
+                                        }
+                                    }
+                                }
                                 check.actionLabel?.let { label ->
-                                    OutlinedButton(onClick = { SafetyCheck.openPlayListing(context) }) {
+                                    OutlinedButton(
+                                        onClick = { SafetyCheck.openPlayListing(context) },
+                                        enabled = !checking
+                                    ) {
                                         Text(label)
                                     }
                                 }
