@@ -9,10 +9,10 @@ import android.media.MediaPlayer
 import android.net.Uri
 import android.os.Build
 import android.provider.MediaStore
-import android.util.Size
 import android.widget.MediaController
 import android.widget.VideoView
 import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
@@ -47,17 +47,13 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 // ---------------------------------------------------------------------------
-// Runtime media-permission helpers: MediaStore reads need a runtime grant —
-// READ_MEDIA_IMAGES / READ_MEDIA_AUDIO on API 33+, READ_EXTERNAL_STORAGE below.
-// Without the grant the query silently returns nothing, so every dialog that
-// reads shared media must gate on this first (never query blindly).
+// Runtime media-permission helper: MediaStore audio reads need a runtime
+// grant — READ_MEDIA_AUDIO on API 33+, READ_EXTERNAL_STORAGE below. Without
+// the grant the query silently returns nothing, so the music dialog gates on
+// this first (never query blindly). Photos and videos deliberately have NO
+// permission helper: the image gallery uses the system photo picker, which
+// needs no permission at all (Google Play photo and video policy).
 // ---------------------------------------------------------------------------
-
-private fun imageReadPermission(): String =
-    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU)
-        android.Manifest.permission.READ_MEDIA_IMAGES
-    else
-        android.Manifest.permission.READ_EXTERNAL_STORAGE
 
 private fun audioReadPermission(): String =
     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU)
@@ -507,50 +503,33 @@ fun InteractivePdfReaderDialog(onClose: () -> Unit) {
 }
 
 // ---------------------------------------------------------------------------
-// Real image gallery: shows the device's actual photos (MediaStore) with
-// working rotate / zoom on the selected image.
+// Image gallery: photos are chosen with the Android system photo picker
+// (ActivityResultContracts.PickMultipleVisualMedia), so the app needs NO
+// photo/video permission at all. Google Play's photo and video policy
+// requires the system picker instead of broad shared-media access for apps
+// whose core job is not media management. Picked photos open in a viewer
+// with working rotate / zoom.
 // ---------------------------------------------------------------------------
 
-private data class DeviceImage(val id: Long, val uri: Uri)
+private data class DeviceImage(val uri: Uri)
 
-private fun queryDeviceImages(context: Context, limit: Int = 120): List<DeviceImage> {
-    val out = mutableListOf<DeviceImage>()
-    val projection = arrayOf(MediaStore.Images.Media._ID)
-    try {
-        context.contentResolver.query(
-            MediaStore.Images.Media.EXTERNAL_CONTENT_URI,
-            projection, null, null,
-            "${MediaStore.Images.Media.DATE_ADDED} DESC"
-        )?.use { c ->
-            val idCol = c.getColumnIndexOrThrow(MediaStore.Images.Media._ID)
-            while (c.moveToNext() && out.size < limit) {
-                val id = c.getLong(idCol)
-                out.add(DeviceImage(id, ContentUris.withAppendedId(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, id)))
-            }
-        }
-    } catch (_: Exception) { }
-    return out
+private fun decodeSampledBitmap(context: Context, uri: Uri, maxDim: Int = 256): Bitmap? {
+    return try {
+        val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+        context.contentResolver.openInputStream(uri)?.use { BitmapFactory.decodeStream(it, null, bounds) }
+        var sample = 1
+        while (bounds.outWidth / (sample * 2) > maxDim || bounds.outHeight / (sample * 2) > maxDim) sample *= 2
+        val opts = BitmapFactory.Options().apply { inSampleSize = sample }
+        context.contentResolver.openInputStream(uri)?.use { BitmapFactory.decodeStream(it, null, opts) }
+    } catch (_: Exception) { null }
 }
 
-@Suppress("DEPRECATION")
 @Composable
 private fun DeviceImageThumb(image: DeviceImage, modifier: Modifier = Modifier, onClick: () -> Unit = {}) {
     val context = LocalContext.current
-    var bmp by remember(image.id) { mutableStateOf<Bitmap?>(null) }
-    LaunchedEffect(image.id) {
-        bmp = withContext(Dispatchers.IO) {
-            try {
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                    context.contentResolver.loadThumbnail(image.uri, Size(256, 256), null)
-                } else {
-                    @Suppress("DEPRECATION")
-                    MediaStore.Images.Thumbnails.getThumbnail(
-                        context.contentResolver, image.id,
-                        MediaStore.Images.Thumbnails.MINI_KIND, null
-                    )
-                }
-            } catch (_: Exception) { null }
-        }
+    var bmp by remember(image.uri) { mutableStateOf<Bitmap?>(null) }
+    LaunchedEffect(image.uri) {
+        bmp = withContext(Dispatchers.IO) { decodeSampledBitmap(context, image.uri) }
     }
     val b = bmp
     if (b != null) {
@@ -568,28 +547,25 @@ private fun DeviceImageThumb(image: DeviceImage, modifier: Modifier = Modifier, 
 fun InteractiveImageGalleryDialog(onClose: () -> Unit) {
     val context = LocalContext.current
     var images by remember { mutableStateOf<List<DeviceImage>>(emptyList()) }
-    var loading by remember { mutableStateOf(true) }
     var selected by remember { mutableStateOf<DeviceImage?>(null) }
     var fullBitmap by remember { mutableStateOf<Bitmap?>(null) }
     var rotation by remember { mutableStateOf(0f) }
     var zoomScale by remember { mutableStateOf(1f) }
 
-    // Runtime permission gate: MediaStore.Images is invisible without the grant.
-    var imagePermissionGranted by remember { mutableStateOf(context.hasMediaPermission(imageReadPermission())) }
-    val imagePermissionLauncher = rememberLauncherForActivityResult(
-        ActivityResultContracts.RequestPermission()
-    ) { granted -> imagePermissionGranted = granted }
-
-    LaunchedEffect(imagePermissionGranted) {
-        if (imagePermissionGranted) {
-            images = withContext(Dispatchers.IO) { queryDeviceImages(context) }
+    // System photo picker: no permission needed; the user picks the photos.
+    val photoPicker = rememberLauncherForActivityResult(
+        ActivityResultContracts.PickMultipleVisualMedia(maxItems = 60)
+    ) { uris ->
+        if (uris.isNotEmpty()) {
+            images = uris.map { DeviceImage(it) }
+            selected = null
         }
-        loading = false
     }
 
-    // Ask once when the dialog opens without the grant.
-    LaunchedEffect(Unit) {
-        if (!imagePermissionGranted) imagePermissionLauncher.launch(imageReadPermission())
+    fun launchPicker() {
+        photoPicker.launch(
+            PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
+        )
     }
 
     // Load the full image when one is selected
@@ -612,40 +588,28 @@ fun InteractiveImageGalleryDialog(onClose: () -> Unit) {
 
     AlertDialog(
         onDismissRequest = onClose,
-        title = { Text("Device Image Gallery", fontWeight = FontWeight.Bold) },
+        title = { Text("Image Gallery", fontWeight = FontWeight.Bold) },
         text = {
             Column(modifier = Modifier.fillMaxWidth()) {
                 when {
-                    loading -> {
-                        Box(modifier = Modifier.fillMaxWidth().height(120.dp), contentAlignment = Alignment.Center) {
-                            CircularProgressIndicator()
-                        }
-                    }
-                    images.isEmpty() && !imagePermissionGranted -> {
+                    images.isEmpty() -> {
                         Column(
                             modifier = Modifier.fillMaxWidth().padding(16.dp),
                             horizontalAlignment = Alignment.CenterHorizontally
                         ) {
                             Text(
-                                "Gallery access denied. Grant photo access to browse your on-device photos.",
+                                "Pick photos with the system photo picker to view them here. No gallery permission is needed — you choose exactly which photos the app can see.",
                                 fontSize = 12.sp,
                                 textAlign = TextAlign.Center
                             )
                             Spacer(modifier = Modifier.height(8.dp))
-                            Button(onClick = { imagePermissionLauncher.launch(imageReadPermission()) }) {
-                                Text("Grant access")
+                            Button(onClick = { launchPicker() }) {
+                                Text("Pick photos")
                             }
                         }
                     }
-                    images.isEmpty() -> {
-                        Text(
-                            "No photos found on this device. Allow media access and add photos, then reopen.",
-                            fontSize = 12.sp, textAlign = TextAlign.Center,
-                            modifier = Modifier.fillMaxWidth().padding(16.dp)
-                        )
-                    }
                     selected == null -> {
-                        Text("${images.size} photos on device — tap to view", fontSize = 12.sp)
+                        Text("${images.size} photos picked — tap to view", fontSize = 12.sp)
                         Spacer(modifier = Modifier.height(8.dp))
                         LazyVerticalGrid(
                             columns = GridCells.Fixed(3),
@@ -653,7 +617,7 @@ fun InteractiveImageGalleryDialog(onClose: () -> Unit) {
                             verticalArrangement = Arrangement.spacedBy(6.dp),
                             horizontalArrangement = Arrangement.spacedBy(6.dp)
                         ) {
-                            items(images, key = { it.id }) { img ->
+                            items(images, key = { it.uri.toString() }) { img ->
                                 DeviceImageThumb(
                                     image = img,
                                     modifier = Modifier.aspectRatio(1f).fillMaxWidth(),
@@ -661,6 +625,8 @@ fun InteractiveImageGalleryDialog(onClose: () -> Unit) {
                                 )
                             }
                         }
+                        Spacer(modifier = Modifier.height(8.dp))
+                        TextButton(onClick = { launchPicker() }) { Text("Pick different photos") }
                     }
                     else -> {
                         val bmp = fullBitmap

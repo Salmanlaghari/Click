@@ -1371,6 +1371,8 @@ class MainActivity : FragmentActivity() {
             var showPasswordManager by remember { mutableStateOf(false) }
             // Cookie manager: per-site cookie viewer.
             var showCookieManager by remember { mutableStateOf(false) }
+            // All-sites settings list (Settings -> Site settings).
+            var showSiteSettingsList by remember { mutableStateOf(false) }
             // Settings suite: tab groups, accessibility, language, downloads, reports.
             var showTabGroups by remember { mutableStateOf(false) }
             var showAccessibility by remember { mutableStateOf(false) }
@@ -4212,6 +4214,7 @@ class MainActivity : FragmentActivity() {
                                         ).show()
                                     },
                                     onOpenCookieManager = { showSettings = false; showCookieManager = true },
+                                    onOpenSiteSettings = { showSettings = false; showSiteSettingsList = true },
                                     onOpenTabGroups = { showSettings = false; showTabGroups = true },
                                     onOpenAccessibility = { showSettings = false; showAccessibility = true },
                                     onOpenLanguage = { showSettings = false; showLanguage = true },
@@ -4333,6 +4336,14 @@ class MainActivity : FragmentActivity() {
                                     theme = theme,
                                     repository = repository,
                                     onClose = { showCookieManager = false }
+                                )
+                            }
+                            // All-sites settings: every saved per-site choice in one list.
+                            if (showSiteSettingsList) {
+                                com.click.browser.ui.screens.AllSiteSettingsScreen(
+                                    theme = theme,
+                                    repository = repository,
+                                    onClose = { showSiteSettingsList = false }
                                 )
                             }
                             // Settings suite: tab groups, accessibility, language, downloads, reports.
@@ -4942,6 +4953,14 @@ class MainActivity : FragmentActivity() {
                                                     Toast.LENGTH_SHORT
                                                 ).show()
                                             }
+                                        }
+                                    },
+                                    onSiteSettings = {
+                                        showBrowserMenu = false
+                                        if (currentTab.url == "about:blank" || !currentTab.url.startsWith("http")) {
+                                            Toast.makeText(this@MainActivity, "Open a page first to change its site settings.", Toast.LENGTH_SHORT).show()
+                                        } else {
+                                            showSiteSettings = true
                                         }
                                     },
                                     onSettings = { showBrowserMenu = false; showSettings = true },

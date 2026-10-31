@@ -115,6 +115,7 @@ fun SettingsScreen(
     onClearCache: () -> Unit,
     onClearAllCurrentMode: () -> Unit,
     onOpenCookieManager: () -> Unit,
+    onOpenSiteSettings: () -> Unit = {},
     // --- Privacy & Security suite ---
     onOpenPrivacySecurity: () -> Unit,
     // --- LocationGuard ---
@@ -704,6 +705,12 @@ fun SettingsScreen(
             add(Row(null) {
                 CardRow(theme) {
                     ActionRow("Cookie Manager", "Inspect & delete cookies per site", Icons.Default.Cookie, theme, onOpenCookieManager)
+                    HorizontalDivider(color = theme.onSurface.copy(alpha = 0.1f))
+                    ActionRow(
+                        "Site settings",
+                        "Review & reset per-site choices for all websites",
+                        Icons.Default.Shield, theme, onOpenSiteSettings
+                    )
                     HorizontalDivider(color = theme.onSurface.copy(alpha = 0.1f))
                     ActionRow(
                         "Privacy & Security",
