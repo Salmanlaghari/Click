@@ -28,7 +28,9 @@ object ThemeController {
 
     fun nextLightThemeVariant(currentId: String?): LightThemeVariant {
         val variants = LightThemeVariant.values()
-        val currentIndex = variants.indexOf(normalizeLightThemeVariant(currentId))
+        if (currentId == null) return LightThemeVariant.CLASSIC
+        val currentIndex = variants.indexOfFirst { it.id == currentId }
+        if (currentIndex < 0) return LightThemeVariant.CLASSIC
         return variants[(currentIndex + 1) % variants.size]
     }
 
