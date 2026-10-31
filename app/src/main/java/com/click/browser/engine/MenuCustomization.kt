@@ -32,6 +32,7 @@ object MenuCustomization {
         FIND_IN_PAGE("Find in page"),
         TRANSLATE("Translate"),
         DESKTOP_SITE("Desktop site"),
+        SITE_SETTINGS("Site settings"),
         VPN("Click VPN"),
         SETTINGS("Settings"),
     }

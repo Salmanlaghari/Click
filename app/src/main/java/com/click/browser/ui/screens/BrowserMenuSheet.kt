@@ -71,6 +71,7 @@ fun BrowserMenuSheet(
     onFindInPage: () -> Unit,
     onTranslate: () -> Unit,
     onToggleDesktopSite: () -> Unit,
+    onSiteSettings: () -> Unit = {},
     onVpn: () -> Unit = {},
     onSettings: () -> Unit,
     onCustomizeMenu: () -> Unit,
@@ -167,6 +168,10 @@ fun BrowserMenuSheet(
                                 )
                             },
                             onClick = onToggleDesktopSite
+                        )
+                        MenuCustomization.MenuItemId.SITE_SETTINGS -> MenuRow(
+                            theme = theme, icon = Icons.Default.Shield,
+                            label = "Site settings", onClick = onSiteSettings
                         )
                         MenuCustomization.MenuItemId.VPN -> MenuRow(
                             theme = theme, icon = Icons.Default.VpnKey,
