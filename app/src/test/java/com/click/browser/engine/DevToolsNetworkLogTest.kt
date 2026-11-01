@@ -8,10 +8,10 @@ import org.junit.Test
 
 class DevToolsNetworkLogTest {
     @Test
-    fun httpErrorUpdatesLatestMatchingRequestOnlyForSameWebView() {
+    fun httpErrorIsStandaloneEvenWhenSimilarRequestsExist() {
         val requests = listOf(
             NetworkRequest("GET", "https://example.com/data", false, 1, timestamp = 10L),
-            NetworkRequest("GET", "https://example.com/data", false, 2, timestamp = 11L),
+            NetworkRequest("GET", "https://example.com/data", false, 1, timestamp = 11L),
             NetworkRequest("GET", "https://example.com/data", true, 1, timestamp = 12L)
         )
 
@@ -26,19 +26,26 @@ class DevToolsNetworkLogTest {
             timestamp = 20L
         )
 
-        assertEquals(3, updated.size)
-        assertEquals(NetworkRequestOutcome.HTTP_ERROR, updated[0].outcome)
-        assertEquals(NetworkRequestOutcome.OBSERVED, updated[1].outcome)
-        assertEquals(NetworkRequestOutcome.OBSERVED, updated[2].outcome)
-        assertEquals(404, updated[0].statusCode ?: -1)
-        assertEquals("Not Found", updated[0].detail)
-        assertEquals(10L, updated[0].timestamp)
+        assertEquals(4, updated.size)
+        assertTrue(updated.take(3).all { it.outcome == NetworkRequestOutcome.OBSERVED })
+        assertEquals(NetworkRequestOutcome.HTTP_ERROR, updated.last().outcome)
+        assertEquals(404, updated.last().statusCode ?: -1)
+        assertEquals("Not Found", updated.last().detail)
+        assertEquals(20L, updated.last().timestamp)
     }
 
     @Test
-    fun errorWithoutObservedRequestStillProducesAnEntry() {
-        val updated = DevToolsNetworkLog.loadError(
+    fun loadErrorIsStandaloneEvenWhenMatchingRequestWasObserved() {
+        val observed = DevToolsNetworkLog.observed(
             existing = emptyList(),
+            method = "GET",
+            url = "https://example.com/offline",
+            isMainFrame = true,
+            webViewKey = 4,
+            timestamp = 29L
+        )
+        val updated = DevToolsNetworkLog.loadError(
+            existing = observed,
             method = "GET",
             url = "https://example.com/offline",
             isMainFrame = true,
@@ -47,10 +54,12 @@ class DevToolsNetworkLogTest {
             timestamp = 30L
         )
 
-        assertEquals(1, updated.size)
-        assertEquals(NetworkRequestOutcome.LOAD_ERROR, updated.single().outcome)
-        assertTrue(updated.single().isMainFrame)
-        assertEquals("net::ERR_NAME_NOT_RESOLVED", updated.single().detail)
+        assertEquals(2, updated.size)
+        assertEquals(NetworkRequestOutcome.OBSERVED, updated[0].outcome)
+        assertEquals(NetworkRequestOutcome.LOAD_ERROR, updated[1].outcome)
+        assertTrue(updated.last().isMainFrame)
+        assertEquals("net::ERR_NAME_NOT_RESOLVED", updated.last().detail)
+        assertEquals(30L, updated.last().timestamp)
     }
 
     @Test

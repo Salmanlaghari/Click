@@ -234,7 +234,7 @@ fun NetworkTab(requests: List<NetworkRequest>, onClearNetwork: () -> Unit) {
             }
         }
         Text(
-            "Passive log while this panel is open. HTTP errors and load failures are reported; successful status/body and redirect follow-ups are not fully exposed.",
+            "Passive log while this panel is open. Errors are separate events (WebView provides no request IDs); successful status/body and some redirects are not exposed.",
             color = Color.LightGray,
             fontSize = 10.sp,
             modifier = Modifier.padding(bottom = 5.dp)
@@ -250,8 +250,13 @@ fun NetworkTab(requests: List<NetworkRequest>, onClearNetwork: () -> Unit) {
                 val statusLabel = when (req.outcome) {
                     NetworkRequestOutcome.OBSERVED -> "Observed · status n/a"
                     NetworkRequestOutcome.BLOCKED_BY_CLICK -> "Blocked by Click"
-                    NetworkRequestOutcome.HTTP_ERROR -> "HTTP ${req.statusCode ?: "error"}"
-                    NetworkRequestOutcome.LOAD_ERROR -> "Failed"
+                    NetworkRequestOutcome.HTTP_ERROR -> "HTTP error · ${req.statusCode ?: "?"}"
+                    NetworkRequestOutcome.LOAD_ERROR -> "Load error"
+                }
+                val entryType = when (req.outcome) {
+                    NetworkRequestOutcome.OBSERVED -> if (req.isMainFrame) "Document" else "Resource"
+                    NetworkRequestOutcome.BLOCKED_BY_CLICK -> "Request"
+                    NetworkRequestOutcome.HTTP_ERROR, NetworkRequestOutcome.LOAD_ERROR -> "Error event"
                 }
 
                 Row(
@@ -267,7 +272,7 @@ fun NetworkTab(requests: List<NetworkRequest>, onClearNetwork: () -> Unit) {
                         Row(verticalAlignment = Alignment.CenterVertically) {
                             Text(req.method, color = Color.Cyan, fontWeight = FontWeight.Bold, fontSize = 11.sp)
                             Spacer(modifier = Modifier.width(6.dp))
-                            Text(if (req.isMainFrame) "Document" else "Resource", color = Color.LightGray, fontSize = 10.sp)
+                            Text(entryType, color = Color.LightGray, fontSize = 10.sp)
                         }
                         Text(req.url, color = Color.White, fontFamily = FontFamily.Monospace, fontSize = 10.sp, maxLines = 2)
                         req.detail?.let { Text(it, color = Color.LightGray, fontSize = 10.sp, maxLines = 2) }

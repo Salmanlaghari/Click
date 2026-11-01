@@ -60,6 +60,7 @@ object DevToolsNetworkLog {
         )
     )
 
+    /** Appends a standalone error event: WebView callbacks do not expose request IDs. */
     fun httpError(
         existing: List<NetworkRequest>,
         method: String,
@@ -69,14 +70,18 @@ object DevToolsNetworkLog {
         statusCode: Int,
         reason: String?,
         timestamp: Long = System.currentTimeMillis()
-    ): List<NetworkRequest> = completeLatestObserved(
-        existing, method, url, isMainFrame, webViewKey,
-        outcome = NetworkRequestOutcome.HTTP_ERROR,
-        statusCode = statusCode,
-        detail = reason,
-        timestamp = timestamp
+    ): List<NetworkRequest> = append(
+        existing,
+        newEntry(
+            method, url, isMainFrame, webViewKey,
+            outcome = NetworkRequestOutcome.HTTP_ERROR,
+            statusCode = statusCode,
+            detail = reason,
+            timestamp = timestamp
+        )
     )
 
+    /** Keeps load failures as standalone events instead of guessing a matching request. */
     fun loadError(
         existing: List<NetworkRequest>,
         method: String,
@@ -85,55 +90,15 @@ object DevToolsNetworkLog {
         webViewKey: Int,
         description: String,
         timestamp: Long = System.currentTimeMillis()
-    ): List<NetworkRequest> = completeLatestObserved(
-        existing, method, url, isMainFrame, webViewKey,
-        outcome = NetworkRequestOutcome.LOAD_ERROR,
-        detail = description,
-        timestamp = timestamp
-    )
-
-    private fun completeLatestObserved(
-        existing: List<NetworkRequest>,
-        method: String,
-        url: String,
-        isMainFrame: Boolean,
-        webViewKey: Int,
-        outcome: NetworkRequestOutcome,
-        statusCode: Int? = null,
-        detail: String?,
-        timestamp: Long
-    ): List<NetworkRequest> {
-        val safeMethod = method.take(MAX_METHOD_LENGTH).ifBlank { "GET" }
-        val safeUrl = url.take(MAX_URL_LENGTH)
-        // WebViewClient exposes no request ID; include frame type in the best-effort match.
-        val pendingIndex = existing.indexOfLast {
-            it.webViewKey == webViewKey &&
-                it.method == safeMethod &&
-                it.url == safeUrl &&
-                it.isMainFrame == isMainFrame &&
-                it.outcome == NetworkRequestOutcome.OBSERVED
-        }
-        if (pendingIndex < 0) {
-            return append(
-                existing,
-                newEntry(
-                    safeMethod, safeUrl, isMainFrame, webViewKey,
-                    outcome = outcome,
-                    statusCode = statusCode,
-                    detail = detail,
-                    timestamp = timestamp
-                )
-            )
-        }
-
-        val updated = existing.toMutableList()
-        updated[pendingIndex] = updated[pendingIndex].copy(
-            outcome = outcome,
-            statusCode = statusCode,
-            detail = detail?.take(MAX_DETAIL_LENGTH)
+    ): List<NetworkRequest> = append(
+        existing,
+        newEntry(
+            method, url, isMainFrame, webViewKey,
+            outcome = NetworkRequestOutcome.LOAD_ERROR,
+            detail = description,
+            timestamp = timestamp
         )
-        return updated.takeLast(MAX_ENTRIES)
-    }
+    )
 
     private fun newEntry(
         method: String,
