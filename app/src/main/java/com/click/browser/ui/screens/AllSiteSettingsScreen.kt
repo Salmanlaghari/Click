@@ -17,7 +17,6 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.click.browser.data.BrowserRepository
 import com.click.browser.engine.ModeTheme
-import com.click.browser.engine.SitePermissionPref
 import com.click.browser.engine.SiteSettings
 import kotlinx.coroutines.launch
 
@@ -244,23 +243,12 @@ private fun siteSettingsSummary(settings: SiteSettings?, desktop: Boolean): Stri
         s.javaScript?.let { parts += if (it) "JavaScript on" else "JavaScript off" }
         s.images?.let { parts += if (it) "Images on" else "Images off" }
         s.popups?.let { parts += if (it) "Pop-ups allowed" else "Pop-ups blocked" }
-        s.sound?.let { parts += if (it) "Sound allowed" else "Sound blocked" }
         s.adBlock?.let { parts += if (it) "Ad block on" else "Ad block off" }
         s.thirdPartyCookies?.let {
             parts += if (it) "Third-party cookies allowed" else "Third-party cookies blocked"
         }
         s.textZoom?.let { parts += "Text zoom $it%" }
-        s.camera?.let { parts += "Camera: ${prefLabel(it)}" }
-        s.microphone?.let { parts += "Microphone: ${prefLabel(it)}" }
-        s.notifications?.let { parts += "Notifications: ${prefLabel(it)}" }
-        s.backgroundSync?.let { parts += if (it) "Background sync on" else "Background sync off" }
     }
     if (desktop) parts += "Desktop site"
     return if (parts.isEmpty()) "Custom settings" else parts.joinToString(" · ")
-}
-
-private fun prefLabel(pref: SitePermissionPref): String = when (pref) {
-    SitePermissionPref.ASK -> "Ask"
-    SitePermissionPref.ALLOW -> "Allow"
-    SitePermissionPref.BLOCK -> "Block"
 }

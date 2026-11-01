@@ -16,6 +16,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Error
+import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Shield
 import androidx.compose.material.icons.filled.VerifiedUser
 import androidx.compose.material3.Button
@@ -165,28 +166,41 @@ fun AdvancedSecurityScreen(
                 }
                 checks?.let { results ->
                     Spacer(Modifier.height(8.dp))
-                    val passed = results.count { it.passed }
+                    val protectionChecks = SafetyCheck.protectionChecks(results)
+                    val passed = protectionChecks.count { it.passed }
+                    val informationalCount = results.count { it.informational }
                     Text(
-                        "$passed of ${results.size} checks passed",
+                        "$passed of ${protectionChecks.size} protection checks passed" +
+                            if (informationalCount > 0) " · $informationalCount informational" else "",
                         fontWeight = FontWeight.SemiBold,
                         fontSize = 13.sp,
-                        color = if (passed == results.size) theme.primary else MaterialTheme.colorScheme.error
+                        color = if (passed == protectionChecks.size) theme.primary else MaterialTheme.colorScheme.error
                     )
                     results.forEach { check ->
                         Row(
                             modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
                             verticalAlignment = Alignment.Top
                         ) {
+                            val icon = when {
+                                check.informational -> Icons.Default.Info
+                                check.passed -> Icons.Default.CheckCircle
+                                else -> Icons.Default.Error
+                            }
+                            val iconTint = when {
+                                check.informational -> theme.onSurface.copy(alpha = 0.55f)
+                                check.passed -> theme.primary
+                                else -> MaterialTheme.colorScheme.error
+                            }
                             Icon(
-                                imageVector = if (check.passed) Icons.Default.CheckCircle else Icons.Default.Error,
-                                contentDescription = if (check.passed) "Passed" else "Needs attention",
-                                tint = if (check.passed) theme.primary else MaterialTheme.colorScheme.error,
+                                imageVector = icon,
+                                contentDescription = if (check.informational) "Information" else if (check.passed) "Passed" else "Needs attention",
+                                tint = iconTint,
                                 modifier = Modifier.size(18.dp)
                             )
                             Column(Modifier.padding(start = 8.dp)) {
                                 Text(check.title, color = theme.onSurface, fontWeight = FontWeight.SemiBold, fontSize = 13.sp)
                                 Text(check.description, color = theme.onSurface.copy(alpha = 0.65f), fontSize = 11.sp)
-                                if (!check.passed) {
+                                if (!check.passed && !check.informational) {
                                     check.fixLabel?.let { label ->
                                         OutlinedButton(
                                             onClick = { applySafetyFix(check.id, label) },

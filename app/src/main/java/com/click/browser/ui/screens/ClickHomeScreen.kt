@@ -33,6 +33,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.sizeIn
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
@@ -109,6 +110,7 @@ import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
 import com.click.browser.engine.BrowserMode
 import com.click.browser.engine.LocationGuard
+import com.click.browser.engine.SearchEngineBrands
 import com.click.browser.engine.ModePersonalization
 import com.click.browser.engine.QuickSiteDef
 import kotlinx.coroutines.launch
@@ -126,16 +128,17 @@ import java.util.Calendar
  *
  * Pixel-faithful to Prince's approved promo reference:
  *  top logo row (Click + Protected pill + avatar) · pill search bar
- *  (G icon, mic, QR) · 2×4 quick-site tiles · category pill tabs ·
+ *  (active search-provider mark, mic) · 2×4 quick-site tiles · category pill tabs ·
  *  news cards (hero + list) · 2×2 quick actions.
  *
- * The caller passes a mode-wired [ModeTheme]:
- *  SIMPLE → light, DEVELOPER → dark glass, POWER → OLED black neon.
+ * All profiles share Click's warm cream interface while retaining their own
+ * browsing data and feature sets.
  */
 @Composable
 fun ClickHomeScreen(
     theme: ModeTheme,
     activeMode: BrowserMode,
+    searchEngine: String,
     adBlockerEnabled: Boolean,
     blockedCount: Int,
     wallpaperUri: String? = null,
@@ -150,19 +153,8 @@ fun ClickHomeScreen(
     onGamesClick: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
-    val isHackNeon = activeMode == BrowserMode.HACK
-    val isGlass = activeMode == BrowserMode.DEVELOPER
-    // Frosted-glass surfaces for Developer; flat soft cards for Simple; pure black for Power.
-    val cardBg = when {
-        isHackNeon -> Color(0xFF0A0A12)
-        isGlass -> theme.surface.copy(alpha = 0.72f)
-        else -> theme.surface
-    }
-    val cardBorder = when {
-        isHackNeon -> theme.glow.copy(alpha = 0.35f)
-        isGlass -> Color.White.copy(alpha = 0.08f)
-        else -> theme.onSurface.copy(alpha = 0.08f)
-    }
+    val cardBg = theme.surface
+    val cardBorder = theme.onSurface.copy(alpha = 0.08f)
 
     // Custom wallpaper (decoded off the main thread). When set, it replaces
     // the theme background with a dimmed photo so content stays readable
@@ -194,7 +186,7 @@ fun ClickHomeScreen(
             Box(
                 modifier = Modifier
                     .fillMaxSize()
-                    .background(theme.background.copy(alpha = 0.6f))
+                    .background(theme.background.copy(alpha = 0.84f))
             )
         } else {
             Box(
@@ -217,13 +209,13 @@ fun ClickHomeScreen(
             theme = theme,
             adBlockerEnabled = adBlockerEnabled,
             blockedCount = blockedCount,
-            neon = isHackNeon,
+            neon = false,
             onProfileClick = onProfileClick
         )
 
         SmartSearchBar(
             theme = theme,
-            neon = isHackNeon,
+            searchEngine = searchEngine,
             onNavigate = onNavigate
         )
 
@@ -232,7 +224,7 @@ fun ClickHomeScreen(
         V9ShieldCard(
             theme = theme,
             active = shieldActive,
-            neon = isHackNeon,
+            neon = false,
             cardBg = cardBg,
             cardBorder = cardBorder,
             onClick = onV9ShieldClick,
@@ -258,7 +250,7 @@ fun ClickHomeScreen(
             theme = theme,
             cardBg = cardBg,
             cardBorder = cardBorder,
-            neon = isHackNeon,
+            neon = false,
             onNavigate = onNavigate
         )
 
@@ -376,7 +368,7 @@ private fun HomeTopRow(
             modifier = Modifier
                 .size(38.dp)
                 .background(
-                    Brush.linearGradient(listOf(Color(0xFF3B82F6), Color(0xFF8B5CF6))),
+                    Brush.linearGradient(listOf(Color(0xFF806B51), Color(0xFFB69468))),
                     CircleShape
                 ),
             contentAlignment = Alignment.Center
@@ -442,14 +434,14 @@ private fun HomeTopRow(
     }
 }
 
-/** Pill search bar: G icon · hint · mic. (QR scanner removed: no CameraX /
+/** Pill search bar: selected search-provider mark · hint · mic. (QR scanner removed: no CameraX /
  * MLKit-barcode stack in the app — the button only showed a "coming soon"
  * toast, so the dead control is gone instead of fake.) */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun SmartSearchBar(
     theme: ModeTheme,
-    neon: Boolean,
+    searchEngine: String,
     onNavigate: (String) -> Unit
 ) {
     var query by remember { mutableStateOf("") }
@@ -463,27 +455,15 @@ private fun SmartSearchBar(
         shape = RoundedCornerShape(28.dp),
         color = theme.surface,
         border = androidx.compose.foundation.BorderStroke(
-            1.5.dp,
-            if (neon) theme.glow.copy(alpha = 0.7f) else theme.onSurface.copy(alpha = 0.12f)
+            1.5.dp, theme.onSurface.copy(alpha = 0.12f)
         ),
-        modifier = Modifier
-            .fillMaxWidth()
-            .then(if (neon) Modifier.shadow(12.dp, RoundedCornerShape(28.dp), spotColor = theme.glow) else Modifier)
+        modifier = Modifier.fillMaxWidth()
     ) {
         Row(
             modifier = Modifier.padding(start = 6.dp, end = 4.dp, top = 4.dp, bottom = 4.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            // G icon
-            Box(
-                modifier = Modifier
-                    .size(36.dp)
-                    .clip(CircleShape)
-                    .background(Color.White),
-                contentAlignment = Alignment.Center
-            ) {
-                Text("G", fontWeight = FontWeight.Black, fontSize = 20.sp, color = Color(0xFF4285F4))
-            }
+            SearchEngineBadge(engine = searchEngine, theme = theme, compact = false)
             OutlinedTextField(
                 value = query,
                 onValueChange = { query = it },
@@ -504,6 +484,42 @@ private fun SmartSearchBar(
                 onNavigate(heard)
             })
         }
+    }
+}
+
+@Composable
+private fun SearchEngineBadge(engine: String, theme: ModeTheme, compact: Boolean) {
+    val brand = SearchEngineBrands.forEngine(engine)
+    Row(
+        modifier = Modifier
+            .padding(horizontal = if (compact) 2.dp else 4.dp)
+            .widthIn(max = if (compact) 82.dp else 124.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Box(
+            modifier = Modifier
+                .size(if (compact) 23.dp else 34.dp)
+                .clip(CircleShape)
+                .background(Color(brand.backgroundArgb)),
+            contentAlignment = Alignment.Center
+        ) {
+            Text(
+                brand.monogram,
+                color = Color(brand.foregroundArgb),
+                fontWeight = FontWeight.ExtraBold,
+                fontSize = if (compact) 10.sp else 16.sp
+            )
+        }
+        Spacer(Modifier.width(4.dp))
+        Text(
+            brand.shortName,
+            color = theme.onSurface,
+            fontSize = if (compact) 9.sp else 11.sp,
+            fontWeight = FontWeight.SemiBold,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.widthIn(max = if (compact) 52.dp else 78.dp)
+        )
     }
 }
 
@@ -1096,12 +1112,10 @@ fun ClickBottomNav(
     onMenu: () -> Unit,
     modifier: Modifier = Modifier
 ) {
-    val neon = theme.mode == BrowserMode.HACK
     Surface(
-        color = if (neon) Color(0xFF000000) else theme.topBarBg,
+        color = theme.topBarBg,
         border = androidx.compose.foundation.BorderStroke(
-            1.dp,
-            if (neon) theme.glow.copy(alpha = 0.3f) else theme.onSurface.copy(alpha = 0.08f)
+            1.dp, theme.onSurface.copy(alpha = 0.08f)
         ),
         modifier = modifier.fillMaxWidth()
     ) {
@@ -1136,12 +1150,9 @@ fun ClickBottomNav(
             Box(
                 modifier = Modifier
                     .size(62.dp)
-                    .then(
-                        if (neon) Modifier.shadow(18.dp, CircleShape, spotColor = theme.glow)
-                        else Modifier.shadow(10.dp, CircleShape, spotColor = theme.primary)
-                    )
+                    .shadow(10.dp, CircleShape, spotColor = theme.primary)
                     .clip(CircleShape)
-                    .background(Brush.linearGradient(listOf(Color(0xFF3B82F6), Color(0xFF8B5CF6), Color(0xFFD946EF))))
+                    .background(Brush.linearGradient(listOf(Color(0xFF72583D), Color(0xFFAA865C), Color(0xFFC7AE8A))))
                     .border(2.dp, Color.White.copy(alpha = 0.35f), CircleShape)
                     .clickable(
                         interactionSource = remember { MutableInteractionSource() },
@@ -1212,7 +1223,7 @@ fun homeGreeting(): String {
 /**
  * 2026-style premium address bar for the browsing surface.
  *
- * Layout: [☰ Sidebar] [🔒 URL field] [↻] [▭ Tabs] [⋮]
+ * Layout: [☰ Sidebar] [🔒 provider + URL field] [↻] [▭ Tabs] [⋮]
  * - Hamburger opens the navigation drawer (sidebar) — restores sidebar access
  *   directly from the top bar, 2026 browser style.
  * - Elevated URL field with soft shadow (not just a border).
@@ -1230,6 +1241,7 @@ internal fun tabBadgeText(count: Int): String =
 fun CompactBrowseBar(
     theme: ModeTheme,
     currentUrl: String,
+    searchEngine: String,
     onNavigate: (String) -> Unit,
     onReload: () -> Unit,
     onMenuClick: () -> Unit,
@@ -1286,15 +1298,15 @@ fun CompactBrowseBar(
                     .animateContentSize()
             ) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    // Shield icon: tap opens Site Settings (per-site permissions).
-                    // Green shield = HTTPS secure, amber shield = HTTP warning.
+                    // Shield icon opens Site Settings. Tint reflects the URL
+                    // scheme only; it is not a broad safety verdict.
                     IconButton(
                         onClick = onSiteSettingsClick,
                         modifier = Modifier.padding(start = 4.dp).size(34.dp)
                     ) {
                         Icon(
                             Icons.Default.Shield,
-                            contentDescription = if (isHttps) "Secure site — tap for site settings" else "Not secure (HTTP) — tap for site settings",
+                            contentDescription = if (isHttps) "HTTPS URL — tap for site settings" else "HTTP URL (not encrypted) — tap for site settings",
                             tint = if (isHttps) Color(0xFF22C55E) else Color(0xFFF59E0B),
                             modifier = Modifier.size(18.dp)
                         )
@@ -1313,6 +1325,7 @@ fun CompactBrowseBar(
                             )
                         }
                     }
+                    SearchEngineBadge(engine = searchEngine, theme = theme, compact = true)
                     androidx.compose.foundation.text.BasicTextField(
                         value = textInput,
                         onValueChange = { textInput = it },
@@ -1462,7 +1475,6 @@ fun AiQuickFab(
     modifier: Modifier = Modifier
 ) {
     var expanded by remember { mutableStateOf(false) }
-    val neon = theme.mode == BrowserMode.HACK
     Column(
         horizontalAlignment = Alignment.End,
         modifier = modifier
@@ -1495,12 +1507,9 @@ fun AiQuickFab(
         Row(
             verticalAlignment = Alignment.CenterVertically,
             modifier = Modifier
-                .then(
-                    if (neon) Modifier.shadow(18.dp, RoundedCornerShape(28.dp), spotColor = theme.glow)
-                    else Modifier.shadow(10.dp, RoundedCornerShape(28.dp), spotColor = theme.primary)
-                )
+                .shadow(10.dp, RoundedCornerShape(28.dp), spotColor = theme.primary)
                 .clip(RoundedCornerShape(28.dp))
-                .background(Brush.linearGradient(listOf(Color(0xFF3B82F6), Color(0xFF8B5CF6))))
+                .background(Brush.linearGradient(listOf(Color(0xFF72583D), Color(0xFFAA865C))))
                 .border(1.5.dp, Color.White.copy(alpha = 0.35f), RoundedCornerShape(28.dp))
                 .clickable(
                     interactionSource = remember { MutableInteractionSource() },
@@ -1584,8 +1593,6 @@ fun BrowseBottomNav(
     onMenu: () -> Unit,
     modifier: Modifier = Modifier
 ) {
-    val neon = theme.mode == BrowserMode.HACK
-
     // One-shot badge pop when the tab count changes (battery-safe: no loop).
     val badgeScale = remember { androidx.compose.animation.core.Animatable(1f) }
     var firstBadgeFrame by remember { mutableStateOf(true) }
@@ -1605,10 +1612,9 @@ fun BrowseBottomNav(
     }
 
     Surface(
-        color = if (neon) Color(0xFF000000) else theme.topBarBg,
+        color = theme.topBarBg,
         border = androidx.compose.foundation.BorderStroke(
-            1.dp,
-            if (neon) theme.glow.copy(alpha = 0.3f) else theme.onSurface.copy(alpha = 0.08f)
+            1.dp, theme.onSurface.copy(alpha = 0.08f)
         ),
         modifier = modifier.fillMaxWidth()
     ) {
