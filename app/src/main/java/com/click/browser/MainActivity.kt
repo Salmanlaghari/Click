@@ -793,27 +793,8 @@ class MainActivity : FragmentActivity() {
         view?.loadDataWithBaseURL(null, customHtml, "text/html", "UTF-8", null)
     }
 
-    private fun showBrowserErrorPage(view: WebView?, description: String?) {
-        val safeDesc = description?.take(200) ?: "Unknown error"
-        val customHtml = """
-            <html>
-            <head>
-                <style>
-                    body { background-color: #0f172a; color: #f8fafc; font-family: sans-serif; text-align: center; padding: 50px; }
-                    h1 { color: #ef4444; font-size: 24px; }
-                    p { color: #94a3b8; font-size: 16px; }
-                    .btn { background-color: #3b82f6; border: none; color: white; padding: 12px 24px; border-radius: 8px; font-weight: bold; cursor: pointer; margin-top: 20px; }
-                </style>
-            </head>
-            <body>
-                <h1>⚠️ Unable to load page</h1>
-                <p>Click Browser could not reach the server or network is offline.</p>
-                <p><i>Details: $safeDesc</i></p>
-                <button class="btn" onclick="location.reload()">Retry Connection</button>
-            </body>
-            </html>
-        """.trimIndent()
-        view?.loadDataWithBaseURL(null, customHtml, "text/html", "UTF-8", null)
+    private fun showBrowserErrorPage(view: WebView?, description: String?, retryUrl: String?) {
+        view?.loadDataWithBaseURL(null, browserErrorPageHtml(description, retryUrl), "text/html", "UTF-8", null)
     }
 
     /** Reads text aloud with the system TTS engine. */
@@ -3150,7 +3131,8 @@ class MainActivity : FragmentActivity() {
                                                                 failedTab.isPageLoading = false
                                                                 failedTab.hasCommittedContent = true
                                                                 failedTab.loadProgress = 0
-                                                                this@MainActivity.showBrowserErrorPage(view, error?.description?.toString())
+                                                                val retryUrl = request?.let { browserRetryUrl(it.method, it.url.toString()) }
+                                                                this@MainActivity.showBrowserErrorPage(view, error?.description?.toString(), retryUrl)
                                                             }
 
                                                         }
