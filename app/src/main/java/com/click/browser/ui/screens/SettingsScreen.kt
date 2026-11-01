@@ -201,89 +201,17 @@ fun SettingsScreen(
                 CardRow(theme) {
                     Text("Appearance", color = theme.onSurface, fontWeight = FontWeight.SemiBold, fontSize = 14.sp)
                     Text(
-                        "Day/Night default for every mode — override per mode in the Modes section.",
+                        "A warm cream palette stays light in every profile.",
                         fontSize = 11.sp, color = theme.onSurface.copy(alpha = 0.6f)
                     )
                     Spacer(Modifier.height(8.dp))
                     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         FilterChip(
-                            selected = currentThemeSetting == "Auto",
-                            onClick = { onThemeChange("Auto") },
-                            label = { Text("🔄 Auto", fontSize = 12.sp) }
-                        )
-                        FilterChip(
-                            selected = currentThemeSetting == "Light",
-                            onClick = { onThemeChange("Light") },
-                            label = { Text("☀️ Light", fontSize = 12.sp) }
-                        )
-                        FilterChip(
-                            selected = currentThemeSetting == "Dark",
-                            onClick = { onThemeChange("Dark") },
-                            label = { Text("🌙 Dark", fontSize = 12.sp) }
-                        )
-                        FilterChip(
-                            selected = currentThemeSetting == "Scheduled",
-                            onClick = { onThemeChange("Scheduled") },
-                            label = { Text("🕒 Scheduled", fontSize = 12.sp) }
+                            selected = true,
+                            onClick = {},
+                            label = { Text("☀️ Cream", fontSize = 12.sp) }
                         )
                     }
-                    if (currentThemeSetting == "Auto") {
-                        Text(
-                            "Follows your phone's system day/night setting.",
-                            fontSize = 11.sp, color = theme.onSurface.copy(alpha = 0.55f)
-                        )
-                    }
-                    if (currentThemeSetting == "Scheduled") {
-                        Spacer(Modifier.height(8.dp))
-                        Text(
-                            "Light theme between the hours below, dark otherwise.",
-                            fontSize = 11.sp, color = theme.onSurface.copy(alpha = 0.55f)
-                        )
-                        Spacer(Modifier.height(4.dp))
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(8.dp)
-                        ) {
-                            HourPicker(
-                                label = "Light from",
-                                hour = scheduleStartHour,
-                                theme = theme,
-                                onChange = { onScheduleChange(it, scheduleEndHour) }
-                            )
-                            HourPicker(
-                                label = "Dark from",
-                                hour = scheduleEndHour,
-                                theme = theme,
-                                onChange = { onScheduleChange(scheduleStartHour, it) }
-                            )
-                        }
-                    }
-                    Text("Light Theme", color = theme.onSurface, fontWeight = FontWeight.SemiBold, fontSize = 14.sp)
-                    Text(
-                        "Choose the light palette used by the existing mode themes.",
-                        fontSize = 11.sp, color = theme.onSurface.copy(alpha = 0.6f)
-                    )
-                    @OptIn(ExperimentalLayoutApi::class)
-                    FlowRow(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp),
-                        verticalArrangement = Arrangement.spacedBy(4.dp)
-                    ) {
-                        LightThemeVariant.values().forEach { variant ->
-                            FilterChip(
-                                selected = lightThemeVariant == variant.id,
-                                onClick = { onLightThemeVariantChange(variant.id) },
-                                label = { Text(variant.label) }
-                            )
-                        }
-                    }
-                    ToggleRow(
-                        "Auto-rotate themes",
-                        "Advance to the next light palette on each fresh app launch",
-                        autoRotateThemes,
-                        onAutoRotateThemesChange,
-                        theme
-                    )
                 }
             })
             add(Row(null) {
@@ -564,8 +492,6 @@ fun SettingsScreen(
                 CardRow(theme) {
                     ToggleRow("Ad Blocker", "Block intrusive ads & tracker scripts", adBlockerEnabled, onToggleAdBlocker, theme)
                     HorizontalDivider(color = theme.onSurface.copy(alpha = 0.1f))
-                    ToggleRow("Force Night Mode", "Inject night theme on web pages", forceNightMode, onToggleNightMode, theme)
-                    HorizontalDivider(color = theme.onSurface.copy(alpha = 0.1f))
                     // ---- HTTPS mode: Off / Standard / Strict ----
                     Text(
                         "HTTPS Mode",
@@ -788,9 +714,7 @@ fun SettingsScreen(
                     Spacer(Modifier.height(8.dp))
                     BrowserMode.values().forEach { mode ->
                         val isActive = mode == activeMode
-                        val override = perModeDark[mode]
-                        val effective = override ?: globalDarkEffective
-                        Card(
+                                Card(
                             colors = CardDefaults.cardColors(
                                 containerColor = if (isActive) theme.primary.copy(alpha = 0.12f)
                                 else theme.surfaceVariant.copy(alpha = 0.5f)
@@ -820,30 +744,10 @@ fun SettingsScreen(
                                     }
                                 }
                                 Text(
-                                    "Theme: ${if (effective) "Dark" else "Light"}${if (override == null) " (global)" else ""}",
+                                    "Theme: Cream",
                                     fontSize = 11.sp,
                                     color = theme.onSurface.copy(alpha = 0.6f)
                                 )
-                                Spacer(Modifier.height(4.dp))
-                                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                                    FilterChip(
-                                        selected = effective && override != null,
-                                        onClick = { onPerModeThemeChange(mode, true) },
-                                        label = { Text("🌙 Dark", fontSize = 11.sp) }
-                                    )
-                                    FilterChip(
-                                        selected = !effective && override != null,
-                                        onClick = { onPerModeThemeChange(mode, false) },
-                                        label = { Text("☀️ Light", fontSize = 11.sp) }
-                                    )
-                                    if (override != null) {
-                                        FilterChip(
-                                            selected = false,
-                                            onClick = { onPerModeThemeChange(mode, null) },
-                                            label = { Text("↩ Global", fontSize = 11.sp) }
-                                        )
-                                    }
-                                }
                             }
                         }
                     }

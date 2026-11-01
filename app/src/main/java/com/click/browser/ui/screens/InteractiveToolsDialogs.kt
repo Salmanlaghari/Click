@@ -676,8 +676,6 @@ fun InteractiveImageGalleryDialog(onClose: () -> Unit) {
 fun InteractiveExtensionsDialog(
     adblock: Boolean,
     onToggleAdblock: (Boolean) -> Unit,
-    night: Boolean,
-    onToggleNight: (Boolean) -> Unit,
     onClose: () -> Unit
 ) {
     AlertDialog(
@@ -697,14 +695,6 @@ fun InteractiveExtensionsDialog(
                 ) {
                     Text("🧩 AdBlocker", fontWeight = FontWeight.Bold, fontSize = 13.sp)
                     Switch(checked = adblock, onCheckedChange = onToggleAdblock)
-                }
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Text("🌙 Dark Mode for websites", fontWeight = FontWeight.Bold, fontSize = 13.sp)
-                    Switch(checked = night, onCheckedChange = onToggleNight)
                 }
                 Text(
                     "More toggles (HTTPS-Only, Data Saver, JavaScript) live in the home screen Settings module.",

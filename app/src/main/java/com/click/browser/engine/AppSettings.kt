@@ -103,24 +103,13 @@ object AppSettings {
     val TEXT_SCALE_GLOBAL = intPreferencesKey("text_scale_global")
     val TEXT_SCALE_HOSTS_JSON = stringPreferencesKey("text_scale_hosts_json")
 
-    /**
-     * Per-mode Day/Night override key. Absent = the mode follows the global
-     * [UI_DARK_MODE] toggle (see [effectiveDarkMode]).
-     */
+    /** Legacy per-mode dark preference key, retained only for migration compatibility. */
     fun darkModeKey(mode: BrowserMode): Preferences.Key<Boolean> =
         booleanPreferencesKey("ui_dark_mode_${mode.name.lowercase()}")
 
-    /**
-     * Effective dark-mode flag for [mode]: per-mode override if set, else the
-     * appearance mode, else the legacy [UI_DARK_MODE] toggle, else Light
-     * (the default since v1.2 — Prince: light default for everyone).
-     */
-    fun effectiveDarkMode(prefs: Preferences, mode: BrowserMode): Boolean =
-        prefs[darkModeKey(mode)] ?: when (prefs[APPEARANCE_MODE]) {
-            "dark" -> true
-            "light" -> false
-            else -> prefs[UI_DARK_MODE] ?: false
-        }
+    /** Appearance is deliberately light-only; legacy saved values are ignored. */
+    @Suppress("UNUSED_PARAMETER")
+    fun effectiveDarkMode(prefs: Preferences, mode: BrowserMode): Boolean = false
 
     // V9 Shield: DNS-over-HTTPS provider + VPN toggle.
     // "cloudflare" | "google" | "custom" (see V9DohResolver).
@@ -144,6 +133,8 @@ object AppSettings {
     // Default-browser prompt: true once the one-time "Make Click your
     // default browser?" prompt has been shown (or acted on), so it never nags.
     val DEFAULT_BROWSER_PROMPT_SHOWN = booleanPreferencesKey("default_browser_prompt_shown")
+    /** True after the first-run feature tour is completed or skipped. */
+    val ONBOARDING_COMPLETED = booleanPreferencesKey("onboarding_completed")
 
     // ---- Background news notifications (WhatsApp-style alerts) ----
     // Opt-in, default OFF (Play-policy friendly): the user enables them in

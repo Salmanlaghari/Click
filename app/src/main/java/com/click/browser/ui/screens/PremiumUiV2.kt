@@ -121,7 +121,6 @@ val ALL_FEATURES: List<FeatureDef> = listOf(
     FeatureDef(FeatureId.PRIVACY_GUARDS, "Guards", Icons.Default.Shield),
     FeatureDef(FeatureId.FULLSCREEN, "Fullscreen", Icons.Default.Fullscreen),
     FeatureDef(FeatureId.TEXT_SIZE, "Text Size", Icons.Default.TextFields),
-    FeatureDef(FeatureId.NIGHT_MODE, "Night", Icons.Default.DarkMode),
     FeatureDef(FeatureId.CLEAR_DATA, "Clear Data", Icons.Default.DeleteSweep),
     FeatureDef(FeatureId.ABOUT, "About", Icons.Default.Help),
     FeatureDef(FeatureId.V9_SHIELD, "V9 Shield", Icons.Default.VpnKey),
