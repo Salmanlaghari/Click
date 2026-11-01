@@ -58,7 +58,7 @@ private val firstRunPages = listOf(
     FirstRunPage(
         eyebrow = "FOUR WAYS TO BROWSE",
         title = "One browser. Your way.",
-        description = "Choose Simple for everyday browsing, Developer for hands-on tools, Power for a feature-rich setup, or Advance for a separate browser-data space.",
+        description = "Simple — clean, everyday browsing.\nDeveloper — dev shortcuts and DevTools.\nPower — desktop-style browsing.\nAdvance — starts fresh; bookmarks, history, downloads and saved passwords stay separate from the other three. Website cookies/cache are already separate in every mode.",
         icon = Icons.Default.Apps,
         accent = Color(0xFF7C6B54)
     ),
