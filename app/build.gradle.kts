@@ -155,6 +155,7 @@ dependencies {
     implementation(libs.androidx.material.icons.extended)
     implementation(libs.androidx.datastore.preferences)
     implementation(libs.androidx.webkit)
+    implementation(libs.geckoview)
     implementation(libs.okhttp)
     implementation(libs.okhttp.dnsoverhttps)
     // On-device translation (ML Kit). Language MODELS are downloaded on

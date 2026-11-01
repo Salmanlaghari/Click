@@ -61,6 +61,12 @@ private val THIRD_PARTY_NOTICES = listOf(
         referenceUrl = "https://github.com/androidx/media"
     ),
     ThirdPartyNotice(
+        name = "Mozilla GeckoView",
+        version = "158.0.20261021001945",
+        description = "Gecko rendering engine for the optional extension browser. Mozilla Public License 2.0.",
+        referenceUrl = "https://www.mozilla.org/en-US/MPL/2.0/"
+    ),
+    ThirdPartyNotice(
         name = "Kotlin",
         version = "1.9.22",
         description = "Language and runtime.",
