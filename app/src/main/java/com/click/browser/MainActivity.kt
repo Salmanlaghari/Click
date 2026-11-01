@@ -49,6 +49,7 @@ import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
@@ -78,6 +79,9 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
@@ -121,6 +125,16 @@ class TabItem(
     var loadProgress by mutableStateOf(0)
     var isPageLoading by mutableStateOf(false)
     var hasCommittedContent by mutableStateOf(false)
+}
+
+/** Keeps the same logical tab selected after a close, without indexing past the list. */
+internal fun activeTabIndexAfterClose(activeIndex: Int, closedIndex: Int, remainingCount: Int): Int {
+    if (remainingCount <= 0) return 0
+    return when {
+        closedIndex < activeIndex -> (activeIndex - 1).coerceIn(0, remainingCount - 1)
+        closedIndex == activeIndex -> activeIndex.coerceAtMost(remainingCount - 1)
+        else -> activeIndex.coerceIn(0, remainingCount - 1)
+    }
 }
 
 private data class PendingBrowserDownload(
@@ -978,9 +992,7 @@ class MainActivity : FragmentActivity() {
                     else Triple(closed.title, closed.url, idx.coerceAtMost(tabs.size - 1))
                 if (tabs.size > 1) {
                     tabs.removeAt(idx)
-                    if (activeTabIndex >= tabs.size) {
-                        activeTabIndex = tabs.size - 1
-                    }
+                    activeTabIndex = activeTabIndexAfterClose(activeTabIndex, idx, tabs.size)
                 } else {
                     tabs[0] = TabItem(url = homeUrl(), title = "New Tab")
                     activeTabIndex = 0
@@ -2628,48 +2640,64 @@ class MainActivity : FragmentActivity() {
 
                             @Composable
                             fun BrowseTopBarBlock() {
-                                AnimatedVisibility(
-                                    visible = !immersiveMode && !showOverlays && toolbarVisible,
-                                    enter = expandVertically() + fadeIn(),
-                                    exit = shrinkVertically() + fadeOut()
-                                ) {
-                                    Crossfade(targetState = theme, label = "topbarTheme") { themed ->
-                                        Column {
-                                            CompactBrowseBar(
-                                                theme = themed,
-                                                currentUrl = currentTab.url,
-                                                searchEngine = currentSearchEngineSetting,
-                                                onNavigate = { input ->
-                                                    val destination = cleanTrackingUrl(formatUrl(input, currentSearchEngineSetting))
-                                                    currentTab.url = destination
-                                                    currentTab.webView?.loadUrl(destination)
-                                                },
-                                                onReload = { currentTab.webView?.reload() },
-                                                onMenuClick = { showBrowserMenu = true },
-                                                onSiteSettingsClick = { showSiteSettings = true },
-                                                // 2026 style: sidebar (drawer) accessible from top bar.
-                                                onDrawerClick = { scope.launch { drawerState.open() } },
-                                                tabCount = tabs.size,
-                                                onTabsClick = { showTabsManager = true },
-                                                // Location requests are always blocked by Click.
-                                                locationMode = LocationGuard.LocationMode.BLOCK,
-                                                onLocationClick = { showLocationSettings = true }
-                                            )
-                                            // Thin page-load progress indicator.
-                                            val progress = currentTab.loadProgress
-                                            androidx.compose.animation.AnimatedVisibility(
-                                                visible = progress in 1..99,
-                                                enter = fadeIn(),
-                                                exit = fadeOut()
-                                            ) {
-                                                LinearProgressIndicator(
-                                                    progress = progress / 100f,
-                                                    modifier = Modifier
-                                                        .fillMaxWidth()
-                                                        .height(2.dp),
-                                                    color = themed.primary,
-                                                    trackColor = themed.topBarBg
+                                Column {
+                                    if (!immersiveMode && !showOverlays) {
+                                        TabStrip(
+                                            tabs = tabs,
+                                            activeTabIndex = activeTabIndex,
+                                            theme = theme,
+                                            onSelectTab = { idx -> activeTabIndex = idx },
+                                            onCloseTab = { idx -> closeTabAt(idx) },
+                                            onNewTab = {
+                                                tabs.add(TabItem(url = homeUrl(), title = "New Tab"))
+                                                activeTabIndex = tabs.lastIndex
+                                            },
+                                            onOpenTabSwitcher = { showTabsManager = true }
+                                        )
+                                    }
+                                    AnimatedVisibility(
+                                        visible = !immersiveMode && !showOverlays && toolbarVisible,
+                                        enter = expandVertically() + fadeIn(),
+                                        exit = shrinkVertically() + fadeOut()
+                                    ) {
+                                        Crossfade(targetState = theme, label = "topbarTheme") { themed ->
+                                            Column {
+                                                CompactBrowseBar(
+                                                    theme = themed,
+                                                    currentUrl = currentTab.url,
+                                                    searchEngine = currentSearchEngineSetting,
+                                                    onNavigate = { input ->
+                                                        val destination = cleanTrackingUrl(formatUrl(input, currentSearchEngineSetting))
+                                                        currentTab.url = destination
+                                                        currentTab.webView?.loadUrl(destination)
+                                                    },
+                                                    onReload = { currentTab.webView?.reload() },
+                                                    onMenuClick = { showBrowserMenu = true },
+                                                    onSiteSettingsClick = { showSiteSettings = true },
+                                                    // 2026 style: sidebar (drawer) accessible from top bar.
+                                                    onDrawerClick = { scope.launch { drawerState.open() } },
+                                                    tabCount = tabs.size,
+                                                    onTabsClick = { showTabsManager = true },
+                                                    // Location requests are always blocked by Click.
+                                                    locationMode = LocationGuard.LocationMode.BLOCK,
+                                                    onLocationClick = { showLocationSettings = true }
                                                 )
+                                                // Thin page-load progress indicator.
+                                                val progress = currentTab.loadProgress
+                                                androidx.compose.animation.AnimatedVisibility(
+                                                    visible = progress in 1..99,
+                                                    enter = fadeIn(),
+                                                    exit = fadeOut()
+                                                ) {
+                                                    LinearProgressIndicator(
+                                                        progress = progress / 100f,
+                                                        modifier = Modifier
+                                                            .fillMaxWidth()
+                                                            .height(2.dp),
+                                                        color = themed.primary,
+                                                        trackColor = themed.topBarBg
+                                                    )
+                                                }
                                             }
                                         }
                                     }
@@ -5720,7 +5748,13 @@ fun TabStrip(
     ) {
         // Tab count badge (Mises-style) — tap opens the visual tab switcher.
         Surface(
-            modifier = Modifier.clickable(onClick = onOpenTabSwitcher),
+            modifier = Modifier
+                .clickable(
+                    role = Role.Button,
+                    onClickLabel = "Open tab switcher",
+                    onClick = onOpenTabSwitcher
+                )
+                .semantics { contentDescription = "${tabs.size} open tabs. Open tab switcher" },
             shape = RoundedCornerShape(7.dp),
             color = theme.primary.copy(alpha = 0.15f),
             border = BorderStroke(1.dp, theme.primary.copy(alpha = 0.4f))
@@ -5739,10 +5773,19 @@ fun TabStrip(
             horizontalArrangement = Arrangement.spacedBy(6.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            itemsIndexed(tabs) { idx, tab ->
+            itemsIndexed(tabs, key = { _, tab -> tab.id }) { idx, tab ->
                 val selected = idx == activeTabIndex
+                val tabTitle = tab.title.ifBlank { "New Tab" }
                 Surface(
-                    modifier = Modifier.clickable { onSelectTab(idx) },
+                    modifier = Modifier
+                        .selectable(
+                            selected = selected,
+                            role = Role.Tab,
+                            onClick = { onSelectTab(idx) }
+                        )
+                        .semantics {
+                            contentDescription = "Tab ${idx + 1} of ${tabs.size}: $tabTitle"
+                        },
                     shape = RoundedCornerShape(16.dp),
                     color = if (selected) theme.primary.copy(alpha = 0.18f)
                     else theme.surfaceVariant.copy(alpha = 0.5f),
@@ -5757,7 +5800,7 @@ fun TabStrip(
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         Text(
-                            text = tab.title.ifBlank { "New Tab" }.take(18),
+                            text = tabTitle.take(18),
                             fontSize = 11.sp,
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis,
@@ -5768,11 +5811,11 @@ fun TabStrip(
                         )
                         IconButton(
                             onClick = { onCloseTab(idx) },
-                            modifier = Modifier.size(22.dp)
+                            modifier = Modifier.size(48.dp)
                         ) {
                             Icon(
                                 Icons.Default.Close,
-                                contentDescription = "Close tab",
+                                contentDescription = "Close $tabTitle tab",
                                 tint = theme.onSurface.copy(alpha = 0.5f),
                                 modifier = Modifier.size(13.dp)
                             )
