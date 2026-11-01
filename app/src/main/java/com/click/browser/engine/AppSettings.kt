@@ -111,10 +111,15 @@ object AppSettings {
     @Suppress("UNUSED_PARAMETER")
     fun effectiveDarkMode(prefs: Preferences, mode: BrowserMode): Boolean = false
 
+    /** Strict DNS is opt-in; missing preference keeps the existing fallback behavior. */
+    fun strictDnsEnabled(prefs: Preferences): Boolean = prefs[STRICT_DNS_ENABLED] ?: false
+
     // V9 Shield: DNS-over-HTTPS provider + VPN toggle.
     // "cloudflare" | "google" | "custom" (see V9DohResolver).
     val DOH_PROVIDER = stringPreferencesKey("doh_provider")
     val DOH_CUSTOM_URL = stringPreferencesKey("doh_custom_url")
+    /** When true, a failed DoH lookup must not fall back to plain DNS. Default OFF. */
+    val STRICT_DNS_ENABLED = booleanPreferencesKey("strict_dns_enabled")
     val V9_VPN_ENABLED = booleanPreferencesKey("v9_vpn_enabled")
     /** Advance Mode 5s intro animation on engine boot. Default ON; tap skips. */
     val ADVANCE_INTRO_ENABLED = booleanPreferencesKey("advance_intro_enabled")
