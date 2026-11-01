@@ -13,6 +13,19 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
 
+internal data class ProfileBootFailureDecision(
+    val bootMode: BrowserMode,
+    val blockBrowser: Boolean,
+)
+
+internal fun profileBootFailureDecision(
+    requestedMode: BrowserMode?,
+): ProfileBootFailureDecision = when (requestedMode) {
+    null -> ProfileBootFailureDecision(BrowserMode.SIMPLE, blockBrowser = true)
+    BrowserMode.ADVANCED -> ProfileBootFailureDecision(BrowserMode.ADVANCED, blockBrowser = true)
+    else -> ProfileBootFailureDecision(BrowserMode.SIMPLE, blockBrowser = false)
+}
+
 /**
  * Manages browser-data profiles backed by Android System WebView.
  * Each profile has a separate WebView data directory for cookies/cache. Advance
@@ -33,8 +46,8 @@ object V9Engine {
      * SINGLE SOURCE OF TRUTH for the active browser-data profile. The WebView
      * data-directory suffix and [profileDataStore] use this value. It is pinned once in
      * [ClickApplication.onCreate] and never changes afterwards: a mode switch
-     * restarts the process rather than mutating it (see [restartForEngineSwitch];
-     * the in-place fallback is a documented degraded mode with no isolation).
+     * restarts the process rather than mutating it (see [restartForEngineSwitch]).
+     * If Advanced isolation cannot be initialized, browser startup is blocked.
      */
     @Volatile
     var bootMode: BrowserMode = BrowserMode.SIMPLE
@@ -52,6 +65,12 @@ object V9Engine {
 
     /** See [bootPinned]. */
     val isBootPinned: Boolean get() = bootPinned
+
+    @Volatile
+    private var bootBlocked = false
+
+    /** True when profile initialization failed and browser data must stay closed. */
+    val isBootBlocked: Boolean get() = bootBlocked
 
     data class EngineProfile(
         val mode: BrowserMode,
@@ -75,6 +94,7 @@ object V9Engine {
      * process to that engine's data directory.
      */
     fun applyDataDirectorySuffix(context: Context) {
+        var requestedMode: BrowserMode? = null
         try {
             val modeStr = runBlocking {
                 context.dataStore.data.first()[ModeManager.MODE_KEY]
@@ -82,21 +102,27 @@ object V9Engine {
             val mode = try {
                 BrowserMode.valueOf(modeStr)
             } catch (_: Exception) {
-                BrowserMode.SIMPLE
+                throw IllegalStateException("Saved browser mode is not recognized")
             }
+            requestedMode = mode
             bootMode = mode
             WebView.setDataDirectorySuffix(suffixFor(mode))
             Log.i(TAG, "V9 browser profile online: ${suffixFor(mode)} (${profileFor(mode).deviceLabel})")
         } catch (t: Throwable) {
-            Log.e(TAG, "V9 data-directory suffix failed; engines share storage", t)
-            // Fall back consistently: the WebView is now on SHARED storage, so
-            // the app-data profile must follow suit — otherwise cookies would
-            // land in shared storage while bookmarks/history went per-profile.
-            bootMode = BrowserMode.SIMPLE
+            val decision = profileBootFailureDecision(requestedMode)
+            bootMode = decision.bootMode
+            bootBlocked = decision.blockBrowser
+            if (decision.blockBrowser) {
+                Log.e(TAG, "V9 profile initialization failed; browser startup is blocked to prevent cross-profile data access", t)
+            } else {
+                // Preserve the legacy fallback for known non-Advanced modes.
+                // A failed mode read is different: without knowing the saved
+                // mode, opening shared data could expose another profile.
+                Log.e(TAG, "V9 data-directory suffix failed for ${requestedMode?.name}; using legacy Simple profile", t)
+            }
         } finally {
-            // Pin the flag even on failure: bootMode then holds the
-            // best-known value (default SIMPLE) and every profile decision
-            // consistently degrades to the shared store — never half-pinned.
+            // Pin even on failure so accessors can reject profile data until
+            // initialization is known to be safe.
             bootPinned = true
         }
     }
