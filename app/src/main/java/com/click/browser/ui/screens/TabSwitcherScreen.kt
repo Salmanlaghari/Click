@@ -10,7 +10,9 @@ import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
+import androidx.compose.animation.scaleIn
 import androidx.compose.animation.scaleOut
+import androidx.compose.animation.slideInVertically
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -74,7 +76,7 @@ import kotlinx.coroutines.launch
  * - 2-column grid of cards with scaled page thumbnails (captured once per
  *   page finish into [TabThumbnailStore], max 360px wide — never live).
  * - Top: tab count badge + "Search tabs" filter (title/URL).
- * - Bottom: + button for a new blank tab.
+ * - Bottom: + adds a new blank tab to the overview so its card can be selected.
  * - Incognito tabs never have thumbnails: lock placeholder instead.
  * - Proper item keys + LRU-cached bitmaps keep scrolling smooth.
  */
@@ -151,7 +153,10 @@ fun TabSwitcherScreen(
                     horizontalArrangement = Arrangement.Center
                 ) {
                     IconButton(
-                        onClick = onNewTab,
+                        onClick = {
+                            query = ""
+                            onNewTab()
+                        },
                         modifier = Modifier
                             .size(52.dp)
                             .background(theme.primary.copy(alpha = 0.15f), CircleShape)
@@ -254,6 +259,7 @@ fun TabSwitcherScreen(
                     )
                     SwipeToDismissBox(
                         state = dismissState,
+                        modifier = if (animationsEnabled) Modifier.animateItem() else Modifier,
                         backgroundContent = {
                             Box(
                                 modifier = Modifier
@@ -278,7 +284,15 @@ fun TabSwitcherScreen(
                     ) {
                     AnimatedVisibility(
                         visibleState = cardVisibility,
-                        enter = fadeIn(tween(enterMs, delayMillis = enterDelayMs)),
+                        enter = fadeIn(tween(enterMs, delayMillis = enterDelayMs)) +
+                                slideInVertically(
+                                    initialOffsetY = { it / 8 },
+                                    animationSpec = tween(enterMs, delayMillis = enterDelayMs)
+                                ) +
+                                scaleIn(
+                                    initialScale = 0.94f,
+                                    animationSpec = tween(enterMs, delayMillis = enterDelayMs)
+                                ),
                         exit = fadeOut(tween(exitMs)) + scaleOut(tween(exitScaleMs), 0.7f),
                     ) {
                     Card(

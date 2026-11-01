@@ -1630,12 +1630,12 @@ fun BrowseBottomNav(
                 enabled = true, theme = theme, onClick = onDrawerClick
             )
             BrowseNavButton(
-                icon = Icons.AutoMirrored.Filled.ArrowBack, label = "Back",
-                enabled = canGoBack, theme = theme, onClick = onBack
+                icon = Icons.AutoMirrored.Filled.ArrowBack, label = "Previous",
+                enabled = canGoBack, theme = theme, onClick = onBack, emphasized = true
             )
             BrowseNavButton(
-                icon = Icons.AutoMirrored.Filled.ArrowForward, label = "Forward",
-                enabled = canGoForward, theme = theme, onClick = onForward
+                icon = Icons.AutoMirrored.Filled.ArrowForward, label = "Next",
+                enabled = canGoForward, theme = theme, onClick = onForward, emphasized = true
             )
             BrowseNavButton(
                 icon = Icons.Default.Home, label = "Home",
@@ -1677,18 +1677,40 @@ private fun BrowseNavButton(
     enabled: Boolean,
     theme: ModeTheme,
     onClick: () -> Unit,
-    highlight: Boolean = false
+    highlight: Boolean = false,
+    emphasized: Boolean = false
 ) {
+    val shape = RoundedCornerShape(14.dp)
     Column(
         horizontalAlignment = Alignment.CenterHorizontally,
         modifier = Modifier
+            .then(
+                if (emphasized) Modifier
+                    .clip(shape)
+                    .background(
+                        if (enabled) theme.primary.copy(alpha = 0.11f)
+                        else theme.surfaceVariant.copy(alpha = 0.45f)
+                    )
+                    .border(1.dp, theme.primary.copy(alpha = if (enabled) 0.24f else 0.09f), shape)
+                else Modifier
+            )
             .clickable(
-                interactionSource = remember { MutableInteractionSource() },
-                indication = null
-            ) { if (enabled) onClick() }
-            .padding(2.dp)
+                enabled = enabled,
+                onClickLabel = label,
+                role = androidx.compose.ui.semantics.Role.Button,
+                onClick = onClick
+            )
+            .padding(horizontal = 3.dp, vertical = 2.dp)
+            .sizeIn(minHeight = 48.dp, minWidth = 48.dp)
     ) {
-        BrowseNavContent(icon = icon, label = label, enabled = enabled, theme = theme, highlight = highlight)
+        BrowseNavContent(
+            icon = icon,
+            label = label,
+            enabled = enabled,
+            theme = theme,
+            highlight = highlight,
+            emphasized = emphasized
+        )
     }
 }
 
@@ -1698,11 +1720,13 @@ private fun BrowseNavContent(
     label: String,
     enabled: Boolean,
     theme: ModeTheme,
-    highlight: Boolean = false
+    highlight: Boolean = false,
+    emphasized: Boolean = false
 ) {
     // Home is highlighted in the active accent (per the 3-mode reference image).
     val tint = when {
         highlight -> theme.primary
+        emphasized && enabled -> theme.primary
         enabled -> theme.onSurface.copy(alpha = 0.85f)
         else -> theme.onSurface.copy(alpha = 0.3f)
     }
