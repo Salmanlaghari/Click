@@ -894,13 +894,7 @@ class MainActivity : FragmentActivity() {
             val activeMode by modeManager.modeFlow.collectAsState(initial = V9Engine.bootMode)
 
             // Click uses one warm, light palette across all browsing profiles.
-            var currentThemeSetting by remember { mutableStateOf("Light") }
-            var scheduleStartHour by remember { mutableStateOf(6) }
-            var scheduleEndHour by remember { mutableStateOf(19) }
-            var lightThemeVariant by remember { mutableStateOf(LightThemeVariant.CREAM) }
-            var autoRotateThemes by remember { mutableStateOf(false) }
-            // Legacy per-mode values remain loaded for migration, but no dark palette is applied.
-            var perModeDark by remember { mutableStateOf<Map<BrowserMode, Boolean?>>(emptyMap()) }
+            // Saved dark/rotation preferences are normalized to light below.
             var wallpaperUri by remember { mutableStateOf<String?>(null) }
             val theme = remember(activeMode) {
                 ModeThemes.forMode(activeMode, dark = false, lightVariant = LightThemeVariant.CREAM)
@@ -1668,12 +1662,6 @@ class MainActivity : FragmentActivity() {
                         )
                         showTextScaleSheet = true
                     }
-                    FeatureId.NIGHT_MODE -> {
-                        forceNightModeWebsites = false
-                        liveNightMode = false
-                        currentTab.webView?.let { applyPrivacyToggles(it, httpsMode, nightMode = false, dataSaver = dataSaverEnabled) }
-                        Toast.makeText(this@MainActivity, "Click keeps pages in light mode.", Toast.LENGTH_SHORT).show()
-                    }
                     FeatureId.ABOUT -> showAboutApp = true
                     FeatureId.FLAGS -> showClickPage = "flags"
                     FeatureId.VERSION -> showClickPage = "version"
@@ -1743,10 +1731,6 @@ class MainActivity : FragmentActivity() {
                             prefs[AppSettings.LIGHT_THEME_VARIANT] != LightThemeVariant.CREAM.id ||
                             prefs[AppSettings.AUTO_ROTATE_THEMES] == true ||
                             BrowserMode.values().any { prefs[AppSettings.darkModeKey(it)] == true }
-                    currentThemeSetting = "Light"
-                    autoRotateThemes = false
-                    lightThemeVariant = LightThemeVariant.CREAM
-                    perModeDark = BrowserMode.values().associateWith { false }
                     if (needsLightThemeMigration) {
                         dataStore.edit { appearance ->
                             appearance[AppSettings.APPEARANCE_MODE] = "light"
@@ -1782,8 +1766,6 @@ class MainActivity : FragmentActivity() {
                     forceZoomEnabled = prefs[AppSettings.FORCE_ZOOM] == true
                     readerModeEnabled = prefs[AppSettings.READER_MODE] == true
                     reducedMotionEnabled = prefs[AppSettings.REDUCED_MOTION] == true
-                    scheduleStartHour = (prefs[AppSettings.THEME_SCHEDULE_START_HOUR] ?: 6).coerceIn(0, 23)
-                    scheduleEndHour = (prefs[AppSettings.THEME_SCHEDULE_END_HOUR] ?: 19).coerceIn(0, 23)
                     wallpaperUri = prefs[AppSettings.WALLPAPER_URI]
                     showOnboarding = prefs[AppSettings.ONBOARDING_COMPLETED] != true
                     onboardingReady = true
@@ -3916,44 +3898,6 @@ class MainActivity : FragmentActivity() {
                             if (showSettings) {
                                 SettingsScreen(
                                     theme = theme,
-                                    currentThemeSetting = currentThemeSetting,
-                                    onThemeChange = {
-                                        currentThemeSetting = "Light"
-                                        scope.launch {
-                                            dataStore.edit { prefs ->
-                                                prefs[AppSettings.APPEARANCE_MODE] = "light"
-                                                prefs[AppSettings.THEME_MODE] = "light"
-                                                prefs[AppSettings.UI_DARK_MODE] = false
-                                            }
-                                        }
-                                    },
-                                    globalDarkEffective = theme.dark,
-                                    lightThemeVariant = lightThemeVariant.id,
-                                    onLightThemeVariantChange = { id ->
-                                        val variant = ThemeController.normalizeLightThemeVariant(id)
-                                        lightThemeVariant = variant
-                                        scope.launch {
-                                            dataStore.edit { prefs -> prefs[AppSettings.LIGHT_THEME_VARIANT] = variant.id }
-                                        }
-                                    },
-                                    autoRotateThemes = autoRotateThemes,
-                                    onAutoRotateThemesChange = {
-                                        autoRotateThemes = false
-                                        scope.launch {
-                                            dataStore.edit { prefs -> prefs[AppSettings.AUTO_ROTATE_THEMES] = false }
-                                        }
-                                    },
-                                    scheduleStartHour = scheduleStartHour,
-                                    scheduleEndHour = scheduleEndHour,
-                                    onScheduleChange = { start, end ->                                        scheduleStartHour = start
-                                        scheduleEndHour = end
-                                        scope.launch {
-                                            dataStore.edit { prefs ->
-                                                prefs[AppSettings.THEME_SCHEDULE_START_HOUR] = start
-                                                prefs[AppSettings.THEME_SCHEDULE_END_HOUR] = end
-                                            }
-                                        }
-                                    },
                                     wallpaperUri = wallpaperUri,
                                     onWallpaperChange = { uri ->
                                         wallpaperUri = uri
@@ -4001,8 +3945,6 @@ class MainActivity : FragmentActivity() {
                                     onSetDefaultBrowser = { requestDefaultBrowser() },
                                     adBlockerEnabled = adBlockerEnabled,
                                     onToggleAdBlocker = { adBlockerEnabled = it },
-                                    forceNightMode = forceNightModeWebsites,
-                                    onToggleNightMode = { forceNightModeWebsites = false },
                                     httpsMode = httpsMode,
                                     onHttpsModeChange = { mode ->
                                         httpsMode = AppSettings.normalizeMode(mode)
@@ -4189,15 +4131,6 @@ class MainActivity : FragmentActivity() {
                                     onOpenPrivacySecurity = { showSettings = false; showPrivacySecurity = true },
                                     locationSummary = LocationGuard.websitesWillSee(),
                                     onOpenLocationSettings = { showLocationSettings = true },
-                                    perModeDark = perModeDark,
-                                    onPerModeThemeChange = { mode, _ ->
-                                        perModeDark = perModeDark + (mode to false)
-                                        scope.launch {
-                                            dataStore.edit { prefs ->
-                                                prefs[AppSettings.darkModeKey(mode)] = false
-                                            }
-                                        }
-                                    },
                                     aiApiKey = aiApiKey,
                                     builtInKeyActive = BuildConfig.GROQ_API_KEY_OBF.isNotBlank(),
                                     onAiApiKeyChange = { v ->

@@ -186,7 +186,7 @@ fun ClickHomeScreen(
             Box(
                 modifier = Modifier
                     .fillMaxSize()
-                    .background(Color(0xFFFBF8F1).copy(alpha = 0.84f))
+                    .background(theme.background.copy(alpha = 0.84f))
             )
         } else {
             Box(

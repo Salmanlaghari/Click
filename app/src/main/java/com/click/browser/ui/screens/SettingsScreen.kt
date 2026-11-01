@@ -29,7 +29,6 @@ import com.click.browser.BuildConfig
 import com.click.browser.engine.AiProviders
 import com.click.browser.engine.BrowserMode
 import com.click.browser.engine.ClickInternalPages
-import com.click.browser.engine.LightThemeVariant
 import com.click.browser.engine.ModePersonalization
 import com.click.browser.engine.ModeTheme
 import com.click.browser.engine.NewsNotifications
@@ -53,17 +52,6 @@ private const val PLAY_STORE_PACKAGE = "com.teampkai.clickbrowser"
 fun SettingsScreen(
     theme: ModeTheme,
     // --- General ---
-    currentThemeSetting: String, // "Auto" | "Light" | "Dark" | "Scheduled"
-    onThemeChange: (String) -> Unit,
-    lightThemeVariant: String,
-    onLightThemeVariantChange: (String) -> Unit,
-    autoRotateThemes: Boolean,
-    onAutoRotateThemesChange: (Boolean) -> Unit,
-    /** Resolved global dark flag right now (auto/scheduled already resolved). */
-    globalDarkEffective: Boolean,
-    scheduleStartHour: Int,
-    scheduleEndHour: Int,
-    onScheduleChange: (Int, Int) -> Unit,
     wallpaperUri: String?,
     onWallpaperChange: (String?) -> Unit,
     activeMode: BrowserMode,
@@ -88,8 +76,6 @@ fun SettingsScreen(
     // --- Privacy toggles ---
     adBlockerEnabled: Boolean,
     onToggleAdBlocker: (Boolean) -> Unit,
-    forceNightMode: Boolean,
-    onToggleNightMode: (Boolean) -> Unit,
     httpsMode: String,
     onHttpsModeChange: (String) -> Unit,
     httpsStrictExceptions: List<String>,
@@ -128,9 +114,6 @@ fun SettingsScreen(
     // --- LocationGuard ---
     locationSummary: String,
     onOpenLocationSettings: () -> Unit,
-    // --- Per-mode themes ---
-    perModeDark: Map<BrowserMode, Boolean?>,
-    onPerModeThemeChange: (BrowserMode, Boolean?) -> Unit,
     // --- UI animations ---
     animationsEnabled: Boolean,
     onToggleAnimations: (Boolean) -> Unit,
@@ -185,11 +168,10 @@ fun SettingsScreen(
     // ---- Row model: each row optionally opens a named section ----
     data class Row(val section: String?, val content: @Composable () -> Unit)
     val rows = remember(
-        theme, currentThemeSetting, lightThemeVariant, autoRotateThemes, globalDarkEffective,
-        scheduleStartHour, scheduleEndHour, wallpaperUri, activeMode,
+        theme, wallpaperUri, activeMode,
         currentSearchEngineSetting, addressBarPosition,
-        adBlockerEnabled, forceNightMode,
-        httpsMode, httpsStrictExceptions, jsEnabled, dataSaver, perModeDark, historyModeTarget,
+        adBlockerEnabled,
+        httpsMode, httpsStrictExceptions, jsEnabled, dataSaver, historyModeTarget,
         aiApiKey, aiProvider, aiModel, showAiKey, animationsEnabled, isDefaultBrowser, advanceIntroEnabled,
         sharpViewEnabled,
         newsNotificationsEnabled, newsTopics

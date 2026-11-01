@@ -1,6 +1,7 @@
 package com.click.browser.engine
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -37,7 +38,9 @@ class SearchEngineBrandTest {
         )
         BrowserMode.values().flatMap(ModePersonalization::searchEngines).distinct().forEach { engine ->
             val url = ModePersonalization.searchUrl(engine, "click+browser")
-            assertTrue("$engine did not route to its provider host: $url", url.contains(expectedHosts.getValue(engine)))
+            val expectedHost = expectedHosts[engine]
+            assertNotNull("Missing expected host mapping for $engine", expectedHost)
+            assertTrue("$engine did not route to its provider host: $url", url.contains(expectedHost!!))
         }
     }
 }
