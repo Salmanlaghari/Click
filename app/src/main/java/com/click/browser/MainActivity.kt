@@ -3640,7 +3640,6 @@ class MainActivity : FragmentActivity() {
                                         onNewTab = {
                                             tabs.add(TabItem(url = homeUrl(), title = "New Tab"))
                                             activeTabIndex = tabs.size - 1
-                                            showTabsManager = false
                                         },
                                         onClose = { showTabsManager = false }
                                     )
