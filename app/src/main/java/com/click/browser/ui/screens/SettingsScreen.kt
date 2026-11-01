@@ -29,10 +29,10 @@ import com.click.browser.BuildConfig
 import com.click.browser.engine.AiProviders
 import com.click.browser.engine.BrowserMode
 import com.click.browser.engine.ClickInternalPages
-import com.click.browser.engine.LightThemeVariant
 import com.click.browser.engine.ModePersonalization
 import com.click.browser.engine.ModeTheme
 import com.click.browser.engine.NewsNotifications
+import com.click.browser.engine.SafetyCheck
 import kotlinx.coroutines.launch
 
 private const val PLAY_STORE_PACKAGE = "com.teampkai.clickbrowser"
@@ -52,17 +52,6 @@ private const val PLAY_STORE_PACKAGE = "com.teampkai.clickbrowser"
 fun SettingsScreen(
     theme: ModeTheme,
     // --- General ---
-    currentThemeSetting: String, // "Auto" | "Light" | "Dark" | "Scheduled"
-    onThemeChange: (String) -> Unit,
-    lightThemeVariant: String,
-    onLightThemeVariantChange: (String) -> Unit,
-    autoRotateThemes: Boolean,
-    onAutoRotateThemesChange: (Boolean) -> Unit,
-    /** Resolved global dark flag right now (auto/scheduled already resolved). */
-    globalDarkEffective: Boolean,
-    scheduleStartHour: Int,
-    scheduleEndHour: Int,
-    onScheduleChange: (Int, Int) -> Unit,
     wallpaperUri: String?,
     onWallpaperChange: (String?) -> Unit,
     activeMode: BrowserMode,
@@ -87,8 +76,6 @@ fun SettingsScreen(
     // --- Privacy toggles ---
     adBlockerEnabled: Boolean,
     onToggleAdBlocker: (Boolean) -> Unit,
-    forceNightMode: Boolean,
-    onToggleNightMode: (Boolean) -> Unit,
     httpsMode: String,
     onHttpsModeChange: (String) -> Unit,
     httpsStrictExceptions: List<String>,
@@ -127,9 +114,6 @@ fun SettingsScreen(
     // --- LocationGuard ---
     locationSummary: String,
     onOpenLocationSettings: () -> Unit,
-    // --- Per-mode themes ---
-    perModeDark: Map<BrowserMode, Boolean?>,
-    onPerModeThemeChange: (BrowserMode, Boolean?) -> Unit,
     // --- UI animations ---
     animationsEnabled: Boolean,
     onToggleAnimations: (Boolean) -> Unit,
@@ -154,6 +138,7 @@ fun SettingsScreen(
     onNewsTopicsChange: (Set<String>) -> Unit,
     // --- About ---
     onOpenPrivacyPolicy: () -> Unit,
+    onOpenLicenses: () -> Unit,
     onOpenHelpFeedback: () -> Unit,
     onClose: () -> Unit
 ) {
@@ -183,11 +168,10 @@ fun SettingsScreen(
     // ---- Row model: each row optionally opens a named section ----
     data class Row(val section: String?, val content: @Composable () -> Unit)
     val rows = remember(
-        theme, currentThemeSetting, lightThemeVariant, autoRotateThemes, globalDarkEffective,
-        scheduleStartHour, scheduleEndHour, wallpaperUri, activeMode,
+        theme, wallpaperUri, activeMode,
         currentSearchEngineSetting, addressBarPosition,
-        adBlockerEnabled, forceNightMode,
-        httpsMode, httpsStrictExceptions, jsEnabled, dataSaver, perModeDark, historyModeTarget,
+        adBlockerEnabled,
+        httpsMode, httpsStrictExceptions, jsEnabled, dataSaver, historyModeTarget,
         aiApiKey, aiProvider, aiModel, showAiKey, animationsEnabled, isDefaultBrowser, advanceIntroEnabled,
         sharpViewEnabled,
         newsNotificationsEnabled, newsTopics
@@ -201,89 +185,17 @@ fun SettingsScreen(
                 CardRow(theme) {
                     Text("Appearance", color = theme.onSurface, fontWeight = FontWeight.SemiBold, fontSize = 14.sp)
                     Text(
-                        "Day/Night default for every mode — override per mode in the Modes section.",
+                        "A warm cream palette stays light in every profile.",
                         fontSize = 11.sp, color = theme.onSurface.copy(alpha = 0.6f)
                     )
                     Spacer(Modifier.height(8.dp))
                     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         FilterChip(
-                            selected = currentThemeSetting == "Auto",
-                            onClick = { onThemeChange("Auto") },
-                            label = { Text("🔄 Auto", fontSize = 12.sp) }
-                        )
-                        FilterChip(
-                            selected = currentThemeSetting == "Light",
-                            onClick = { onThemeChange("Light") },
-                            label = { Text("☀️ Light", fontSize = 12.sp) }
-                        )
-                        FilterChip(
-                            selected = currentThemeSetting == "Dark",
-                            onClick = { onThemeChange("Dark") },
-                            label = { Text("🌙 Dark", fontSize = 12.sp) }
-                        )
-                        FilterChip(
-                            selected = currentThemeSetting == "Scheduled",
-                            onClick = { onThemeChange("Scheduled") },
-                            label = { Text("🕒 Scheduled", fontSize = 12.sp) }
+                            selected = true,
+                            onClick = {},
+                            label = { Text("☀️ Cream", fontSize = 12.sp) }
                         )
                     }
-                    if (currentThemeSetting == "Auto") {
-                        Text(
-                            "Follows your phone's system day/night setting.",
-                            fontSize = 11.sp, color = theme.onSurface.copy(alpha = 0.55f)
-                        )
-                    }
-                    if (currentThemeSetting == "Scheduled") {
-                        Spacer(Modifier.height(8.dp))
-                        Text(
-                            "Light theme between the hours below, dark otherwise.",
-                            fontSize = 11.sp, color = theme.onSurface.copy(alpha = 0.55f)
-                        )
-                        Spacer(Modifier.height(4.dp))
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(8.dp)
-                        ) {
-                            HourPicker(
-                                label = "Light from",
-                                hour = scheduleStartHour,
-                                theme = theme,
-                                onChange = { onScheduleChange(it, scheduleEndHour) }
-                            )
-                            HourPicker(
-                                label = "Dark from",
-                                hour = scheduleEndHour,
-                                theme = theme,
-                                onChange = { onScheduleChange(scheduleStartHour, it) }
-                            )
-                        }
-                    }
-                    Text("Light Theme", color = theme.onSurface, fontWeight = FontWeight.SemiBold, fontSize = 14.sp)
-                    Text(
-                        "Choose the light palette used by the existing mode themes.",
-                        fontSize = 11.sp, color = theme.onSurface.copy(alpha = 0.6f)
-                    )
-                    @OptIn(ExperimentalLayoutApi::class)
-                    FlowRow(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp),
-                        verticalArrangement = Arrangement.spacedBy(4.dp)
-                    ) {
-                        LightThemeVariant.values().forEach { variant ->
-                            FilterChip(
-                                selected = lightThemeVariant == variant.id,
-                                onClick = { onLightThemeVariantChange(variant.id) },
-                                label = { Text(variant.label) }
-                            )
-                        }
-                    }
-                    ToggleRow(
-                        "Auto-rotate themes",
-                        "Advance to the next light palette on each fresh app launch",
-                        autoRotateThemes,
-                        onAutoRotateThemesChange,
-                        theme
-                    )
                 }
             })
             add(Row(null) {
@@ -564,8 +476,6 @@ fun SettingsScreen(
                 CardRow(theme) {
                     ToggleRow("Ad Blocker", "Block intrusive ads & tracker scripts", adBlockerEnabled, onToggleAdBlocker, theme)
                     HorizontalDivider(color = theme.onSurface.copy(alpha = 0.1f))
-                    ToggleRow("Force Night Mode", "Inject night theme on web pages", forceNightMode, onToggleNightMode, theme)
-                    HorizontalDivider(color = theme.onSurface.copy(alpha = 0.1f))
                     // ---- HTTPS mode: Off / Standard / Strict ----
                     Text(
                         "HTTPS Mode",
@@ -788,9 +698,7 @@ fun SettingsScreen(
                     Spacer(Modifier.height(8.dp))
                     BrowserMode.values().forEach { mode ->
                         val isActive = mode == activeMode
-                        val override = perModeDark[mode]
-                        val effective = override ?: globalDarkEffective
-                        Card(
+                                Card(
                             colors = CardDefaults.cardColors(
                                 containerColor = if (isActive) theme.primary.copy(alpha = 0.12f)
                                 else theme.surfaceVariant.copy(alpha = 0.5f)
@@ -820,30 +728,10 @@ fun SettingsScreen(
                                     }
                                 }
                                 Text(
-                                    "Theme: ${if (effective) "Dark" else "Light"}${if (override == null) " (global)" else ""}",
+                                    "Theme: Cream",
                                     fontSize = 11.sp,
                                     color = theme.onSurface.copy(alpha = 0.6f)
                                 )
-                                Spacer(Modifier.height(4.dp))
-                                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                                    FilterChip(
-                                        selected = effective && override != null,
-                                        onClick = { onPerModeThemeChange(mode, true) },
-                                        label = { Text("🌙 Dark", fontSize = 11.sp) }
-                                    )
-                                    FilterChip(
-                                        selected = !effective && override != null,
-                                        onClick = { onPerModeThemeChange(mode, false) },
-                                        label = { Text("☀️ Light", fontSize = 11.sp) }
-                                    )
-                                    if (override != null) {
-                                        FilterChip(
-                                            selected = false,
-                                            onClick = { onPerModeThemeChange(mode, null) },
-                                            label = { Text("↩ Global", fontSize = 11.sp) }
-                                        )
-                                    }
-                                }
                             }
                         }
                     }
@@ -864,6 +752,21 @@ fun SettingsScreen(
             })
             add(Row(null) {
                 CardRow(theme) {
+                    ActionRow(
+                        "Check for updates",
+                        "Open Google Play; Click does not check versions in the background",
+                        Icons.Default.Refresh,
+                        theme
+                    ) { SafetyCheck.openPlayListing(context) }
+                    HorizontalDivider(color = theme.onSurface.copy(alpha = 0.1f))
+                    ActionRow(
+                        "Open-source licenses",
+                        "Click's MIT license and third-party project notices",
+                        Icons.Default.Description,
+                        theme,
+                        onOpenLicenses
+                    )
+                    HorizontalDivider(color = theme.onSurface.copy(alpha = 0.1f))
                     ActionRow("Privacy Policy", "How Click handles your data", Icons.Default.Description, theme, onOpenPrivacyPolicy)
                     HorizontalDivider(color = theme.onSurface.copy(alpha = 0.1f))
                     ActionRow("Help & Feedback", "FAQs + email the developer", Icons.Default.Help, theme, onOpenHelpFeedback)

@@ -84,7 +84,7 @@ enum class FeatureId {
     PRIVATE_TAB, TABS, RECENT_TABS, SHARE, FIND_IN_PAGE,
     ADBLOCK, READER, SCREENSHOT, SAVE_PDF, ADD_HOME, SITE_INFO,
     PRIVACY_GUARDS, FULLSCREEN, TEXT_SIZE,
-    NIGHT_MODE, CLEAR_DATA, ABOUT, V9_SHIELD, FLAGS, VERSION, HELP_FEEDBACK, GAMES
+    CLEAR_DATA, ABOUT, V9_SHIELD, FLAGS, VERSION, HELP_FEEDBACK, GAMES
 }
 
 data class FeatureDef(
@@ -121,7 +121,6 @@ val ALL_FEATURES: List<FeatureDef> = listOf(
     FeatureDef(FeatureId.PRIVACY_GUARDS, "Guards", Icons.Default.Shield),
     FeatureDef(FeatureId.FULLSCREEN, "Fullscreen", Icons.Default.Fullscreen),
     FeatureDef(FeatureId.TEXT_SIZE, "Text Size", Icons.Default.TextFields),
-    FeatureDef(FeatureId.NIGHT_MODE, "Night", Icons.Default.DarkMode),
     FeatureDef(FeatureId.CLEAR_DATA, "Clear Data", Icons.Default.DeleteSweep),
     FeatureDef(FeatureId.ABOUT, "About", Icons.Default.Help),
     FeatureDef(FeatureId.V9_SHIELD, "V9 Shield", Icons.Default.VpnKey),

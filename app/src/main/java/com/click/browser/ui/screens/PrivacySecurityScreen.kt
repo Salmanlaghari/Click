@@ -273,11 +273,14 @@ fun PrivacySecurityScreen(
                 }
                 checks?.let { list ->
                     Spacer(Modifier.height(8.dp))
-                    val passed = list.count { it.passed }
+                    val protectionChecks = SafetyCheck.protectionChecks(list)
+                    val passed = protectionChecks.count { it.passed }
+                    val informationalCount = list.count { it.informational }
                     Text(
-                        "$passed of ${list.size} checks passed",
+                        "$passed of ${protectionChecks.size} protection checks passed" +
+                            if (informationalCount > 0) " · $informationalCount informational" else "",
                         fontWeight = FontWeight.SemiBold, fontSize = 13.sp,
-                        color = if (passed == list.size) theme.primary else MaterialTheme.colorScheme.error
+                        color = if (passed == protectionChecks.size) theme.primary else MaterialTheme.colorScheme.error
                     )
                     Spacer(Modifier.height(4.dp))
                     list.forEach { check ->
@@ -431,6 +434,16 @@ private fun SafetyCheckRow(
     onFix: () -> Unit,
     onAction: () -> Unit
 ) {
+    val icon = when {
+        check.informational -> Icons.Default.Info
+        check.passed -> Icons.Default.CheckCircle
+        else -> Icons.Default.Error
+    }
+    val iconTint = when {
+        check.informational -> theme.onSurface.copy(alpha = 0.55f)
+        check.passed -> theme.primary
+        else -> MaterialTheme.colorScheme.error
+    }
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -438,9 +451,9 @@ private fun SafetyCheckRow(
         verticalAlignment = Alignment.CenterVertically
     ) {
         Icon(
-            if (check.passed) Icons.Default.CheckCircle else Icons.Default.Error,
-            contentDescription = null,
-            tint = if (check.passed) theme.primary else MaterialTheme.colorScheme.error,
+            icon,
+            contentDescription = if (check.informational) "Information" else if (check.passed) "Passed" else "Needs attention",
+            tint = iconTint,
             modifier = Modifier.size(22.dp)
         )
         Spacer(Modifier.width(10.dp))

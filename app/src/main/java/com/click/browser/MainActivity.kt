@@ -196,8 +196,8 @@ class MainActivity : FragmentActivity() {
     private var liveGpcEnabled = false
     // Live copy of per-site desktop hosts (persisted per host via BrowserRepository).
     private var liveDesktopHosts: Set<String> = emptySet()
-    // Live copy of per-site settings (JS / adblock / location / cookies / zoom),
-    // persisted per host per engine mode via BrowserRepository.
+    // Live copy of supported per-site content settings, persisted per host
+    // and engine mode via BrowserRepository.
     private var liveSiteSettings: Map<String, com.click.browser.engine.SiteSettings> = emptyMap()
     // Live copy of the global ad-block toggle for WebViewClient callbacks.
     private var liveAdBlockerEnabled: Boolean = true
@@ -318,6 +318,9 @@ class MainActivity : FragmentActivity() {
 
     override fun onResume() {
         super.onResume()
+        // The fallback default-apps page (pre-Android 10) does not return an
+        // ActivityResult, so always refresh the role state when we come back.
+        isDefaultBrowserState.value = DefaultBrowserHelper.isDefaultBrowser(this)
         liveWebViews.forEach { wv ->
             try { wv.onResume() } catch (_: Exception) { }
             try { wv.resumeTimers() } catch (_: Exception) { }
@@ -605,10 +608,8 @@ class MainActivity : FragmentActivity() {
      * - Third-party cookies: real per-WebView CookieManager toggle.
      * - Images: loadsImagesAutomatically per WebView.
      * - Pop-ups: javaScriptCanOpenWindowsAutomatically per WebView.
-     * - Ad-block / location / camera / mic: stored here for the
-     *   WebViewClient / WebChromeClient callbacks (see
-     *   shouldInterceptRequest + onGeolocationPermissionsShowPrompt +
-     *   onPermissionRequest).
+     * - Ad-block is stored here for shouldInterceptRequest. Website camera,
+     *   microphone and notification permissions are not granted by this build.
      * Desktop mode stays in the existing desktop-hosts path.
      */
     private fun applyPerSiteSettings(
@@ -647,24 +648,6 @@ class MainActivity : FragmentActivity() {
             } catch (_: Exception) {
             }
         }
-    }
-
-    /**
-     * Per-site camera/mic decision for an origin host: ALLOW / BLOCK are
-     * enforced silently in onPermissionRequest, ASK (or unset) falls through
-     * to the default WebView prompt behavior.
-     */
-
-    /** Per-site camera pref (null = ASK/default). */
-    private fun siteCameraPref(host: String?): com.click.browser.engine.SitePermissionPref? {
-        if (host.isNullOrEmpty()) return null
-        return liveSiteSettings.forHost(host.lowercase())?.camera
-    }
-
-    /** Per-site microphone pref (null = ASK/default). */
-    private fun siteMicPref(host: String?): com.click.browser.engine.SitePermissionPref? {
-        if (host.isNullOrEmpty()) return null
-        return liveSiteSettings.forHost(host.lowercase())?.microphone
     }
 
     /**
@@ -868,7 +851,6 @@ class MainActivity : FragmentActivity() {
         // API 35+ enforces edge-to-edge for targetSdk 35+ — opt in and handle
         // WindowInsets in Compose so no chrome is hidden behind system bars.
         enableEdgeToEdge()
-        val freshLaunch = savedInstanceState == null
 
         // News notification deep link (cold start): consume the article URL
         // once so the composable below opens it in a new tab. Skipped on
@@ -891,41 +873,31 @@ class MainActivity : FragmentActivity() {
         com.click.browser.engine.MlKitTranslator.loadLanguages(this)
 
         setContent {
-            // App-start intro: 5s Markhor "TEAM PK AI ERA" animation on EVERY
-            // cold start (Prince's request). rememberSaveable: not replayed
-            // on rotation. Tap skips immediately.
-            var showSplash by rememberSaveable { mutableStateOf(true) }
+            // First-run feature cards replace the repeated full-screen intro.
+            var onboardingReady by rememberSaveable { mutableStateOf(false) }
+            var showOnboarding by rememberSaveable { mutableStateOf(false) }
             val scope = rememberCoroutineScope()
+            fun finishFirstRunOnboarding() {
+                showOnboarding = false
+                scope.launch {
+                    dataStore.edit {
+                        it[AppSettings.ONBOARDING_COMPLETED] = true
+                        // The tour already explains Advance, so do not stack its old
+                        // first-entry specification sheet immediately afterward.
+                        it[AppSettings.ADVANCE_SPECS_SEEN] = true
+                    }
+                }
+            }
+            BackHandler(enabled = onboardingReady && showOnboarding) {
+                finishFirstRunOnboarding()
+            }
             val activeMode by modeManager.modeFlow.collectAsState(initial = V9Engine.bootMode)
 
-            // App Layout configuration: global appearance mode.
-            // "Auto" (default) follows the system night mode — light during
-            // the day for everyone (Prince: light default), dark at night.
-            // "Scheduled" uses the start/end hours below. Each browsing mode
-            // can still override per-mode below.
-            var currentThemeSetting by remember { mutableStateOf("Auto") }
-            var scheduleStartHour by remember { mutableStateOf(6) }
-            var scheduleEndHour by remember { mutableStateOf(19) }
-            var lightThemeVariant by remember { mutableStateOf(LightThemeVariant.CLASSIC) }
-            var autoRotateThemes by remember { mutableStateOf(false) }
-            // Per-mode Day/Night overrides (null = follow the global toggle).
-            var perModeDark by remember { mutableStateOf<Map<BrowserMode, Boolean?>>(emptyMap()) }
+            // Click uses one warm, light palette across all browsing profiles.
+            // Saved dark/rotation preferences are normalized to light below.
             var wallpaperUri by remember { mutableStateOf<String?>(null) }
-            val theme = remember(activeMode, currentThemeSetting, perModeDark, scheduleStartHour, scheduleEndHour, lightThemeVariant) {
-                val dark = perModeDark[activeMode] ?: when (currentThemeSetting) {
-                    "Dark" -> true
-                    "Light" -> false
-                    "Scheduled" -> {
-                        // Light between startHour (inclusive) and endHour (exclusive), dark otherwise.
-                        val hour = java.util.Calendar.getInstance().get(java.util.Calendar.HOUR_OF_DAY)
-                        val s = scheduleStartHour.coerceIn(0, 23)
-                        val e = scheduleEndHour.coerceIn(0, 23)
-                        val isLight = if (s < e) hour in s until e else hour >= s || hour < e
-                        !isLight
-                    }
-                    else -> AppSettings.isSystemNightMode(this@MainActivity)
-                }
-                ModeThemes.forMode(activeMode, dark, lightThemeVariant)
+            val theme = remember(activeMode) {
+                ModeThemes.forMode(activeMode, dark = false, lightVariant = LightThemeVariant.CREAM)
             }
 
             val themeColors = if (theme.dark) {
@@ -1318,6 +1290,7 @@ class MainActivity : FragmentActivity() {
             var showExtensionsManager by remember { mutableStateOf(false) }
             var showPrivacyPolicy by remember { mutableStateOf(false) }
             var showAboutApp by remember { mutableStateOf(false) }
+            var showLicenses by remember { mutableStateOf(false) }
 
             // AI chat + privacy guards
             var showAiChat by remember { mutableStateOf(false) }
@@ -1350,8 +1323,8 @@ class MainActivity : FragmentActivity() {
             // (after the intro overlay closes, if it is showing), so the
             // user learns what is special about Advance mode. The intro
             // overlay is full-screen, so the sheet waits for it.
-            LaunchedEffect(activeMode, showAdvanceIntro) {
-                if (activeMode == BrowserMode.ADVANCED && !showAdvanceIntro) {
+            LaunchedEffect(activeMode, showAdvanceIntro, onboardingReady, showOnboarding) {
+                if (onboardingReady && !showOnboarding && activeMode == BrowserMode.ADVANCED && !showAdvanceIntro) {
                     val seen = try {
                         dataStore.data.first()[AppSettings.ADVANCE_SPECS_SEEN] == true
                     } catch (_: Exception) { true }
@@ -1689,15 +1662,6 @@ class MainActivity : FragmentActivity() {
                         )
                         showTextScaleSheet = true
                     }
-                    FeatureId.NIGHT_MODE -> {
-                        forceNightModeWebsites = !forceNightModeWebsites
-                        currentTab.webView?.let { modeManager.applySettings(it, activeMode, forceDesktopMode) }
-                        Toast.makeText(
-                            this@MainActivity,
-                            if (forceNightModeWebsites) "Night mode ON" else "Night mode OFF",
-                            Toast.LENGTH_SHORT
-                        ).show()
-                    }
                     FeatureId.ABOUT -> showAboutApp = true
                     FeatureId.FLAGS -> showClickPage = "flags"
                     FeatureId.VERSION -> showClickPage = "version"
@@ -1760,15 +1724,24 @@ class MainActivity : FragmentActivity() {
                     aiApiKey = prefs[AppSettings.AI_API_KEY].orEmpty()
                     aiProvider = prefs[AppSettings.AI_PROVIDER] ?: "groq"
                     aiModel = prefs[AppSettings.AI_MODEL].orEmpty()
-                    val savedLightThemeId = prefs[AppSettings.LIGHT_THEME_VARIANT]
-                    autoRotateThemes = prefs[AppSettings.AUTO_ROTATE_THEMES] ?: false
-                    lightThemeVariant = if (freshLaunch && autoRotateThemes) {
-                        ThemeController.nextLightThemeVariant(savedLightThemeId)
-                    } else {
-                        ThemeController.normalizeLightThemeVariant(savedLightThemeId)
-                    }
-                    if (savedLightThemeId != lightThemeVariant.id) {
-                        dataStore.edit { it[AppSettings.LIGHT_THEME_VARIANT] = lightThemeVariant.id }
+                    val needsLightThemeMigration =
+                        prefs[AppSettings.APPEARANCE_MODE] != "light" ||
+                            prefs[AppSettings.THEME_MODE] != "light" ||
+                            prefs[AppSettings.UI_DARK_MODE] == true ||
+                            prefs[AppSettings.LIGHT_THEME_VARIANT] != LightThemeVariant.CREAM.id ||
+                            prefs[AppSettings.AUTO_ROTATE_THEMES] == true ||
+                            BrowserMode.values().any { prefs[AppSettings.darkModeKey(it)] == true }
+                    if (needsLightThemeMigration) {
+                        dataStore.edit { appearance ->
+                            appearance[AppSettings.APPEARANCE_MODE] = "light"
+                            appearance[AppSettings.THEME_MODE] = "light"
+                            appearance[AppSettings.UI_DARK_MODE] = false
+                            appearance[AppSettings.LIGHT_THEME_VARIANT] = LightThemeVariant.CREAM.id
+                            appearance[AppSettings.AUTO_ROTATE_THEMES] = false
+                            BrowserMode.values().forEach { mode ->
+                                appearance[AppSettings.darkModeKey(mode)] = false
+                            }
+                        }
                     }
                     // HTTPS mode (default "standard" = historical HTTPS-Only upgrade behavior).
                     httpsMode = AppSettings.normalizeMode(prefs[AppSettings.HTTPS_MODE])
@@ -1793,30 +1766,9 @@ class MainActivity : FragmentActivity() {
                     forceZoomEnabled = prefs[AppSettings.FORCE_ZOOM] == true
                     readerModeEnabled = prefs[AppSettings.READER_MODE] == true
                     reducedMotionEnabled = prefs[AppSettings.REDUCED_MOTION] == true
-                    // Appearance: "auto" (default, follows system night mode) |
-                    // "light" | "dark" | "scheduled". Migrates legacy keys.
-                    currentThemeSetting = when (prefs[AppSettings.APPEARANCE_MODE]) {
-                        "light" -> "Light"
-                        "dark" -> "Dark"
-                        "scheduled" -> "Scheduled"
-                        "auto" -> "Auto"
-                        else -> {
-                            // Migrate from old THEME_MODE if present.
-                            when (prefs[AppSettings.THEME_MODE]) {
-                                "light" -> "Light"
-                                "dark" -> "Dark"
-                                "scheduled" -> "Scheduled"
-                                else -> if (prefs[AppSettings.UI_DARK_MODE] == true) "Dark" else "Light"
-                            }
-                        }
-                    }
-                    scheduleStartHour = (prefs[AppSettings.THEME_SCHEDULE_START_HOUR] ?: 6).coerceIn(0, 23)
-                    scheduleEndHour = (prefs[AppSettings.THEME_SCHEDULE_END_HOUR] ?: 19).coerceIn(0, 23)
-                    // Per-mode Day/Night overrides (missing key = follow global).
-                    perModeDark = BrowserMode.values().associateWith { mode ->
-                        prefs[AppSettings.darkModeKey(mode)]
-                    }
                     wallpaperUri = prefs[AppSettings.WALLPAPER_URI]
+                    showOnboarding = prefs[AppSettings.ONBOARDING_COMPLETED] != true
+                    onboardingReady = true
                     // Biometric private-tab lock + text scaling.
                     biometricLockEnabled = prefs[AppSettings.BIOMETRIC_TAB_LOCK] == true
                     liveBiometricLockEnabled = biometricLockEnabled
@@ -1844,18 +1796,16 @@ class MainActivity : FragmentActivity() {
                 backgroundAudioEnabledCached = backgroundAudioEnabled
             }
 
-            // Settings Configurations
-            var currentSearchEngineSetting by remember { mutableStateOf("Google") }
-
+            // Search preference is profile-specific and drives both the visible brand mark
+            // and the URL used when a query (rather than a website address) is submitted.
+            var currentSearchEngineSetting by remember(activeMode) {
+                mutableStateOf(ModePersonalization.defaultSearchEngine(activeMode))
+            }
             LaunchedEffect(activeMode) {
-                val engines = when (activeMode) {
-                    BrowserMode.SIMPLE -> listOf("Google", "Yahoo", "Bing")
-                    BrowserMode.DEVELOPER -> listOf("Yandex", "DuckDuckGo", "Baidu")
-                    BrowserMode.HACK -> listOf("Google", "DuckDuckGo", "Bing")
-                    BrowserMode.ADVANCED -> listOf("Google", "Brave Search", "DuckDuckGo")
-                }
-                if (currentSearchEngineSetting !in engines) {
-                    currentSearchEngineSetting = engines.first()
+                currentSearchEngineSetting = try {
+                    ModePersonalization.getSearchEngine(this@MainActivity, activeMode)
+                } catch (_: Exception) {
+                    ModePersonalization.defaultSearchEngine(activeMode)
                 }
             }
 
@@ -2415,18 +2365,6 @@ class MainActivity : FragmentActivity() {
                                     }
                                 }
                                 item {
-                                    DrawerItem(label = "Toggle Dark Mode Websites", icon = Icons.Default.Brightness4, color = Color(0xFF818CF8)) {
-                                        scope.launch {
-                                            drawerState.close()
-                                            forceNightModeWebsites = !forceNightModeWebsites
-                                            currentTab.webView?.let {
-                                                applyPrivacyToggles(it, httpsMode, forceNightModeWebsites, dataSaverEnabled)
-                                            }
-                                            Toast.makeText(this@MainActivity, "Dark Mode Force is " + (if(forceNightModeWebsites) "ENABLED" else "DISABLED"), Toast.LENGTH_SHORT).show()
-                                        }
-                                    }
-                                }
-                                item {
                                     DrawerItem(
                                         label = "HTTPS Mode: ${httpsMode.replaceFirstChar { it.uppercase() }}",
                                         icon = Icons.Default.Lock, color = Color(0xFF34D399)
@@ -2692,8 +2630,9 @@ class MainActivity : FragmentActivity() {
                                             CompactBrowseBar(
                                                 theme = themed,
                                                 currentUrl = currentTab.url,
+                                                searchEngine = currentSearchEngineSetting,
                                                 onNavigate = { input ->
-                                                    val destination = cleanTrackingUrl(formatUrl(input, currentSearchEngineSetting, activeMode))
+                                                    val destination = cleanTrackingUrl(formatUrl(input, currentSearchEngineSetting))
                                                     currentTab.url = destination
                                                     currentTab.webView?.loadUrl(destination)
                                                 },
@@ -2753,6 +2692,7 @@ class MainActivity : FragmentActivity() {
                                         ClickHomeScreen(
                                             theme = theme,
                                             activeMode = activeMode,
+                                            searchEngine = currentSearchEngineSetting,
                                             adBlockerEnabled = adBlockerEnabled,
                                             blockedCount = blockedCount,
                                             wallpaperUri = wallpaperUri,
@@ -2761,7 +2701,7 @@ class MainActivity : FragmentActivity() {
                                             onVpnToggle = { toggleVpnShield() },
                                             onGamesClick = { showClickPage = "games" },
                                             onNavigate = { input ->
-                                                val destination = cleanTrackingUrl(formatUrl(input, currentSearchEngineSetting, activeMode))
+                                                val destination = cleanTrackingUrl(formatUrl(input, currentSearchEngineSetting))
                                                 currentTab.url = destination
                                                 currentTab.webView?.loadUrl(destination)
                                             },
@@ -3241,36 +3181,12 @@ class MainActivity : FragmentActivity() {
                                                                 super.onGeolocationPermissionsHidePrompt()
                                                             }
 
-                                                            // Camera / microphone: per-site SiteSettings pref
-                                                            // (ALLOW/BLOCK from the site sheet) wins when set;
-                                                            // ASK or unset falls through to the default WebView
-                                                            // prompt. Deny takes precedence if either is BLOCK.
+                                                            // Fail closed for website media/resource permission
+                                                            // requests. RECORD_AUDIO is used only by Click's own
+                                                            // optional AI voice input; Click does not grant it to
+                                                            // websites and has no camera-permission flow.
                                                             override fun onPermissionRequest(request: android.webkit.PermissionRequest?) {
-                                                                if (request == null) {
-                                                                    super.onPermissionRequest(request)
-                                                                    return
-                                                                }
-                                                                val host = try {
-                                                                    android.net.Uri.parse(request.origin?.toString() ?: "").host
-                                                                } catch (_: Exception) { null }
-                                                                val wantsVideo = request.resources.any {
-                                                                    it == android.webkit.PermissionRequest.RESOURCE_VIDEO_CAPTURE
-                                                                }
-                                                                val wantsAudio = request.resources.any {
-                                                                    it == android.webkit.PermissionRequest.RESOURCE_AUDIO_CAPTURE
-                                                                }
-                                                                val camPref = if (wantsVideo) this@MainActivity.siteCameraPref(host) else null
-                                                                val micPref = if (wantsAudio) this@MainActivity.siteMicPref(host) else null
-                                                                val deny = camPref == com.click.browser.engine.SitePermissionPref.BLOCK ||
-                                                                        micPref == com.click.browser.engine.SitePermissionPref.BLOCK
-                                                                val allow = (camPref == com.click.browser.engine.SitePermissionPref.ALLOW || !wantsVideo) &&
-                                                                        (micPref == com.click.browser.engine.SitePermissionPref.ALLOW || !wantsAudio) &&
-                                                                        (wantsVideo || wantsAudio)
-                                                                when {
-                                                                    deny -> request.deny()
-                                                                    allow -> request.grant(request.resources)
-                                                                    else -> super.onPermissionRequest(request)
-                                                                }
+                                                                request?.deny()
                                                             }
                                                         }
 
@@ -3837,11 +3753,8 @@ class MainActivity : FragmentActivity() {
                                 )
                             }
 
-                            // Crash-restore offer: the previous run for this mode died
-                            // uncleanly (crash / force-close / system kill).
-                            // Gated on !showSplash so it pops right after the
-                            // 5s Markhor intro instead of hiding beneath it.
-                            if (showRestoreDialog && !showSplash) {
+                            // Crash-restore waits until the first-run tour is complete.
+                            if (showRestoreDialog && onboardingReady && !showOnboarding) {
                                 androidx.compose.material3.AlertDialog(
                                     onDismissRequest = {
                                         showRestoreDialog = false
@@ -3940,11 +3853,9 @@ class MainActivity : FragmentActivity() {
                                 }
                             }
 
-                            // One-time prompt, shown right after the splash —
-                            // same !showSplash gating as the restore dialog so
-                            // it never hides beneath the intro animation.
-                            LaunchedEffect(showSplash) {
-                                if (!showSplash) {
+                            // One-time default-browser prompt follows the first-run tour.
+                            LaunchedEffect(onboardingReady, showOnboarding) {
+                                if (onboardingReady && !showOnboarding) {
                                     isDefaultBrowserState.value =
                                         DefaultBrowserHelper.isDefaultBrowser(this@MainActivity)
                                     val shown =
@@ -3987,50 +3898,6 @@ class MainActivity : FragmentActivity() {
                             if (showSettings) {
                                 SettingsScreen(
                                     theme = theme,
-                                    currentThemeSetting = currentThemeSetting,
-                                    onThemeChange = {
-                                        currentThemeSetting = it
-                                        scope.launch {
-                                            dataStore.edit { prefs ->
-                                                prefs[AppSettings.APPEARANCE_MODE] = when (it) {
-                                                    "Light" -> "light"
-                                                    "Dark" -> "dark"
-                                                    "Scheduled" -> "scheduled"
-                                                    else -> "auto"
-                                                }
-                                                // Keep the legacy boolean in sync for
-                                                // any reader still on UI_DARK_MODE.
-                                                prefs[AppSettings.UI_DARK_MODE] = it == "Dark"
-                                            }
-                                        }
-                                    },
-                                    globalDarkEffective = theme.dark,
-                                    lightThemeVariant = lightThemeVariant.id,
-                                    onLightThemeVariantChange = { id ->
-                                        val variant = ThemeController.normalizeLightThemeVariant(id)
-                                        lightThemeVariant = variant
-                                        scope.launch {
-                                            dataStore.edit { prefs -> prefs[AppSettings.LIGHT_THEME_VARIANT] = variant.id }
-                                        }
-                                    },
-                                    autoRotateThemes = autoRotateThemes,
-                                    onAutoRotateThemesChange = { enabled ->
-                                        autoRotateThemes = enabled
-                                        scope.launch {
-                                            dataStore.edit { prefs -> prefs[AppSettings.AUTO_ROTATE_THEMES] = enabled }
-                                        }
-                                    },
-                                    scheduleStartHour = scheduleStartHour,
-                                    scheduleEndHour = scheduleEndHour,
-                                    onScheduleChange = { start, end ->                                        scheduleStartHour = start
-                                        scheduleEndHour = end
-                                        scope.launch {
-                                            dataStore.edit { prefs ->
-                                                prefs[AppSettings.THEME_SCHEDULE_START_HOUR] = start
-                                                prefs[AppSettings.THEME_SCHEDULE_END_HOUR] = end
-                                            }
-                                        }
-                                    },
                                     wallpaperUri = wallpaperUri,
                                     onWallpaperChange = { uri ->
                                         wallpaperUri = uri
@@ -4051,7 +3918,15 @@ class MainActivity : FragmentActivity() {
                                         }
                                     },
                                     currentSearchEngineSetting = currentSearchEngineSetting,
-                                    onSearchEngineChange = { currentSearchEngineSetting = it },
+                                    onSearchEngineChange = { engine ->
+                                        val offered = ModePersonalization.searchEngines(activeMode)
+                                        if (engine in offered) {
+                                            currentSearchEngineSetting = engine
+                                            scope.launch {
+                                                ModePersonalization.setSearchEngine(this@MainActivity, activeMode, engine)
+                                            }
+                                        }
+                                    },
                                     addressBarPosition = if (flagsUi.bottomAddressBar) "bottom" else "top",
                                     onAddressBarPositionChange = { pos ->
                                         val bottom = pos == "bottom"
@@ -4070,8 +3945,6 @@ class MainActivity : FragmentActivity() {
                                     onSetDefaultBrowser = { requestDefaultBrowser() },
                                     adBlockerEnabled = adBlockerEnabled,
                                     onToggleAdBlocker = { adBlockerEnabled = it },
-                                    forceNightMode = forceNightModeWebsites,
-                                    onToggleNightMode = { forceNightModeWebsites = it },
                                     httpsMode = httpsMode,
                                     onHttpsModeChange = { mode ->
                                         httpsMode = AppSettings.normalizeMode(mode)
@@ -4258,18 +4131,6 @@ class MainActivity : FragmentActivity() {
                                     onOpenPrivacySecurity = { showSettings = false; showPrivacySecurity = true },
                                     locationSummary = LocationGuard.websitesWillSee(),
                                     onOpenLocationSettings = { showLocationSettings = true },
-                                    perModeDark = perModeDark,
-                                    onPerModeThemeChange = { mode, dark ->
-                                        val updated = perModeDark.toMutableMap()
-                                        if (dark == null) updated.remove(mode) else updated[mode] = dark
-                                        perModeDark = updated
-                                        scope.launch {
-                                            dataStore.edit { prefs ->
-                                                if (dark == null) prefs.remove(AppSettings.darkModeKey(mode))
-                                                else prefs[AppSettings.darkModeKey(mode)] = dark
-                                            }
-                                        }
-                                    },
                                     aiApiKey = aiApiKey,
                                     builtInKeyActive = BuildConfig.GROQ_API_KEY_OBF.isNotBlank(),
                                     onAiApiKeyChange = { v ->
@@ -4294,6 +4155,7 @@ class MainActivity : FragmentActivity() {
                                         scope.launch { dataStore.edit { prefs -> prefs[AppSettings.AI_MODEL] = v } }
                                     },
                                     onOpenPrivacyPolicy = { showSettings = false; showPrivacyPolicy = true },
+                                    onOpenLicenses = { showSettings = false; showLicenses = true },
                                     onOpenHelpFeedback = { showSettings = false; showHelp = true },
                                     onClose = { showSettings = false }
                                 )
@@ -4316,13 +4178,17 @@ class MainActivity : FragmentActivity() {
                                 InteractiveExtensionsDialog(
                                     adblock = adBlockerEnabled,
                                     onToggleAdblock = { adBlockerEnabled = it },
-                                    night = forceNightModeWebsites,
-                                    onToggleNight = { forceNightModeWebsites = it },
                                     onClose = { showExtensionsManager = false }
                                 )
                             }
                             if (showPrivacyPolicy) {
                                 PrivacyPolicyDialog(onClose = { showPrivacyPolicy = false })
+                            }
+                            if (showLicenses) {
+                                com.click.browser.ui.screens.OpenSourceLicensesScreen(
+                                    theme = theme,
+                                    onClose = { showLicenses = false }
+                                )
                             }
                             if (showAboutApp) {
                                 AboutAppDialog(onClose = { showAboutApp = false })
@@ -5160,26 +5026,9 @@ class MainActivity : FragmentActivity() {
                                 )
                             }
 
-                            // App-start intro: 5s Markhor animation on EVERY cold
-                            // start (Prince's request) — last child of the root
-                            // composition, so it draws above everything.
-                            // Tap anywhere skips it immediately.
-                            AnimatedVisibility(
-                                visible = showSplash,
-                                enter = EnterTransition.None,
-                                exit = fadeOut(animationSpec = tween(450)),
-                                modifier = Modifier.fillMaxSize()
-                            ) {
-                                if (activeMode == BrowserMode.ADVANCED) {
-                                    AdvanceIntroOverlay(onDone = { showSplash = false })
-                                } else {
-                                    HackIntroOverlay(
-                                        onDone = { showSplash = false },
-                                        durationMs = 5000L,
-                                        title = "CLICK BROWSER",
-                                        subtitle = "TEAM PK AI ERA"
-                                    )
-                                }
+                            // First launch: feature cards replace the every-launch intro.
+                            if (onboardingReady && showOnboarding && !privateLocked) {
+                                FirstRunOnboarding(onFinished = { finishFirstRunOnboarding() })
                             }
                         }
                     }
@@ -5242,7 +5091,7 @@ class MainActivity : FragmentActivity() {
         return result
     }
 
-    private fun formatUrl(input: String, searchEngine: String, mode: BrowserMode): String {
+    private fun formatUrl(input: String, searchEngine: String): String {
         val trimmed = input.trim()
         // click:// internal pages (chrome://-style): pass through (normalized
         // to lowercase) so shouldOverrideUrlLoading can intercept them into
@@ -5257,40 +5106,7 @@ class MainActivity : FragmentActivity() {
             return "https://$trimmed"
         }
         val query = URLEncoder.encode(trimmed, "UTF-8")
-
-        return when (mode) {
-            BrowserMode.SIMPLE -> {
-                when (searchEngine) {
-                    "Yahoo" -> "https://search.yahoo.com/search?p=$query"
-                    "Bing" -> "https://www.bing.com/search?q=$query"
-                    else -> "https://www.google.com/search?q=$query"
-                }
-            }
-            BrowserMode.DEVELOPER -> {
-                when (searchEngine) {
-                    "DuckDuckGo" -> "https://duckduckgo.com/?q=$query"
-                    "Baidu" -> "https://www.baidu.com/s?wd=$query"
-                    else -> "https://yandex.com/search/?text=$query"
-                }
-            }
-            BrowserMode.HACK -> {
-                when (searchEngine) {
-                    "Startpage", "Deep Search" -> "https://www.startpage.com/sp/search?query=$query"
-                    "Perplexity", "AI Search", "integrated AI search" -> "https://www.perplexity.ai/search?q=$query"
-                    "DuckDuckGo" -> "https://duckduckgo.com/?q=$query"
-                    else -> "https://search.brave.com/search?q=$query"
-                }
-            }
-            BrowserMode.ADVANCED -> {
-                when (searchEngine) {
-                    "Google" -> "https://www.google.com/search?q=$query"
-                    "Brave Search" -> "https://search.brave.com/search?q=$query"
-                    "DuckDuckGo" -> "https://duckduckgo.com/?q=$query"
-                    "Startpage" -> "https://www.startpage.com/sp/search?query=$query"
-                    else -> "https://www.google.com/search?q=$query"
-                }
-            }
-        }
+        return ModePersonalization.searchUrl(searchEngine, query)
     }
 
     /**
@@ -5671,9 +5487,8 @@ fun BrowserTopBar(
                 keyboardOptions = KeyboardOptions(imeAction = ImeAction.Go),
                 keyboardActions = KeyboardActions(onGo = { onNavigate(textInput) }),
                 leadingIcon = {
-                    // Shield icon: tap opens Site Settings (per-site permissions).
-                    // Green shield = HTTPS secure, amber shield = HTTP warning,
-                    // grey = internal/about page.
+                    // Shield icon opens Site Settings. The tint reflects only
+                    // the current URL scheme, not a broad site-safety verdict.
                     val isHttps = currentUrl.startsWith("https://")
                     val isHttp = currentUrl.startsWith("http://")
                     val shieldTint = when {
@@ -5687,8 +5502,8 @@ fun BrowserTopBar(
                     ) {
                         Icon(
                             Icons.Default.Shield,
-                            contentDescription = if (isHttps) "Secure site — tap for site settings"
-                                else if (isHttp) "Not secure (HTTP) — tap for site settings"
+                            contentDescription = if (isHttps) "HTTPS URL — tap for site settings"
+                                else if (isHttp) "HTTP URL (not encrypted) — tap for site settings"
                                 else "Site settings",
                             tint = shieldTint,
                             modifier = Modifier.size(18.dp)
@@ -6233,11 +6048,6 @@ fun PremiumHomeScreen(
                             Row(modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp), horizontalArrangement = Arrangement.SpaceBetween) {
                                 Text("🧩 Adblocker Extension Active", color = theme.onBackground, fontSize = 11.sp)
                                 Switch(checked = adBlockerEnabled, onCheckedChange = onToggleAdBlocker, modifier = Modifier.scale(0.8f))
-                            }
-                            // night mode
-                            Row(modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp), horizontalArrangement = Arrangement.SpaceBetween) {
-                                Text("🌙 Force Night Mode Website", color = theme.onBackground, fontSize = 11.sp)
-                                Switch(checked = forceNightMode, onCheckedChange = onToggleNightMode, modifier = Modifier.scale(0.8f))
                             }
                             // HTTPS mode (tap to cycle Off -> Standard -> Strict)
                             Row(

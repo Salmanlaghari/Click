@@ -32,8 +32,14 @@ object SafetyCheck {
         /** Fix button label; null = no automatic fix (manual action instead). */
         val fixLabel: String?,
         /** Manual action label when fixLabel is null. */
-        val actionLabel: String? = null
+        val actionLabel: String? = null,
+        /** Informational actions are not counted as a protection check. */
+        val informational: Boolean = false
     )
+
+    /** Protection checks only; informational links are never counted as passes. */
+    fun protectionChecks(checks: List<Check>): List<Check> =
+        checks.filterNot { it.informational }
 
     suspend fun run(context: Context): List<Check> {
         val prefs = context.dataStore.data.first()
@@ -118,9 +124,10 @@ object SafetyCheck {
                 id = "updates",
                 title = "App updates",
                 description = "Click can't check versions silently — open the Play Store to see if an update is waiting.",
-                passed = true, // informational; never fails
+                passed = true,
                 fixLabel = null,
-                actionLabel = "Open Play Store"
+                actionLabel = "Open Play Store",
+                informational = true
             )
         )
 

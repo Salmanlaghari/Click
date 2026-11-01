@@ -18,9 +18,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.material.icons.filled.Block
-import androidx.compose.material.icons.filled.CameraAlt
 import androidx.compose.material.icons.filled.Cookie
 import androidx.compose.material.icons.filled.DeleteSweep
 import androidx.compose.material.icons.filled.History
@@ -28,18 +26,12 @@ import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.LocationOn
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.LockOpen
-import androidx.compose.material.icons.filled.Mic
-import androidx.compose.material.icons.filled.Notifications
 import androidx.compose.material.icons.filled.OpenInNew
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Shield
 import androidx.compose.material.icons.filled.Speed
-import androidx.compose.material.icons.filled.Sync
-import androidx.compose.material.icons.filled.VolumeUp
 import androidx.compose.material.icons.filled.Code
 import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.DropdownMenu
-import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -67,7 +59,6 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.click.browser.engine.CookieStore
 import com.click.browser.engine.ModeTheme
-import com.click.browser.engine.SitePermissionPref
 import com.click.browser.engine.SiteSettings
 import kotlinx.coroutines.launch
 
@@ -77,16 +68,15 @@ import kotlinx.coroutines.launch
  * Developer = dark glass, Power = OLED neon, Advance = deep-space teal).
  *
  * Sections (mirroring Chrome's site-details page):
- * - Site header: gradient icon + host + connection security badge.
- * - Permissions: Location / Camera / Microphone / Notifications
- *   (Allow / Ask / Block). Enforced in WebChromeClient callbacks.
- * - Content: JavaScript / Images / Pop-ups / Ads / Sound /
- *   Third-party cookies. Applied to the current WebView.
+ * - Site header: host + a factual HTTP/HTTPS URL-scheme label.
+ * - Permissions: a clear explanation of website permissions that Click does
+ *   not grant in this build (camera, microphone and notifications).
+ * - Content: JavaScript / Images / Pop-ups / Ads / Third-party cookies.
+ *   Applied to the current WebView.
  * - Shields: Brave-style trackers/cookies/history info (existing).
- * - Usage: storage used + Clear site data + Reset permissions.
+ * - Usage: storage used + Clear site data + Reset supported site settings.
  *
- * Null (unset) = "use global default"; dropdowns show "Ask (default)" /
- * "Allow (default)" so the user can tell override from default apart.
+ * Null (unset) = "use global default" for the supported content settings.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -126,7 +116,7 @@ fun SiteSettingsSheet(
                 .verticalScroll(rememberScrollState())
                 .padding(horizontal = 20.dp, vertical = 8.dp)
         ) {
-            // ---- Site header: gradient icon + host + security badge ----
+            // ---- Site header: host + HTTP/HTTPS URL-scheme label ----
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Box(
                     modifier = Modifier
@@ -166,7 +156,7 @@ fun SiteSettingsSheet(
                         )
                         Spacer(Modifier.width(6.dp))
                         Text(
-                            if (isHttps) "Connection is secure" else "Connection is not secure",
+                            if (isHttps) "URL uses HTTPS" else "URL uses HTTP (not encrypted)",
                             fontSize = 12.sp,
                             color = theme.onSurface.copy(alpha = 0.6f)
                         )
@@ -175,34 +165,14 @@ fun SiteSettingsSheet(
             }
             Spacer(Modifier.height(8.dp))
 
-            // ================= PERMISSIONS =================
-            SectionTitle(theme, "Permissions")
-            PermissionDropdownRow(
-                theme = theme,
-                icon = Icons.Default.CameraAlt,
-                title = "Camera",
-                subtitle = "Allow this site to use your camera",
-                value = current.camera,
-                defaultLabel = "Ask",
-                onChange = { onSettingsChange(current.copy(camera = it)) }
-            )
-            PermissionDropdownRow(
-                theme = theme,
-                icon = Icons.Default.Mic,
-                title = "Microphone",
-                subtitle = "Allow this site to use your microphone",
-                value = current.microphone,
-                defaultLabel = "Ask",
-                onChange = { onSettingsChange(current.copy(microphone = it)) }
-            )
-            PermissionDropdownRow(
-                theme = theme,
-                icon = Icons.Default.Notifications,
-                title = "Notifications",
-                subtitle = "Allow this site to send notifications",
-                value = current.notifications,
-                defaultLabel = "Ask",
-                onChange = { onSettingsChange(current.copy(notifications = it)) }
+            // ================= WEBSITE PERMISSIONS =================
+            SectionTitle(theme, "Website permissions")
+            Text(
+                "Click blocks website camera and microphone requests. Website notifications are not supported. " +
+                    "The microphone permission, if granted, is used only for Click's optional AI voice input.",
+                fontSize = 12.sp,
+                color = theme.onSurface.copy(alpha = 0.68f),
+                lineHeight = 18.sp
             )
 
             // ================= CONTENT =================
@@ -266,20 +236,6 @@ fun SiteSettingsSheet(
                     onReload()
                 }
             )
-            // Sound — tri-state (Allow / Mute).
-            TriStateRow(
-                theme = theme,
-                icon = Icons.Default.VolumeUp,
-                title = "Sound",
-                subtitle = "Allow this site to play sound",
-                value = current.sound,
-                globalLabel = "Allowed",
-                onChange = { v ->
-                    val next = current.copy(sound = v)
-                    onSettingsChange(next)
-                    onApplyToWebView(next)
-                }
-            )
             // Third-party cookies — tri-state.
             TriStateRow(
                 theme = theme,
@@ -294,21 +250,6 @@ fun SiteSettingsSheet(
                     onApplyToWebView(next)
                 }
             )
-            // Background sync — tri-state.
-            TriStateRow(
-                theme = theme,
-                icon = Icons.Default.Sync,
-                title = "Background sync",
-                subtitle = "Allow this site to sync in background",
-                value = current.backgroundSync,
-                globalLabel = "Allowed",
-                onChange = { v ->
-                    val next = current.copy(backgroundSync = v)
-                    onSettingsChange(next)
-                    onApplyToWebView(next)
-                }
-            )
-
             // Desktop site — plain toggle (existing desktop-hosts path).
             SettingToggleRow(
                 theme = theme,
@@ -483,95 +424,6 @@ private fun SectionTitle(theme: ModeTheme, title: String) {
         color = theme.primary,
         modifier = Modifier.padding(top = 18.dp, bottom = 4.dp)
     )
-}
-
-/**
- * Chrome-style permission row: icon + title/subtitle on the left, an
- * Allow/Ask/Block dropdown on the right. Null = "use default".
- */
-@Composable
-private fun PermissionDropdownRow(
-    theme: ModeTheme,
-    icon: ImageVector,
-    title: String,
-    subtitle: String,
-    value: SitePermissionPref?,
-    defaultLabel: String,
-    onChange: (SitePermissionPref?) -> Unit
-) {
-    var expanded by remember { mutableStateOf(false) }
-    val label = when (value) {
-        SitePermissionPref.ALLOW -> "Allow"
-        SitePermissionPref.BLOCK -> "Block"
-        SitePermissionPref.ASK -> "Ask"
-        null -> "$defaultLabel (default)"
-    }
-    Row(
-        verticalAlignment = Alignment.CenterVertically,
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(vertical = 8.dp)
-    ) {
-        Box(
-            modifier = Modifier
-                .size(38.dp)
-                .clip(RoundedCornerShape(10.dp))
-                .background(theme.surfaceVariant),
-            contentAlignment = Alignment.Center
-        ) {
-            Icon(icon, contentDescription = null, tint = theme.primary, modifier = Modifier.size(20.dp))
-        }
-        Spacer(Modifier.width(12.dp))
-        Column(modifier = Modifier.weight(1f)) {
-            Text(title, fontWeight = FontWeight.SemiBold, fontSize = 14.sp, color = theme.onSurface)
-            Text(subtitle, fontSize = 11.sp, color = theme.onSurface.copy(alpha = 0.6f))
-        }
-        Box {
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                modifier = Modifier
-                    .clip(RoundedCornerShape(10.dp))
-                    .background(theme.surfaceVariant)
-                    .clickable { expanded = true }
-                    .padding(horizontal = 10.dp, vertical = 7.dp)
-            ) {
-                Text(
-                    label,
-                    fontSize = 13.sp,
-                    fontWeight = if (value != null) FontWeight.Bold else FontWeight.Normal,
-                    color = if (value != null) theme.primary
-                    else theme.onSurface.copy(alpha = 0.7f)
-                )
-                Icon(
-                    Icons.Default.ArrowDropDown,
-                    contentDescription = null,
-                    tint = theme.onSurface.copy(alpha = 0.6f),
-                    modifier = Modifier.size(18.dp)
-                )
-            }
-            DropdownMenu(
-                expanded = expanded,
-                onDismissRequest = { expanded = false }
-            ) {
-                DropdownMenuItem(
-                    text = { Text("$defaultLabel (default)") },
-                    onClick = { onChange(null); expanded = false }
-                )
-                DropdownMenuItem(
-                    text = { Text("Ask") },
-                    onClick = { onChange(SitePermissionPref.ASK); expanded = false }
-                )
-                DropdownMenuItem(
-                    text = { Text("Allow") },
-                    onClick = { onChange(SitePermissionPref.ALLOW); expanded = false }
-                )
-                DropdownMenuItem(
-                    text = { Text("Block") },
-                    onClick = { onChange(SitePermissionPref.BLOCK); expanded = false }
-                )
-            }
-        }
-    }
 }
 
 /**
