@@ -90,8 +90,10 @@ class ExtensionInstallPolicyTest {
     fun addressBarAllowsOnlyHttpAndHttpsSchemes() {
         assertEquals("https://example.com", ExtensionBrowserInput.resolve("example.com"))
         assertEquals("http://example.com/path", ExtensionBrowserInput.resolve("http://example.com/path"))
+        assertEquals("https://example.com:8443", ExtensionBrowserInput.resolve("example.com:8443"))
         assertEquals("https://duckduckgo.com/?q=hello+world", ExtensionBrowserInput.resolve("hello world"))
         assertNull(ExtensionBrowserInput.resolve("javascript:alert(1)"))
+        assertNull(ExtensionBrowserInput.resolve("mailto:hello@example.com"))
         assertNull(ExtensionBrowserInput.resolve("file:///etc/passwd"))
         assertNull(ExtensionBrowserInput.resolve("data:text/html,hi"))
     }

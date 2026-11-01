@@ -96,7 +96,12 @@ internal object ExtensionBrowserInput {
             return input
         }
         // Reject javascript:, file:, data:, intent:, and other non-HTTP schemes.
-        if (input.contains("://") || input.substringBefore(':').matches(Regex("^[A-Za-z][A-Za-z0-9+.-]*$"))) {
+        val isDottedHostWithPort = input.contains(':') &&
+            input.substringBefore(':').contains('.') && hostLike.matches(input)
+        val hasNonWebScheme = input.contains("://") ||
+            (input.contains(':') && !isDottedHostWithPort &&
+                input.substringBefore(':').matches(Regex("^[A-Za-z][A-Za-z0-9+.-]*$")))
+        if (hasNonWebScheme) {
             return null
         }
         if (hostLike.matches(input) && input.contains('.')) return "https://$input"
