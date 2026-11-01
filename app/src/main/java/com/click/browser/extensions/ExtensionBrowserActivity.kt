@@ -19,7 +19,6 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.weight
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
@@ -219,7 +218,7 @@ private fun ExtensionBrowserScreen(
     fun refreshExtensions() {
         controller.list().accept(
             { extensions ->
-                val appExtensions = extensions.filterNot { it.isBuiltIn }
+                val appExtensions = extensions.orEmpty().filterNot { it.isBuiltIn }
                 installedExtensionIds = appExtensions.map { it.id }.toSet()
                 extensionListLoaded = true
                 val disallowed = appExtensions.filter { extensionPolicyBlockers(it).isNotEmpty() }
@@ -234,7 +233,7 @@ private fun ExtensionBrowserScreen(
             },
             { error ->
                 extensionListLoaded = false
-                statusMessage = "Couldn't load extensions: ${error.message ?: "unknown error"}"
+                statusMessage = "Couldn't load extensions: ${error?.message ?: "unknown error"}"
             }
         )
     }
@@ -242,11 +241,12 @@ private fun ExtensionBrowserScreen(
     fun sourceDescription(extension: WebExtension): String {
         val metadata = extension.metaData
         val saved = sourcePrefs.getString(extension.id, null)
+        val downloadUrl = metadata.downloadUrl
         return buildList {
             if (!saved.isNullOrBlank()) add(saved)
             if (!metadata.amoListingUrl.isNullOrBlank()) add("Mozilla Add-ons listing: ${metadata.amoListingUrl}")
-            if (!metadata.downloadUrl.isNullOrBlank() && metadata.downloadUrl.startsWith("https://")) {
-                add("Package URL: ${metadata.downloadUrl}")
+            if (!downloadUrl.isNullOrBlank() && downloadUrl.startsWith("https://")) {
+                add("Package URL: $downloadUrl")
             }
         }.distinct().joinToString("\n").ifBlank {
             "User-selected XPI; no listing or download URL was declared in the package."
@@ -262,12 +262,13 @@ private fun ExtensionBrowserScreen(
         decide: (Boolean, Boolean) -> Unit
     ): PendingExtensionPrompt {
         val metadata = extension.metaData
+        val downloadUrl = metadata.downloadUrl
         val publisher = metadata.creatorName.orEmpty().takeIf { it.isNotBlank() } ?: "Not declared"
         val source = buildList {
             selectedFileName?.let { add("Selected local file: $it") }
             if (!metadata.amoListingUrl.isNullOrBlank()) add("Mozilla Add-ons listing: ${metadata.amoListingUrl}")
-            if (!metadata.downloadUrl.isNullOrBlank() && metadata.downloadUrl.startsWith("https://")) {
-                add("Package URL: ${metadata.downloadUrl}")
+            if (!downloadUrl.isNullOrBlank() && downloadUrl.startsWith("https://")) {
+                add("Package URL: $downloadUrl")
             }
         }.distinct().joinToString("\n").ifBlank {
             sourceDescription(extension)
@@ -366,15 +367,16 @@ private fun ExtensionBrowserScreen(
         session.setNavigationDelegate(object : GeckoSession.NavigationDelegate {
             override fun onLocationChange(
                 session: GeckoSession,
-                url: String,
-                permissions: List<GeckoSession.PermissionDelegate.ContentPermission>
+                url: String?,
+                permissions: List<GeckoSession.PermissionDelegate.ContentPermission>,
+                hasUserGesture: Boolean
             ) {
-                address = url
+                if (url != null) address = url
             }
         })
         session.setContentDelegate(object : GeckoSession.ContentDelegate {
-            override fun onTitleChange(session: GeckoSession, newTitle: String) {
-                title = newTitle.ifBlank { "Extension Browser" }
+            override fun onTitleChange(session: GeckoSession, newTitle: String?) {
+                title = newTitle.orEmpty().ifBlank { "Extension Browser" }
             }
         })
         onDispose {
@@ -412,16 +414,22 @@ private fun ExtensionBrowserScreen(
                         WebExtensionController.INSTALLATION_METHOD_FROM_FILE
                     ).accept(
                         { extension ->
-                            sourcePrefs.edit().putString(extension.id, "Local file selected by you: $cleanName").apply()
-                            selectedFileName = null
-                            packageFile.delete()
-                            statusMessage = "Installed ${extension.metaData.name.orEmpty()}. Review its site access in Extensions."
-                            refreshExtensions()
+                            if (extension == null) {
+                                selectedFileName = null
+                                packageFile.delete()
+                                statusMessage = "Install rejected: GeckoView returned no extension."
+                            } else {
+                                sourcePrefs.edit().putString(extension.id, "Local file selected by you: $cleanName").apply()
+                                selectedFileName = null
+                                packageFile.delete()
+                                statusMessage = "Installed ${extension.metaData.name.orEmpty()}. Review its site access in Extensions."
+                                refreshExtensions()
+                            }
                         },
                         { error ->
                             selectedFileName = null
                             packageFile.delete()
-                            statusMessage = "Install rejected: ${error.message?.take(180) ?: "invalid, unsigned, or unsupported XPI"}"
+                            statusMessage = "Install rejected: ${error?.message?.take(180) ?: "invalid, unsigned, or unsupported XPI"}"
                         }
                     )
                 } catch (error: Exception) {
@@ -544,7 +552,7 @@ private fun ExtensionBrowserScreen(
                     }
                     result.accept(
                         { refreshExtensions() },
-                        { error -> statusMessage = "Couldn't update extension: ${error.message ?: "unknown error"}" }
+                        { error -> statusMessage = "Couldn't update extension: ${error?.message ?: "unknown error"}" }
                     )
                 }
             },
@@ -569,7 +577,7 @@ private fun ExtensionBrowserScreen(
                         },
                         { error ->
                             removeTarget = null
-                            statusMessage = "Couldn't remove extension: ${error.message ?: "unknown error"}"
+                            statusMessage = "Couldn't remove extension: ${error?.message ?: "unknown error"}"
                         }
                     )
                 }) { Text("Remove") }
