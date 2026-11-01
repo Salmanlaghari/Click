@@ -90,7 +90,7 @@ internal object PasswordOriginPolicy {
  * WebView message origin and asks the user before persisting anything.
  */
 object PasswordDetector {
-    const val PASSWORD_DETECT_JS = """
+    val PASSWORD_DETECT_JS = """
         (function() {
             if (window.__clickPwHooked) return;
             window.__clickPwHooked = true;
