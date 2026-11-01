@@ -4385,6 +4385,21 @@ class MainActivity : FragmentActivity() {
                                 InteractiveExtensionsDialog(
                                     adblock = adBlockerEnabled,
                                     onToggleAdblock = { adBlockerEnabled = it },
+                                    onOpenExtensionBrowser = {
+                                        showExtensionsManager = false
+                                        val sourceUrl = currentTab.url
+                                        val extensionIntent = Intent(
+                                            this@MainActivity,
+                                            com.click.browser.extensions.ExtensionBrowserActivity::class.java
+                                        )
+                                        if (sourceUrl.startsWith("https://") || sourceUrl.startsWith("http://")) {
+                                            extensionIntent.putExtra(
+                                                com.click.browser.extensions.ExtensionBrowserActivity.EXTRA_START_URL,
+                                                sourceUrl
+                                            )
+                                        }
+                                        startActivity(extensionIntent)
+                                    },
                                     onClose = { showExtensionsManager = false }
                                 )
                             }

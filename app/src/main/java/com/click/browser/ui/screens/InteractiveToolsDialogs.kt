@@ -667,8 +667,7 @@ fun InteractiveImageGalleryDialog(onClose: () -> Unit) {
 }
 
 // ---------------------------------------------------------------------------
-// Quick toggles (previously mislabeled "Extensions Manager"): the two switches
-// are real and wired to the WebView in MainActivity.
+// Built-in quick toggle plus the separately isolated extension browser.
 // ---------------------------------------------------------------------------
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -676,11 +675,12 @@ fun InteractiveImageGalleryDialog(onClose: () -> Unit) {
 fun InteractiveExtensionsDialog(
     adblock: Boolean,
     onToggleAdblock: (Boolean) -> Unit,
+    onOpenExtensionBrowser: () -> Unit,
     onClose: () -> Unit
 ) {
     AlertDialog(
         onDismissRequest = onClose,
-        title = { Text("Quick Toggles", fontWeight = FontWeight.Bold) },
+        title = { Text("Extensions & Quick Toggles", fontWeight = FontWeight.Bold) },
         text = {
             Column(
                 modifier = Modifier
@@ -693,9 +693,22 @@ fun InteractiveExtensionsDialog(
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Text("🧩 AdBlocker", fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                    Text("Built-in AdBlocker", fontWeight = FontWeight.Bold, fontSize = 13.sp)
                     Switch(checked = adblock, onCheckedChange = onToggleAdblock)
                 }
+                Text(
+                    "The four regular browser profiles stay on Android System WebView. Extension browsing opens separately in GeckoView.",
+                    fontSize = 12.sp
+                )
+                Button(onClick = onOpenExtensionBrowser, modifier = Modifier.fillMaxWidth()) {
+                    Icon(Icons.Default.Extension, contentDescription = null, modifier = Modifier.padding(end = 6.dp))
+                    Text("Open Extension Browser")
+                }
+                Text(
+                    "It uses a separate profile and accepts only Mozilla Recommended, fully reviewed, non-blocklisted add-ons from addons.mozilla.org. Chrome .crx and userscripts are not supported. Extensions can still affect the exact HTTPS sites you approve.",
+                    fontSize = 11.sp,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
                 Text(
                     "More toggles (HTTPS-Only, Data Saver, JavaScript) live in the home screen Settings module.",
                     fontSize = 11.sp,
@@ -725,12 +738,13 @@ fun PrivacyPolicyDialog(onClose: () -> Unit) {
                 Text(
                     text = "Click Browser Privacy Policy\n\n" +
                         "• Bookmarks, history, download records, settings and Click's on-device credential vault are kept in app-private storage. Credentials saved to Google Password Manager are handled by Google. Android may include some app data in device backups when backups are enabled; private tabs skip local history recording but are not anonymous.\n\n" +
-                        "• Pages use Android System WebView and your current network or VPN settings. Websites receive the requests needed to load them. Click does not request device location and denies website geolocation, camera and microphone requests; website notifications are not supported. The microphone permission is used only for Click's optional AI voice input.\n\n" +
+                        "• The four regular browser profiles use Android System WebView and your current network or VPN settings. The optional Extension Browser uses GeckoView in a separate profile; its cookies, history and saved passwords are not shared with regular Click tabs. Click denies website geolocation, camera, microphone and notification requests there.\n\n" +
+                        "• The Extension Browser accepts only Mozilla Recommended add-ons that are fully signed, not blocklisted, and listed on addons.mozilla.org. GeckoView validates signatures. Click shows requested permissions and exact HTTPS site access; wildcard, HTTP, local-network, and over-10-site access plus sensitive APIs are blocked. Approved extensions can still read or change the sites they access and may process or send data under their own code and privacy terms. Native messaging, Chrome .crx files and userscripts are not supported.\n\n" +
                         "• HTTPS mode upgrades or blocks navigation URLs according to your setting. HTTPS describes the connection scheme; it does not guarantee that a site is trustworthy. Optional DNT/GPC signals are voluntary and sites may ignore them.\n\n" +
                         "• If you use AI chat, the prompt and recent conversation sent with it go over HTTPS to the selected provider (Groq or OpenRouter). The provider's own privacy terms apply.\n\n" +
                         "• Google sign-in is handled by Google Play services. Click caches the selected profile name, email and photo in app storage and does not operate its own account backend.\n\n" +
                         "• Feedback and crash/bug reports open an email draft with app/device details. Nothing is emailed until you review and send it. Opt-in news alerts periodically fetch selected topics.\n\n" +
-                        "• Click does not run app analytics. All profiles use Android System WebView; local data separation follows the selected profile settings. Click does not substitute device identity.",
+                        "• Click does not run app analytics. The four regular profiles use Android System WebView; the optional extension profile uses GeckoView. Regular-profile data separation follows the selected profile settings. Click does not substitute device identity.",
                     fontSize = 12.sp,
                     lineHeight = 18.sp
                 )
@@ -759,7 +773,7 @@ fun AboutAppDialog(onClose: () -> Unit) {
                 Text("UI Design Built By: Prince Laghari", fontSize = 13.sp, fontWeight = FontWeight.ExtraBold)
                 Spacer(modifier = Modifier.height(12.dp))
                 Text(
-                    "Click Browser is an Android browser with four profiles: Simple, Developer, Power and Advance. All profiles use Android System WebView.",
+                    "Click Browser is an Android browser with four profiles: Simple, Developer, Power and Advance. Those profiles use Android System WebView; an optional Extension Browser uses GeckoView in a separate profile.",
                     fontSize = 11.sp,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
@@ -773,7 +787,7 @@ fun AboutAppDialog(onClose: () -> Unit) {
                 )
                 Spacer(modifier = Modifier.height(4.dp))
                 Text(
-                    "Profiles use Android System WebView; local data separation follows the selected profile settings. Click does not substitute device identity.",
+                    "The four main profiles use Android System WebView; the extension profile is separate. Click does not substitute device identity.",
                     fontSize = 11.sp,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
@@ -786,7 +800,7 @@ fun AboutAppDialog(onClose: () -> Unit) {
                 )
                 Spacer(modifier = Modifier.height(4.dp))
                 Text(
-                    "Click includes Safe Browsing when supported by the installed WebView, HTTPS controls, optional ad/tracker blocking and V9 Shield DNS-layer protection. These tools can reduce some risks, but they cannot guarantee every site is safe. Website geolocation, camera and microphone requests are denied.",
+                    "Click includes Safe Browsing when supported by the installed WebView, HTTPS controls, optional ad/tracker blocking and V9 Shield DNS-layer protection. These tools can reduce some risks, but they cannot guarantee every site is safe. The isolated Extension Browser accepts only Mozilla Recommended, fully reviewed, non-blocklisted add-ons from addons.mozilla.org and limits them to approved exact HTTPS site access. Native messaging and sensitive browser APIs are blocked; extensions can still affect sites they are allowed to access. Website geolocation, camera and microphone requests are denied.",
                     fontSize = 11.sp,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )

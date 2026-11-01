@@ -10,24 +10,20 @@ name: Build and Package APKs
 # source with a version-pinned cache — a fast no-op when the pin in
 # app/libs/libbox.version hasn't changed. Built arm64-only (~28MB vs
 # 112MB universal) since 99%+ of phones are arm64.
-# Job 2 builds and signs the app. No cross-workflow artifact races:
-# everything happens inside this one run.
+# Job 2 runs unsigned, secret-free debug checks on pull requests and builds
+# signed APK/AAB releases only from main. Tags never trigger this workflow.
 
 on:
   push:
     branches: [ main ]
-    tags:
-      - 'v*'
   pull_request:
     branches: [ main ]
   workflow_dispatch:
 
-# The tag build creates a GitHub Release via softprops/action-gh-release,
-# which needs write access to repo contents. Without this block the default
-# GITHUB_TOKEN is read-only and the tag run fails with
-# "Resource not accessible by integration".
+# CI uses read-only repository access. Pull-request builds receive no signing/API
+# secrets; signing and release artifacts are restricted to the protected main ref.
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   build-libbox:
@@ -147,12 +143,27 @@ jobs:
       - name: Run focused browser error-page tests
         run: ./gradlew testDebugUnitTest --tests 'com.click.browser.ui.screens.BrowserErrorPageTest'
 
+      - name: Build main-branch merged manifest baseline
+        if: github.event_name == 'pull_request'
+        env:
+          GROQ_API_KEY: ci-placeholder-no-secret
+        run: |
+          git fetch --no-tags origin main:refs/remotes/origin/main
+          git worktree add --detach "$RUNNER_TEMP/click-main" origin/main
+          mkdir -p "$RUNNER_TEMP/click-main/app/libs"
+          cp app/libs/libbox.aar "$RUNNER_TEMP/click-main/app/libs/libbox.aar"
+          (cd "$RUNNER_TEMP/click-main" && ./gradlew :app:processDebugMainManifest)
+          BASE_MANIFEST=$(find "$RUNNER_TEMP/click-main/app/build/intermediates/merged_manifest" -type f -name AndroidManifest.xml -print -quit)
+          test -n "$BASE_MANIFEST"
+          cp "$BASE_MANIFEST" "$RUNNER_TEMP/main-merged-manifest.xml"
+
       # NOTE: AGP generates the debug keystore automatically — no manual step needed.
       # Release APKs MUST be signed with Prince's real keystore. A debug-signed
       # "release" APK trips the in-app tamper warning on install — so we fail
       # loudly instead of silently shipping a wrongly-signed artifact
-      # (Prince's rule: no improperly signed APKs, ever).
+      # (Prince's rule: no improperly-signed APKs, ever).
       - name: Setup release signing (real keystore)
+        if: github.ref == 'refs/heads/main'
         env:
           KEYSTORE_B64: ${{ secrets.CLICK_KEYSTORE_BASE64 }}
           KEYSTORE_PASSWORD: ${{ secrets.CLICK_KEYSTORE_PASSWORD }}
@@ -192,25 +203,35 @@ jobs:
         run: chmod +x gradlew
 
       - name: Run unit tests
+        env:
+          GROQ_API_KEY: ci-placeholder-no-secret
         run: ./gradlew :app:testDebugUnitTest
 
       - name: Build Debug APK
         env:
-          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+          GROQ_API_KEY: ${{ github.ref == 'refs/heads/main' && secrets.GROQ_API_KEY || 'ci-placeholder-no-secret' }}
         run: ./gradlew assembleDebug
 
       - name: Run focused browser URL input tests
         run: ./gradlew testDebugUnitTest --tests 'com.click.browser.ui.screens.BrowserUrlInputTest'
 
+      - name: Verify merged Android permissions unchanged
+        if: github.event_name == 'pull_request'
+        run: |
+          CURRENT_MANIFEST=$(find app/build/intermediates/merged_manifest/debug -type f -name AndroidManifest.xml -print -quit)
+          test -n "$CURRENT_MANIFEST"
+          python3 scripts/compare-manifest-permissions.py "$RUNNER_TEMP/main-merged-manifest.xml" "$CURRENT_MANIFEST"
+
       - name: Build Debug AAB
         env:
-          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+          GROQ_API_KEY: ${{ github.ref == 'refs/heads/main' && secrets.GROQ_API_KEY || 'ci-placeholder-no-secret' }}
         run: ./gradlew bundleDebug
 
       - name: Run focused legacy cleanup tests
         run: ./gradlew testDebugUnitTest --tests 'com.click.browser.engine.LegacyCleanupOnceTest'
 
       - name: Build Release APK
+        if: github.ref == 'refs/heads/main'
         env:
           GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
           CLICK_KEYSTORE_FILE: ${{ env.CLICK_KEYSTORE_FILE }}
@@ -220,6 +241,7 @@ jobs:
         run: ./gradlew assembleRelease --stacktrace
 
       - name: Build Release AAB
+        if: github.ref == 'refs/heads/main'
         env:
           GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
           CLICK_KEYSTORE_FILE: ${{ env.CLICK_KEYSTORE_FILE }}
@@ -229,6 +251,7 @@ jobs:
         run: ./gradlew bundleRelease
 
       - name: Verify release signature (must be Prince's key)
+        if: github.ref == 'refs/heads/main'
         run: |
           APKSIGNER=$(echo "$ANDROID_HOME"/build-tools/*/apksigner | tr ' ' '\n' | sort -V | tail -1)
           "$APKSIGNER" verify --print-certs app/build/outputs/apk/release/app-release.apk | grep -E "Signer #1|SHA-256"
@@ -248,6 +271,7 @@ jobs:
           retention-days: 30
 
       - name: Upload Release APK
+        if: github.ref == 'refs/heads/main'
         uses: actions/upload-artifact@v4
         with:
           name: Click-Browser-Release
@@ -255,27 +279,9 @@ jobs:
           retention-days: 90
 
       - name: Upload Release AAB
+        if: github.ref == 'refs/heads/main'
         uses: actions/upload-artifact@v4
         with:
           name: Click-Browser-Release-AAB
           path: app/build/outputs/bundle/release/app-release.aab
           retention-days: 90
-
-      - name: Create GitHub Release
-        uses: softprops/action-gh-release@v1
-        if: startsWith(github.ref, 'refs/tags/')
-        with:
-          name: Click Browser ${{ github.ref_name }}
-          body: |
-            ## Click Browser ${{ github.ref_name }}
-            - API 36 (Android 16), edge-to-edge, predictive back
-            - Simple / Developer / Power / Advance browser-data profiles on Android System WebView
-            - Real AI chat (Groq/OpenRouter, user-provided key)
-            - Ad blocking, HTTPS settings, private browsing and standard downloads
-            - Page inspection with a read-only console
-            - Pull-to-refresh, fullscreen view, per-site desktop toggle
-          files: |
-            app/build/outputs/apk/debug/app-debug.apk
-            app/build/outputs/bundle/debug/app-debug.aab
-            app/build/outputs/apk/release/app-release.apk
-            app/build/outputs/bundle/release/app-release.aab
