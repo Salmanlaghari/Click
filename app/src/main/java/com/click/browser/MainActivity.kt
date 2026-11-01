@@ -290,11 +290,11 @@ class MainActivity : FragmentActivity() {
     }
     // Crash-restore: latest restorable-tab snapshot for this boot mode, kept
     // outside composable scope so onDestroy() and v9SwitchMode() can persist
-    // it and mark clean exits without touching UI state. The mirror is
-    // refreshed synchronously on every tab change (see the snapshot saver) —
-    // only the DataStore write is debounced — so it never lags behind.
+    // it and mark clean exits without touching UI state. The mirror is updated
+    // after composition; only the DataStore write is debounced.
     private var liveRestoreTabs: List<SavedTab> = emptyList()
     private var liveRestoreActiveIndex: Int = 0
+    @Volatile private var modeSwitchInProgress: Boolean = false
 
     /**
      * Builds the restorable-tab snapshot from live tab state: drops
@@ -956,6 +956,14 @@ class MainActivity : FragmentActivity() {
             val tabs = remember { mutableStateListOf<TabItem>(TabItem(url = startViewUrl ?: homeUrl(), title = "New Tab")) }
             var activeTabIndex by remember { mutableStateOf(0) }
             val currentTab = tabs.getOrNull(activeTabIndex) ?: TabItem(url = "about:blank")
+            SideEffect {
+                val (snapshot, active) = buildRestorableSnapshot(
+                    tabs.map { Triple(it.url, it.title, it.isIncognito) },
+                    activeTabIndex
+                )
+                liveRestoreTabs = snapshot
+                liveRestoreActiveIndex = active
+            }
 
             var showTabsManager by remember { mutableStateOf(false) }
             // Chrome/Mises-style browser menu (bottom sheet) + recent tabs +
@@ -1047,6 +1055,7 @@ class MainActivity : FragmentActivity() {
             var showRestoreDialog by remember { mutableStateOf(false) }
             var crashedTabs by remember { mutableStateOf<List<SavedTab>>(emptyList()) }
             var crashedActiveIndex by remember { mutableStateOf(0) }
+            var sessionStartupReady by remember { mutableStateOf(false) }
             // Gated by the flags-loading effect below: the session saver and
             // the restore check must not read liveFlags.clearOnExit before
             // DataStore has delivered the real value (LaunchedEffect order
@@ -1078,23 +1087,41 @@ class MainActivity : FragmentActivity() {
                 }
             }
 
-            // Crash-restore startup check: if the previous run for THIS boot
-            // mode did not exit cleanly and a tab snapshot exists, offer to
-            // restore it. Never crosses modes — each mode keeps its own
-            // snapshot in its own profile store (isolation is a feature).
-            // Waits for flagsLoaded: liveFlags.clearOnExit must come from
-            // DataStore, not its default, before we decide.
+            // Restore the current profile's own tabs after an intentional mode
+            // switch; only an unclean exit shows the crash-recovery prompt.
+            // The session saver waits for this decision so it cannot overwrite
+            // a snapshot with the initial New Tab before it is restored.
             LaunchedEffect(Unit) {
                 snapshotFlow { flagsLoaded }.first { it }
                 val bootMode = V9Engine.bootMode
                 val clean = SessionRestore.wasCleanExit(this@MainActivity, bootMode)
+                val modeSwitchPending = SessionRestore.consumeModeSwitchRestore(
+                    this@MainActivity, bootMode
+                )
                 val (saved, savedActive) = SessionRestore.loadSession(this@MainActivity, bootMode)
                 // From here on, assume this run may die uncleanly.
                 SessionRestore.markCleanExit(this@MainActivity, bootMode, false)
-                if (!clean && saved.isNotEmpty() && !liveFlags.clearOnExit) {
-                    crashedTabs = saved
-                    crashedActiveIndex = savedActive
-                    showRestoreDialog = true
+                when (
+                    sessionRestoreStartupAction(
+                        previousExitWasClean = clean,
+                        modeSwitchRestorePending = modeSwitchPending,
+                        savedTabCount = saved.size,
+                        clearOnExit = liveFlags.clearOnExit,
+                        externalStartUrlPresent = startViewUrl != null
+                    )
+                ) {
+                    SessionRestoreStartupAction.AUTOMATIC_MODE_RESTORE -> {
+                        tabs.clear()
+                        tabs.addAll(saved.map { TabItem(url = it.url, title = it.title) })
+                        activeTabIndex = savedActive.coerceIn(0, (tabs.size - 1).coerceAtLeast(0))
+                        sessionStartupReady = true
+                    }
+                    SessionRestoreStartupAction.CRASH_RECOVERY_PROMPT -> {
+                        crashedTabs = saved
+                        crashedActiveIndex = savedActive
+                        showRestoreDialog = true
+                    }
+                    SessionRestoreStartupAction.NONE -> sessionStartupReady = true
                 }
             }
 
@@ -1109,14 +1136,14 @@ class MainActivity : FragmentActivity() {
                 // Wait for experimental flags: reading liveFlags.clearOnExit
                 // before DataStore loads would use the default (false).
                 snapshotFlow { flagsLoaded }.first { it }
+                snapshotFlow { sessionStartupReady }.first { it }
                 snapshotFlow { tabs.map { Triple(it.url, it.title, it.isIncognito) } to activeTabIndex }
                     .collect { (tabStates, activeIdx) ->
                         val (snapshot, active) = buildRestorableSnapshot(tabStates, activeIdx)
-                        liveRestoreTabs = snapshot
-                        liveRestoreActiveIndex = active
                         // Biometric lock bookkeeping: does an incognito tab exist right now?
                         liveHasIncognitoTabs = tabStates.any { it.third }
                         delay(1000) // trailing-edge debounce: rapid edits collapse into one write
+                        if (modeSwitchInProgress) return@collect
                         val bootMode = V9Engine.bootMode
                         if (liveFlags.clearOnExit) {
                             SessionRestore.clearSession(this@MainActivity, bootMode)
@@ -1435,7 +1462,7 @@ class MainActivity : FragmentActivity() {
 
             // Dev tools states
             var elementInspectorEnabled by remember { mutableStateOf(false) }
-            var deviceEmulatorMode by remember { mutableStateOf("Desktop") } // Mobile, Tablet, Desktop
+            var deviceEmulatorMode by remember { mutableStateOf("Mobile") } // Mobile, Tablet, Desktop
             var pageLoadTime by remember { mutableStateOf(0L) }
             var lastPageStart by remember { mutableStateOf(0L) }
             var showDebugOverlay by remember { mutableStateOf(true) }
@@ -2658,7 +2685,7 @@ class MainActivity : FragmentActivity() {
                             @Composable
                             fun BrowseTopBarBlock() {
                                 Column {
-                                    if (!immersiveMode) {
+                                    if (!immersiveMode && showOverlays) {
                                         TabStrip(
                                             tabs = tabs,
                                             activeTabIndex = activeTabIndex,
@@ -2681,6 +2708,7 @@ class MainActivity : FragmentActivity() {
                                             Column {
                                                 CompactBrowseBar(
                                                     theme = themed,
+                                                    activeMode = activeMode,
                                                     currentUrl = if (showOverlays) "" else currentTab.url,
                                                     searchEngine = currentSearchEngineSetting,
                                                     onNavigate = { input ->
@@ -2689,6 +2717,10 @@ class MainActivity : FragmentActivity() {
                                                         currentTab.webView?.loadUrl(destination)
                                                     },
                                                     onReload = { currentTab.webView?.reload() },
+                                                    onNewTab = {
+                                                        tabs.add(TabItem(url = homeUrl(), title = "New Tab"))
+                                                        activeTabIndex = tabs.lastIndex
+                                                    },
                                                     onMenuClick = { showBrowserMenu = true },
                                                     onSiteSettingsClick = { showSiteSettings = true },
                                                     // 2026 style: sidebar (drawer) accessible from top bar.
@@ -2723,11 +2755,9 @@ class MainActivity : FragmentActivity() {
 
                             Column(modifier = Modifier.fillMaxSize()) {
 
-                                // PREMIUM UI v2 — Chrome-like single-row top bar (Prince-approved
-                                // design): back, forward, rounded address bar, tab-count badge,
-                                // ⋮ browser menu. The old 2-row bar + separate tab strip are
-                                // gone; the counter opens the visual tab switcher, and the
-                                // bottom-left FAB menu replaces the top hamburger.
+                                // Premium browser chrome: web pages use the compact address
+                                // row and visual tab switcher; the tab strip stays on the
+                                // new-tab surface. Simple keeps its bottom navigation compact.
                                 // SURFACE 2 — Browsing: compact address bar + privacy strip.
                                 // Home keeps the same tab/address chrome, plus its own
                                 // prominent search field below the greeting.
@@ -3664,6 +3694,7 @@ class MainActivity : FragmentActivity() {
                                 ) { themed ->
                                     BrowseBottomNav(
                                         theme = themed,
+                                        activeMode = activeMode,
                                         tabCount = tabs.size,
                                         canGoBack = currentTab.webView?.canGoBack() == true,
                                         canGoForward = currentTab.webView?.canGoForward() == true,
@@ -3935,6 +3966,7 @@ class MainActivity : FragmentActivity() {
                                             SessionRestore.clearSession(
                                                 this@MainActivity, V9Engine.bootMode
                                             )
+                                            sessionStartupReady = true
                                         }
                                     },
                                     title = {
@@ -3957,6 +3989,7 @@ class MainActivity : FragmentActivity() {
                                             activeTabIndex = crashedActiveIndex.coerceIn(
                                                 0, (tabs.size - 1).coerceAtLeast(0)
                                             )
+                                            sessionStartupReady = true
                                         }) {
                                             androidx.compose.material3.Text("Restore")
                                         }
@@ -3968,6 +4001,7 @@ class MainActivity : FragmentActivity() {
                                                 SessionRestore.clearSession(
                                                     this@MainActivity, V9Engine.bootMode
                                                 )
+                                                sessionStartupReady = true
                                             }
                                         }) {
                                             androidx.compose.material3.Text("Start fresh")
@@ -5435,14 +5469,20 @@ class MainActivity : FragmentActivity() {
         android.widget.Toast.makeText(
             this, toastMsg, android.widget.Toast.LENGTH_LONG
         ).show()
-        // Crash-restore: an intentional engine switch is a CLEAN exit of the
-        // source mode — persist its final tab snapshot and mark it clean so
-        // switching Simple→Power→Simple restores Simple's tabs instead of
-        // offering a phantom "crash" restore. Per-mode keys keep isolation.
-        // liveRestoreTabs is refreshed synchronously on every tab change
-        // (only the DataStore write is debounced), so this is never stale.
+        // An intentional profile switch saves the source profile's own tabs,
+        // arms its one-shot restore marker, and marks the exit clean. Returning
+        // to that profile restores those tabs without a crash prompt. The
+        // mirror is refreshed after composition; only its DataStore write is
+        // debounced. Clear-on-exit still removes the snapshot and marker.
         val sourceMode = V9Engine.bootMode
-        SessionRestore.saveSession(this, sourceMode, liveRestoreTabs, liveRestoreActiveIndex)
+        modeSwitchInProgress = true
+        if (liveFlags.clearOnExit) {
+            SessionRestore.clearSession(this, sourceMode)
+        } else {
+            SessionRestore.saveSessionForModeSwitch(
+                this, sourceMode, liveRestoreTabs, liveRestoreActiveIndex
+            )
+        }
         SessionRestore.markCleanExit(this, sourceMode, true)
         val restarted = V9Engine.restartForEngineSwitch(
             this, modeManager, mode,
@@ -5450,6 +5490,8 @@ class MainActivity : FragmentActivity() {
             advanceIntro = (mode == BrowserMode.ADVANCED) && liveAdvanceIntroEnabled
         )
         if (!restarted) {
+            SessionRestore.clearModeSwitchRestore(this, sourceMode)
+            modeSwitchInProgress = false
             // Restart wasn't possible (alarm unavailable etc.) — apply the
             // mode in-place WITHOUT engine isolation rather than killing
             // the app. Cookies stay shared, but the app stays alive.

@@ -1196,17 +1196,19 @@ fun homeGreeting(): String {
 
 /* ---------------------------------------------------------------------------
  * SURFACE 2 — Browsing (webpage open). Distinct from Home:
- *  compact URL bar · privacy strip · WebView focus · floating AI button ·
- *  bottom nav = Back/Forward/Home/Tabs/Menu (no center AI tab).
+ *  compact URL bar · WebView focus · floating AI button. Simple uses a
+ *  compact Home + Previous/Next footer; other profiles retain the full nav.
  * --------------------------------------------------------------------------- */
 
 /**
  * 2026-style premium address bar for the browsing surface.
  *
- * Layout: [☰ Sidebar] [🔒 provider + URL field] [↻] [▭ Tabs] [⋮]
+ * Layout: [☰ Sidebar] [🔒 URL field] [＋ new tab in Simple / ↻ elsewhere] [▭ Tabs] [⋮]
  * - Hamburger opens the navigation drawer (sidebar) — restores sidebar access
  *   directly from the top bar, 2026 browser style.
  * - Elevated URL field with soft shadow (not just a border).
+ * - Search-provider branding appears on the new-tab search field; loaded pages
+ *   show their site security affordance instead.
  * - Tab counter button for quick tab switching.
  * - Mode-aware accent colors, refined touch targets.
  *
@@ -1220,10 +1222,12 @@ internal fun tabBadgeText(count: Int): String =
 @Composable
 fun CompactBrowseBar(
     theme: ModeTheme,
+    activeMode: BrowserMode,
     currentUrl: String,
     searchEngine: String,
     onNavigate: (String) -> Unit,
     onReload: () -> Unit,
+    onNewTab: () -> Unit,
     onMenuClick: () -> Unit,
     onSiteSettingsClick: () -> Unit = {},
     // Kilo: these are required (no defaults) so missing wiring fails at
@@ -1314,7 +1318,9 @@ fun CompactBrowseBar(
                             )
                         }
                     }
-                    SearchEngineBadge(engine = searchEngine, theme = theme, compact = true)
+                    if (currentUrl.isBlank()) {
+                        SearchEngineBadge(engine = searchEngine, theme = theme, compact = true)
+                    }
                     androidx.compose.foundation.text.BasicTextField(
                         value = textInput,
                         onValueChange = { textInput = it },
@@ -1365,16 +1371,28 @@ fun CompactBrowseBar(
                 }
             }
             Spacer(modifier = Modifier.width(4.dp))
-            // Reload button.
-            // Kilo: never wipes what the user typed — the field resets via
-            // remember(currentUrl) when the URL actually changes.
-            IconButton(onClick = onReload, modifier = Modifier.size(40.dp)) {
-                Icon(
-                    Icons.Default.Refresh,
-                    contentDescription = "Reload",
-                    tint = theme.onTopBar,
-                    modifier = Modifier.size(22.dp)
-                )
+            // On Simple's web surface the approved compact row uses a direct
+            // new-tab affordance; reload remains available in the browser drawer.
+            if (activeMode == BrowserMode.SIMPLE && currentUrl.isNotBlank()) {
+                IconButton(onClick = onNewTab, modifier = Modifier.size(40.dp)) {
+                    Icon(
+                        Icons.Default.Add,
+                        contentDescription = "New tab",
+                        tint = theme.onTopBar,
+                        modifier = Modifier.size(22.dp)
+                    )
+                }
+            } else {
+                // Kilo: never wipes what the user typed — the field resets via
+                // remember(currentUrl) when the URL actually changes.
+                IconButton(onClick = onReload, modifier = Modifier.size(40.dp)) {
+                    Icon(
+                        Icons.Default.Refresh,
+                        contentDescription = "Reload",
+                        tint = theme.onTopBar,
+                        modifier = Modifier.size(22.dp)
+                    )
+                }
             }
             // Tab counter button (2026 style: quick tab access from top bar).
             IconButton(onClick = onTabsClick, modifier = Modifier.size(40.dp)) {
@@ -1571,8 +1589,8 @@ private fun AiPopupItem(
 }
 
 /**
- * Bottom nav for the browsing surface: ☰ Menu(drawer) · ‹ Back · › Forward ·
- * ⌂ Home · ▭ Tabs (live count badge) · ⋮ More.
+ * Bottom nav for the browsing surface. Simple uses ⌂ Home plus the approved
+ * Previous/Next pill; other modes retain the full drawer, navigation, tab, and menu footer.
  * Per the "Same Website. 3 Beautiful Modes." reference image — compact icons +
  * labels, mode-aware colors. (No center AI tab here — AI lives in the floating pill.)
  *
@@ -1583,6 +1601,7 @@ private fun AiPopupItem(
 @Composable
 fun BrowseBottomNav(
     theme: ModeTheme,
+    activeMode: BrowserMode,
     tabCount: Int,
     canGoBack: Boolean,
     canGoForward: Boolean,
@@ -1622,79 +1641,134 @@ fun BrowseBottomNav(
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 2.dp, vertical = 3.dp),
-            horizontalArrangement = Arrangement.SpaceEvenly,
+                .padding(
+                    horizontal = if (activeMode == BrowserMode.SIMPLE) 12.dp else 2.dp,
+                    vertical = if (activeMode == BrowserMode.SIMPLE) 6.dp else 3.dp
+                ),
+            horizontalArrangement = if (activeMode == BrowserMode.SIMPLE) {
+                Arrangement.spacedBy(10.dp)
+            } else {
+                Arrangement.SpaceEvenly
+            },
             verticalAlignment = Alignment.CenterVertically
         ) {
-            BrowseNavButton(
-                icon = Icons.Default.Menu, label = "Menu",
-                enabled = true, theme = theme, onClick = onDrawerClick
-            )
-            Surface(
-                shape = RoundedCornerShape(24.dp),
-                color = theme.surfaceVariant.copy(alpha = 0.72f),
-                border = androidx.compose.foundation.BorderStroke(1.dp, theme.primary.copy(alpha = 0.22f)),
-                modifier = Modifier.weight(1.55f).padding(horizontal = 4.dp)
-            ) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    val backTint = if (canGoBack) theme.onSurface else theme.onSurface.copy(alpha = 0.35f)
-                    val forwardTint = if (canGoForward) theme.onSurface else theme.onSurface.copy(alpha = 0.35f)
-                    Row(
-                        modifier = Modifier
-                            .weight(1f)
-                            .clickable(enabled = canGoBack, onClick = onBack)
-                            .padding(horizontal = 5.dp, vertical = 10.dp),
-                        horizontalArrangement = Arrangement.Center,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Previous", tint = backTint, modifier = Modifier.size(16.dp))
-                        Spacer(Modifier.width(3.dp))
-                        Text("Previous", color = backTint, fontSize = 10.sp, maxLines = 1)
-                    }
-                    Box(Modifier.width(1.dp).height(20.dp).background(theme.onSurface.copy(alpha = 0.16f)))
-                    Row(
-                        modifier = Modifier
-                            .weight(1f)
-                            .clickable(enabled = canGoForward, onClick = onForward)
-                            .padding(horizontal = 5.dp, vertical = 10.dp),
-                        horizontalArrangement = Arrangement.Center,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Text("Next", color = forwardTint, fontSize = 10.sp, maxLines = 1)
-                        Spacer(Modifier.width(3.dp))
-                        Icon(Icons.AutoMirrored.Filled.ArrowForward, contentDescription = "Next", tint = forwardTint, modifier = Modifier.size(16.dp))
+            if (activeMode == BrowserMode.SIMPLE) {
+                BrowseNavButton(
+                    icon = Icons.Default.Home,
+                    label = "Home",
+                    enabled = true,
+                    theme = theme,
+                    onClick = onHome
+                )
+                Surface(
+                    shape = RoundedCornerShape(24.dp),
+                    color = theme.surfaceVariant.copy(alpha = 0.72f),
+                    border = androidx.compose.foundation.BorderStroke(
+                        1.dp, theme.primary.copy(alpha = 0.22f)
+                    ),
+                    modifier = Modifier.weight(1f)
+                ) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        val backTint = if (canGoBack) theme.onSurface else theme.onSurface.copy(alpha = 0.35f)
+                        val forwardTint = if (canGoForward) theme.onSurface else theme.onSurface.copy(alpha = 0.35f)
+                        Row(
+                            modifier = Modifier
+                                .weight(1f)
+                                .clickable(enabled = canGoBack, onClick = onBack)
+                                .padding(horizontal = 5.dp, vertical = 10.dp),
+                            horizontalArrangement = Arrangement.Center,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Previous", tint = backTint, modifier = Modifier.size(16.dp))
+                            Spacer(Modifier.width(3.dp))
+                            Text("Previous", color = backTint, fontSize = 10.sp, maxLines = 1)
+                        }
+                        Box(Modifier.width(1.dp).height(20.dp).background(theme.onSurface.copy(alpha = 0.16f)))
+                        Row(
+                            modifier = Modifier
+                                .weight(1f)
+                                .clickable(enabled = canGoForward, onClick = onForward)
+                                .padding(horizontal = 5.dp, vertical = 10.dp),
+                            horizontalArrangement = Arrangement.Center,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text("Next", color = forwardTint, fontSize = 10.sp, maxLines = 1)
+                            Spacer(Modifier.width(3.dp))
+                            Icon(Icons.AutoMirrored.Filled.ArrowForward, contentDescription = "Next", tint = forwardTint, modifier = Modifier.size(16.dp))
+                        }
                     }
                 }
-            }
-            BrowseNavButton(
-                icon = Icons.Default.Home, label = "Home",
-                enabled = true, theme = theme, onClick = onHome,
-                highlight = true
-            )
-            BadgedBox(
-                badge = {
-                    Badge(
-                        containerColor = theme.primary,
-                        contentColor = Color.White,
-                        modifier = Modifier.graphicsLayer {
-                            scaleX = badgeScale.value
-                            scaleY = badgeScale.value
+            } else {
+                BrowseNavButton(
+                    icon = Icons.Default.Menu, label = "Menu",
+                    enabled = true, theme = theme, onClick = onDrawerClick
+                )
+                Surface(
+                    shape = RoundedCornerShape(24.dp),
+                    color = theme.surfaceVariant.copy(alpha = 0.72f),
+                    border = androidx.compose.foundation.BorderStroke(1.dp, theme.primary.copy(alpha = 0.22f)),
+                    modifier = Modifier.weight(1.55f).padding(horizontal = 4.dp)
+                ) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        val backTint = if (canGoBack) theme.onSurface else theme.onSurface.copy(alpha = 0.35f)
+                        val forwardTint = if (canGoForward) theme.onSurface else theme.onSurface.copy(alpha = 0.35f)
+                        Row(
+                            modifier = Modifier
+                                .weight(1f)
+                                .clickable(enabled = canGoBack, onClick = onBack)
+                                .padding(horizontal = 5.dp, vertical = 10.dp),
+                            horizontalArrangement = Arrangement.Center,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Previous", tint = backTint, modifier = Modifier.size(16.dp))
+                            Spacer(Modifier.width(3.dp))
+                            Text("Previous", color = backTint, fontSize = 10.sp, maxLines = 1)
                         }
-                    ) {
-                        Text(tabBadgeText(tabCount), fontSize = 9.sp)
+                        Box(Modifier.width(1.dp).height(20.dp).background(theme.onSurface.copy(alpha = 0.16f)))
+                        Row(
+                            modifier = Modifier
+                                .weight(1f)
+                                .clickable(enabled = canGoForward, onClick = onForward)
+                                .padding(horizontal = 5.dp, vertical = 10.dp),
+                            horizontalArrangement = Arrangement.Center,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text("Next", color = forwardTint, fontSize = 10.sp, maxLines = 1)
+                            Spacer(Modifier.width(3.dp))
+                            Icon(Icons.AutoMirrored.Filled.ArrowForward, contentDescription = "Next", tint = forwardTint, modifier = Modifier.size(16.dp))
+                        }
                     }
-                },
-                modifier = Modifier.clickable(
-                    interactionSource = remember { MutableInteractionSource() },
-                    indication = null
-                ) { onTabs() }
-            ) {
-                BrowseNavContent(icon = Icons.Default.Tab, label = "Tabs", enabled = true, theme = theme)
+                }
+                BrowseNavButton(
+                    icon = Icons.Default.Home, label = "Home",
+                    enabled = true, theme = theme, onClick = onHome,
+                    highlight = true
+                )
+                BadgedBox(
+                    badge = {
+                        Badge(
+                            containerColor = theme.primary,
+                            contentColor = Color.White,
+                            modifier = Modifier.graphicsLayer {
+                                scaleX = badgeScale.value
+                                scaleY = badgeScale.value
+                            }
+                        ) {
+                            Text(tabBadgeText(tabCount), fontSize = 9.sp)
+                        }
+                    },
+                    modifier = Modifier.clickable(
+                        interactionSource = remember { MutableInteractionSource() },
+                        indication = null
+                    ) { onTabs() }
+                ) {
+                    BrowseNavContent(icon = Icons.Default.Tab, label = "Tabs", enabled = true, theme = theme)
+                }
+                BrowseNavButton(
+                    icon = Icons.Default.MoreVert, label = "More",
+                    enabled = true, theme = theme, onClick = onMenu
+                )
             }
-            BrowseNavButton(
-                icon = Icons.Default.MoreVert, label = "More",
-                enabled = true, theme = theme, onClick = onMenu
-            )
         }
     }
 }

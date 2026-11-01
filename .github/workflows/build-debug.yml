@@ -188,6 +188,9 @@ jobs:
       - name: Grant Gradle Permission
         run: chmod +x gradlew
 
+      - name: Run unit tests
+        run: ./gradlew :app:testDebugUnitTest
+
       - name: Build Debug APK
         env:
           GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
