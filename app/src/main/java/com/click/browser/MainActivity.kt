@@ -109,7 +109,6 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
 import okhttp3.Request
-import java.net.URLEncoder
 import java.util.Locale
 import java.util.concurrent.TimeUnit
 
@@ -5405,23 +5404,10 @@ class MainActivity : FragmentActivity() {
         return result
     }
 
-    private fun formatUrl(input: String, searchEngine: String): String {
-        val trimmed = input.trim()
-        // click:// internal pages (chrome://-style): pass through (normalized
-        // to lowercase) so shouldOverrideUrlLoading can intercept them into
-        // native screens.
-        if (trimmed.startsWith("click://", ignoreCase = true)) {
-            return trimmed.lowercase()
+    private fun formatUrl(input: String, searchEngine: String): String =
+        formatBrowserInputUrl(input, searchEngine) { engine, query ->
+            ModePersonalization.searchUrl(engine, query)
         }
-        if (trimmed.startsWith("http://") || trimmed.startsWith("https://")) {
-            return trimmed
-        }
-        if (trimmed.contains(".") && !trimmed.contains(" ")) {
-            return "https://$trimmed"
-        }
-        val query = URLEncoder.encode(trimmed, "UTF-8")
-        return ModePersonalization.searchUrl(searchEngine, query)
-    }
 
     /**
      * Switching modes selects browser-data profiles. Each profile (Simple /
