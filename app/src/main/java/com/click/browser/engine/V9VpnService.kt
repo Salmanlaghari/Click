@@ -29,8 +29,9 @@ import kotlin.concurrent.thread
  * V9 Shield — device-level DNS protection.
  *
  * HONEST CAPABILITY STATEMENT (do not oversell this):
- * - YES: all DNS on the device is answered over encrypted DNS-over-HTTPS
- *   (Cloudflare / Google / custom) — no plaintext port-53 leaks while on.
+ * - YES: Shield attempts DNS-over-HTTPS (Cloudflare / Google / custom).
+ *   By default, failed DoH requests fall back to plain DNS; Strict DNS disables
+ *   that fallback and returns SERVFAIL instead.
  * - YES: known ad / tracker / malware domains are sinkholed at the DNS
  *   layer (see [V9Blocklist]).
  * - YES: per-mode toggle, persistent notification, clean start/stop.
@@ -67,7 +68,7 @@ class V9VpnService : VpnService() {
     private val ipId = AtomicInteger(1)
     private val queryCount = AtomicLong(0)
     private val blockedCount = AtomicLong(0)
-    // Fail-open safety: track consecutive DoH failures.
+    // Track consecutive DoH failures for a user-visible degraded-mode notice.
     private val dohFailStreak = AtomicInteger(0)
     private val dohOkStreak = AtomicInteger(0)
     @Volatile private var dohDegradedNotified = false
@@ -164,7 +165,7 @@ class V9VpnService : VpnService() {
         val b = NotificationCompat.Builder(this, CHANNEL_ID)
             .setSmallIcon(R.mipmap.ic_launcher)
             .setContentTitle("V9 Shield is on")
-            .setContentText("Encrypted DNS + tracker blocking active")
+            .setContentText("DNS protection + tracker blocking active")
             .setOngoing(true)
             .addAction(0, "Stop", stopPi)
         if (openPi != null) b.setContentIntent(openPi)
@@ -214,33 +215,40 @@ class V9VpnService : VpnService() {
             _blocked.value = blockedCount.get()
             buildDnsResponse(query, sinkhole = true)
         } else {
-            val (provider, customUrl) = dohConfig()
-            var ips = V9DohResolver.resolve(query.name, query.qtype, provider, customUrl)
-            if (ips.isNotEmpty()) {
+            val (provider, customUrl, strictDns) = dohConfig()
+            val ips = V9DohResolver.resolveOrNull(query.name, query.qtype, provider, customUrl)
+            if (ips != null) {
                 dohFailStreak.set(0)
                 if (dohOkStreak.incrementAndGet() >= 10) dohDegradedNotified = false
             } else {
-                // DoH failed — FAIL-OPEN: forward the raw query over plain UDP
-                // via a protected socket so browsing never breaks.
+                // DoH failed. Preserve plain-DNS fallback unless the user
+                // explicitly enabled Strict DNS.
                 val fails = dohFailStreak.incrementAndGet()
                 dohOkStreak.set(0)
-                Log.w(TAG, "DoH failed for ${query.name} (streak=$fails), fail-open via UDP")
+                Log.w(TAG, "DoH failed for ${query.name} (streak=$fails, strictDns=$strictDns)")
                 if (fails == 5 && !dohDegradedNotified) {
                     dohDegradedNotified = true
-                    notifyDnsDegraded()
+                    notifyDnsDegraded(strictDns)
                 }
-                ips = emptyList()
             }
             val rawQuery = buf.copyOfRange(dnsOff, len)
-            val relayed = if (ips.isEmpty()) forwardViaUdp(rawQuery) else null
-            if (relayed != null) {
-                // Relay the upstream response, fixing the TXID to ours.
-                relayed[0] = buf[dnsOff]
-                relayed[1] = buf[dnsOff + 1]
-                relayed
-            } else {
-                buildDnsResponse(query, ips = ips)
-            }
+            DnsResolutionPolicy.resolve(
+                dohSucceeded = ips != null,
+                strictDns = strictDns,
+                onDoh = { buildDnsResponse(query, ips = ips.orEmpty()) },
+                onPlainDnsFallback = {
+                    val relayed = forwardViaUdp(rawQuery)
+                    if (relayed != null) {
+                        // Relay the upstream response, fixing the TXID to ours.
+                        relayed[0] = buf[dnsOff]
+                        relayed[1] = buf[dnsOff + 1]
+                        relayed
+                    } else {
+                        buildDnsResponse(query)
+                    }
+                },
+                onBlocked = { buildDnsResponse(query, responseCode = 2) },
+            )
         }
         out.write(buildUdpIpPacket(srcIp, srcPort, response))
     }
@@ -279,9 +287,14 @@ class V9VpnService : VpnService() {
     /**
      * Builds a DNS response. [sinkhole]=true returns 0.0.0.0 for A queries
      * (blocked). Otherwise answers from [ips] (A/AAAA); other qtypes get an
-     * empty NOERROR answer.
+     * empty NOERROR answer. [responseCode]=2 returns SERVFAIL for Strict DNS.
      */
-    private fun buildDnsResponse(query: DnsQuery, sinkhole: Boolean = false, ips: List<String> = emptyList()): ByteArray {
+    private fun buildDnsResponse(
+        query: DnsQuery,
+        sinkhole: Boolean = false,
+        ips: List<String> = emptyList(),
+        responseCode: Int = 0,
+    ): ByteArray {
         val answers = mutableListOf<ByteArray>()
         if (sinkhole && query.qtype == 1) {
             answers.add(answer(query.qtype, byteArrayOf(0, 0, 0, 0)))
@@ -293,7 +306,7 @@ class V9VpnService : VpnService() {
         }
         val out = ByteBuffer.allocate(512).order(ByteOrder.BIG_ENDIAN)
         out.putShort(query.id.toShort())
-        out.putShort(0x8180.toShort()) // standard response, no error
+        out.putShort((0x8180 or (responseCode and 0x0F)).toShort()) // standard response + RCODE
         out.putShort(1) // QDCOUNT
         out.putShort(answers.size.toShort()) // ANCOUNT
         out.putShort(0); out.putShort(0) // NSCOUNT, ARCOUNT
@@ -379,16 +392,17 @@ class V9VpnService : VpnService() {
         return sum.inv() and 0xFFFF
     }
 
-    /** Returns (dohProvider, dohCustomUrl) from settings. */
-    private fun dohConfig(): Pair<String, String> {
+    /** Returns (dohProvider, dohCustomUrl, strictDnsEnabled) from settings. */
+    private fun dohConfig(): Triple<String, String, Boolean> {
         return try {
             val prefs = runBlocking { dataStore.data.first() }
             val provider = prefs[AppSettings.DOH_PROVIDER]
                 ?: V9DohResolver.PROVIDER_CLOUDFLARE
             val custom = prefs[AppSettings.DOH_CUSTOM_URL].orEmpty()
-            provider to custom
+            Triple(provider, custom, AppSettings.strictDnsEnabled(prefs))
         } catch (_: Throwable) {
-            V9DohResolver.PROVIDER_CLOUDFLARE to ""
+            // Keep the opt-in disabled if settings cannot be read.
+            Triple(V9DohResolver.PROVIDER_CLOUDFLARE, "", false)
         }
     }
 
@@ -421,8 +435,8 @@ class V9VpnService : VpnService() {
         return null
     }
 
-    /** User-visible note when DoH keeps failing (we've failed open to UDP). */
-    private fun notifyDnsDegraded() {
+    /** User-visible note when DoH keeps failing. */
+    private fun notifyDnsDegraded(strictDns: Boolean) {
         try {
             val nm = getSystemService(NOTIFICATION_SERVICE) as NotificationManager
             if (android.os.Build.VERSION.SDK_INT >= 26) {
@@ -435,8 +449,11 @@ class V9VpnService : VpnService() {
             }
             val n = NotificationCompat.Builder(this, CHANNEL_ID)
                 .setSmallIcon(R.mipmap.ic_launcher)
-                .setContentTitle("V9 Shield: encrypted DNS degraded")
-                .setContentText("Falling back to plain DNS so browsing keeps working.")
+                .setContentTitle(if (strictDns) "V9 Shield: Strict DNS blocked lookups" else "V9 Shield: encrypted DNS degraded")
+                .setContentText(
+                    if (strictDns) "DoH failed; no plain DNS fallback was used. Some lookups may fail."
+                    else "Falling back to plain DNS; these lookups may be unencrypted."
+                )
                 .setAutoCancel(true)
                 .build()
             nm.notify(NOTIF_ID + 1, n)

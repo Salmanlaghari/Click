@@ -800,7 +800,7 @@ fun AboutAppDialog(onClose: () -> Unit) {
                 )
                 Spacer(modifier = Modifier.height(4.dp))
                 Text(
-                    "Click includes Safe Browsing when supported by the installed WebView, HTTPS controls, optional ad/tracker blocking and V9 Shield DNS/VPN features. Extension browsing accepts only Mozilla Recommended, fully reviewed, non-blocklisted add-ons from addons.mozilla.org and limits them to approved exact HTTPS site access. Native messaging and sensitive browser APIs are blocked; extensions can still affect sites they are allowed to access. Website geolocation, camera and microphone requests are denied.",
+                    "Click includes Safe Browsing when supported by the installed WebView, HTTPS controls, optional ad/tracker blocking and V9 Shield DNS-layer protection. These tools can reduce some risks, but they cannot guarantee every site is safe. The isolated Extension Browser accepts only Mozilla Recommended, fully reviewed, non-blocklisted add-ons from addons.mozilla.org and limits them to approved exact HTTPS site access. Native messaging and sensitive browser APIs are blocked; extensions can still affect sites they are allowed to access. Website geolocation, camera and microphone requests are denied.",
                     fontSize = 11.sp,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )

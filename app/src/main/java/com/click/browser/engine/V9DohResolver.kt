@@ -118,12 +118,16 @@ object V9DohResolver {
         return doh
     }
 
+    /** Compatibility helper; returns an empty list for a DoH failure. */
+    fun resolve(name: String, qtype: Int, provider: String, customUrl: String): List<String> =
+        resolveOrNull(name, qtype, provider, customUrl).orEmpty()
+
     /**
      * Resolves [name] via DoH. [qtype] 1 = A, 28 = AAAA.
-     * Returns IP address strings (empty on failure — caller may fail-open).
+     * Returns null only when DoH fails; a successful empty answer stays empty.
      */
-    fun resolve(name: String, qtype: Int, provider: String, customUrl: String): List<String> {
-        val doh = dohFor(provider, customUrl) ?: return emptyList()
+    fun resolveOrNull(name: String, qtype: Int, provider: String, customUrl: String): List<String>? {
+        val doh = dohFor(provider, customUrl) ?: return null
         return try {
             val addrs = doh.lookup(name)
             val wantV6 = qtype == 28
@@ -134,7 +138,7 @@ object V9DohResolver {
             }
         } catch (t: Throwable) {
             Log.w(TAG, "DoH resolve failed for $name", t)
-            emptyList()
+            null
         }
     }
 
@@ -149,6 +153,6 @@ object V9DohResolver {
             else -> PROVIDER_CUSTOM
         }
         val custom = if (provider == PROVIDER_CUSTOM) endpoint else ""
-        return resolve(name, qtype, provider, custom)
+        return resolveOrNull(name, qtype, provider, custom).orEmpty()
     }
 }

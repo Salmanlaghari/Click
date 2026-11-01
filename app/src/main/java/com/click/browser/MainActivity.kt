@@ -109,7 +109,6 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
 import okhttp3.Request
-import java.net.URLEncoder
 import java.util.Locale
 import java.util.concurrent.TimeUnit
 
@@ -290,11 +289,11 @@ class MainActivity : FragmentActivity() {
     }
     // Crash-restore: latest restorable-tab snapshot for this boot mode, kept
     // outside composable scope so onDestroy() and v9SwitchMode() can persist
-    // it and mark clean exits without touching UI state. The mirror is
-    // refreshed synchronously on every tab change (see the snapshot saver) —
-    // only the DataStore write is debounced — so it never lags behind.
+    // it and mark clean exits without touching UI state. The mirror is updated
+    // after composition; only the DataStore write is debounced.
     private var liveRestoreTabs: List<SavedTab> = emptyList()
     private var liveRestoreActiveIndex: Int = 0
+    @Volatile private var modeSwitchInProgress: Boolean = false
 
     /**
      * Builds the restorable-tab snapshot from live tab state: drops
@@ -793,27 +792,8 @@ class MainActivity : FragmentActivity() {
         view?.loadDataWithBaseURL(null, customHtml, "text/html", "UTF-8", null)
     }
 
-    private fun showBrowserErrorPage(view: WebView?, description: String?) {
-        val safeDesc = description?.take(200) ?: "Unknown error"
-        val customHtml = """
-            <html>
-            <head>
-                <style>
-                    body { background-color: #0f172a; color: #f8fafc; font-family: sans-serif; text-align: center; padding: 50px; }
-                    h1 { color: #ef4444; font-size: 24px; }
-                    p { color: #94a3b8; font-size: 16px; }
-                    .btn { background-color: #3b82f6; border: none; color: white; padding: 12px 24px; border-radius: 8px; font-weight: bold; cursor: pointer; margin-top: 20px; }
-                </style>
-            </head>
-            <body>
-                <h1>⚠️ Unable to load page</h1>
-                <p>Click Browser could not reach the server or network is offline.</p>
-                <p><i>Details: $safeDesc</i></p>
-                <button class="btn" onclick="location.reload()">Retry Connection</button>
-            </body>
-            </html>
-        """.trimIndent()
-        view?.loadDataWithBaseURL(null, customHtml, "text/html", "UTF-8", null)
+    private fun showBrowserErrorPage(view: WebView?, description: String?, retryUrl: String?) {
+        view?.loadDataWithBaseURL(null, browserErrorPageHtml(description, retryUrl), "text/html", "UTF-8", null)
     }
 
     /** Reads text aloud with the system TTS engine. */
@@ -956,6 +936,14 @@ class MainActivity : FragmentActivity() {
             val tabs = remember { mutableStateListOf<TabItem>(TabItem(url = startViewUrl ?: homeUrl(), title = "New Tab")) }
             var activeTabIndex by remember { mutableStateOf(0) }
             val currentTab = tabs.getOrNull(activeTabIndex) ?: TabItem(url = "about:blank")
+            SideEffect {
+                val (snapshot, active) = buildRestorableSnapshot(
+                    tabs.map { Triple(it.url, it.title, it.isIncognito) },
+                    activeTabIndex
+                )
+                liveRestoreTabs = snapshot
+                liveRestoreActiveIndex = active
+            }
 
             var showTabsManager by remember { mutableStateOf(false) }
             // Chrome/Mises-style browser menu (bottom sheet) + recent tabs +
@@ -1047,6 +1035,7 @@ class MainActivity : FragmentActivity() {
             var showRestoreDialog by remember { mutableStateOf(false) }
             var crashedTabs by remember { mutableStateOf<List<SavedTab>>(emptyList()) }
             var crashedActiveIndex by remember { mutableStateOf(0) }
+            var sessionStartupReady by remember { mutableStateOf(false) }
             // Gated by the flags-loading effect below: the session saver and
             // the restore check must not read liveFlags.clearOnExit before
             // DataStore has delivered the real value (LaunchedEffect order
@@ -1078,23 +1067,41 @@ class MainActivity : FragmentActivity() {
                 }
             }
 
-            // Crash-restore startup check: if the previous run for THIS boot
-            // mode did not exit cleanly and a tab snapshot exists, offer to
-            // restore it. Never crosses modes — each mode keeps its own
-            // snapshot in its own profile store (isolation is a feature).
-            // Waits for flagsLoaded: liveFlags.clearOnExit must come from
-            // DataStore, not its default, before we decide.
+            // Restore the current profile's own tabs after an intentional mode
+            // switch; only an unclean exit shows the crash-recovery prompt.
+            // The session saver waits for this decision so it cannot overwrite
+            // a snapshot with the initial New Tab before it is restored.
             LaunchedEffect(Unit) {
                 snapshotFlow { flagsLoaded }.first { it }
                 val bootMode = V9Engine.bootMode
                 val clean = SessionRestore.wasCleanExit(this@MainActivity, bootMode)
+                val modeSwitchPending = SessionRestore.consumeModeSwitchRestore(
+                    this@MainActivity, bootMode
+                )
                 val (saved, savedActive) = SessionRestore.loadSession(this@MainActivity, bootMode)
                 // From here on, assume this run may die uncleanly.
                 SessionRestore.markCleanExit(this@MainActivity, bootMode, false)
-                if (!clean && saved.isNotEmpty() && !liveFlags.clearOnExit) {
-                    crashedTabs = saved
-                    crashedActiveIndex = savedActive
-                    showRestoreDialog = true
+                when (
+                    sessionRestoreStartupAction(
+                        previousExitWasClean = clean,
+                        modeSwitchRestorePending = modeSwitchPending,
+                        savedTabCount = saved.size,
+                        clearOnExit = liveFlags.clearOnExit,
+                        externalStartUrlPresent = startViewUrl != null
+                    )
+                ) {
+                    SessionRestoreStartupAction.AUTOMATIC_MODE_RESTORE -> {
+                        tabs.clear()
+                        tabs.addAll(saved.map { TabItem(url = it.url, title = it.title) })
+                        activeTabIndex = savedActive.coerceIn(0, (tabs.size - 1).coerceAtLeast(0))
+                        sessionStartupReady = true
+                    }
+                    SessionRestoreStartupAction.CRASH_RECOVERY_PROMPT -> {
+                        crashedTabs = saved
+                        crashedActiveIndex = savedActive
+                        showRestoreDialog = true
+                    }
+                    SessionRestoreStartupAction.NONE -> sessionStartupReady = true
                 }
             }
 
@@ -1109,14 +1116,14 @@ class MainActivity : FragmentActivity() {
                 // Wait for experimental flags: reading liveFlags.clearOnExit
                 // before DataStore loads would use the default (false).
                 snapshotFlow { flagsLoaded }.first { it }
+                snapshotFlow { sessionStartupReady }.first { it }
                 snapshotFlow { tabs.map { Triple(it.url, it.title, it.isIncognito) } to activeTabIndex }
                     .collect { (tabStates, activeIdx) ->
                         val (snapshot, active) = buildRestorableSnapshot(tabStates, activeIdx)
-                        liveRestoreTabs = snapshot
-                        liveRestoreActiveIndex = active
                         // Biometric lock bookkeeping: does an incognito tab exist right now?
                         liveHasIncognitoTabs = tabStates.any { it.third }
                         delay(1000) // trailing-edge debounce: rapid edits collapse into one write
+                        if (modeSwitchInProgress) return@collect
                         val bootMode = V9Engine.bootMode
                         if (liveFlags.clearOnExit) {
                             SessionRestore.clearSession(this@MainActivity, bootMode)
@@ -1138,7 +1145,7 @@ class MainActivity : FragmentActivity() {
             var pageTransitionTick by remember { mutableStateOf(0) }
             // Real session count of blocked tracker/ad requests (home privacy pill).
             val blockedCount by AdBlocker.blockedCountFlow.collectAsState()
-            // V9 Shield VPN running state (for the home shield card).
+            // V9 Shield DNS-only service running state (for the home shield card).
             val shieldActive by com.click.browser.engine.V9VpnController.isRunning.collectAsState()
             var forceNightModeWebsites by remember { mutableStateOf(false) }
             // HTTPS mode: "off" | "standard" | "strict" (Brave-hardening).
@@ -1226,18 +1233,18 @@ class MainActivity : FragmentActivity() {
                         kotlinx.coroutines.delay(800)
                         if (com.click.browser.engine.V9VpnService.running.value) {
                             dataStore.edit { it[com.click.browser.engine.AppSettings.V9_VPN_ENABLED] = true }
-                            Toast.makeText(this@MainActivity, "V9 Shield VPN ON", Toast.LENGTH_SHORT).show()
+                            Toast.makeText(this@MainActivity, "V9 Shield on · DNS-only protection", Toast.LENGTH_SHORT).show()
                         } else {
-                            Toast.makeText(this@MainActivity, "VPN failed to start — try again", Toast.LENGTH_SHORT).show()
+                            Toast.makeText(this@MainActivity, "DNS protection failed to start — try again", Toast.LENGTH_SHORT).show()
                         }
                     }
                 } else {
-                    Toast.makeText(this@MainActivity, "VPN permission denied", Toast.LENGTH_SHORT).show()
+                    Toast.makeText(this@MainActivity, "DNS protection permission denied", Toast.LENGTH_SHORT).show()
                 }
             }
-            // Toggles V9 Shield VPN ON/OFF from the home shield card.
+            // Toggles the V9 Shield DNS-only service from the home card.
             // Kilo fix: verify actual service state before updating the flag.
-            fun toggleVpnShield() {
+            fun toggleDnsShield() {
                 val isOn = com.click.browser.engine.V9VpnController.isRunning.value
                 if (isOn) {
                     com.click.browser.engine.V9VpnController.stop(this@MainActivity)
@@ -1245,9 +1252,9 @@ class MainActivity : FragmentActivity() {
                         kotlinx.coroutines.delay(800)
                         if (!com.click.browser.engine.V9VpnService.running.value) {
                             dataStore.edit { it[com.click.browser.engine.AppSettings.V9_VPN_ENABLED] = false }
-                            Toast.makeText(this@MainActivity, "V9 Shield VPN OFF", Toast.LENGTH_SHORT).show()
+                            Toast.makeText(this@MainActivity, "V9 Shield off · DNS-only protection", Toast.LENGTH_SHORT).show()
                         } else {
-                            Toast.makeText(this@MainActivity, "VPN failed to stop — try again", Toast.LENGTH_SHORT).show()
+                            Toast.makeText(this@MainActivity, "DNS protection failed to stop — try again", Toast.LENGTH_SHORT).show()
                         }
                     }
                 } else {
@@ -1258,9 +1265,9 @@ class MainActivity : FragmentActivity() {
                             kotlinx.coroutines.delay(800)
                             if (com.click.browser.engine.V9VpnService.running.value) {
                                 dataStore.edit { it[com.click.browser.engine.AppSettings.V9_VPN_ENABLED] = true }
-                                Toast.makeText(this@MainActivity, "V9 Shield VPN ON", Toast.LENGTH_SHORT).show()
+                                Toast.makeText(this@MainActivity, "V9 Shield on · DNS-only protection", Toast.LENGTH_SHORT).show()
                             } else {
-                                Toast.makeText(this@MainActivity, "VPN failed to start — try again", Toast.LENGTH_SHORT).show()
+                                Toast.makeText(this@MainActivity, "DNS protection failed to start — try again", Toast.LENGTH_SHORT).show()
                             }
                         }
                     } else {
@@ -1435,7 +1442,7 @@ class MainActivity : FragmentActivity() {
 
             // Dev tools states
             var elementInspectorEnabled by remember { mutableStateOf(false) }
-            var deviceEmulatorMode by remember { mutableStateOf("Desktop") } // Mobile, Tablet, Desktop
+            var deviceEmulatorMode by remember { mutableStateOf("Mobile") } // Mobile, Tablet, Desktop
             var pageLoadTime by remember { mutableStateOf(0L) }
             var lastPageStart by remember { mutableStateOf(0L) }
             var showDebugOverlay by remember { mutableStateOf(true) }
@@ -2658,7 +2665,7 @@ class MainActivity : FragmentActivity() {
                             @Composable
                             fun BrowseTopBarBlock() {
                                 Column {
-                                    if (!immersiveMode && !showOverlays) {
+                                    if (!immersiveMode && showOverlays) {
                                         TabStrip(
                                             tabs = tabs,
                                             activeTabIndex = activeTabIndex,
@@ -2673,7 +2680,7 @@ class MainActivity : FragmentActivity() {
                                         )
                                     }
                                     AnimatedVisibility(
-                                        visible = !immersiveMode && !showOverlays && toolbarVisible,
+                                        visible = !immersiveMode && toolbarVisible,
                                         enter = expandVertically() + fadeIn(),
                                         exit = shrinkVertically() + fadeOut()
                                     ) {
@@ -2681,7 +2688,8 @@ class MainActivity : FragmentActivity() {
                                             Column {
                                                 CompactBrowseBar(
                                                     theme = themed,
-                                                    currentUrl = currentTab.url,
+                                                    activeMode = activeMode,
+                                                    currentUrl = if (showOverlays) "" else currentTab.url,
                                                     searchEngine = currentSearchEngineSetting,
                                                     onNavigate = { input ->
                                                         val destination = cleanTrackingUrl(formatUrl(input, currentSearchEngineSetting))
@@ -2689,6 +2697,10 @@ class MainActivity : FragmentActivity() {
                                                         currentTab.webView?.loadUrl(destination)
                                                     },
                                                     onReload = { currentTab.webView?.reload() },
+                                                    onNewTab = {
+                                                        tabs.add(TabItem(url = homeUrl(), title = "New Tab"))
+                                                        activeTabIndex = tabs.lastIndex
+                                                    },
                                                     onMenuClick = { showBrowserMenu = true },
                                                     onSiteSettingsClick = { showSiteSettings = true },
                                                     // 2026 style: sidebar (drawer) accessible from top bar.
@@ -2723,15 +2735,13 @@ class MainActivity : FragmentActivity() {
 
                             Column(modifier = Modifier.fillMaxSize()) {
 
-                                // PREMIUM UI v2 — Chrome-like single-row top bar (Prince-approved
-                                // design): back, forward, rounded address bar, tab-count badge,
-                                // ⋮ browser menu. The old 2-row bar + separate tab strip are
-                                // gone; the counter opens the visual tab switcher, and the
-                                // bottom-left FAB menu replaces the top hamburger.
+                                // Premium browser chrome: web pages use the compact address
+                                // row and visual tab switcher; the tab strip stays on the
+                                // new-tab surface. Simple keeps its bottom navigation compact.
                                 // SURFACE 2 — Browsing: compact address bar + privacy strip.
-                                // (Home surface has no browser top bar — it has its own
-                                // big search bar; tab switching lives in the bottom nav.)
-                                if (!flagsUi.bottomAddressBar) BrowseTopBarBlock()
+                                // Home keeps the same tab/address chrome, plus its own
+                                // prominent search field below the greeting.
+                                if (!flagsUi.bottomAddressBar || showOverlays) BrowseTopBarBlock()
 
                                 // 4. MAIN CONTENT CONTAINER (WIDGET-STYLE DASHBOARD OR WEBVIEW)
                                 // Nested-scroll: drives the toolbar auto-hide on page scroll.
@@ -2751,7 +2761,7 @@ class MainActivity : FragmentActivity() {
                                             wallpaperUri = wallpaperUri,
                                             shieldActive = shieldActive,
                                             onV9ShieldClick = { showV9Shield = true },
-                                            onVpnToggle = { toggleVpnShield() },
+                                            onShieldToggle = { toggleDnsShield() },
                                             onGamesClick = { showClickPage = "games" },
                                             onNavigate = { input ->
                                                 val destination = cleanTrackingUrl(formatUrl(input, currentSearchEngineSetting))
@@ -3150,7 +3160,8 @@ class MainActivity : FragmentActivity() {
                                                                 failedTab.isPageLoading = false
                                                                 failedTab.hasCommittedContent = true
                                                                 failedTab.loadProgress = 0
-                                                                this@MainActivity.showBrowserErrorPage(view, error?.description?.toString())
+                                                                val retryUrl = request?.let { browserRetryUrl(it.method, it.url.toString()) }
+                                                                this@MainActivity.showBrowserErrorPage(view, error?.description?.toString(), retryUrl)
                                                             }
 
                                                         }
@@ -3651,7 +3662,7 @@ class MainActivity : FragmentActivity() {
                             // Polish: one-shot theme crossfade (battery-safe).
                             // Bottom-address-bar option: bar renders below the page,
                             // padded above the overlaid bottom nav so they never overlap.
-                            if (flagsUi.bottomAddressBar) {
+                            if (flagsUi.bottomAddressBar && !showOverlays) {
                                 Box(modifier = Modifier.padding(bottom = 76.dp)) {
                                     BrowseTopBarBlock()
                                 }
@@ -3664,6 +3675,7 @@ class MainActivity : FragmentActivity() {
                                 ) { themed ->
                                     BrowseBottomNav(
                                         theme = themed,
+                                        activeMode = activeMode,
                                         tabCount = tabs.size,
                                         canGoBack = currentTab.webView?.canGoBack() == true,
                                         canGoForward = currentTab.webView?.canGoForward() == true,
@@ -3935,6 +3947,7 @@ class MainActivity : FragmentActivity() {
                                             SessionRestore.clearSession(
                                                 this@MainActivity, V9Engine.bootMode
                                             )
+                                            sessionStartupReady = true
                                         }
                                     },
                                     title = {
@@ -3957,6 +3970,7 @@ class MainActivity : FragmentActivity() {
                                             activeTabIndex = crashedActiveIndex.coerceIn(
                                                 0, (tabs.size - 1).coerceAtLeast(0)
                                             )
+                                            sessionStartupReady = true
                                         }) {
                                             androidx.compose.material3.Text("Restore")
                                         }
@@ -3968,6 +3982,7 @@ class MainActivity : FragmentActivity() {
                                                 SessionRestore.clearSession(
                                                     this@MainActivity, V9Engine.bootMode
                                                 )
+                                                sessionStartupReady = true
                                             }
                                         }) {
                                             androidx.compose.material3.Text("Start fresh")
@@ -4314,6 +4329,7 @@ class MainActivity : FragmentActivity() {
                                         showSiteSettingsList = true
                                     },
                                     onOpenAdvancedSecurity = { showSettings = false; showAdvancedSecurity = true },
+                                    onOpenV9Shield = { showSettings = false; showV9Shield = true },
                                     onOpenTabGroups = { showSettings = false; showTabGroups = true },
                                     onOpenAccessibility = { showSettings = false; showAccessibility = true },
                                     onOpenLanguage = { showSettings = false; showLanguage = true },
@@ -4399,7 +4415,7 @@ class MainActivity : FragmentActivity() {
                             if (showAboutApp) {
                                 AboutAppDialog(onClose = { showAboutApp = false })
                             }
-                            // V9 Shield screen (VPN + DNS + 3-engine identities).
+                            // V9 Shield screen (DNS protection + resolver + profile identities).
                             if (showV9Shield) {
                                 V9ShieldScreen(onClose = { showV9Shield = false })
                             }
@@ -4806,6 +4822,14 @@ class MainActivity : FragmentActivity() {
                                 )
                                 AlertDialog(
                                     onDismissRequest = { pendingBrowserDownload = null },
+                                    icon = {
+                                        Icon(
+                                            Icons.Default.Download,
+                                            contentDescription = null,
+                                            tint = theme.primary,
+                                            modifier = Modifier.size(24.dp)
+                                        )
+                                    },
                                     title = { Text("Save download?") },
                                     text = {
                                         Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -4867,7 +4891,10 @@ class MainActivity : FragmentActivity() {
                                     },
                                     dismissButton = {
                                         TextButton(onClick = { pendingBrowserDownload = null }) { Text("Cancel") }
-                                    }
+                                    },
+                                    shape = RoundedCornerShape(24.dp),
+                                    containerColor = theme.surface,
+                                    tonalElevation = 6.dp
                                 )
                             }
                             // Password manager: "Save password?" offer dialog.
@@ -5392,23 +5419,10 @@ class MainActivity : FragmentActivity() {
         return result
     }
 
-    private fun formatUrl(input: String, searchEngine: String): String {
-        val trimmed = input.trim()
-        // click:// internal pages (chrome://-style): pass through (normalized
-        // to lowercase) so shouldOverrideUrlLoading can intercept them into
-        // native screens.
-        if (trimmed.startsWith("click://", ignoreCase = true)) {
-            return trimmed.lowercase()
+    private fun formatUrl(input: String, searchEngine: String): String =
+        formatBrowserInputUrl(input, searchEngine) { engine, query ->
+            ModePersonalization.searchUrl(engine, query)
         }
-        if (trimmed.startsWith("http://") || trimmed.startsWith("https://")) {
-            return trimmed
-        }
-        if (trimmed.contains(".") && !trimmed.contains(" ")) {
-            return "https://$trimmed"
-        }
-        val query = URLEncoder.encode(trimmed, "UTF-8")
-        return ModePersonalization.searchUrl(searchEngine, query)
-    }
 
     /**
      * Switching modes selects browser-data profiles. Each profile (Simple /
@@ -5438,14 +5452,20 @@ class MainActivity : FragmentActivity() {
         android.widget.Toast.makeText(
             this, toastMsg, android.widget.Toast.LENGTH_LONG
         ).show()
-        // Crash-restore: an intentional engine switch is a CLEAN exit of the
-        // source mode — persist its final tab snapshot and mark it clean so
-        // switching Simple→Power→Simple restores Simple's tabs instead of
-        // offering a phantom "crash" restore. Per-mode keys keep isolation.
-        // liveRestoreTabs is refreshed synchronously on every tab change
-        // (only the DataStore write is debounced), so this is never stale.
+        // An intentional profile switch saves the source profile's own tabs,
+        // arms its one-shot restore marker, and marks the exit clean. Returning
+        // to that profile restores those tabs without a crash prompt. The
+        // mirror is refreshed after composition; only its DataStore write is
+        // debounced. Clear-on-exit still removes the snapshot and marker.
         val sourceMode = V9Engine.bootMode
-        SessionRestore.saveSession(this, sourceMode, liveRestoreTabs, liveRestoreActiveIndex)
+        modeSwitchInProgress = true
+        if (liveFlags.clearOnExit) {
+            SessionRestore.clearSession(this, sourceMode)
+        } else {
+            SessionRestore.saveSessionForModeSwitch(
+                this, sourceMode, liveRestoreTabs, liveRestoreActiveIndex
+            )
+        }
         SessionRestore.markCleanExit(this, sourceMode, true)
         val restarted = V9Engine.restartForEngineSwitch(
             this, modeManager, mode,
@@ -5453,6 +5473,8 @@ class MainActivity : FragmentActivity() {
             advanceIntro = (mode == BrowserMode.ADVANCED) && liveAdvanceIntroEnabled
         )
         if (!restarted) {
+            SessionRestore.clearModeSwitchRestore(this, sourceMode)
+            modeSwitchInProgress = false
             // Restart wasn't possible (alarm unavailable etc.) — apply the
             // mode in-place WITHOUT engine isolation rather than killing
             // the app. Cookies stay shared, but the app stays alive.

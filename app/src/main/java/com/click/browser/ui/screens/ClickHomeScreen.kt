@@ -126,9 +126,9 @@ import java.util.Calendar
 /**
  * Premium home screen — "Click — AI Privacy Browser" identity (Phase 1).
  *
- * Pixel-faithful to Prince's approved promo reference:
- *  top logo row (Click + Protected pill + avatar) · pill search bar
- *  (active search-provider mark, mic) · 2×4 quick-site tiles · category pill tabs ·
+ * Aligned with Prince's approved browser reference:
+ *  time-aware greeting and live privacy status · pill search bar
+ *  (active search-provider mark, mic) · real quick-site tiles · category pill tabs ·
  *  news cards (hero + list) · 2×2 quick actions.
  *
  * All profiles share Click's warm cream interface while retaining their own
@@ -149,7 +149,7 @@ fun ClickHomeScreen(
     onReaderMode: () -> Unit,
     onProfileClick: () -> Unit,
     onV9ShieldClick: () -> Unit = {},
-    onVpnToggle: () -> Unit = {},
+    onShieldToggle: () -> Unit = {},
     onGamesClick: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
@@ -201,9 +201,9 @@ fun ClickHomeScreen(
             .fillMaxSize()
             .verticalScroll(rememberScrollState())
             .padding(horizontal = 16.dp),
-        verticalArrangement = Arrangement.spacedBy(14.dp)
+        verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
-        Spacer(modifier = Modifier.height(4.dp))
+        Spacer(modifier = Modifier.height(6.dp))
 
         HomeTopRow(
             theme = theme,
@@ -219,8 +219,7 @@ fun ClickHomeScreen(
             onNavigate = onNavigate
         )
 
-        // V9 Shield: big prominent VPN toggle card (Prince couldn't find it).
-        // One tap opens the Shield screen; shows live ON/OFF state.
+        // V9 Shield is DNS-only; the card retains the existing detail and toggle actions.
         V9ShieldCard(
             theme = theme,
             active = shieldActive,
@@ -228,7 +227,7 @@ fun ClickHomeScreen(
             cardBg = cardBg,
             cardBorder = cardBorder,
             onClick = onV9ShieldClick,
-            onToggle = onVpnToggle
+            onToggle = onShieldToggle
         )
 
         QuickSitesGrid(
@@ -270,7 +269,7 @@ fun ClickHomeScreen(
     } // Box: wallpaper background + content
 }
 
-/** V9 Shield: big prominent VPN card on the home screen. One tap toggles. */
+/** V9 Shield: DNS-only status card. Its existing toggle behavior is unchanged. */
 @Composable
 private fun V9ShieldCard(
     theme: ModeTheme,
@@ -316,20 +315,19 @@ private fun V9ShieldCard(
             Spacer(Modifier.width(14.dp))
             Column(modifier = Modifier.weight(1f)) {
                 Text(
-                    "V9 Shield VPN",
+                    "V9 Shield",
                     color = theme.onSurface,
                     fontWeight = FontWeight.ExtraBold,
                     fontSize = 16.sp
                 )
                 Text(
-                    if (active) "● Protected — encrypted DNS active"
-                    else "Tap toggle to enable protection",
+                    if (active) "DNS-only protection on · not a VPN"
+                    else "DNS-only protection off · not a VPN",
                     color = if (active) Color(0xFF22C55E) else theme.onSurface.copy(alpha = 0.6f),
                     fontSize = 12.sp
                 )
             }
-            // Toggle pill: tapping toggles VPN ON/OFF directly (does NOT
-            // just open the Shield screen — the card body does that).
+            // The pill toggles DNS protection; the card body opens its settings.
             Box(
                 modifier = Modifier
                     .background(
@@ -350,7 +348,7 @@ private fun V9ShieldCard(
     }
 }
 
-/** Top row: gradient "C Click" logo · Protected pill · avatar. */
+/** Greeting, live ad-block status, and a profile shortcut. */
 @Composable
 private fun HomeTopRow(
     theme: ModeTheme,
@@ -363,58 +361,40 @@ private fun HomeTopRow(
         modifier = Modifier.fillMaxWidth(),
         verticalAlignment = Alignment.CenterVertically
     ) {
-        // Gradient "C" logo + wordmark
-        Box(
-            modifier = Modifier
-                .size(38.dp)
-                .background(
-                    Brush.linearGradient(listOf(Color(0xFF806B51), Color(0xFFB69468))),
-                    CircleShape
-                ),
-            contentAlignment = Alignment.Center
+        Column(
+            modifier = Modifier.weight(1f),
+            verticalArrangement = Arrangement.spacedBy(2.dp)
         ) {
-            Text("C", color = Color.White, fontWeight = FontWeight.Black, fontSize = 22.sp)
-        }
-        Spacer(modifier = Modifier.width(8.dp))
-        Text("Click", color = theme.onBackground, fontWeight = FontWeight.ExtraBold, fontSize = 22.sp)
-
-        Spacer(modifier = Modifier.weight(1f))
-
-        // Protected pill badge
-        Surface(
-            shape = RoundedCornerShape(20.dp),
-            color = Color(0xFF16A34A).copy(alpha = 0.12f),
-            border = androidx.compose.foundation.BorderStroke(
-                1.dp, Color(0xFF16A34A).copy(alpha = 0.35f)
+            Text(
+                homeGreeting(),
+                color = theme.onBackground,
+                fontWeight = FontWeight.ExtraBold,
+                fontSize = 26.sp
             )
-        ) {
-            Row(
-                modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Icon(Icons.Default.Shield, contentDescription = null, tint = Color(0xFF16A34A), modifier = Modifier.size(14.dp))
-                Spacer(modifier = Modifier.width(4.dp))
-                Column {
-                    Text(
-                        "Protected",
-                        color = Color(0xFF16A34A),
-                        fontSize = 10.sp,
-                        fontWeight = FontWeight.Bold,
-                        lineHeight = 11.sp
-                    )
-                    Text(
-                        if (adBlockerEnabled) "$blockedCount trackers blocked" else "AdBlock off",
-                        color = theme.onSurface.copy(alpha = 0.6f),
-                        fontSize = 8.5.sp,
-                        lineHeight = 9.sp
-                    )
-                }
+            Text(
+                "A faster, safer web for what's next.",
+                color = theme.onSurface.copy(alpha = 0.72f),
+                fontSize = 13.sp
+            )
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(
+                    Icons.Default.Shield,
+                    contentDescription = null,
+                    tint = if (adBlockerEnabled) Color(0xFF16A34A) else theme.onSurface.copy(alpha = 0.45f),
+                    modifier = Modifier.size(13.dp)
+                )
+                Spacer(Modifier.width(5.dp))
+                Text(
+                    if (adBlockerEnabled) {
+                        if (blockedCount > 0) "$blockedCount trackers blocked" else "Ad and tracker blocking is on"
+                    } else "Ad and tracker blocking is off",
+                    color = theme.onSurface.copy(alpha = 0.62f),
+                    fontSize = 10.sp
+                )
             }
         }
 
-        Spacer(modifier = Modifier.width(8.dp))
-
-        // Avatar circle
+        // Profile remains one tap away, in the same position as the approved design.
         Box(
             modifier = Modifier
                 .size(38.dp)
@@ -467,7 +447,7 @@ private fun SmartSearchBar(
             OutlinedTextField(
                 value = query,
                 onValueChange = { query = it },
-                placeholder = { Text("Search or enter address", fontSize = 14.sp, color = theme.onSurface.copy(alpha = 0.45f)) },
+                placeholder = { Text("Search the web or enter address", fontSize = 14.sp, color = theme.onSurface.copy(alpha = 0.45f)) },
                 singleLine = true,
                 keyboardOptions = KeyboardOptions(imeAction = ImeAction.Go),
                 keyboardActions = KeyboardActions(onGo = { submit() }),
@@ -630,7 +610,7 @@ private fun QuickSitesGrid(
     Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
         // null entry = the trailing "Add" tile.
         val tiles: List<QuickSiteDef?> = sites + listOf(null)
-        tiles.chunked(4).forEach { row ->
+        tiles.chunked(5).forEach { row ->
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceEvenly
@@ -654,9 +634,9 @@ private fun QuickSitesGrid(
                         Box(
                             modifier = Modifier
                                 .size(52.dp)
-                                .clip(CircleShape)
+                                .clip(RoundedCornerShape(14.dp))
                                 .then(
-                                    if (isAdd) Modifier.border(1.5.dp, onSurface.copy(alpha = 0.25f), CircleShape)
+                                    if (isAdd) Modifier.border(1.5.dp, onSurface.copy(alpha = 0.25f), RoundedCornerShape(14.dp))
                                     else Modifier.background(Color(site!!.bgArgb))
                                 )
                                 .then(
@@ -683,7 +663,7 @@ private fun QuickSitesGrid(
                     }
                 }
                 // Pad short rows so tiles keep even spacing.
-                repeat(4 - row.size) { Spacer(modifier = Modifier.weight(1f)) }
+                repeat(5 - row.size) { Spacer(modifier = Modifier.weight(1f)) }
             }
         }
     }
@@ -1216,17 +1196,19 @@ fun homeGreeting(): String {
 
 /* ---------------------------------------------------------------------------
  * SURFACE 2 — Browsing (webpage open). Distinct from Home:
- *  compact URL bar · privacy strip · WebView focus · floating AI button ·
- *  bottom nav = Back/Forward/Home/Tabs/Menu (no center AI tab).
+ *  compact URL bar · WebView focus · floating AI button. Simple uses a
+ *  compact Home + Previous/Next footer; other profiles retain the full nav.
  * --------------------------------------------------------------------------- */
 
 /**
  * 2026-style premium address bar for the browsing surface.
  *
- * Layout: [☰ Sidebar] [🔒 provider + URL field] [↻] [▭ Tabs] [⋮]
+ * Layout: [☰ Sidebar] [🔒 URL field] [＋ new tab in Simple / ↻ elsewhere] [▭ Tabs] [⋮]
  * - Hamburger opens the navigation drawer (sidebar) — restores sidebar access
  *   directly from the top bar, 2026 browser style.
  * - Elevated URL field with soft shadow (not just a border).
+ * - Search-provider branding appears on the new-tab search field; loaded pages
+ *   show their site security affordance instead.
  * - Tab counter button for quick tab switching.
  * - Mode-aware accent colors, refined touch targets.
  *
@@ -1240,10 +1222,12 @@ internal fun tabBadgeText(count: Int): String =
 @Composable
 fun CompactBrowseBar(
     theme: ModeTheme,
+    activeMode: BrowserMode,
     currentUrl: String,
     searchEngine: String,
     onNavigate: (String) -> Unit,
     onReload: () -> Unit,
+    onNewTab: () -> Unit,
     onMenuClick: () -> Unit,
     onSiteSettingsClick: () -> Unit = {},
     // Kilo: these are required (no defaults) so missing wiring fails at
@@ -1298,21 +1282,30 @@ fun CompactBrowseBar(
                     .animateContentSize()
             ) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    // Shield icon opens Site Settings. Tint reflects the URL
-                    // scheme only; it is not a broad safety verdict.
-                    IconButton(
-                        onClick = onSiteSettingsClick,
-                        modifier = Modifier.padding(start = 4.dp).size(34.dp)
-                    ) {
+                    // On a new tab this becomes a neutral search affordance;
+                    // on real pages it opens Site Settings and reflects the URL scheme only.
+                    if (currentUrl.isBlank()) {
                         Icon(
-                            Icons.Default.Shield,
-                            contentDescription = if (isHttps) "HTTPS URL — tap for site settings" else "HTTP URL (not encrypted) — tap for site settings",
-                            tint = if (isHttps) Color(0xFF22C55E) else Color(0xFFF59E0B),
-                            modifier = Modifier.size(18.dp)
+                            Icons.Default.Search,
+                            contentDescription = null,
+                            tint = theme.onSurface.copy(alpha = 0.58f),
+                            modifier = Modifier.padding(start = 12.dp).size(18.dp)
                         )
+                    } else {
+                        IconButton(
+                            onClick = onSiteSettingsClick,
+                            modifier = Modifier.padding(start = 4.dp).size(34.dp)
+                        ) {
+                            Icon(
+                                Icons.Default.Shield,
+                                contentDescription = if (isHttps) "HTTPS URL — tap for site settings" else "HTTP URL (not encrypted) — tap for site settings",
+                                tint = if (isHttps) Color(0xFF22C55E) else Color(0xFFF59E0B),
+                                modifier = Modifier.size(18.dp)
+                            )
+                        }
                     }
                     // Show an indicator only when location requests are blocked.
-                    if (locationMode == LocationGuard.LocationMode.BLOCK) {
+                    if (locationMode == LocationGuard.LocationMode.BLOCK && currentUrl.isNotBlank()) {
                         IconButton(
                             onClick = onLocationClick,
                             modifier = Modifier.size(32.dp)
@@ -1325,7 +1318,9 @@ fun CompactBrowseBar(
                             )
                         }
                     }
-                    SearchEngineBadge(engine = searchEngine, theme = theme, compact = true)
+                    if (currentUrl.isBlank()) {
+                        SearchEngineBadge(engine = searchEngine, theme = theme, compact = true)
+                    }
                     androidx.compose.foundation.text.BasicTextField(
                         value = textInput,
                         onValueChange = { textInput = it },
@@ -1334,6 +1329,18 @@ fun CompactBrowseBar(
                             fontSize = 14.sp,
                             color = theme.onSurface
                         ),
+                        decorationBox = { innerTextField ->
+                            Box(contentAlignment = Alignment.CenterStart) {
+                                if (textInput.isBlank()) {
+                                    Text(
+                                        "Search or type URL",
+                                        color = theme.onSurface.copy(alpha = 0.48f),
+                                        fontSize = 14.sp
+                                    )
+                                }
+                                innerTextField()
+                            }
+                        },
                         keyboardOptions = KeyboardOptions(imeAction = ImeAction.Go),
                         keyboardActions = KeyboardActions(
                             onGo = { onNavigate(textInput) },
@@ -1364,16 +1371,28 @@ fun CompactBrowseBar(
                 }
             }
             Spacer(modifier = Modifier.width(4.dp))
-            // Reload button.
-            // Kilo: never wipes what the user typed — the field resets via
-            // remember(currentUrl) when the URL actually changes.
-            IconButton(onClick = onReload, modifier = Modifier.size(40.dp)) {
-                Icon(
-                    Icons.Default.Refresh,
-                    contentDescription = "Reload",
-                    tint = theme.onTopBar,
-                    modifier = Modifier.size(22.dp)
-                )
+            // On Simple's web surface the approved compact row uses a direct
+            // new-tab affordance; reload remains available in the browser drawer.
+            if (activeMode == BrowserMode.SIMPLE && currentUrl.isNotBlank()) {
+                IconButton(onClick = onNewTab, modifier = Modifier.size(40.dp)) {
+                    Icon(
+                        Icons.Default.Add,
+                        contentDescription = "New tab",
+                        tint = theme.onTopBar,
+                        modifier = Modifier.size(22.dp)
+                    )
+                }
+            } else {
+                // Kilo: never wipes what the user typed — the field resets via
+                // remember(currentUrl) when the URL actually changes.
+                IconButton(onClick = onReload, modifier = Modifier.size(40.dp)) {
+                    Icon(
+                        Icons.Default.Refresh,
+                        contentDescription = "Reload",
+                        tint = theme.onTopBar,
+                        modifier = Modifier.size(22.dp)
+                    )
+                }
             }
             // Tab counter button (2026 style: quick tab access from top bar).
             IconButton(onClick = onTabsClick, modifier = Modifier.size(40.dp)) {
@@ -1570,8 +1589,8 @@ private fun AiPopupItem(
 }
 
 /**
- * Bottom nav for the browsing surface: ☰ Menu(drawer) · ‹ Back · › Forward ·
- * ⌂ Home · ▭ Tabs (live count badge) · ⋮ More.
+ * Bottom nav for the browsing surface. Simple uses ⌂ Home plus the approved
+ * Previous/Next pill; other modes retain the full drawer, navigation, tab, and menu footer.
  * Per the "Same Website. 3 Beautiful Modes." reference image — compact icons +
  * labels, mode-aware colors. (No center AI tab here — AI lives in the floating pill.)
  *
@@ -1582,6 +1601,7 @@ private fun AiPopupItem(
 @Composable
 fun BrowseBottomNav(
     theme: ModeTheme,
+    activeMode: BrowserMode,
     tabCount: Int,
     canGoBack: Boolean,
     canGoForward: Boolean,
@@ -1621,51 +1641,134 @@ fun BrowseBottomNav(
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 2.dp, vertical = 3.dp),
-            horizontalArrangement = Arrangement.SpaceEvenly,
+                .padding(
+                    horizontal = if (activeMode == BrowserMode.SIMPLE) 12.dp else 2.dp,
+                    vertical = if (activeMode == BrowserMode.SIMPLE) 6.dp else 3.dp
+                ),
+            horizontalArrangement = if (activeMode == BrowserMode.SIMPLE) {
+                Arrangement.spacedBy(10.dp)
+            } else {
+                Arrangement.SpaceEvenly
+            },
             verticalAlignment = Alignment.CenterVertically
         ) {
-            BrowseNavButton(
-                icon = Icons.Default.Menu, label = "Menu",
-                enabled = true, theme = theme, onClick = onDrawerClick
-            )
-            BrowseNavButton(
-                icon = Icons.AutoMirrored.Filled.ArrowBack, label = "Previous",
-                enabled = canGoBack, theme = theme, onClick = onBack, emphasized = true
-            )
-            BrowseNavButton(
-                icon = Icons.AutoMirrored.Filled.ArrowForward, label = "Next",
-                enabled = canGoForward, theme = theme, onClick = onForward, emphasized = true
-            )
-            BrowseNavButton(
-                icon = Icons.Default.Home, label = "Home",
-                enabled = true, theme = theme, onClick = onHome,
-                highlight = true
-            )
-            BadgedBox(
-                badge = {
-                    Badge(
-                        containerColor = theme.primary,
-                        contentColor = Color.White,
-                        modifier = Modifier.graphicsLayer {
-                            scaleX = badgeScale.value
-                            scaleY = badgeScale.value
+            if (activeMode == BrowserMode.SIMPLE) {
+                BrowseNavButton(
+                    icon = Icons.Default.Home,
+                    label = "Home",
+                    enabled = true,
+                    theme = theme,
+                    onClick = onHome
+                )
+                Surface(
+                    shape = RoundedCornerShape(24.dp),
+                    color = theme.surfaceVariant.copy(alpha = 0.72f),
+                    border = androidx.compose.foundation.BorderStroke(
+                        1.dp, theme.primary.copy(alpha = 0.22f)
+                    ),
+                    modifier = Modifier.weight(1f)
+                ) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        val backTint = if (canGoBack) theme.onSurface else theme.onSurface.copy(alpha = 0.35f)
+                        val forwardTint = if (canGoForward) theme.onSurface else theme.onSurface.copy(alpha = 0.35f)
+                        Row(
+                            modifier = Modifier
+                                .weight(1f)
+                                .clickable(enabled = canGoBack, onClick = onBack)
+                                .padding(horizontal = 5.dp, vertical = 10.dp),
+                            horizontalArrangement = Arrangement.Center,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Previous", tint = backTint, modifier = Modifier.size(16.dp))
+                            Spacer(Modifier.width(3.dp))
+                            Text("Previous", color = backTint, fontSize = 10.sp, maxLines = 1)
                         }
-                    ) {
-                        Text(tabBadgeText(tabCount), fontSize = 9.sp)
+                        Box(Modifier.width(1.dp).height(20.dp).background(theme.onSurface.copy(alpha = 0.16f)))
+                        Row(
+                            modifier = Modifier
+                                .weight(1f)
+                                .clickable(enabled = canGoForward, onClick = onForward)
+                                .padding(horizontal = 5.dp, vertical = 10.dp),
+                            horizontalArrangement = Arrangement.Center,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text("Next", color = forwardTint, fontSize = 10.sp, maxLines = 1)
+                            Spacer(Modifier.width(3.dp))
+                            Icon(Icons.AutoMirrored.Filled.ArrowForward, contentDescription = "Next", tint = forwardTint, modifier = Modifier.size(16.dp))
+                        }
                     }
-                },
-                modifier = Modifier.clickable(
-                    interactionSource = remember { MutableInteractionSource() },
-                    indication = null
-                ) { onTabs() }
-            ) {
-                BrowseNavContent(icon = Icons.Default.Tab, label = "Tabs", enabled = true, theme = theme)
+                }
+            } else {
+                BrowseNavButton(
+                    icon = Icons.Default.Menu, label = "Menu",
+                    enabled = true, theme = theme, onClick = onDrawerClick
+                )
+                Surface(
+                    shape = RoundedCornerShape(24.dp),
+                    color = theme.surfaceVariant.copy(alpha = 0.72f),
+                    border = androidx.compose.foundation.BorderStroke(1.dp, theme.primary.copy(alpha = 0.22f)),
+                    modifier = Modifier.weight(1.55f).padding(horizontal = 4.dp)
+                ) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        val backTint = if (canGoBack) theme.onSurface else theme.onSurface.copy(alpha = 0.35f)
+                        val forwardTint = if (canGoForward) theme.onSurface else theme.onSurface.copy(alpha = 0.35f)
+                        Row(
+                            modifier = Modifier
+                                .weight(1f)
+                                .clickable(enabled = canGoBack, onClick = onBack)
+                                .padding(horizontal = 5.dp, vertical = 10.dp),
+                            horizontalArrangement = Arrangement.Center,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Previous", tint = backTint, modifier = Modifier.size(16.dp))
+                            Spacer(Modifier.width(3.dp))
+                            Text("Previous", color = backTint, fontSize = 10.sp, maxLines = 1)
+                        }
+                        Box(Modifier.width(1.dp).height(20.dp).background(theme.onSurface.copy(alpha = 0.16f)))
+                        Row(
+                            modifier = Modifier
+                                .weight(1f)
+                                .clickable(enabled = canGoForward, onClick = onForward)
+                                .padding(horizontal = 5.dp, vertical = 10.dp),
+                            horizontalArrangement = Arrangement.Center,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text("Next", color = forwardTint, fontSize = 10.sp, maxLines = 1)
+                            Spacer(Modifier.width(3.dp))
+                            Icon(Icons.AutoMirrored.Filled.ArrowForward, contentDescription = "Next", tint = forwardTint, modifier = Modifier.size(16.dp))
+                        }
+                    }
+                }
+                BrowseNavButton(
+                    icon = Icons.Default.Home, label = "Home",
+                    enabled = true, theme = theme, onClick = onHome,
+                    highlight = true
+                )
+                BadgedBox(
+                    badge = {
+                        Badge(
+                            containerColor = theme.primary,
+                            contentColor = Color.White,
+                            modifier = Modifier.graphicsLayer {
+                                scaleX = badgeScale.value
+                                scaleY = badgeScale.value
+                            }
+                        ) {
+                            Text(tabBadgeText(tabCount), fontSize = 9.sp)
+                        }
+                    },
+                    modifier = Modifier.clickable(
+                        interactionSource = remember { MutableInteractionSource() },
+                        indication = null
+                    ) { onTabs() }
+                ) {
+                    BrowseNavContent(icon = Icons.Default.Tab, label = "Tabs", enabled = true, theme = theme)
+                }
+                BrowseNavButton(
+                    icon = Icons.Default.MoreVert, label = "More",
+                    enabled = true, theme = theme, onClick = onMenu
+                )
             }
-            BrowseNavButton(
-                icon = Icons.Default.MoreVert, label = "More",
-                enabled = true, theme = theme, onClick = onMenu
-            )
         }
     }
 }

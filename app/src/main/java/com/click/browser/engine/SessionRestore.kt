@@ -22,9 +22,10 @@ data class SavedTab(
  *
  * - While the app runs, [saveSession] keeps a snapshot of the open
  *   non-incognito tabs in the profile's DataStore ([profileDataStoreFor]).
- * - A `clean_exit` flag distinguishes "user closed the app / switched
- *   engine on purpose" from "the process died unexpectedly" (crash,
- *   force-close, system kill).
+ * - A `clean_exit` flag distinguishes a normal close or intentional profile
+ *   switch from an unexpected process death (crash, force-close, system kill).
+ * - An intentional switch also arms a one-shot marker in the source profile;
+ *   returning to that same profile restores its own tabs automatically.
  * - On the next launch, if the flag says the previous run was NOT clean
  *   and a snapshot exists, the UI offers "Restore N tabs?".
  *
@@ -53,6 +54,9 @@ object SessionRestore {
     private fun activeIndexKey(mode: BrowserMode) =
         intPreferencesKey("session_active_index_${mode.name.lowercase()}")
 
+    private fun modeSwitchRestoreKey(mode: BrowserMode) =
+        booleanPreferencesKey("session_mode_switch_restore_${mode.name.lowercase()}")
+
     /** True if the URL is worth restoring (real web page, not chrome UI). */
     fun isRestorableUrl(url: String): Boolean =
         url.startsWith("http://") || url.startsWith("https://")
@@ -72,6 +76,22 @@ object SessionRestore {
         mode: BrowserMode,
         tabs: List<SavedTab>,
         activeIndex: Int
+    ) = writeSession(context, mode, tabs, activeIndex, armModeSwitchRestore = false)
+
+    /** Saves this profile's tabs and arms automatic restoration when it is re-entered. */
+    suspend fun saveSessionForModeSwitch(
+        context: Context,
+        mode: BrowserMode,
+        tabs: List<SavedTab>,
+        activeIndex: Int
+    ) = writeSession(context, mode, tabs, activeIndex, armModeSwitchRestore = true)
+
+    private suspend fun writeSession(
+        context: Context,
+        mode: BrowserMode,
+        tabs: List<SavedTab>,
+        activeIndex: Int,
+        armModeSwitchRestore: Boolean
     ) {
         val restorable = tabs
             .filter { isRestorableUrl(it.url) }
@@ -86,6 +106,13 @@ object SessionRestore {
         context.profileDataStoreFor(mode).edit { prefs ->
             prefs[tabsKey(mode)] = array.toString()
             prefs[activeIndexKey(mode)] = activeIndex.coerceIn(0, (restorable.size - 1).coerceAtLeast(0))
+            if (armModeSwitchRestore) {
+                if (restorable.isEmpty()) {
+                    prefs.remove(modeSwitchRestoreKey(mode))
+                } else {
+                    prefs[modeSwitchRestoreKey(mode)] = true
+                }
+            }
         }
     }
 
@@ -128,6 +155,23 @@ object SessionRestore {
         }
     }
 
+    /** Atomically reads and removes the one-shot marker for this profile. */
+    suspend fun consumeModeSwitchRestore(context: Context, mode: BrowserMode): Boolean {
+        var pending = false
+        context.profileDataStoreFor(mode).edit { prefs ->
+            pending = prefs[modeSwitchRestoreKey(mode)] == true
+            prefs.remove(modeSwitchRestoreKey(mode))
+        }
+        return pending
+    }
+
+    /** Cancels a pending restore if the requested process restart could not be scheduled. */
+    suspend fun clearModeSwitchRestore(context: Context, mode: BrowserMode) {
+        context.profileDataStoreFor(mode).edit { prefs ->
+            prefs.remove(modeSwitchRestoreKey(mode))
+        }
+    }
+
     /**
      * Drops the snapshot for [mode] (used when the user discards the restore
      * offer, or when "clear data on exit" wipes it). Also resets the
@@ -140,6 +184,7 @@ object SessionRestore {
         context.profileDataStoreFor(mode).edit { prefs ->
             prefs.remove(tabsKey(mode))
             prefs.remove(activeIndexKey(mode))
+            prefs.remove(modeSwitchRestoreKey(mode))
             prefs.remove(cleanExitKey(mode)) // default = true = clean
         }
     }

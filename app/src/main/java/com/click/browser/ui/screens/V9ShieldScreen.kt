@@ -32,8 +32,8 @@ import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 
 /**
- * V9 Shield — built-in VPN (encrypted DNS + DNS threat blocking), DNS
- * provider settings, and an overview of the browser-data profiles.
+ * V9 Shield — DNS-only protection and DNS provider settings, plus an overview
+ * of the browser-data profiles. It does not tunnel general web traffic.
  *
  * Includes the responsible-use notice: V9 Shield is a privacy tool, not a
  * tool for illegal activity. Click Browser applies no political censorship —
@@ -54,6 +54,9 @@ fun V9ShieldScreen(onClose: () -> Unit) {
     val customUrl by context.dataStore.data
         .map { it[AppSettings.DOH_CUSTOM_URL].orEmpty() }
         .collectAsState(initial = "")
+    val strictDns by context.dataStore.data
+        .map { AppSettings.strictDnsEnabled(it) }
+        .collectAsState(initial = false)
     var customDraft by remember(customUrl) { mutableStateOf(customUrl) }
 
     val vpnPermissionLauncher = rememberLauncherForActivityResult(
@@ -99,7 +102,7 @@ fun V9ShieldScreen(onClose: () -> Unit) {
         Column(
             modifier = Modifier
                 .fillMaxSize()
-                .background(Color(0xFF0A0A0F))
+                .background(Color(0xFFF6F2E9))
                 .verticalScroll(rememberScrollState())
                 .padding(20.dp)
         ) {
@@ -110,19 +113,19 @@ fun V9ShieldScreen(onClose: () -> Unit) {
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Column {
-                    Text("V9 Shield", fontSize = 22.sp, fontWeight = FontWeight.ExtraBold, color = Color.White)
+                    Text("V9 Shield", fontSize = 22.sp, fontWeight = FontWeight.ExtraBold, color = Color(0xFF1F2A24))
                     Text(
-                        "Encrypted DNS · Tracker blocking",
-                        fontSize = 12.sp, color = Color(0xFF8E8EA3)
+                        "DNS protection · Tracker blocking",
+                        fontSize = 12.sp, color = Color(0xFF657168)
                     )
                 }
-                TextButton(onClick = onClose) { Text("Close", color = Color(0xFF7C6CFF)) }
+                TextButton(onClick = onClose) { Text("Close", color = Color(0xFF2F6B4F)) }
             }
             Spacer(Modifier.height(16.dp))
 
-            // VPN toggle card
+            // DNS-only protection toggle card.
             Card(
-                colors = CardDefaults.cardColors(containerColor = Color(0xFF14141F)),
+                colors = CardDefaults.cardColors(containerColor = Color(0xFFFFFEFB)),
                 shape = RoundedCornerShape(16.dp),
                 modifier = Modifier.fillMaxWidth()
             ) {
@@ -134,17 +137,21 @@ fun V9ShieldScreen(onClose: () -> Unit) {
                     horizontalArrangement = Arrangement.SpaceBetween
                 ) {
                     Column(Modifier.weight(1f)) {
-                        Text("Shield VPN", fontWeight = FontWeight.Bold, color = Color.White, fontSize = 15.sp)
+                        Text("DNS protection", fontWeight = FontWeight.Bold, color = Color(0xFF1F2A24), fontSize = 15.sp)
                         Text(
-                            if (vpnOn) "ON — DNS is encrypted" else "OFF",
+                            if (!vpnOn) "OFF" else if (strictDns) {
+                                "ON — Strict DNS; DoH failures are blocked"
+                            } else {
+                                "ON — plain-DNS fallback may be unencrypted"
+                            },
                             fontSize = 12.sp,
-                            color = if (vpnOn) Color(0xFF34D399) else Color(0xFF8E8EA3)
+                            color = if (vpnOn) Color(0xFF2F6B4F) else Color(0xFF657168)
                         )
                     }
                     Switch(
                         checked = vpnOn,
                         onCheckedChange = ::setVpn,
-                        colors = SwitchDefaults.colors(checkedThumbColor = Color.White, checkedTrackColor = Color(0xFF7C6CFF))
+                        colors = SwitchDefaults.colors(checkedThumbColor = Color.White, checkedTrackColor = Color(0xFF2F6B4F))
                     )
                 }
             }
@@ -157,7 +164,44 @@ fun V9ShieldScreen(onClose: () -> Unit) {
             }
             Spacer(Modifier.height(16.dp))
 
-            Text("DNS provider", fontWeight = FontWeight.Bold, color = Color.White, fontSize = 14.sp)
+            Text("DNS behavior", fontWeight = FontWeight.Bold, color = Color(0xFF1F2A24), fontSize = 14.sp)
+            Spacer(Modifier.height(8.dp))
+            Card(
+                colors = CardDefaults.cardColors(containerColor = Color(0xFFFFFEFB)),
+                shape = RoundedCornerShape(12.dp),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth().padding(14.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Column(Modifier.weight(1f).padding(end = 12.dp)) {
+                        Text("Strict DNS", fontWeight = FontWeight.Bold, color = Color(0xFF1F2A24), fontSize = 14.sp)
+                        Spacer(Modifier.height(4.dp))
+                        Text(
+                            if (strictDns) {
+                                "ON — DoH failures return an error; no plain-DNS retry. Lookups may fail."
+                            } else {
+                                "OFF — DoH failures fall back to plain DNS; those lookups may be unencrypted."
+                            },
+                            fontSize = 11.5.sp, color = Color(0xFF657168), lineHeight = 16.sp
+                        )
+                    }
+                    Switch(
+                        checked = strictDns,
+                        onCheckedChange = { enabled ->
+                            scope.launch {
+                                context.dataStore.edit { it[AppSettings.STRICT_DNS_ENABLED] = enabled }
+                            }
+                        },
+                        colors = SwitchDefaults.colors(checkedThumbColor = Color.White, checkedTrackColor = Color(0xFF2F6B4F))
+                    )
+                }
+            }
+            Spacer(Modifier.height(16.dp))
+
+            Text("DNS provider", fontWeight = FontWeight.Bold, color = Color(0xFF1F2A24), fontSize = 14.sp)
             Spacer(Modifier.height(8.dp))
             DnsOption("Cloudflare (1.1.1.1)", dohProvider == V9DohResolver.PROVIDER_CLOUDFLARE) {
                 setProvider(V9DohResolver.PROVIDER_CLOUDFLARE)
@@ -177,10 +221,10 @@ fun V9ShieldScreen(onClose: () -> Unit) {
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth(),
                     colors = OutlinedTextFieldDefaults.colors(
-                        focusedBorderColor = Color(0xFF7C6CFF),
-                        unfocusedBorderColor = Color(0xFF2A2A3E),
-                        focusedTextColor = Color.White,
-                        unfocusedTextColor = Color.White,
+                        focusedBorderColor = Color(0xFF2F6B4F),
+                        unfocusedBorderColor = Color(0xFFD6D2C7),
+                        focusedTextColor = Color(0xFF1F2A24),
+                        unfocusedTextColor = Color(0xFF1F2A24),
                     )
                 )
                 Spacer(Modifier.height(8.dp))
@@ -191,17 +235,17 @@ fun V9ShieldScreen(onClose: () -> Unit) {
                             context.dataStore.edit { it[AppSettings.DOH_CUSTOM_URL] = v }
                         }
                     },
-                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF7C6CFF))
+                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF2F6B4F))
                 ) { Text("Save") }
             }
             Text(
-                "Changing DNS applies to new connections. The Shield VPN must be ON for device-wide encrypted DNS.",
-                fontSize = 11.sp, color = Color(0xFF8E8EA3),
+                "Provider changes apply to new requests. DNS protection must be ON for device-wide DNS handling.",
+                fontSize = 11.sp, color = Color(0xFF657168),
                 modifier = Modifier.padding(top = 8.dp)
             )
 
             Spacer(Modifier.height(20.dp))
-            Text("Browser profiles", fontWeight = FontWeight.Bold, color = Color.White, fontSize = 14.sp)
+            Text("Browser profiles", fontWeight = FontWeight.Bold, color = Color(0xFF1F2A24), fontSize = 14.sp)
             Spacer(Modifier.height(8.dp))
             BrowserMode.values().forEach { mode ->
                 val p = V9Engine.profileFor(mode)
@@ -214,7 +258,7 @@ fun V9ShieldScreen(onClose: () -> Unit) {
                 }
                 Card(
                     colors = CardDefaults.cardColors(
-                        containerColor = if (isBoot) Color(0xFF1B2340) else Color(0xFF14141F)
+                        containerColor = if (isBoot) Color(0xFFE8F0E8) else Color(0xFFFFFEFB)
                     ),
                     shape = RoundedCornerShape(12.dp),
                     modifier = Modifier
@@ -228,17 +272,17 @@ fun V9ShieldScreen(onClose: () -> Unit) {
                         Column(Modifier.weight(1f)) {
                             Text(
                                 "$profileName profile",
-                                fontWeight = FontWeight.Bold, color = Color.White, fontSize = 13.sp
+                                fontWeight = FontWeight.Bold, color = Color(0xFF1F2A24), fontSize = 13.sp
                             )
-                            Text(p.deviceLabel, fontSize = 11.sp, color = Color(0xFF8E8EA3))
+                            Text(p.deviceLabel, fontSize = 11.sp, color = Color(0xFF657168))
                         }
                         if (isBoot) {
                             Text(
                                 "ACTIVE", fontSize = 10.sp, fontWeight = FontWeight.ExtraBold,
-                                color = Color(0xFF34D399),
+                                color = Color(0xFF2F6B4F),
                                 modifier = Modifier
                                     .clip(RoundedCornerShape(6.dp))
-                                    .background(Color(0xFF34D399).copy(alpha = 0.15f))
+                                    .background(Color(0xFF2F6B4F).copy(alpha = 0.15f))
                                     .padding(horizontal = 8.dp, vertical = 4.dp)
                             )
                         }
@@ -249,14 +293,14 @@ fun V9ShieldScreen(onClose: () -> Unit) {
             Spacer(Modifier.height(12.dp))
             // Responsible-use notice (anti-misuse safeguard).
             Card(
-                colors = CardDefaults.cardColors(containerColor = Color(0xFF1A1408)),
+                colors = CardDefaults.cardColors(containerColor = Color(0xFFFFF3D8)),
                 shape = RoundedCornerShape(12.dp),
                 modifier = Modifier.fillMaxWidth()
             ) {
                 Column(Modifier.padding(14.dp)) {
                     Text(
                         "Responsible use",
-                        fontWeight = FontWeight.Bold, color = Color(0xFFFBBF24), fontSize = 13.sp
+                        fontWeight = FontWeight.Bold, color = Color(0xFF946200), fontSize = 13.sp
                     )
                     Spacer(Modifier.height(6.dp))
                     Text(
@@ -266,7 +310,7 @@ fun V9ShieldScreen(onClose: () -> Unit) {
                             "the law. Click Browser applies no political censorship — " +
                             "protection covers only malware, phishing and adult " +
                             "content where you enable it.",
-                        fontSize = 11.5.sp, color = Color(0xFFD6C9A8), lineHeight = 16.sp
+                        fontSize = 11.5.sp, color = Color(0xFF574B33), lineHeight = 16.sp
                     )
                 }
             }
@@ -278,13 +322,13 @@ fun V9ShieldScreen(onClose: () -> Unit) {
 @Composable
 private fun StatCard(label: String, value: String, modifier: Modifier = Modifier) {
     Card(
-        colors = CardDefaults.cardColors(containerColor = Color(0xFF14141F)),
+        colors = CardDefaults.cardColors(containerColor = Color(0xFFFFFEFB)),
         shape = RoundedCornerShape(12.dp),
         modifier = modifier
     ) {
         Column(Modifier.padding(12.dp)) {
-            Text(value, fontWeight = FontWeight.ExtraBold, color = Color.White, fontSize = 18.sp)
-            Text(label, fontSize = 11.sp, color = Color(0xFF8E8EA3))
+            Text(value, fontWeight = FontWeight.ExtraBold, color = Color(0xFF1F2A24), fontSize = 18.sp)
+            Text(label, fontSize = 11.sp, color = Color(0xFF657168))
         }
     }
 }
@@ -302,9 +346,9 @@ private fun DnsOption(label: String, selected: Boolean, onClick: () -> Unit) {
         RadioButton(
             selected = selected,
             onClick = onClick,
-            colors = RadioButtonDefaults.colors(selectedColor = Color(0xFF7C6CFF))
+            colors = RadioButtonDefaults.colors(selectedColor = Color(0xFF2F6B4F))
         )
         Spacer(Modifier.width(8.dp))
-        Text(label, color = Color.White, fontSize = 13.sp)
+        Text(label, color = Color(0xFF1F2A24), fontSize = 13.sp)
     }
 }

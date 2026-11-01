@@ -105,7 +105,7 @@ fun WebsiteProcessingOverlay(
     Box(
         modifier = modifier
             .fillMaxSize()
-            .background(theme.background.copy(alpha = 0.97f))
+            .background(theme.background.copy(alpha = 0.28f))
             .clickable(
                 interactionSource = remember { MutableInteractionSource() },
                 indication = null,
@@ -116,27 +116,27 @@ fun WebsiteProcessingOverlay(
         Surface(
             modifier = Modifier
                 .fillMaxWidth()
-                .widthIn(max = 360.dp)
-                .padding(horizontal = 20.dp),
-            shape = RoundedCornerShape(28.dp),
+                .widthIn(max = 330.dp)
+                .padding(horizontal = 24.dp),
+            shape = RoundedCornerShape(24.dp),
             color = theme.surface,
             border = BorderStroke(1.dp, theme.primary.copy(alpha = 0.16f)),
-            shadowElevation = 16.dp
+            shadowElevation = 12.dp
         ) {
             Column(
                 modifier = Modifier
                     .verticalScroll(rememberScrollState())
-                    .padding(horizontal = 24.dp, vertical = 22.dp),
+                    .padding(horizontal = 20.dp, vertical = 16.dp),
                 horizontalAlignment = Alignment.CenterHorizontally
             ) {
                 Box(
-                    modifier = Modifier.size(116.dp),
+                    modifier = Modifier.size(92.dp),
                     contentAlignment = Alignment.Center
                 ) {
                     // Thin orbital ring adds depth without a shader, bitmap, or extra dependency.
                     Box(
                         modifier = Modifier
-                            .size(96.dp)
+                            .size(72.dp)
                             .graphicsLayer { rotationZ = rotation * 2f }
                             .border(
                                 width = 1.dp,
@@ -192,7 +192,7 @@ fun WebsiteProcessingOverlay(
                             imageVector = Icons.Default.Language,
                             contentDescription = null,
                             tint = Color.White,
-                            modifier = Modifier.size(34.dp)
+                            modifier = Modifier.size(28.dp)
                         )
                         Box(
                             modifier = Modifier
@@ -215,7 +215,7 @@ fun WebsiteProcessingOverlay(
                 }
                 Spacer(Modifier.height(8.dp))
                 Text(
-                    text = "Loading website",
+                    text = "Loading page…",
                     modifier = Modifier.semantics { heading() },
                     color = theme.onSurface,
                     fontSize = 18.sp,
@@ -229,7 +229,7 @@ fun WebsiteProcessingOverlay(
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis
                 )
-                Spacer(Modifier.height(18.dp))
+                Spacer(Modifier.height(12.dp))
                 if (progressPercent != null) {
                     LinearProgressIndicator(
                         progress = { progressPercent / 100f },

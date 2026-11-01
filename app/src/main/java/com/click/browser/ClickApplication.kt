@@ -23,10 +23,12 @@ class ClickApplication : Application() {
     override fun onCreate() {
         V9Engine.applyDataDirectorySuffix(this)
         super.onCreate()
-        // Finish the local policy-remediation migration before any Activity can
-        // observe legacy shortcuts or settings during its first composition.
-        runBlocking {
-            com.click.browser.engine.LegacyPolicyFeatureCleanup.run(this@ClickApplication)
+        // Run policy-remediation cleanup before any Activity can observe legacy
+        // state, but skip coroutine startup after its versioned marker is written.
+        if (!com.click.browser.engine.LegacyPolicyFeatureCleanup.isComplete(this)) {
+            runBlocking {
+                com.click.browser.engine.LegacyPolicyFeatureCleanup.run(this@ClickApplication)
+            }
         }
         // Crash + OOM reports: capture to files dir, user sends them from
         // Settings → Reports. Never uploads silently.

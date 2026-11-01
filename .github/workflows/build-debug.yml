@@ -140,6 +140,9 @@ jobs:
           java-version: '21'
           distribution: 'temurin'
 
+      - name: Run focused browser error-page tests
+        run: ./gradlew testDebugUnitTest --tests 'com.click.browser.ui.screens.BrowserErrorPageTest'
+
       - name: Build main-branch merged manifest baseline
         if: github.event_name == 'pull_request'
         env:
@@ -202,12 +205,15 @@ jobs:
       - name: Run unit tests
         env:
           GROQ_API_KEY: ci-placeholder-no-secret
-        run: ./gradlew testDebugUnitTest
+        run: ./gradlew :app:testDebugUnitTest
 
       - name: Build Debug APK
         env:
           GROQ_API_KEY: ${{ github.ref == 'refs/heads/main' && secrets.GROQ_API_KEY || 'ci-placeholder-no-secret' }}
         run: ./gradlew assembleDebug
+
+      - name: Run focused browser URL input tests
+        run: ./gradlew testDebugUnitTest --tests 'com.click.browser.ui.screens.BrowserUrlInputTest'
 
       - name: Verify merged Android permissions unchanged
         if: github.event_name == 'pull_request'
@@ -220,6 +226,9 @@ jobs:
         env:
           GROQ_API_KEY: ${{ github.ref == 'refs/heads/main' && secrets.GROQ_API_KEY || 'ci-placeholder-no-secret' }}
         run: ./gradlew bundleDebug
+
+      - name: Run focused legacy cleanup tests
+        run: ./gradlew testDebugUnitTest --tests 'com.click.browser.engine.LegacyCleanupOnceTest'
 
       - name: Build Release APK
         if: github.ref == 'refs/heads/main'
