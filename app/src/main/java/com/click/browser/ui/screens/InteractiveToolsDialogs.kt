@@ -786,7 +786,7 @@ fun AboutAppDialog(onClose: () -> Unit) {
                 )
                 Spacer(modifier = Modifier.height(4.dp))
                 Text(
-                    "Click includes Safe Browsing when supported by the installed WebView, HTTPS controls, optional ad/tracker blocking and V9 Shield DNS/VPN features. These tools can reduce some risks, but they cannot guarantee every site is safe. Website geolocation, camera and microphone requests are denied.",
+                    "Click includes Safe Browsing when supported by the installed WebView, HTTPS controls, optional ad/tracker blocking and V9 Shield DNS-layer protection. These tools can reduce some risks, but they cannot guarantee every site is safe. Website geolocation, camera and microphone requests are denied.",
                     fontSize = 11.sp,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
