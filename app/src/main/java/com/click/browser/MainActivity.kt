@@ -119,7 +119,16 @@ class TabItem(
     var isIncognito by mutableStateOf(isIncognito)
     /** 0..100 page-load progress (drives the thin progress bar under the top bar). */
     var loadProgress by mutableStateOf(0)
+    var isPageLoading by mutableStateOf(false)
+    var hasCommittedContent by mutableStateOf(false)
 }
+
+private data class PendingBrowserDownload(
+    val url: String,
+    val fileName: String,
+    val mimeType: String?,
+    val userAgent: String?
+)
 
 /**
  * Page transition wrapper — subtle fade + slide on every navigation start.
@@ -1355,6 +1364,9 @@ class MainActivity : FragmentActivity() {
             var showAccessibility by remember { mutableStateOf(false) }
             var showLanguage by remember { mutableStateOf(false) }
             var showDownloadSettings by remember { mutableStateOf(false) }
+            var pendingBrowserDownload by remember { mutableStateOf<PendingBrowserDownload?>(null) }
+            var downloadDestination by remember { mutableStateOf(DownloadSettings.LOCATION_PHONE) }
+            var customDownloadFolderAvailable by remember { mutableStateOf(false) }
             var showReports by remember { mutableStateOf(false) }
             // Privacy & Security suite (Google Sign-In, passwords, Safety Check, autofill, cards).
             var showPrivacySecurity by remember { mutableStateOf(false) }
@@ -1470,10 +1482,7 @@ class MainActivity : FragmentActivity() {
                             ).show()
                         }
                     }
-                    FeatureId.DOWNLOADS -> {
-                        this@MainActivity.requestStoragePermissions()
-                        showDownloads = true
-                    }
+                    FeatureId.DOWNLOADS -> showDownloads = true
                     FeatureId.BOOKMARKS -> showBookmarks = true
                     FeatureId.AI_CHAT -> {
                         // Same tamper gate as the drawer entry (Play-policy critical).
@@ -2096,7 +2105,6 @@ class MainActivity : FragmentActivity() {
                                     DrawerItem(label = "Downloads Center", icon = Icons.Default.Download, color = Color.LightGray) {
                                         scope.launch {
                                             drawerState.close()
-                                            requestStoragePermissions()
                                             showDownloads = true
                                         }
                                     }
@@ -2920,25 +2928,38 @@ class MainActivity : FragmentActivity() {
 
                                                                     override fun onPageStarted(view: WebView?, url: String?, favicon: Bitmap?) {
                                                                 super.onPageStarted(view, url, favicon)
-                                                                currentTab.url = url ?: ""
-                                                                lastPageStart = System.currentTimeMillis()
-                                                                // Page transition animation trigger (main-frame
-                                                                // navigations only — subframes don't call this).
-                                                                pageTransitionTick++
+                                                                val loadingTab = view?.let { target -> tabs.firstOrNull { it.webView === target } } ?: return
+                                                                loadingTab.url = url ?: ""
+                                                                loadingTab.isPageLoading = true
+                                                                loadingTab.hasCommittedContent = false
+                                                                loadingTab.loadProgress = 0
+                                                                if (loadingTab === currentTab) {
+                                                                    lastPageStart = System.currentTimeMillis()
+                                                                    pageTransitionTick++
+                                                                    networkRequests.clear()
+                                                                    sourcesList.clear()
+                                                                }
+                                                            }
 
-                                                                // Clear stats
-                                                                networkRequests.clear()
-                                                                sourcesList.clear()
-
-
+                                                            override fun onPageCommitVisible(view: WebView?, url: String?) {
+                                                                super.onPageCommitVisible(view, url)
+                                                                view?.let { target ->
+                                                                    tabs.firstOrNull { it.webView === target }?.hasCommittedContent = true
+                                                                }
                                                             }
 
                                                             override fun onPageFinished(view: WebView?, url: String?) {
                                                                 super.onPageFinished(view, url)
-                                                                currentTab.title = view?.title ?: "Page"
-                                                                pageLoadTime = System.currentTimeMillis() - lastPageStart
-                                                                // Pull-to-refresh completes when the page finishes loading.
-                                                                if (isRefreshing) isRefreshing = false
+                                                                val finishedTab = view?.let { target -> tabs.firstOrNull { it.webView === target } } ?: return
+                                                                finishedTab.url = url ?: finishedTab.url
+                                                                finishedTab.title = view.title ?: "Page"
+                                                                finishedTab.isPageLoading = false
+                                                                finishedTab.hasCommittedContent = true
+                                                                finishedTab.loadProgress = 100
+                                                                if (finishedTab === currentTab) {
+                                                                    pageLoadTime = System.currentTimeMillis() - lastPageStart
+                                                                    if (isRefreshing) isRefreshing = false
+                                                                }
 
                                                                 // Password manager: inject form detection + auto-fill
                                                                 // saved credentials for this host (if any).
@@ -2950,7 +2971,7 @@ class MainActivity : FragmentActivity() {
                                                                     val host = try {
                                                                         android.net.Uri.parse(url.orEmpty()).host.orEmpty()
                                                                     } catch (_: Exception) { "" }
-                                                                    if (host.isNotBlank() && !currentTab.isIncognito) {
+                                                                    if (host.isNotBlank() && !finishedTab.isIncognito) {
                                                                         scope.launch {
                                                                             val saved = com.click.browser.engine.PasswordManager.getForHost(
                                                                                 this@MainActivity, host
@@ -2972,9 +2993,9 @@ class MainActivity : FragmentActivity() {
                                                                 }
 
                                                                 // History tracking (skip if Incognito Tab)
-                                                                if (!currentTab.isIncognito && url != null && url != "about:blank") {
+                                                                if (!finishedTab.isIncognito && url != null && url != "about:blank") {
                                                                     scope.launch {
-                                                                        repository.addHistoryItem(HistoryItem(currentTab.title, url, System.currentTimeMillis()))
+                                                                        repository.addHistoryItem(HistoryItem(finishedTab.title, url, System.currentTimeMillis()))
                                                                     }
                                                                 }
 
@@ -3060,10 +3081,18 @@ class MainActivity : FragmentActivity() {
                                                                 return super.shouldInterceptRequest(view, request)
                                                             }
 
-                                                            @Suppress("Deprecated")
-                                                            override fun onReceivedError(view: WebView?, errorCode: Int, description: String?, failingUrl: String?) {
-                                                                // Framework routes main-frame errors to the deprecated overload
-                                                                this@MainActivity.showBrowserErrorPage(view, description)
+                                                            override fun onReceivedError(
+                                                                view: WebView?,
+                                                                request: WebResourceRequest?,
+                                                                error: WebResourceError?
+                                                            ) {
+                                                                super.onReceivedError(view, request, error)
+                                                                if (request?.isForMainFrame != true) return
+                                                                val failedTab = view?.let { target -> tabs.firstOrNull { it.webView === target } } ?: return
+                                                                failedTab.isPageLoading = false
+                                                                failedTab.hasCommittedContent = true
+                                                                failedTab.loadProgress = 0
+                                                                this@MainActivity.showBrowserErrorPage(view, error?.description?.toString())
                                                             }
 
                                                         }
@@ -3158,7 +3187,7 @@ class MainActivity : FragmentActivity() {
 
                                                             override fun onReceivedTitle(view: WebView?, title: String?) {
                                                                 super.onReceivedTitle(view, title)
-                                                                currentTab.title = title ?: "Page"
+                                                                view?.let { target -> tabs.firstOrNull { it.webView === target }?.title = title ?: "Page" }
                                                             }
 
                                                             // Page-load progress → thin progress bar under the
@@ -3267,6 +3296,33 @@ class MainActivity : FragmentActivity() {
                                                                     this@MainActivity.liveWebViews.add(this)
                                                                 }
 
+                                                                setDownloadListener { url, userAgent, contentDisposition, mimeType, _ ->
+                                                                    val scheme = try {
+                                                                        android.net.Uri.parse(url).scheme?.lowercase()
+                                                                    } catch (_: Exception) { null }
+                                                                    if (scheme != "http" && scheme != "https") {
+                                                                        Toast.makeText(this@MainActivity, "This download link is not supported.", Toast.LENGTH_SHORT).show()
+                                                                    } else {
+                                                                        val fileName = android.webkit.URLUtil.guessFileName(
+                                                                            url, contentDisposition, mimeType
+                                                                        )
+                                                                        val pending = PendingBrowserDownload(
+                                                                            url = url,
+                                                                            fileName = fileName,
+                                                                            mimeType = mimeType,
+                                                                            userAgent = userAgent
+                                                                        )
+                                                                        scope.launch {
+                                                                            val savedLocation = DownloadSettings.location(this@MainActivity)
+                                                                            customDownloadFolderAvailable = DownloadSettings.customUri(this@MainActivity) != null
+                                                                            downloadDestination = if (
+                                                                                savedLocation == DownloadSettings.LOCATION_CUSTOM && !customDownloadFolderAvailable
+                                                                            ) DownloadSettings.LOCATION_PHONE else savedLocation
+                                                                            pendingBrowserDownload = pending
+                                                                        }
+                                                                    }
+                                                                }
+
                                                                 // Long-press context menu (links + images).
                                                                 // Attached once at WebView creation, so it works in
                                                                 // every mode (Simple / Developer / Power / Advance).
@@ -3338,6 +3394,20 @@ class MainActivity : FragmentActivity() {
                                                         this@MainActivity.applyExperimentalFlags(webView)
                                                     }
                                                 )
+                                                if (currentTab.url != "about:blank" && currentTab.isPageLoading && !currentTab.hasCommittedContent) {
+                                                    WebsiteProcessingOverlay(
+                                                        theme = theme,
+                                                        site = hostOfUrl(currentTab.url),
+                                                        progress = currentTab.loadProgress,
+                                                        animationsEnabled = flagsUi.tabAnimations && !liveReducedMotion,
+                                                        onCancel = {
+                                                            currentTab.webView?.stopLoading()
+                                                            currentTab.isPageLoading = false
+                                                            currentTab.hasCommittedContent = true
+                                                            currentTab.loadProgress = 0
+                                                        }
+                                                    )
+                                                }
                                             }
                                         }
                                         }
@@ -4590,6 +4660,79 @@ class MainActivity : FragmentActivity() {
                                     }
                                 )
                             }
+                            val downloadPrompt = pendingBrowserDownload
+                            if (downloadPrompt != null) {
+                                val destinations = listOf(
+                                    Triple(DownloadSettings.LOCATION_PHONE, "Phone storage", "Public Downloads folder"),
+                                    Triple(DownloadSettings.LOCATION_APP, "App private storage", "Only available inside Click"),
+                                    Triple(DownloadSettings.LOCATION_CUSTOM, "Custom folder", "Use the folder selected in Downloads settings")
+                                )
+                                AlertDialog(
+                                    onDismissRequest = { pendingBrowserDownload = null },
+                                    title = { Text("Save download?") },
+                                    text = {
+                                        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                                            Text(
+                                                downloadPrompt.fileName,
+                                                color = theme.onSurface,
+                                                fontWeight = FontWeight.SemiBold,
+                                                maxLines = 2,
+                                                overflow = TextOverflow.Ellipsis
+                                            )
+                                            downloadPrompt.mimeType?.takeIf { it.isNotBlank() }?.let {
+                                                Text(it, color = theme.onSurface.copy(alpha = 0.6f), fontSize = 12.sp)
+                                            }
+                                            Spacer(Modifier.height(4.dp))
+                                            Text("Choose where to save it:", color = theme.onSurface, fontSize = 13.sp)
+                                            destinations.forEach { (value, label, description) ->
+                                                val enabled = value != DownloadSettings.LOCATION_CUSTOM || customDownloadFolderAvailable
+                                                Row(
+                                                    modifier = Modifier
+                                                        .fillMaxWidth()
+                                                        .clickable(enabled = enabled) { downloadDestination = value }
+                                                        .padding(vertical = 3.dp),
+                                                    verticalAlignment = Alignment.CenterVertically
+                                                ) {
+                                                    RadioButton(
+                                                        selected = downloadDestination == value,
+                                                        onClick = { downloadDestination = value },
+                                                        enabled = enabled
+                                                    )
+                                                    Column(Modifier.padding(start = 8.dp)) {
+                                                        Text(label, color = if (enabled) theme.onSurface else theme.onSurface.copy(alpha = 0.4f), fontSize = 13.sp)
+                                                        Text(description, color = theme.onSurface.copy(alpha = 0.58f), fontSize = 11.sp)
+                                                    }
+                                                }
+                                            }
+                                            if (!customDownloadFolderAvailable) {
+                                                Text(
+                                                    "Choose a custom folder in Settings → Downloads first.",
+                                                    color = theme.onSurface.copy(alpha = 0.58f),
+                                                    fontSize = 11.sp
+                                                )
+                                            }
+                                        }
+                                    },
+                                    confirmButton = {
+                                        TextButton(onClick = {
+                                            val accepted = downloadPrompt
+                                            pendingBrowserDownload = null
+                                            scope.launch {
+                                                DownloadHelper.enqueue(
+                                                    this@MainActivity,
+                                                    accepted.url,
+                                                    accepted.fileName,
+                                                    locationOverride = downloadDestination,
+                                                    userAgent = accepted.userAgent
+                                                )
+                                            }
+                                        }) { Text("Save") }
+                                    },
+                                    dismissButton = {
+                                        TextButton(onClick = { pendingBrowserDownload = null }) { Text("Cancel") }
+                                    }
+                                )
+                            }
                             // Password manager: "Save password?" offer dialog.
                             val pwSave = pendingPasswordSave
                             if (showPasswordSaveDialog && pwSave != null) {
@@ -4814,7 +4957,6 @@ class MainActivity : FragmentActivity() {
                                     },
                                     onDownloads = {
                                         showBrowserMenu = false
-                                        this@MainActivity.requestStoragePermissions()
                                         showDownloads = true
                                     },
                                     onPlaylist = {
@@ -4943,8 +5085,10 @@ class MainActivity : FragmentActivity() {
                                         TextButton(onClick = {
                                             scope.launch {
                                                 repository.clearHistory()
-                                                currentTab.webView?.clearHistory()
-                                                currentTab.webView?.clearCache(true)
+                                                tabs.forEach { tab ->
+                                                    tab.webView?.clearHistory()
+                                                    tab.webView?.clearCache(true)
+                                                }
                                                 android.webkit.CookieManager.getInstance().removeAllCookies(null)
                                                 android.webkit.CookieManager.getInstance().flush()
                                                 android.webkit.WebStorage.getInstance().deleteAllData()

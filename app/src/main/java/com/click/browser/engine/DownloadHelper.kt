@@ -30,17 +30,34 @@ object DownloadHelper {
             .build()
     }
 
-    suspend fun enqueue(context: Context, url: String, fileName: String) {
-        val location = try { DownloadSettings.location(context) }
-        catch (_: Exception) { DownloadSettings.LOCATION_PHONE }
+    suspend fun enqueue(
+        context: Context,
+        url: String,
+        fileName: String,
+        locationOverride: String? = null,
+        userAgent: String? = null
+    ) {
+        val scheme = try { Uri.parse(url).scheme?.lowercase() } catch (_: Exception) { null }
+        if (scheme != "http" && scheme != "https") {
+            withContext(Dispatchers.Main) {
+                Toast.makeText(context, "Only HTTP and HTTPS downloads are supported.", Toast.LENGTH_SHORT).show()
+            }
+            return
+        }
+        val safeName = fileName.replace(Regex("[\\\\/:*?\"<>|]"), "_").trim().take(180).ifBlank { "download" }
+        val location = locationOverride?.let(DownloadSettings::normalize) ?: try {
+            DownloadSettings.location(context)
+        } catch (_: Exception) {
+            DownloadSettings.LOCATION_PHONE
+        }
         when (location) {
             DownloadSettings.LOCATION_APP ->
-                enqueueViaDownloadManager(context, url, fileName, appPrivate = true)
+                enqueueViaDownloadManager(context, url, safeName, appPrivate = true, userAgent = userAgent)
             DownloadSettings.LOCATION_CUSTOM -> {
-                val ok = downloadToCustomFolder(context, url, fileName)
-                if (!ok) enqueueViaDownloadManager(context, url, fileName, appPrivate = false)
+                val ok = downloadToCustomFolder(context, url, safeName, userAgent)
+                if (!ok) enqueueViaDownloadManager(context, url, safeName, appPrivate = false, userAgent = userAgent)
             }
-            else -> enqueueViaDownloadManager(context, url, fileName, appPrivate = false)
+            else -> enqueueViaDownloadManager(context, url, safeName, appPrivate = false, userAgent = userAgent)
         }
     }
 
@@ -48,7 +65,8 @@ object DownloadHelper {
         context: Context,
         url: String,
         fileName: String,
-        appPrivate: Boolean
+        appPrivate: Boolean,
+        userAgent: String?
     ) {
         try {
             val dm = context.getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager
@@ -58,6 +76,10 @@ object DownloadHelper {
                 .setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED)
                 .setAllowedOverMetered(true)
                 .setAllowedOverRoaming(false)
+            val actualUserAgent = userAgent?.takeIf { it.isNotBlank() }
+            if (actualUserAgent != null) req.addRequestHeader("User-Agent", actualUserAgent)
+            val cookie = try { android.webkit.CookieManager.getInstance().getCookie(url) } catch (_: Exception) { null }
+            if (!cookie.isNullOrBlank()) req.addRequestHeader("Cookie", cookie)
             if (appPrivate) {
                 req.setDestinationInExternalFilesDir(
                     context, Environment.DIRECTORY_DOWNLOADS, fileName
@@ -77,7 +99,8 @@ object DownloadHelper {
     private suspend fun downloadToCustomFolder(
         context: Context,
         url: String,
-        fileName: String
+        fileName: String,
+        userAgent: String?
     ): Boolean = withContext(Dispatchers.IO) {
         try {
             val treeUri = try { DownloadSettings.customUri(context) } catch (_: Exception) { null }
@@ -86,9 +109,15 @@ object DownloadHelper {
             if (!tree.canWrite()) return@withContext false
             tree.findFile(fileName)?.delete()
             val doc = tree.createFile(guessMime(fileName), fileName) ?: return@withContext false
-            val req = okhttp3.Request.Builder().url(url).get()
-                .header("User-Agent", android.webkit.WebSettings.getDefaultUserAgent(context.applicationContext))
-                .build()
+            val requestBuilder = okhttp3.Request.Builder().url(url).get()
+                .header(
+                    "User-Agent",
+                    userAgent?.takeIf { it.isNotBlank() }
+                        ?: android.webkit.WebSettings.getDefaultUserAgent(context.applicationContext)
+                )
+            val cookie = try { android.webkit.CookieManager.getInstance().getCookie(url) } catch (_: Exception) { null }
+            if (!cookie.isNullOrBlank()) requestBuilder.header("Cookie", cookie)
+            val req = requestBuilder.build()
             httpClient.newCall(req).execute().use { resp ->
                 if (!resp.isSuccessful) return@withContext false
                 val body = resp.body ?: return@withContext false
