@@ -144,6 +144,9 @@ jobs:
           java-version: '21'
           distribution: 'temurin'
 
+      - name: Run focused browser error-page tests
+        run: ./gradlew testDebugUnitTest --tests 'com.click.browser.ui.screens.BrowserErrorPageTest'
+
       # NOTE: AGP generates the debug keystore automatically — no manual step needed.
       # Release APKs MUST be signed with Prince's real keystore. A debug-signed
       # "release" APK trips the in-app tamper warning on install — so we fail
