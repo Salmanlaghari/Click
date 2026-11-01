@@ -12,9 +12,18 @@ import java.io.File
 
 /**
  * Removes persistent state for retired page-modification and identity features.
- * Safe to run on every launch: deletion and preference cleanup are idempotent.
+ * A versioned marker avoids repeating the synchronous migration on later launches.
  */
 object LegacyPolicyFeatureCleanup {
+
+    // Bump this filename when new retired state is added to the cleanup.
+    private const val COMPLETION_MARKER_FILE = "legacy_policy_cleanup_v1.complete"
+
+    internal fun isComplete(context: Context): Boolean =
+        completionMarker(context).isFile
+
+    private fun completionMarker(context: Context): File =
+        File(context.noBackupFilesDir, COMPLETION_MARKER_FILE)
 
     private val retiredStringKeys = listOf(
         "userscripts_index",
@@ -44,7 +53,13 @@ object LegacyPolicyFeatureCleanup {
     )
 
     suspend fun run(context: Context) = withContext(Dispatchers.IO) {
-        purgeScriptFiles(context)
+        runCleanupOnce(completionMarker(context)) {
+            cleanupLegacyState(context)
+        }
+    }
+
+    private suspend fun cleanupLegacyState(context: Context): Boolean {
+        val filesPurged = purgeScriptFiles(context)
         val stores = listOf(context.dataStore, context.advancedDataStore)
         stores.forEach { store ->
             store.edit { prefs ->
@@ -106,24 +121,33 @@ object LegacyPolicyFeatureCleanup {
                 }
             }
         }
+        return filesPurged
     }
 
-    private fun purgeScriptFiles(context: Context) {
+    private fun purgeScriptFiles(context: Context): Boolean {
+        var cleanupSucceeded = true
         listOf("userscripts", "userscripts_advanced").forEach { folder ->
-            runCatching { File(context.filesDir, folder).deleteRecursively() }
+            val directory = File(context.filesDir, folder)
+            if (directory.exists() && !runCatching { directory.deleteRecursively() }.getOrDefault(false)) {
+                cleanupSucceeded = false
+            }
         }
 
         val sharedPrefsDir = File(context.applicationInfo.dataDir, "shared_prefs")
-        sharedPrefsDir.listFiles()
-            ?.filter { it.name.startsWith("userscript_") && it.name.endsWith(".xml") }
-            ?.forEach { file ->
-                runCatching {
-                    context.getSharedPreferences(file.name.removeSuffix(".xml"), Context.MODE_PRIVATE)
-                        .edit()
-                        .clear()
-                        .commit()
-                    file.delete()
+        if (sharedPrefsDir.exists()) {
+            val files = sharedPrefsDir.listFiles() ?: return false
+            files.filter { it.name.startsWith("userscript_") && it.name.endsWith(".xml") }
+                .forEach { file ->
+                    val preferencesCleared = runCatching {
+                        context.getSharedPreferences(file.name.removeSuffix(".xml"), Context.MODE_PRIVATE)
+                            .edit()
+                            .clear()
+                            .commit()
+                    }.getOrDefault(false)
+                    val fileDeleted = runCatching { !file.exists() || file.delete() }.getOrDefault(false)
+                    if (!preferencesCleared && !fileDeleted) cleanupSucceeded = false
                 }
-            }
+        }
+        return cleanupSucceeded
     }
 }
