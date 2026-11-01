@@ -13,8 +13,17 @@ object ThemeController {
     fun normalizeLightThemeVariant(id: String?): LightThemeVariant =
         LightThemeVariant.fromId(id)
 
-    @Suppress("UNUSED_PARAMETER")
-    fun nextLightThemeVariant(currentId: String?): LightThemeVariant = LightThemeVariant.CREAM
+    /** Advances exactly one palette in the stable enum order, wrapping at the end. */
+    fun nextLightThemeVariant(currentId: String?): LightThemeVariant {
+        val variants = LightThemeVariant.values()
+        val currentIndex = variants.indexOf(normalizeLightThemeVariant(currentId))
+        return variants[(currentIndex + 1) % variants.size]
+    }
+
+    /** Resolves the palette to persist for one app launch. */
+    fun variantForLaunch(lastAppliedId: String?, autoRotate: Boolean): LightThemeVariant =
+        if (autoRotate) nextLightThemeVariant(lastAppliedId)
+        else normalizeLightThemeVariant(lastAppliedId)
 
     @Suppress("UNUSED_PARAMETER")
     suspend fun themeMode(context: Context): String = MODE_LIGHT

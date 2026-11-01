@@ -915,12 +915,12 @@ class MainActivity : FragmentActivity() {
                 finishFirstRunOnboarding()
             }
             val activeMode by modeManager.modeFlow.collectAsState(initial = V9Engine.bootMode)
-
-            // Click uses one warm, light palette across all browsing profiles.
-            // Saved dark/rotation preferences are normalized to light below.
+            // Palette selection is shared across profiles; each mode keeps its own label and behavior.
+            var lightThemeVariant by rememberSaveable { mutableStateOf(LightThemeVariant.CREAM) }
+            var autoRotateThemes by rememberSaveable { mutableStateOf(false) }
             var wallpaperUri by remember { mutableStateOf<String?>(null) }
-            val theme = remember(activeMode) {
-                ModeThemes.forMode(activeMode, dark = false, lightVariant = LightThemeVariant.CREAM)
+            val theme = remember(activeMode, lightThemeVariant) {
+                ModeThemes.forMode(activeMode, dark = false, lightVariant = lightThemeVariant)
             }
 
             val themeColors = if (theme.dark) {
@@ -1745,25 +1745,34 @@ class MainActivity : FragmentActivity() {
                     aiApiKey = prefs[AppSettings.AI_API_KEY].orEmpty()
                     aiProvider = prefs[AppSettings.AI_PROVIDER] ?: "groq"
                     aiModel = prefs[AppSettings.AI_MODEL].orEmpty()
+                    val autoRotate = prefs[AppSettings.AUTO_ROTATE_THEMES] ?: false
+                    val storedVariantId = prefs[AppSettings.LIGHT_THEME_VARIANT]
+                    val launchVariant = ThemeController.variantForLaunch(
+                        storedVariantId,
+                        autoRotate && savedInstanceState == null
+                    )
                     val needsLightThemeMigration =
                         prefs[AppSettings.APPEARANCE_MODE] != "light" ||
                             prefs[AppSettings.THEME_MODE] != "light" ||
                             prefs[AppSettings.UI_DARK_MODE] == true ||
-                            prefs[AppSettings.LIGHT_THEME_VARIANT] != LightThemeVariant.CREAM.id ||
-                            prefs[AppSettings.AUTO_ROTATE_THEMES] == true ||
                             BrowserMode.values().any { prefs[AppSettings.darkModeKey(it)] == true }
-                    if (needsLightThemeMigration) {
+                    val needsThemePreferenceWrite = needsLightThemeMigration ||
+                        storedVariantId != launchVariant.id ||
+                        prefs[AppSettings.AUTO_ROTATE_THEMES] == null
+                    if (needsThemePreferenceWrite) {
                         dataStore.edit { appearance ->
                             appearance[AppSettings.APPEARANCE_MODE] = "light"
                             appearance[AppSettings.THEME_MODE] = "light"
                             appearance[AppSettings.UI_DARK_MODE] = false
-                            appearance[AppSettings.LIGHT_THEME_VARIANT] = LightThemeVariant.CREAM.id
-                            appearance[AppSettings.AUTO_ROTATE_THEMES] = false
+                            appearance[AppSettings.LIGHT_THEME_VARIANT] = launchVariant.id
+                            appearance[AppSettings.AUTO_ROTATE_THEMES] = autoRotate
                             BrowserMode.values().forEach { mode ->
                                 appearance[AppSettings.darkModeKey(mode)] = false
                             }
                         }
                     }
+                    lightThemeVariant = launchVariant
+                    autoRotateThemes = autoRotate
                     // HTTPS mode (default "standard" = historical HTTPS-Only upgrade behavior).
                     httpsMode = AppSettings.normalizeMode(prefs[AppSettings.HTTPS_MODE])
                     httpsStrictExceptions = AppSettings.parseHostList(prefs[AppSettings.HTTPS_STRICT_EXCEPTIONS])
@@ -3995,6 +4004,24 @@ class MainActivity : FragmentActivity() {
                             if (showSettings) {
                                 SettingsScreen(
                                     theme = theme,
+                                    lightThemeVariant = lightThemeVariant,
+                                    onLightThemeVariantChange = { variant ->
+                                        lightThemeVariant = variant
+                                        scope.launch {
+                                            dataStore.edit { prefs ->
+                                                prefs[AppSettings.LIGHT_THEME_VARIANT] = variant.id
+                                            }
+                                        }
+                                    },
+                                    autoRotateThemes = autoRotateThemes,
+                                    onToggleAutoRotateThemes = { enabled ->
+                                        autoRotateThemes = enabled
+                                        scope.launch {
+                                            dataStore.edit { prefs ->
+                                                prefs[AppSettings.AUTO_ROTATE_THEMES] = enabled
+                                            }
+                                        }
+                                    },
                                     wallpaperUri = wallpaperUri,
                                     onWallpaperChange = { uri ->
                                         wallpaperUri = uri

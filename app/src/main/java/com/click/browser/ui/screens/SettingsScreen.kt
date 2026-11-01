@@ -29,6 +29,7 @@ import com.click.browser.BuildConfig
 import com.click.browser.engine.AiProviders
 import com.click.browser.engine.BrowserMode
 import com.click.browser.engine.ClickInternalPages
+import com.click.browser.engine.LightThemeVariant
 import com.click.browser.engine.ModePersonalization
 import com.click.browser.engine.ModeTheme
 import com.click.browser.engine.NewsNotifications
@@ -51,6 +52,10 @@ private const val PLAY_STORE_PACKAGE = "com.teampkai.clickbrowser"
 @Composable
 fun SettingsScreen(
     theme: ModeTheme,
+    lightThemeVariant: LightThemeVariant,
+    onLightThemeVariantChange: (LightThemeVariant) -> Unit,
+    autoRotateThemes: Boolean,
+    onToggleAutoRotateThemes: (Boolean) -> Unit,
     // --- General ---
     wallpaperUri: String?,
     onWallpaperChange: (String?) -> Unit,
@@ -168,7 +173,7 @@ fun SettingsScreen(
     // ---- Row model: each row optionally opens a named section ----
     data class Row(val section: String?, val content: @Composable () -> Unit)
     val rows = remember(
-        theme, wallpaperUri, activeMode,
+        theme, lightThemeVariant, autoRotateThemes, wallpaperUri, activeMode,
         currentSearchEngineSetting, addressBarPosition,
         adBlockerEnabled,
         httpsMode, httpsStrictExceptions, jsEnabled, dataSaver, historyModeTarget,
@@ -185,17 +190,31 @@ fun SettingsScreen(
                 CardRow(theme) {
                     Text("Appearance", color = theme.onSurface, fontWeight = FontWeight.SemiBold, fontSize = 14.sp)
                     Text(
-                        "A warm cream palette stays light in every profile.",
+                        "Choose a soft light palette. Click stays light in every profile.",
                         fontSize = 11.sp, color = theme.onSurface.copy(alpha = 0.6f)
                     )
                     Spacer(Modifier.height(8.dp))
-                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        FilterChip(
-                            selected = true,
-                            onClick = {},
-                            label = { Text("☀️ Cream", fontSize = 12.sp) }
-                        )
+                    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                        LightThemeVariant.values().toList().chunked(2).forEach { variants ->
+                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                variants.forEach { variant ->
+                                    FilterChip(
+                                        selected = lightThemeVariant == variant,
+                                        onClick = { onLightThemeVariantChange(variant) },
+                                        label = { Text(variant.label, fontSize = 12.sp) }
+                                    )
+                                }
+                            }
+                        }
                     }
+                    HorizontalDivider(color = theme.onSurface.copy(alpha = 0.1f))
+                    ToggleRow(
+                        "Rotate theme on launch",
+                        "Advance to the next light palette each time Click launches",
+                        autoRotateThemes,
+                        onToggleAutoRotateThemes,
+                        theme
+                    )
                 }
             })
             add(Row(null) {
@@ -728,7 +747,7 @@ fun SettingsScreen(
                                     }
                                 }
                                 Text(
-                                    "Theme: Cream",
+                                    "Theme: ${lightThemeVariant.label}",
                                     fontSize = 11.sp,
                                     color = theme.onSurface.copy(alpha = 0.6f)
                                 )
