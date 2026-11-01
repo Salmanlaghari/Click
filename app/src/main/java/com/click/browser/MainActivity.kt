@@ -196,8 +196,8 @@ class MainActivity : FragmentActivity() {
     private var liveGpcEnabled = false
     // Live copy of per-site desktop hosts (persisted per host via BrowserRepository).
     private var liveDesktopHosts: Set<String> = emptySet()
-    // Live copy of per-site settings (JS / adblock / location / cookies / zoom),
-    // persisted per host per engine mode via BrowserRepository.
+    // Live copy of supported per-site content settings, persisted per host
+    // and engine mode via BrowserRepository.
     private var liveSiteSettings: Map<String, com.click.browser.engine.SiteSettings> = emptyMap()
     // Live copy of the global ad-block toggle for WebViewClient callbacks.
     private var liveAdBlockerEnabled: Boolean = true
@@ -318,6 +318,9 @@ class MainActivity : FragmentActivity() {
 
     override fun onResume() {
         super.onResume()
+        // The fallback default-apps page (pre-Android 10) does not return an
+        // ActivityResult, so always refresh the role state when we come back.
+        isDefaultBrowserState.value = DefaultBrowserHelper.isDefaultBrowser(this)
         liveWebViews.forEach { wv ->
             try { wv.onResume() } catch (_: Exception) { }
             try { wv.resumeTimers() } catch (_: Exception) { }
@@ -605,10 +608,8 @@ class MainActivity : FragmentActivity() {
      * - Third-party cookies: real per-WebView CookieManager toggle.
      * - Images: loadsImagesAutomatically per WebView.
      * - Pop-ups: javaScriptCanOpenWindowsAutomatically per WebView.
-     * - Ad-block / location / camera / mic: stored here for the
-     *   WebViewClient / WebChromeClient callbacks (see
-     *   shouldInterceptRequest + onGeolocationPermissionsShowPrompt +
-     *   onPermissionRequest).
+     * - Ad-block is stored here for shouldInterceptRequest. Website camera,
+     *   microphone and notification permissions are not granted by this build.
      * Desktop mode stays in the existing desktop-hosts path.
      */
     private fun applyPerSiteSettings(
@@ -647,24 +648,6 @@ class MainActivity : FragmentActivity() {
             } catch (_: Exception) {
             }
         }
-    }
-
-    /**
-     * Per-site camera/mic decision for an origin host: ALLOW / BLOCK are
-     * enforced silently in onPermissionRequest, ASK (or unset) falls through
-     * to the default WebView prompt behavior.
-     */
-
-    /** Per-site camera pref (null = ASK/default). */
-    private fun siteCameraPref(host: String?): com.click.browser.engine.SitePermissionPref? {
-        if (host.isNullOrEmpty()) return null
-        return liveSiteSettings.forHost(host.lowercase())?.camera
-    }
-
-    /** Per-site microphone pref (null = ASK/default). */
-    private fun siteMicPref(host: String?): com.click.browser.engine.SitePermissionPref? {
-        if (host.isNullOrEmpty()) return null
-        return liveSiteSettings.forHost(host.lowercase())?.microphone
     }
 
     /**
@@ -1313,6 +1296,7 @@ class MainActivity : FragmentActivity() {
             var showExtensionsManager by remember { mutableStateOf(false) }
             var showPrivacyPolicy by remember { mutableStateOf(false) }
             var showAboutApp by remember { mutableStateOf(false) }
+            var showLicenses by remember { mutableStateOf(false) }
 
             // AI chat + privacy guards
             var showAiChat by remember { mutableStateOf(false) }
@@ -3215,36 +3199,12 @@ class MainActivity : FragmentActivity() {
                                                                 super.onGeolocationPermissionsHidePrompt()
                                                             }
 
-                                                            // Camera / microphone: per-site SiteSettings pref
-                                                            // (ALLOW/BLOCK from the site sheet) wins when set;
-                                                            // ASK or unset falls through to the default WebView
-                                                            // prompt. Deny takes precedence if either is BLOCK.
+                                                            // Fail closed for website media/resource permission
+                                                            // requests. RECORD_AUDIO is used only by Click's own
+                                                            // optional AI voice input; Click does not grant it to
+                                                            // websites and has no camera-permission flow.
                                                             override fun onPermissionRequest(request: android.webkit.PermissionRequest?) {
-                                                                if (request == null) {
-                                                                    super.onPermissionRequest(request)
-                                                                    return
-                                                                }
-                                                                val host = try {
-                                                                    android.net.Uri.parse(request.origin?.toString() ?: "").host
-                                                                } catch (_: Exception) { null }
-                                                                val wantsVideo = request.resources.any {
-                                                                    it == android.webkit.PermissionRequest.RESOURCE_VIDEO_CAPTURE
-                                                                }
-                                                                val wantsAudio = request.resources.any {
-                                                                    it == android.webkit.PermissionRequest.RESOURCE_AUDIO_CAPTURE
-                                                                }
-                                                                val camPref = if (wantsVideo) this@MainActivity.siteCameraPref(host) else null
-                                                                val micPref = if (wantsAudio) this@MainActivity.siteMicPref(host) else null
-                                                                val deny = camPref == com.click.browser.engine.SitePermissionPref.BLOCK ||
-                                                                        micPref == com.click.browser.engine.SitePermissionPref.BLOCK
-                                                                val allow = (camPref == com.click.browser.engine.SitePermissionPref.ALLOW || !wantsVideo) &&
-                                                                        (micPref == com.click.browser.engine.SitePermissionPref.ALLOW || !wantsAudio) &&
-                                                                        (wantsVideo || wantsAudio)
-                                                                when {
-                                                                    deny -> request.deny()
-                                                                    allow -> request.grant(request.resources)
-                                                                    else -> super.onPermissionRequest(request)
-                                                                }
+                                                                request?.deny()
                                                             }
                                                         }
 
@@ -4262,6 +4222,7 @@ class MainActivity : FragmentActivity() {
                                         scope.launch { dataStore.edit { prefs -> prefs[AppSettings.AI_MODEL] = v } }
                                     },
                                     onOpenPrivacyPolicy = { showSettings = false; showPrivacyPolicy = true },
+                                    onOpenLicenses = { showSettings = false; showLicenses = true },
                                     onOpenHelpFeedback = { showSettings = false; showHelp = true },
                                     onClose = { showSettings = false }
                                 )
@@ -4289,6 +4250,12 @@ class MainActivity : FragmentActivity() {
                             }
                             if (showPrivacyPolicy) {
                                 PrivacyPolicyDialog(onClose = { showPrivacyPolicy = false })
+                            }
+                            if (showLicenses) {
+                                com.click.browser.ui.screens.OpenSourceLicensesScreen(
+                                    theme = theme,
+                                    onClose = { showLicenses = false }
+                                )
                             }
                             if (showAboutApp) {
                                 AboutAppDialog(onClose = { showAboutApp = false })
@@ -5587,9 +5554,8 @@ fun BrowserTopBar(
                 keyboardOptions = KeyboardOptions(imeAction = ImeAction.Go),
                 keyboardActions = KeyboardActions(onGo = { onNavigate(textInput) }),
                 leadingIcon = {
-                    // Shield icon: tap opens Site Settings (per-site permissions).
-                    // Green shield = HTTPS secure, amber shield = HTTP warning,
-                    // grey = internal/about page.
+                    // Shield icon opens Site Settings. The tint reflects only
+                    // the current URL scheme, not a broad site-safety verdict.
                     val isHttps = currentUrl.startsWith("https://")
                     val isHttp = currentUrl.startsWith("http://")
                     val shieldTint = when {
@@ -5603,8 +5569,8 @@ fun BrowserTopBar(
                     ) {
                         Icon(
                             Icons.Default.Shield,
-                            contentDescription = if (isHttps) "Secure site — tap for site settings"
-                                else if (isHttp) "Not secure (HTTP) — tap for site settings"
+                            contentDescription = if (isHttps) "HTTPS URL — tap for site settings"
+                                else if (isHttp) "HTTP URL (not encrypted) — tap for site settings"
                                 else "Site settings",
                             tint = shieldTint,
                             modifier = Modifier.size(18.dp)

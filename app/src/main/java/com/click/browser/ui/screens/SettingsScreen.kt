@@ -33,6 +33,7 @@ import com.click.browser.engine.LightThemeVariant
 import com.click.browser.engine.ModePersonalization
 import com.click.browser.engine.ModeTheme
 import com.click.browser.engine.NewsNotifications
+import com.click.browser.engine.SafetyCheck
 import kotlinx.coroutines.launch
 
 private const val PLAY_STORE_PACKAGE = "com.teampkai.clickbrowser"
@@ -154,6 +155,7 @@ fun SettingsScreen(
     onNewsTopicsChange: (Set<String>) -> Unit,
     // --- About ---
     onOpenPrivacyPolicy: () -> Unit,
+    onOpenLicenses: () -> Unit,
     onOpenHelpFeedback: () -> Unit,
     onClose: () -> Unit
 ) {
@@ -768,6 +770,21 @@ fun SettingsScreen(
             })
             add(Row(null) {
                 CardRow(theme) {
+                    ActionRow(
+                        "Check for updates",
+                        "Open Google Play; Click does not check versions in the background",
+                        Icons.Default.Refresh,
+                        theme
+                    ) { SafetyCheck.openPlayListing(context) }
+                    HorizontalDivider(color = theme.onSurface.copy(alpha = 0.1f))
+                    ActionRow(
+                        "Open-source licenses",
+                        "Click's MIT license and third-party project notices",
+                        Icons.Default.Description,
+                        theme,
+                        onOpenLicenses
+                    )
+                    HorizontalDivider(color = theme.onSurface.copy(alpha = 0.1f))
                     ActionRow("Privacy Policy", "How Click handles your data", Icons.Default.Description, theme, onOpenPrivacyPolicy)
                     HorizontalDivider(color = theme.onSurface.copy(alpha = 0.1f))
                     ActionRow("Help & Feedback", "FAQs + email the developer", Icons.Default.Help, theme, onOpenHelpFeedback)

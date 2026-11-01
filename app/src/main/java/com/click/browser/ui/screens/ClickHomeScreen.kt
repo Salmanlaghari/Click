@@ -1298,15 +1298,15 @@ fun CompactBrowseBar(
                     .animateContentSize()
             ) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    // Shield icon: tap opens Site Settings (per-site permissions).
-                    // Green shield = HTTPS secure, amber shield = HTTP warning.
+                    // Shield icon opens Site Settings. Tint reflects the URL
+                    // scheme only; it is not a broad safety verdict.
                     IconButton(
                         onClick = onSiteSettingsClick,
                         modifier = Modifier.padding(start = 4.dp).size(34.dp)
                     ) {
                         Icon(
                             Icons.Default.Shield,
-                            contentDescription = if (isHttps) "Secure site — tap for site settings" else "Not secure (HTTP) — tap for site settings",
+                            contentDescription = if (isHttps) "HTTPS URL — tap for site settings" else "HTTP URL (not encrypted) — tap for site settings",
                             tint = if (isHttps) Color(0xFF22C55E) else Color(0xFFF59E0B),
                             modifier = Modifier.size(18.dp)
                         )

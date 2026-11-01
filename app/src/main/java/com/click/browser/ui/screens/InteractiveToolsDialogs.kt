@@ -719,22 +719,25 @@ fun PrivacyPolicyDialog(onClose: () -> Unit) {
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .height(220.dp)
+                    .height(320.dp)
                     .verticalScroll(rememberScrollState())
             ) {
                 Text(
                     text = "Click Browser Privacy Policy\n\n" +
-                        "• Your bookmarks, history and download records are stored only on this device (app-private storage). Nothing is uploaded to our servers — we operate no analytics or account backend.\n\n" +
-                        "• Pages load through Android's system WebView; network requests go directly to the websites you visit.\n\n" +
-                        "• HTTPS-Only mode (when enabled) upgrades http:// links to https:// and blocks mixed content. It is enforced per navigation.\n\n" +
-                        "• All modes use Android System WebView. They can keep separate local browser data, but do not substitute device identity or inject fingerprint-changing scripts. Optional DNT/GPC settings send voluntary privacy signals.\n\n" +
-                        "• Incognito tabs skip history recording on this device.",
-                    fontSize = 12.sp
+                        "• Bookmarks, history, download records, settings and Click's on-device credential vault are kept in app-private storage. Credentials saved to Google Password Manager are handled by Google. Android may include some app data in device backups when backups are enabled; private tabs skip local history recording but are not anonymous.\n\n" +
+                        "• Pages use Android System WebView and your current network or VPN settings. Websites receive the requests needed to load them. Click does not request device location and denies website geolocation, camera and microphone requests; website notifications are not supported. The microphone permission is used only for Click's optional AI voice input.\n\n" +
+                        "• HTTPS mode upgrades or blocks navigation URLs according to your setting. HTTPS describes the connection scheme; it does not guarantee that a site is trustworthy. Optional DNT/GPC signals are voluntary and sites may ignore them.\n\n" +
+                        "• If you use AI chat, the prompt and recent conversation sent with it go over HTTPS to the selected provider (Groq or OpenRouter). The provider's own privacy terms apply.\n\n" +
+                        "• Google sign-in is handled by Google Play services. Click caches the selected profile name, email and photo in app storage and does not operate its own account backend.\n\n" +
+                        "• Feedback and crash/bug reports open an email draft with app/device details. Nothing is emailed until you review and send it. Opt-in news alerts periodically fetch selected topics.\n\n" +
+                        "• Click does not run app analytics. All profiles use Android System WebView; local data separation follows the selected profile settings. Click does not substitute device identity.",
+                    fontSize = 12.sp,
+                    lineHeight = 18.sp
                 )
             }
         },
         confirmButton = {
-            Button(onClick = onClose) { Text("Accept") }
+            Button(onClick = onClose) { Text("Close") }
         }
     )
 }
@@ -756,7 +759,7 @@ fun AboutAppDialog(onClose: () -> Unit) {
                 Text("UI Design Built By: Prince Laghari", fontSize = 13.sp, fontWeight = FontWeight.ExtraBold)
                 Spacer(modifier = Modifier.height(12.dp))
                 Text(
-                    "A multi-mode Android browser (Simple / Developer / Power) with ad-blocking, developer inspection tools, privacy settings and local media playback.",
+                    "Click Browser is an Android browser with four profiles: Simple, Developer, Power and Advance. All profiles use Android System WebView.",
                     fontSize = 11.sp,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
@@ -770,19 +773,11 @@ fun AboutAppDialog(onClose: () -> Unit) {
                 )
                 Spacer(modifier = Modifier.height(4.dp))
                 Text(
-                    "Each mode uses Android System WebView and can keep separate cookies, storage and app data. Device identity is not substituted.",
+                    "Profiles use Android System WebView; local data separation follows the selected profile settings. Click does not substitute device identity.",
                     fontSize = 11.sp,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-                Spacer(modifier = Modifier.height(4.dp))
-                Text(
-                    "\"First time in the World We Present A Superior Testing Future\"",
-                    fontSize = 11.sp,
-                    fontStyle = FontStyle.Italic,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
                 Spacer(modifier = Modifier.height(12.dp))
-                // Safety section — the anti-misuse protection suite.
                 Text(
                     "Safety",
                     fontSize = 13.sp,
@@ -791,7 +786,7 @@ fun AboutAppDialog(onClose: () -> Unit) {
                 )
                 Spacer(modifier = Modifier.height(4.dp))
                 Text(
-                    "Click Browser protects you with Safe Browsing warnings, malware/phishing blocking, adult-content filtering and the V9 Shield VPN (encrypted DNS). These tools are for your privacy and safety — please use them responsibly, not for illegal activity. Click Browser does not censor political or news content.",
+                    "Click includes Safe Browsing when supported by the installed WebView, HTTPS controls, optional ad/tracker blocking and V9 Shield DNS/VPN features. These tools can reduce some risks, but they cannot guarantee every site is safe. Website geolocation, camera and microphone requests are denied.",
                     fontSize = 11.sp,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
