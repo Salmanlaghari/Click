@@ -41,7 +41,7 @@ private const val PLAY_STORE_PACKAGE = "com.teampkai.clickbrowser"
 /**
  * Unified Settings screen — the single home for every app setting.
  *
- * Sections: General / Privacy / Modes / About.
+ * Sections: General / Safety & DNS / Browser / Modes / About.
  * Replaces the old fragmented settings (PremiumSettingsScreen). Every
  * toggle and button here is wired to a real action — no dead controls.
  *
@@ -114,6 +114,7 @@ fun SettingsScreen(
     onOpenCookieManager: () -> Unit,
     onOpenSiteSettings: () -> Unit = {},
     onOpenAdvancedSecurity: () -> Unit,
+    onOpenV9Shield: () -> Unit,
     // --- Privacy & Security suite ---
     onOpenPrivacySecurity: () -> Unit,
     // --- LocationGuard ---
@@ -173,7 +174,7 @@ fun SettingsScreen(
     // ---- Row model: each row optionally opens a named section ----
     data class Row(val section: String?, val content: @Composable () -> Unit)
     val rows = remember(
-        theme, lightThemeVariant, autoRotateThemes, wallpaperUri, activeMode,
+        theme, lightThemeVariant, autoRotateThemes, wallpaperUri, activeMode, onOpenV9Shield,
         currentSearchEngineSetting, addressBarPosition,
         adBlockerEnabled,
         httpsMode, httpsStrictExceptions, jsEnabled, dataSaver, historyModeTarget,
@@ -487,13 +488,21 @@ fun SettingsScreen(
                 }
             })
 
-            // ================= PRIVACY =================
-            add(Row("Privacy") {
-                SectionHeader("Privacy & Security", Icons.Default.Shield, theme)
+            // ================= SAFETY & DNS =================
+            add(Row("Safety & DNS") {
+                SectionHeader("Safety & DNS", Icons.Default.Shield, theme)
             })
             add(Row(null) {
                 CardRow(theme) {
                     ToggleRow("Ad Blocker", "Block intrusive ads & tracker scripts", adBlockerEnabled, onToggleAdBlocker, theme)
+                    HorizontalDivider(color = theme.onSurface.copy(alpha = 0.1f))
+                    ActionRow(
+                        "V9 Shield",
+                        "DNS protection only · not a VPN",
+                        Icons.Default.Shield,
+                        theme,
+                        onOpenV9Shield
+                    )
                     HorizontalDivider(color = theme.onSurface.copy(alpha = 0.1f))
                     // ---- HTTPS mode: Off / Standard / Strict ----
                     Text(
@@ -831,7 +840,7 @@ fun SettingsScreen(
             rows.forEachIndexed { i, row -> row.section?.let { put(it, i) } }
         }
     }
-    val sections = listOf("General", "Privacy", "Browser", "Modes", "About")
+    val sections = listOf("General", "Safety & DNS", "Browser", "Modes", "About")
     var activeSection by remember { mutableStateOf("General") }
 
     Scaffold(
@@ -877,7 +886,7 @@ fun SettingsScreen(
                 modifier = Modifier
                     .fillMaxSize()
                     .padding(horizontal = 16.dp),
-                verticalArrangement = Arrangement.spacedBy(12.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
                 contentPadding = PaddingValues(bottom = 24.dp)
             ) {
                 items(rows.size) { i -> rows[i].content() }
@@ -928,7 +937,7 @@ private fun CardRow(theme: ModeTheme, content: @Composable ColumnScope.() -> Uni
         colors = CardDefaults.cardColors(containerColor = theme.surface),
         modifier = Modifier.fillMaxWidth()
     ) {
-        Column(Modifier.padding(14.dp), content = content)
+        Column(Modifier.padding(12.dp), content = content)
     }
 }
 

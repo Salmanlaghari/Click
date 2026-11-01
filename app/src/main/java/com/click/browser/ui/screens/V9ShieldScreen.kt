@@ -32,8 +32,8 @@ import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 
 /**
- * V9 Shield — built-in VPN (encrypted DNS + DNS threat blocking), DNS
- * provider settings, and an overview of the browser-data profiles.
+ * V9 Shield — DNS-only protection and DNS provider settings, plus an overview
+ * of the browser-data profiles. It does not tunnel general web traffic.
  *
  * Includes the responsible-use notice: V9 Shield is a privacy tool, not a
  * tool for illegal activity. Click Browser applies no political censorship —
@@ -123,7 +123,7 @@ fun V9ShieldScreen(onClose: () -> Unit) {
             }
             Spacer(Modifier.height(16.dp))
 
-            // VPN toggle card
+            // DNS-only protection toggle card.
             Card(
                 colors = CardDefaults.cardColors(containerColor = Color(0xFFFFFEFB)),
                 shape = RoundedCornerShape(16.dp),
@@ -137,7 +137,7 @@ fun V9ShieldScreen(onClose: () -> Unit) {
                     horizontalArrangement = Arrangement.SpaceBetween
                 ) {
                     Column(Modifier.weight(1f)) {
-                        Text("Shield VPN", fontWeight = FontWeight.Bold, color = Color(0xFF1F2A24), fontSize = 15.sp)
+                        Text("DNS protection", fontWeight = FontWeight.Bold, color = Color(0xFF1F2A24), fontSize = 15.sp)
                         Text(
                             if (!vpnOn) "OFF" else if (strictDns) {
                                 "ON — Strict DNS; DoH failures are blocked"
@@ -239,7 +239,7 @@ fun V9ShieldScreen(onClose: () -> Unit) {
                 ) { Text("Save") }
             }
             Text(
-                "Provider changes apply to new requests. The Shield VPN must be ON for device-wide DNS protection.",
+                "Provider changes apply to new requests. DNS protection must be ON for device-wide DNS handling.",
                 fontSize = 11.sp, color = Color(0xFF657168),
                 modifier = Modifier.padding(top = 8.dp)
             )

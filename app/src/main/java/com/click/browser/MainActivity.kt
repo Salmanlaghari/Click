@@ -1138,7 +1138,7 @@ class MainActivity : FragmentActivity() {
             var pageTransitionTick by remember { mutableStateOf(0) }
             // Real session count of blocked tracker/ad requests (home privacy pill).
             val blockedCount by AdBlocker.blockedCountFlow.collectAsState()
-            // V9 Shield VPN running state (for the home shield card).
+            // V9 Shield DNS-only service running state (for the home shield card).
             val shieldActive by com.click.browser.engine.V9VpnController.isRunning.collectAsState()
             var forceNightModeWebsites by remember { mutableStateOf(false) }
             // HTTPS mode: "off" | "standard" | "strict" (Brave-hardening).
@@ -1226,18 +1226,18 @@ class MainActivity : FragmentActivity() {
                         kotlinx.coroutines.delay(800)
                         if (com.click.browser.engine.V9VpnService.running.value) {
                             dataStore.edit { it[com.click.browser.engine.AppSettings.V9_VPN_ENABLED] = true }
-                            Toast.makeText(this@MainActivity, "V9 Shield VPN ON", Toast.LENGTH_SHORT).show()
+                            Toast.makeText(this@MainActivity, "V9 Shield on · DNS-only protection", Toast.LENGTH_SHORT).show()
                         } else {
-                            Toast.makeText(this@MainActivity, "VPN failed to start — try again", Toast.LENGTH_SHORT).show()
+                            Toast.makeText(this@MainActivity, "DNS protection failed to start — try again", Toast.LENGTH_SHORT).show()
                         }
                     }
                 } else {
-                    Toast.makeText(this@MainActivity, "VPN permission denied", Toast.LENGTH_SHORT).show()
+                    Toast.makeText(this@MainActivity, "DNS protection permission denied", Toast.LENGTH_SHORT).show()
                 }
             }
-            // Toggles V9 Shield VPN ON/OFF from the home shield card.
+            // Toggles the V9 Shield DNS-only service from the home card.
             // Kilo fix: verify actual service state before updating the flag.
-            fun toggleVpnShield() {
+            fun toggleDnsShield() {
                 val isOn = com.click.browser.engine.V9VpnController.isRunning.value
                 if (isOn) {
                     com.click.browser.engine.V9VpnController.stop(this@MainActivity)
@@ -1245,9 +1245,9 @@ class MainActivity : FragmentActivity() {
                         kotlinx.coroutines.delay(800)
                         if (!com.click.browser.engine.V9VpnService.running.value) {
                             dataStore.edit { it[com.click.browser.engine.AppSettings.V9_VPN_ENABLED] = false }
-                            Toast.makeText(this@MainActivity, "V9 Shield VPN OFF", Toast.LENGTH_SHORT).show()
+                            Toast.makeText(this@MainActivity, "V9 Shield off · DNS-only protection", Toast.LENGTH_SHORT).show()
                         } else {
-                            Toast.makeText(this@MainActivity, "VPN failed to stop — try again", Toast.LENGTH_SHORT).show()
+                            Toast.makeText(this@MainActivity, "DNS protection failed to stop — try again", Toast.LENGTH_SHORT).show()
                         }
                     }
                 } else {
@@ -1258,9 +1258,9 @@ class MainActivity : FragmentActivity() {
                             kotlinx.coroutines.delay(800)
                             if (com.click.browser.engine.V9VpnService.running.value) {
                                 dataStore.edit { it[com.click.browser.engine.AppSettings.V9_VPN_ENABLED] = true }
-                                Toast.makeText(this@MainActivity, "V9 Shield VPN ON", Toast.LENGTH_SHORT).show()
+                                Toast.makeText(this@MainActivity, "V9 Shield on · DNS-only protection", Toast.LENGTH_SHORT).show()
                             } else {
-                                Toast.makeText(this@MainActivity, "VPN failed to start — try again", Toast.LENGTH_SHORT).show()
+                                Toast.makeText(this@MainActivity, "DNS protection failed to start — try again", Toast.LENGTH_SHORT).show()
                             }
                         }
                     } else {
@@ -2658,7 +2658,7 @@ class MainActivity : FragmentActivity() {
                             @Composable
                             fun BrowseTopBarBlock() {
                                 Column {
-                                    if (!immersiveMode && !showOverlays) {
+                                    if (!immersiveMode) {
                                         TabStrip(
                                             tabs = tabs,
                                             activeTabIndex = activeTabIndex,
@@ -2673,7 +2673,7 @@ class MainActivity : FragmentActivity() {
                                         )
                                     }
                                     AnimatedVisibility(
-                                        visible = !immersiveMode && !showOverlays && toolbarVisible,
+                                        visible = !immersiveMode && toolbarVisible,
                                         enter = expandVertically() + fadeIn(),
                                         exit = shrinkVertically() + fadeOut()
                                     ) {
@@ -2681,7 +2681,7 @@ class MainActivity : FragmentActivity() {
                                             Column {
                                                 CompactBrowseBar(
                                                     theme = themed,
-                                                    currentUrl = currentTab.url,
+                                                    currentUrl = if (showOverlays) "" else currentTab.url,
                                                     searchEngine = currentSearchEngineSetting,
                                                     onNavigate = { input ->
                                                         val destination = cleanTrackingUrl(formatUrl(input, currentSearchEngineSetting))
@@ -2729,9 +2729,9 @@ class MainActivity : FragmentActivity() {
                                 // gone; the counter opens the visual tab switcher, and the
                                 // bottom-left FAB menu replaces the top hamburger.
                                 // SURFACE 2 — Browsing: compact address bar + privacy strip.
-                                // (Home surface has no browser top bar — it has its own
-                                // big search bar; tab switching lives in the bottom nav.)
-                                if (!flagsUi.bottomAddressBar) BrowseTopBarBlock()
+                                // Home keeps the same tab/address chrome, plus its own
+                                // prominent search field below the greeting.
+                                if (!flagsUi.bottomAddressBar || showOverlays) BrowseTopBarBlock()
 
                                 // 4. MAIN CONTENT CONTAINER (WIDGET-STYLE DASHBOARD OR WEBVIEW)
                                 // Nested-scroll: drives the toolbar auto-hide on page scroll.
@@ -2751,7 +2751,7 @@ class MainActivity : FragmentActivity() {
                                             wallpaperUri = wallpaperUri,
                                             shieldActive = shieldActive,
                                             onV9ShieldClick = { showV9Shield = true },
-                                            onVpnToggle = { toggleVpnShield() },
+                                            onShieldToggle = { toggleDnsShield() },
                                             onGamesClick = { showClickPage = "games" },
                                             onNavigate = { input ->
                                                 val destination = cleanTrackingUrl(formatUrl(input, currentSearchEngineSetting))
@@ -3651,7 +3651,7 @@ class MainActivity : FragmentActivity() {
                             // Polish: one-shot theme crossfade (battery-safe).
                             // Bottom-address-bar option: bar renders below the page,
                             // padded above the overlaid bottom nav so they never overlap.
-                            if (flagsUi.bottomAddressBar) {
+                            if (flagsUi.bottomAddressBar && !showOverlays) {
                                 Box(modifier = Modifier.padding(bottom = 76.dp)) {
                                     BrowseTopBarBlock()
                                 }
@@ -4314,6 +4314,7 @@ class MainActivity : FragmentActivity() {
                                         showSiteSettingsList = true
                                     },
                                     onOpenAdvancedSecurity = { showSettings = false; showAdvancedSecurity = true },
+                                    onOpenV9Shield = { showSettings = false; showV9Shield = true },
                                     onOpenTabGroups = { showSettings = false; showTabGroups = true },
                                     onOpenAccessibility = { showSettings = false; showAccessibility = true },
                                     onOpenLanguage = { showSettings = false; showLanguage = true },
@@ -4384,7 +4385,7 @@ class MainActivity : FragmentActivity() {
                             if (showAboutApp) {
                                 AboutAppDialog(onClose = { showAboutApp = false })
                             }
-                            // V9 Shield screen (VPN + DNS + 3-engine identities).
+                            // V9 Shield screen (DNS protection + resolver + profile identities).
                             if (showV9Shield) {
                                 V9ShieldScreen(onClose = { showV9Shield = false })
                             }
@@ -4791,6 +4792,14 @@ class MainActivity : FragmentActivity() {
                                 )
                                 AlertDialog(
                                     onDismissRequest = { pendingBrowserDownload = null },
+                                    icon = {
+                                        Icon(
+                                            Icons.Default.Download,
+                                            contentDescription = null,
+                                            tint = theme.primary,
+                                            modifier = Modifier.size(24.dp)
+                                        )
+                                    },
                                     title = { Text("Save download?") },
                                     text = {
                                         Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -4852,7 +4861,10 @@ class MainActivity : FragmentActivity() {
                                     },
                                     dismissButton = {
                                         TextButton(onClick = { pendingBrowserDownload = null }) { Text("Cancel") }
-                                    }
+                                    },
+                                    shape = RoundedCornerShape(24.dp),
+                                    containerColor = theme.surface,
+                                    tonalElevation = 6.dp
                                 )
                             }
                             // Password manager: "Save password?" offer dialog.

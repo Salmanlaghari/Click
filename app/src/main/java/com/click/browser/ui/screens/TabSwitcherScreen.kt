@@ -109,26 +109,12 @@ fun TabSwitcherScreen(
         topBar = {
             TopAppBar(
                 title = {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        // Tab count badge (Mises-style)
-                        Surface(
-                            shape = RoundedCornerShape(8.dp),
-                            color = theme.primary.copy(alpha = 0.15f)
-                        ) {
-                            Text(
-                                text = tabs.size.toString(),
-                                color = theme.primary,
-                                fontWeight = FontWeight.ExtraBold,
-                                fontSize = 15.sp,
-                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp)
-                            )
-                        }
-                        Spacer(modifier = Modifier.width(10.dp))
+                    Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
                         Text(
-                            "Tabs",
+                            "${tabs.size} tabs",
                             color = theme.onBackground,
                             fontWeight = FontWeight.Bold,
-                            fontSize = 18.sp
+                            fontSize = 20.sp
                         )
                     }
                 },
@@ -141,32 +127,35 @@ fun TabSwitcherScreen(
             )
         },
         bottomBar = {
-            Surface(
-                color = theme.topBarBg,
-                tonalElevation = 4.dp,
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                Row(
+            Surface(color = theme.topBarBg, tonalElevation = 4.dp, modifier = Modifier.fillMaxWidth()) {
+                Column(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(12.dp),
-                    horizontalArrangement = Arrangement.Center
+                        .padding(horizontal = 20.dp, vertical = 8.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.spacedBy(6.dp)
                 ) {
-                    IconButton(
-                        onClick = {
-                            query = ""
-                            onNewTab()
-                        },
+                    Text("Swipe a tab to close", color = theme.onSurface.copy(alpha = 0.58f), fontSize = 11.sp)
+                    Surface(
+                        color = theme.primary,
+                        shape = RoundedCornerShape(28.dp),
+                        shadowElevation = 4.dp,
                         modifier = Modifier
-                            .size(52.dp)
-                            .background(theme.primary.copy(alpha = 0.15f), CircleShape)
+                            .fillMaxWidth()
+                            .clickable {
+                                query = ""
+                                onNewTab()
+                            }
                     ) {
-                        Icon(
-                            Icons.Default.Add,
-                            contentDescription = "New tab",
-                            tint = theme.primary,
-                            modifier = Modifier.size(26.dp)
-                        )
+                        Row(
+                            modifier = Modifier.padding(horizontal = 18.dp, vertical = 12.dp),
+                            horizontalArrangement = Arrangement.Center,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Icon(Icons.Default.Add, contentDescription = null, tint = androidx.compose.ui.graphics.Color.White)
+                            Spacer(Modifier.width(8.dp))
+                            Text("New tab", color = androidx.compose.ui.graphics.Color.White, fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
+                        }
                     }
                 }
             }
@@ -299,9 +288,9 @@ fun TabSwitcherScreen(
                         modifier = Modifier
                             .fillMaxWidth()
                             .clickable(enabled = idx >= 0) { onSelectTab(idx) },
-                        shape = RoundedCornerShape(14.dp),
+                        shape = RoundedCornerShape(18.dp),
                         colors = CardDefaults.cardColors(
-                            containerColor = if (tab.isIncognito) theme.surface else theme.surfaceVariant
+                            containerColor = theme.surface
                         ),
                         border = if (isActive) androidx.compose.foundation.BorderStroke(
                             2.dp,
@@ -314,8 +303,8 @@ fun TabSwitcherScreen(
                             Box(
                                 modifier = Modifier
                                     .fillMaxWidth()
-                                    .aspectRatio(1.15f)
-                                    .clip(RoundedCornerShape(topStart = 14.dp, topEnd = 14.dp))
+                                    .aspectRatio(0.82f)
+                                    .clip(RoundedCornerShape(topStart = 18.dp, topEnd = 18.dp))
                                     .background(theme.background)
                             ) {
                                 if (thumb != null && !tab.isIncognito) {
