@@ -1,35 +1,100 @@
 package com.click.browser.engine
 
-import android.webkit.JavascriptInterface
+import androidx.webkit.WebMessageCompat
+import java.net.URI
+import java.util.Locale
+import org.json.JSONObject
 
 /**
- * JS bridge: the injected [PASSWORD_DETECT_JS] watches for password-form
- * submissions and reports the host + username back to native code, which
- * shows the "Save password?" dialog.
+ * Receives password-save candidates only through WebView's origin-aware
+ * WebMessageListener. The page never supplies the host used for storage; that
+ * host is derived from the browser-provided source origin.
  */
 class PasswordBridge(
-    private val onPasswordDetected: (host: String, username: String, password: String) -> Unit
+    private val onPasswordDetected: (
+        sourceOrigin: String,
+        host: String,
+        username: String,
+        password: String
+    ) -> Unit
 ) {
-    @JavascriptInterface
-    fun onLoginDetected(host: String, username: String, password: String) {
+    fun onMessage(sourceOrigin: String, isMainFrame: Boolean, message: WebMessageCompat) {
+        val host = PasswordOriginPolicy.secureHost(sourceOrigin, isMainFrame) ?: return
+        if (message.type != WebMessageCompat.TYPE_STRING) return
+        val data = message.data ?: return
+        if (data.length > MAX_MESSAGE_LENGTH) return
+
         try {
-            if (host.isNotBlank() && password.isNotBlank()) {
-                onPasswordDetected(host, username, password)
-            }
-        } catch (_: Exception) { /* ignore */ }
+            val payload = JSONObject(data)
+            val usernameValue = payload.opt("username")
+            val passwordValue = payload.opt("password")
+            if (usernameValue != null && usernameValue !is String) return
+            if (passwordValue !is String || passwordValue.isBlank() || passwordValue.length > MAX_PASSWORD_LENGTH) return
+            val username = (usernameValue as? String).orEmpty()
+            if (username.length > MAX_USERNAME_LENGTH) return
+            onPasswordDetected(sourceOrigin, host, username, passwordValue)
+        } catch (_: Exception) {
+            // A page may send arbitrary messages; malformed input is ignored.
+        }
+    }
+
+    private companion object {
+        const val MAX_MESSAGE_LENGTH = 16_384
+        const val MAX_USERNAME_LENGTH = 1_024
+        const val MAX_PASSWORD_LENGTH = 4_096
     }
 }
 
+/** Strict HTTPS origin checks shared by the bridge, save UI, and autofill. */
+internal object PasswordOriginPolicy {
+    private data class SecureOrigin(val host: String, val port: Int?)
+
+    /** Returns a canonical HTTPS host only for a top-level frame origin. */
+    fun secureHost(sourceOrigin: String, isMainFrame: Boolean): String? {
+        if (!isMainFrame) return null
+        return parse(sourceOrigin, originOnly = true)?.host
+    }
+
+    /** Returns a host from a current top-level HTTPS page URL, including its path. */
+    fun securePageHost(pageUrl: String): String? = parse(pageUrl, originOnly = false)?.host
+
+    /** True only when a secure source origin still matches the current page URL. */
+    fun isSameSecureOrigin(sourceOrigin: String, pageUrl: String): Boolean {
+        val source = parse(sourceOrigin, originOnly = true) ?: return false
+        val page = parse(pageUrl, originOnly = false) ?: return false
+        return source == page
+    }
+
+    private fun parse(value: String, originOnly: Boolean): SecureOrigin? {
+        if (value.isBlank()) return null
+        val uri = try {
+            URI(value)
+        } catch (_: Exception) {
+            return null
+        }
+        if (!uri.scheme.equals("https", ignoreCase = true)) return null
+        if (uri.rawUserInfo != null || uri.rawAuthority.isNullOrBlank()) return null
+        if (originOnly && (uri.rawPath.orEmpty().isNotEmpty() && uri.rawPath != "/" || uri.rawQuery != null || uri.rawFragment != null)) return null
+
+        val host = uri.host?.lowercase(Locale.ROOT)?.removeSuffix(".")?.takeIf { it.isNotBlank() } ?: return null
+        val parsedPort = uri.port
+        if (parsedPort !in -1..65_535) return null
+        val normalizedPort = parsedPort.takeIf { it != -1 && it != 443 }
+        return SecureOrigin(host, normalizedPort)
+    }
+}
+
+/**
+ * Injected after HTTPS pages finish loading. A candidate is sent only for a
+ * trusted, top-level form submit. Native code independently validates the
+ * WebView message origin and asks the user before persisting anything.
+ */
 object PasswordDetector {
-    /**
-     * Injected on every page finish. Hooks form submits containing a password
-     * field; reports (host, username, password) once per page. The password
-     * value is passed to native only to offer saving — never logged.
-     */
     const val PASSWORD_DETECT_JS = """
         (function() {
             if (window.__clickPwHooked) return;
             window.__clickPwHooked = true;
+            var reported = false;
             function findUsername(form) {
                 var u = form.querySelector('input[type="text"][name*="user" i], input[type="email"], input[name*="email" i], input[type="text"][autocomplete="username"]');
                 if (!u) u = form.querySelector('input[type="text"], input[type="email"]');
@@ -39,12 +104,14 @@ object PasswordDetector {
                 var pw = form.querySelector('input[type="password"]');
                 if (!pw || form.__clickPwHooked) return;
                 form.__clickPwHooked = true;
-                form.addEventListener('submit', function() {
+                form.addEventListener('submit', function(event) {
                     try {
+                        if (!event.isTrusted || window.top !== window || reported) return;
                         var user = findUsername(form);
                         var pass = pw.value || '';
-                        if (pass && window.PasswordBridge) {
-                            window.PasswordBridge.onLoginDetected(window.location.hostname, user, pass);
+                        if (pass && window.PasswordBridge && typeof window.PasswordBridge.postMessage === 'function') {
+                            reported = true;
+                            window.PasswordBridge.postMessage(JSON.stringify({username:user, password:pass}));
                         }
                     } catch (e) {}
                 });
@@ -55,12 +122,13 @@ object PasswordDetector {
                 new MutationObserver(function(muts) {
                     muts.forEach(function(m) {
                         m.addedNodes.forEach(function(n) {
+                            if (n.matches && n.matches('form')) hookForm(n);
                             if (n.querySelectorAll) n.querySelectorAll('form').forEach(hookForm);
                         });
                     });
                 }).observe(document.documentElement, { childList: true, subtree: true });
             } catch (e) {}
-            // Auto-fill hook: native can call window.__clickFillLogin(u, p).
+            // Auto-fill hook: native code calls this only for a matching HTTPS origin.
             window.__clickFillLogin = function(user, pass) {
                 try {
                     document.querySelectorAll('form').forEach(function(form) {
@@ -74,5 +142,5 @@ object PasswordDetector {
                 } catch (e) { return false; }
             };
         })();
-    """
+    """.trimIndent()
 }

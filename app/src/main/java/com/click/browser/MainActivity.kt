@@ -29,9 +29,11 @@ import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.Lifecycle
+import androidx.webkit.WebMessageCompat
 import androidx.webkit.WebSettingsCompat
 import androidx.annotation.RequiresApi
 import androidx.webkit.WebViewFeature
+import androidx.webkit.WebViewCompat
 import androidx.compose.animation.*
 import androidx.compose.animation.core.*
 import androidx.compose.foundation.BorderStroke
@@ -142,6 +144,12 @@ private data class PendingBrowserDownload(
     val fileName: String,
     val mimeType: String?,
     val userAgent: String?
+)
+
+private data class PendingPasswordSaveOffer(
+    val tabId: String,
+    val sourceOrigin: String,
+    val credential: SavedPassword
 )
 
 /**
@@ -1362,7 +1370,7 @@ class MainActivity : FragmentActivity() {
             // Password manager: save-offer dialog state.
             var showPasswordSaveDialog by remember { mutableStateOf(false) }
             var pendingPasswordSave by remember {
-                mutableStateOf<com.click.browser.engine.SavedPassword?>(null)
+                mutableStateOf<PendingPasswordSaveOffer?>(null)
             }
             // Password manager: saved-logins management screen.
             var showPasswordManager by remember { mutableStateOf(false) }
@@ -2998,31 +3006,44 @@ class MainActivity : FragmentActivity() {
                                                                     if (isRefreshing) isRefreshing = false
                                                                 }
 
-                                                                // Password manager: inject form detection + auto-fill
-                                                                // saved credentials for this host (if any).
+                                                                // Password manager: inspect only secure pages. Detection and
+                                                                // autofill are both disabled on HTTP and in private tabs.
                                                                 view?.let { wv ->
-                                                                    wv.evaluateJavascript(
-                                                                        com.click.browser.engine.PasswordDetector.PASSWORD_DETECT_JS,
-                                                                        null
-                                                                    )
-                                                                    val host = try {
-                                                                        android.net.Uri.parse(url.orEmpty()).host.orEmpty()
-                                                                    } catch (_: Exception) { "" }
-                                                                    if (host.isNotBlank() && !finishedTab.isIncognito) {
+                                                                    val pageUrl = wv.url.orEmpty()
+                                                                    val host = com.click.browser.engine.PasswordOriginPolicy.securePageHost(pageUrl)
+                                                                    val callbackMatchesPage =
+                                                                        com.click.browser.engine.PasswordOriginPolicy.isSameSecureOrigin(
+                                                                            url.orEmpty(), pageUrl
+                                                                        )
+                                                                    if (host != null && callbackMatchesPage && !finishedTab.isIncognito) {
+                                                                        wv.evaluateJavascript(
+                                                                            com.click.browser.engine.PasswordDetector.PASSWORD_DETECT_JS,
+                                                                            null
+                                                                        )
                                                                         scope.launch {
+                                                                            val managerEnabled = try {
+                                                                                com.click.browser.engine.PasswordManager.isEnabled(this@MainActivity)
+                                                                            } catch (_: Exception) { false }
+                                                                            if (!managerEnabled) return@launch
                                                                             val saved = com.click.browser.engine.PasswordManager.getForHost(
                                                                                 this@MainActivity, host
                                                                             )
                                                                             if (saved != null) {
                                                                                 val js = "window.__clickFillLogin(" +
-                                                                                    "'${saved.username.replace("'", "\\'")}', " +
-                                                                                    "'${saved.password.replace("'", "\\'")}')"
+                                                                                    "${org.json.JSONObject.quote(saved.username)}, " +
+                                                                                    "${org.json.JSONObject.quote(saved.password)})"
                                                                                 // Fill immediately, then retry after a
                                                                                 // delay — SPA login forms often render
                                                                                 // after onPageFinished.
-                                                                                wv.post { wv.evaluateJavascript(js, null) }
+                                                                                wv.post {
+                                                                                    if (!finishedTab.isIncognito &&
+                                                                                        com.click.browser.engine.PasswordOriginPolicy.isSameSecureOrigin(pageUrl, wv.url.orEmpty())
+                                                                                    ) wv.evaluateJavascript(js, null)
+                                                                                }
                                                                                 wv.postDelayed({
-                                                                                    wv.evaluateJavascript(js, null)
+                                                                                    if (!finishedTab.isIncognito &&
+                                                                                        com.click.browser.engine.PasswordOriginPolicy.isSameSecureOrigin(pageUrl, wv.url.orEmpty())
+                                                                                    ) wv.evaluateJavascript(js, null)
                                                                                 }, 1500)
                                                                             }
                                                                         }
@@ -3288,20 +3309,66 @@ class MainActivity : FragmentActivity() {
                                                         )
 
 
-                                                        // Password manager: detects login forms, offers to save.
-                                                        addJavascriptInterface(
-                                                            com.click.browser.engine.PasswordBridge { host, username, password ->
-                                                                scope.launch {
-                                                                    pendingPasswordSave = com.click.browser.engine.SavedPassword(
-                                                                        host = host,
-                                                                        username = username,
-                                                                        password = password
-                                                                    )
-                                                                    showPasswordSaveDialog = true
+                                                        // Password manager: accept messages only from HTTPS origins.
+                                                        // Unlike addJavascriptInterface, WebMessageListener supplies
+                                                        // the browser-verified source origin and frame status.
+                                                        try {
+                                                            if (WebViewFeature.isFeatureSupported(WebViewFeature.WEB_MESSAGE_LISTENER)) {
+                                                                val passwordWebView = this
+                                                                val passwordBridge = com.click.browser.engine.PasswordBridge { sourceOrigin, host, username, password ->
+                                                                    runOnUiThread {
+                                                                        val offerTab = tabs.firstOrNull { it.webView === passwordWebView }
+                                                                            ?: return@runOnUiThread
+                                                                        if (offerTab.isIncognito || tabs.indexOf(offerTab) != activeTabIndex) return@runOnUiThread
+                                                                        if (!com.click.browser.engine.PasswordOriginPolicy.isSameSecureOrigin(
+                                                                                sourceOrigin, passwordWebView.url.orEmpty()
+                                                                            )
+                                                                        ) return@runOnUiThread
+                                                                        if (showPasswordSaveDialog || pendingPasswordSave != null) return@runOnUiThread
+                                                                        scope.launch {
+                                                                            val managerEnabled = try {
+                                                                                com.click.browser.engine.PasswordManager.isEnabled(this@MainActivity)
+                                                                            } catch (_: Exception) { false }
+                                                                            if (!managerEnabled) return@launch
+                                                                            val currentOfferTab = tabs.firstOrNull { it.id == offerTab.id }
+                                                                                ?: return@launch
+                                                                            if (currentOfferTab.isIncognito ||
+                                                                                tabs.indexOf(currentOfferTab) != activeTabIndex ||
+                                                                                !com.click.browser.engine.PasswordOriginPolicy.isSameSecureOrigin(
+                                                                                    sourceOrigin, passwordWebView.url.orEmpty()
+                                                                                ) || showPasswordSaveDialog || pendingPasswordSave != null
+                                                                            ) return@launch
+                                                                            pendingPasswordSave = PendingPasswordSaveOffer(
+                                                                                tabId = currentOfferTab.id,
+                                                                                sourceOrigin = sourceOrigin,
+                                                                                credential = com.click.browser.engine.SavedPassword(
+                                                                                    host = host,
+                                                                                    username = username,
+                                                                                    password = password
+                                                                                )
+                                                                            )
+                                                                            showPasswordSaveDialog = true
+                                                                        }
+                                                                    }
                                                                 }
-                                                            },
-                                                            "PasswordBridge"
-                                                        )
+                                                                WebViewCompat.addWebMessageListener(
+                                                                    this,
+                                                                    "PasswordBridge",
+                                                                    setOf("https://*"),
+                                                                    WebViewCompat.WebMessageListener { messageView, message, sourceOrigin, isMainFrame, _ ->
+                                                                        val origin = sourceOrigin.toString()
+                                                                        if (com.click.browser.engine.PasswordOriginPolicy.isSameSecureOrigin(
+                                                                                origin, messageView.url.orEmpty()
+                                                                            )
+                                                                        ) {
+                                                                            passwordBridge.onMessage(origin, isMainFrame, message)
+                                                                        }
+                                                                    }
+                                                                )
+                                                            }
+                                                        } catch (e: Exception) {
+                                                            android.util.Log.w("PasswordManager", "Secure password bridge unavailable", e)
+                                                        }
 
                                                         // Config settings
                                                         settings.javaScriptEnabled = javaScriptEnabledGlobal
@@ -4789,8 +4856,9 @@ class MainActivity : FragmentActivity() {
                                 )
                             }
                             // Password manager: "Save password?" offer dialog.
-                            val pwSave = pendingPasswordSave
-                            if (showPasswordSaveDialog && pwSave != null) {
+                            val pwOffer = pendingPasswordSave
+                            if (showPasswordSaveDialog && pwOffer != null) {
+                                val pwSave = pwOffer.credential
                                 AlertDialog(
                                     onDismissRequest = {
                                         showPasswordSaveDialog = false
@@ -4806,19 +4874,39 @@ class MainActivity : FragmentActivity() {
                                     },
                                     confirmButton = {
                                         TextButton(onClick = {
-                                            scope.launch {
-                                                com.click.browser.engine.PasswordManager.save(
-                                                    this@MainActivity,
-                                                    pwSave.host, pwSave.username, pwSave.password
-                                                )
-                                            }
                                             showPasswordSaveDialog = false
                                             pendingPasswordSave = null
-                                            Toast.makeText(
-                                                this@MainActivity,
-                                                "Password saved (encrypted).",
-                                                Toast.LENGTH_SHORT
-                                            ).show()
+                                            scope.launch {
+                                                val managerEnabled = try {
+                                                    com.click.browser.engine.PasswordManager.isEnabled(this@MainActivity)
+                                                } catch (_: Exception) { false }
+                                                val saveTab = tabs.firstOrNull { it.id == pwOffer.tabId }
+                                                val offerStillValid = managerEnabled &&
+                                                    saveTab != null &&
+                                                    currentTab.id == pwOffer.tabId &&
+                                                    tabs.indexOf(saveTab) == activeTabIndex &&
+                                                    !saveTab.isIncognito &&
+                                                    com.click.browser.engine.PasswordOriginPolicy.isSameSecureOrigin(
+                                                        pwOffer.sourceOrigin,
+                                                        saveTab.webView?.url.orEmpty()
+                                                    )
+                                                val saved = if (offerStillValid) {
+                                                    try {
+                                                        com.click.browser.engine.PasswordManager.save(
+                                                            this@MainActivity,
+                                                            pwSave.host, pwSave.username, pwSave.password
+                                                        )
+                                                        true
+                                                    } catch (_: Exception) { false }
+                                                } else false
+                                                val notice = when {
+                                                    !managerEnabled -> "Password manager is off; password not saved."
+                                                    !offerStillValid -> "Page changed; password not saved."
+                                                    saved -> "Password saved (encrypted)."
+                                                    else -> "Could not save password."
+                                                }
+                                                Toast.makeText(this@MainActivity, notice, Toast.LENGTH_SHORT).show()
+                                            }
                                         }) {
                                             Text("Save")
                                         }
