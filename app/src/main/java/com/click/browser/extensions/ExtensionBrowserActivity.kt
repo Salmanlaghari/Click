@@ -670,11 +670,25 @@ private fun ExtensionBrowserScreen(
             sourceFor = ::sourceDescription,
             onInstall = { pickXpi.launch(arrayOf("*/*")) },
             onOpenListing = { entry ->
-                showManager = false
-                runCatching {
-                    context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(entry.listingUrl)))
-                }.onFailure {
-                    statusMessage = "Couldn't open the official AMO listing. You can still install a downloaded package here."
+                if (!ExtensionInstallPolicy.isOfficialAmoListing(entry.listingUrl)) {
+                    statusMessage = "Blocked: this is not an official HTTPS Mozilla Add-ons listing."
+                } else {
+                    showManager = false
+                    address = entry.listingUrl
+                    session.loadUri(entry.listingUrl)
+                    statusMessage = "Opened the official AMO listing in Click's separate GeckoView."
+                }
+            },
+            onOpenExternalListing = { entry ->
+                if (!ExtensionInstallPolicy.isOfficialAmoListing(entry.listingUrl)) {
+                    statusMessage = "Blocked: this is not an official HTTPS Mozilla Add-ons listing."
+                } else {
+                    showManager = false
+                    runCatching {
+                        context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(entry.listingUrl)))
+                    }.onFailure {
+                        statusMessage = "Couldn't open the official AMO listing in your default browser."
+                    }
                 }
             },
             onToggle = { extension, enabled ->
@@ -807,6 +821,7 @@ private fun ExtensionManagerDialog(
     sourceFor: (WebExtension) -> String,
     onInstall: () -> Unit,
     onOpenListing: (FirefoxAmoCatalogEntry) -> Unit,
+    onOpenExternalListing: (FirefoxAmoCatalogEntry) -> Unit,
     onToggle: (WebExtension, Boolean) -> Unit,
     onRemove: (WebExtension) -> Unit,
     onClose: () -> Unit
@@ -822,7 +837,7 @@ private fun ExtensionManagerDialog(
             ) {
                 Text("Limited AMO catalog", fontWeight = FontWeight.SemiBold)
                 Text(
-                    "These are real Firefox for Android listings selected for the current isolated GeckoView policy. Opening a listing does not install an add-on.",
+                    "These are official Firefox for Android listings selected for Click's isolated GeckoView policy. Any in-page install still passes Click's signature, recommendation, blocklist, and permission checks.",
                     fontSize = 12.sp
                 )
                 catalogEntries.forEach { entry ->
@@ -852,7 +867,10 @@ private fun ExtensionManagerDialog(
                                     color = MaterialTheme.colorScheme.onSurfaceVariant
                                 )
                                 OutlinedButton(onClick = { onOpenListing(entry) }) {
-                                    Text("Open official AMO listing")
+                                    Text("Open official AMO listing in Click")
+                                }
+                                TextButton(onClick = { onOpenExternalListing(entry) }) {
+                                    Text("Download XPI in default browser")
                                 }
                             }
                         }
