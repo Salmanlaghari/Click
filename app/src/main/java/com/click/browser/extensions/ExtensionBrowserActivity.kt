@@ -691,6 +691,28 @@ private fun ExtensionBrowserScreen(
                     }
                 }
             },
+            onOpenOptions = { extension ->
+                val metadata = extension.metaData
+                val optionsPageUrl = ExtensionInstallPolicy.safeExtensionOptionsPageUrl(
+                    metadata.baseUrl,
+                    metadata.optionsPageUrl
+                )
+                when {
+                    metadata.optionsPageUrl.isNullOrBlank() -> statusMessage = "This add-on does not declare an options page."
+                    extensionPolicyBlockers(extension).isNotEmpty() ->
+                        statusMessage = "Options are unavailable because this add-on is blocked by Click's safety policy."
+                    !metadata.enabled ->
+                        statusMessage = "Enable this approved add-on to open its options page."
+                    optionsPageUrl == null ->
+                        statusMessage = "Blocked: the options page is not on this add-on's own GeckoView origin."
+                    else -> {
+                        showManager = false
+                        address = optionsPageUrl
+                        session.loadUri(optionsPageUrl)
+                        statusMessage = "Opened ${metadata.name.orEmpty().ifBlank { "add-on" }} options in the isolated GeckoView profile."
+                    }
+                }
+            },
             onToggle = { extension, enabled ->
                 val policyBlockers = extensionPolicyBlockers(extension)
                 if (enabled && policyBlockers.isNotEmpty()) {
@@ -822,6 +844,7 @@ private fun ExtensionManagerDialog(
     onInstall: () -> Unit,
     onOpenListing: (FirefoxAmoCatalogEntry) -> Unit,
     onOpenExternalListing: (FirefoxAmoCatalogEntry) -> Unit,
+    onOpenOptions: (WebExtension) -> Unit,
     onToggle: (WebExtension, Boolean) -> Unit,
     onRemove: (WebExtension) -> Unit,
     onClose: () -> Unit
@@ -904,6 +927,12 @@ private fun ExtensionManagerDialog(
                 extensions.forEach { extension ->
                     val metadata = extension.metaData
                     val policyBlockers = extensionPolicyBlockers(extension)
+                    val optionsPageUrl = ExtensionInstallPolicy.safeExtensionOptionsPageUrl(
+                        metadata.baseUrl,
+                        metadata.optionsPageUrl
+                    )
+                    val canOpenOptionsPage = policyBlockers.isEmpty() && metadata.enabled &&
+                        optionsPageUrl != null
                     Card(Modifier.fillMaxWidth()) {
                         Column(Modifier.fillMaxWidth().padding(10.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                             Text(metadata.name.orEmpty().ifBlank { "Unnamed extension" }, fontWeight = FontWeight.SemiBold)
@@ -919,6 +948,20 @@ private fun ExtensionManagerDialog(
                                     Text(if (policyBlockers.isNotEmpty()) "Blocked" else if (metadata.enabled) "Enabled" else "Disabled", fontSize = 12.sp)
                                 }
                                 TextButton(onClick = { onRemove(extension) }) { Text("Remove") }
+                            }
+                            if (canOpenOptionsPage) {
+                                OutlinedButton(
+                                    onClick = { onOpenOptions(extension) },
+                                    modifier = Modifier.fillMaxWidth()
+                                ) { Text("Options") }
+                            } else {
+                                val optionsMessage = when {
+                                    metadata.optionsPageUrl.isNullOrBlank() -> "This add-on does not provide an options page."
+                                    policyBlockers.isNotEmpty() -> "Options unavailable because this add-on is blocked by Click."
+                                    !metadata.enabled -> "Enable this approved add-on to open its options page."
+                                    else -> "Options blocked: page is not on this add-on's own GeckoView origin."
+                                }
+                                Text(optionsMessage, fontSize = 10.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
                             }
                         }
                     }

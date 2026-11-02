@@ -83,6 +83,28 @@ internal object ExtensionInstallPolicy {
             uri.userInfo == null && (uri.port == -1 || uri.port == 443) &&
             uri.path.orEmpty().contains("/firefox/addon/")
     }
+
+    /** Resolve a manifest options page, but only within that add-on's own GeckoView base URL. */
+    fun safeExtensionOptionsPageUrl(baseUrl: String?, optionsPageUrl: String?): String? {
+        val base = runCatching { baseUrl?.let { java.net.URI(it).normalize() } }.getOrNull() ?: return null
+        val candidate = runCatching { optionsPageUrl?.let { java.net.URI(it) } }.getOrNull() ?: return null
+        if (!base.scheme.equals("moz-extension", ignoreCase = true) || base.userInfo != null || base.port != -1) {
+            return null
+        }
+        val resolved = runCatching { base.resolve(candidate).normalize() }.getOrNull() ?: return null
+        val baseHost = base.host ?: return null
+        val optionsHost = resolved.host ?: return null
+        val basePath = base.path.orEmpty().ifBlank { "/" }
+        val optionsPath = resolved.path.orEmpty()
+        if (!basePath.startsWith("/") || !optionsPath.startsWith("/")) return null
+        val baseRoot = if (basePath.endsWith("/")) basePath else "$basePath/"
+        val belongsToBasePath = optionsPath == basePath || optionsPath.startsWith(baseRoot)
+        val staysOnExtensionOrigin = resolved.scheme.equals("moz-extension", ignoreCase = true) &&
+            baseHost.equals(optionsHost, ignoreCase = true) &&
+            resolved.userInfo == null &&
+            resolved.port == -1
+        return resolved.toASCIIString().takeIf { staysOnExtensionOrigin && belongsToBasePath }
+    }
 }
 
 /** Address-bar parsing deliberately rejects non-web schemes instead of loading local or script URLs. */
