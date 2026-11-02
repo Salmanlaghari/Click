@@ -98,6 +98,9 @@ import com.click.browser.data.BrowserRepository
 import com.click.browser.data.HistoryItem
 import com.click.browser.data.DownloadItem
 import com.click.browser.engine.*
+import com.click.browser.extensions.ExtensionBrowserActivity
+import com.click.browser.extensions.ExtensionToolbarAction
+import com.click.browser.extensions.ExtensionToolbarState
 import com.click.browser.ui.screens.*
 import androidx.datastore.preferences.core.edit
 import kotlinx.coroutines.Dispatchers
@@ -200,6 +203,8 @@ class MainActivity : FragmentActivity() {
     // Set from onCreate (cold start) or onNewIntent (warm, singleTask); consumed
     // once by the composable, which opens it in a new tab.
     private val notificationOpenUrl = mutableStateOf<String?>(null)
+    private val extensionToolbarAction = mutableStateOf(ExtensionToolbarAction.HIDDEN)
+    private var extensionToolbarSyncInFlight = false
 
     // Live copies of composable state for use inside WebViewClient callbacks,
     // which are created once and would otherwise capture stale values.
@@ -419,6 +424,16 @@ class MainActivity : FragmentActivity() {
 
     override fun onResume() {
         super.onResume()
+        extensionToolbarAction.value = ExtensionToolbarState.currentAction(this)
+        if (!ExtensionToolbarState.isInitialized(this) && !extensionToolbarSyncInFlight) {
+            extensionToolbarSyncInFlight = true
+            ExtensionToolbarState.synchronizeIfNeeded(this) { action ->
+                runOnUiThread {
+                    extensionToolbarAction.value = action
+                    extensionToolbarSyncInFlight = false
+                }
+            }
+        }
         // The fallback default-apps page (pre-Android 10) does not return an
         // ActivityResult, so always refresh the role state when we come back.
         isDefaultBrowserState.value = DefaultBrowserHelper.isDefaultBrowser(this)
@@ -2927,6 +2942,26 @@ class MainActivity : FragmentActivity() {
                                                     onDrawerClick = { scope.launch { drawerState.open() } },
                                                     tabCount = tabs.size,
                                                     onTabsClick = { showTabsManager = true },
+                                                    showExtensionsButton = extensionToolbarAction.value ==
+                                                        ExtensionToolbarAction.OPEN_EXTENSION_MANAGER,
+                                                    onExtensionsClick = {
+                                                        val extensionIntent = Intent(
+                                                            this@MainActivity,
+                                                            ExtensionBrowserActivity::class.java
+                                                        ).putExtra(
+                                                            ExtensionBrowserActivity.EXTRA_SHOW_MANAGER,
+                                                            true
+                                                        )
+                                                        if (!currentTab.isIncognito &&
+                                                            (currentTab.url.startsWith("https://") || currentTab.url.startsWith("http://"))
+                                                        ) {
+                                                            extensionIntent.putExtra(
+                                                                ExtensionBrowserActivity.EXTRA_START_URL,
+                                                                currentTab.url
+                                                            )
+                                                        }
+                                                        startActivity(extensionIntent)
+                                                    },
                                                     // Location requests are always blocked by Click.
                                                     locationMode = LocationGuard.LocationMode.BLOCK,
                                                     onLocationClick = { showLocationSettings = true }

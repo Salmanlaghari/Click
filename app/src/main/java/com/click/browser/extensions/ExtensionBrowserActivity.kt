@@ -66,6 +66,7 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
+import com.click.browser.R
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -101,12 +102,14 @@ class ExtensionBrowserActivity : ComponentActivity() {
         }
 
         val requestedStartUrl = intent.getStringExtra(EXTRA_START_URL).orEmpty()
+        val openManagerOnStart = intent.getBooleanExtra(EXTRA_SHOW_MANAGER, false)
         setContent {
             MaterialTheme {
                 ExtensionBrowserScreen(
                     runtime = geckoRuntime,
                     session = requireNotNull(session),
                     requestedStartUrl = requestedStartUrl,
+                    openManagerOnStart = openManagerOnStart,
                     onExit = { finish() }
                 )
             }
@@ -124,6 +127,7 @@ class ExtensionBrowserActivity : ComponentActivity() {
 
     companion object {
         const val EXTRA_START_URL = "com.click.browser.extensions.START_URL"
+        const val EXTRA_SHOW_MANAGER = "com.click.browser.extensions.SHOW_MANAGER"
     }
 }
 
@@ -179,7 +183,7 @@ private fun isMozillaRecommended(extension: WebExtension): Boolean {
         ExtensionInstallPolicy.isOfficialAmoListing(metadata.amoListingUrl)
 }
 
-private fun extensionPolicyBlockers(extension: WebExtension): List<String> {
+internal fun extensionPolicyBlockers(extension: WebExtension): List<String> {
     val metadata = extension.metaData
     val currentPermissions = metadata.requiredPermissions.orEmpty().asList() +
         metadata.grantedOptionalPermissions.orEmpty().asList()
@@ -199,6 +203,7 @@ private fun ExtensionBrowserScreen(
     runtime: GeckoRuntime,
     session: GeckoSession,
     requestedStartUrl: String,
+    openManagerOnStart: Boolean,
     onExit: () -> Unit
 ) {
     val context = LocalContext.current
@@ -223,7 +228,7 @@ private fun ExtensionBrowserScreen(
     var popupSession by remember { mutableStateOf<GeckoSession?>(null) }
     var popupTitle by remember { mutableStateOf("") }
     var extensionListLoaded by remember { mutableStateOf(false) }
-    var showManager by remember { mutableStateOf(false) }
+    var showManager by remember { mutableStateOf(openManagerOnStart) }
     var removeTarget by remember { mutableStateOf<WebExtension?>(null) }
     var pendingPrompt by remember { mutableStateOf<PendingExtensionPrompt?>(null) }
     var selectedFileName by remember { mutableStateOf<String?>(null) }
@@ -298,6 +303,7 @@ private fun ExtensionBrowserScreen(
                 val appExtensions = extensions.orEmpty().filterNot { it.isBuiltIn }
                 installedExtensionIds = appExtensions.map { it.id }.toSet()
                 extensionListLoaded = true
+                ExtensionToolbarState.updateFromExtensions(context, appExtensions)
                 val disallowed = appExtensions.filter { extensionPolicyBlockers(it).isNotEmpty() }
                 disallowed.filter { it.metaData.enabled }.forEach { extension ->
                     controller.disable(extension, WebExtensionController.EnableSource.APP)
@@ -317,6 +323,7 @@ private fun ExtensionBrowserScreen(
             },
             { error ->
                 extensionListLoaded = false
+                ExtensionToolbarState.invalidate(context)
                 statusMessage = "Couldn't load extensions: ${error?.message ?: "unknown error"}"
             }
         )
@@ -480,10 +487,10 @@ private fun ExtensionBrowserScreen(
         }
     }
 
-    LaunchedEffect(session) {
+    LaunchedEffect(session, openManagerOnStart) {
         val start = ExtensionBrowserInput.resolve(requestedStartUrl) ?: address
         session.loadUri(start)
-        refreshExtensions()
+        if (!openManagerOnStart) refreshExtensions()
     }
     LaunchedEffect(showManager) {
         if (showManager) refreshExtensions()
@@ -804,6 +811,7 @@ private fun ExtensionManagerDialog(
     onRemove: (WebExtension) -> Unit,
     onClose: () -> Unit
 ) {
+    val context = LocalContext.current
     AlertDialog(
         onDismissRequest = onClose,
         title = { Text("Firefox/AMO compatible add-ons", fontWeight = FontWeight.Bold) },
@@ -835,7 +843,11 @@ private fun ExtensionManagerDialog(
                                 Text("Version ${entry.version} · Android ${entry.minimumAndroidVersion}+", fontSize = 10.sp)
                                 Text(entry.summary, fontSize = 11.sp)
                                 Text(
-                                    "Required APIs: ${entry.requiredPermissions.joinToString()} · Site access: none declared",
+                                    context.getString(
+                                        R.string.amo_catalog_permission_summary,
+                                        entry.requiredPermissions.joinToString().ifBlank { "none declared" },
+                                        entry.requiredOrigins.ifEmpty { listOf("none declared") }.joinToString()
+                                    ),
                                     fontSize = 10.sp,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant
                                 )
@@ -847,7 +859,7 @@ private fun ExtensionManagerDialog(
                     }
                 }
                 Text(
-                    "To install, choose the listing yourself, download its XPI, return here, and import the downloaded package. GeckoView rechecks Mozilla signature, recommendation, and blocklist status; Click still blocks sensitive APIs and broad or insecure site access and asks you to approve permissions.",
+                    context.getString(R.string.amo_catalog_install_instructions),
                     fontSize = 11.sp,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
@@ -861,7 +873,7 @@ private fun ExtensionManagerDialog(
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
                 Text(
-                    "Updates are not automatic in this version. To update safely, remove the add-on and import its new AMO XPI; replacing an installed ID directly is blocked.",
+                    context.getString(R.string.amo_catalog_update_note),
                     fontSize = 11.sp,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
