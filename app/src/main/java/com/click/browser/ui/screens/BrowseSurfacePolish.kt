@@ -24,7 +24,7 @@ import com.click.browser.engine.BrowserMode
  * Official per-mode display names + taglines, used by every mode switcher:
  * - Simple — Clean · Fresh · Easy on Eyes
  * - Developer — Modern · Stylish · Premium
- * - Power — Pure Black · Neon Glow · Next Level
+ * - Power — Desktop-style browsing · Wide-page layout
  * - Advance — Isolated · Fast · Fresh Space (own data profile, starts empty)
  */
 data class ModeDisplay(val title: String, val tagline: String)
@@ -40,7 +40,7 @@ fun BrowserMode.display(): ModeDisplay = when (this) {
     )
     BrowserMode.HACK -> ModeDisplay(
         "Power",
-        "Pure Black · Neon Glow · Next Level"
+        "Desktop-style browsing · Wide-page layout"
     )
     // Honest wording: an isolated, performance-tuned profile — not a new engine.
     BrowserMode.ADVANCED -> ModeDisplay(

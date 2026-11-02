@@ -213,6 +213,10 @@ fun ClickHomeScreen(
             onProfileClick = onProfileClick
         )
 
+        if (activeMode == BrowserMode.HACK) {
+            PowerModeHomeHeader(theme)
+        }
+
         SmartSearchBar(
             theme = theme,
             searchEngine = searchEngine,
@@ -410,6 +414,67 @@ private fun HomeTopRow(
             contentAlignment = Alignment.Center
         ) {
             Icon(Icons.Default.Person, contentDescription = "Profile", tint = Color.White, modifier = Modifier.size(20.dp))
+        }
+    }
+}
+
+@Composable
+private fun PowerModeHomeHeader(theme: ModeTheme) {
+    Surface(
+        shape = RoundedCornerShape(16.dp),
+        color = theme.surface,
+        border = androidx.compose.foundation.BorderStroke(
+            1.dp,
+            theme.modeAccent.copy(alpha = 0.28f)
+        ),
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 14.dp, vertical = 11.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Box(
+                modifier = Modifier
+                    .size(40.dp)
+                    .clip(RoundedCornerShape(12.dp))
+                    .background(
+                        Brush.linearGradient(
+                            listOf(Color(0xFF92400E), theme.modeAccent)
+                        )
+                    ),
+                contentAlignment = Alignment.Center
+            ) {
+                Text(
+                    "P",
+                    color = Color.White,
+                    fontWeight = FontWeight.Black,
+                    fontSize = 19.sp
+                )
+            }
+            Spacer(Modifier.width(12.dp))
+            Column(
+                modifier = Modifier.weight(1f),
+                verticalArrangement = Arrangement.spacedBy(2.dp)
+            ) {
+                Text(
+                    "POWER MODE",
+                    color = theme.modeAccent,
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 10.sp,
+                    letterSpacing = 1.sp
+                )
+                Text(
+                    "Desktop-style page layout",
+                    color = theme.onSurface,
+                    fontWeight = FontWeight.SemiBold,
+                    fontSize = 13.sp
+                )
+                Text(
+                    "Wider viewport for web pages",
+                    color = theme.onSurface.copy(alpha = 0.62f),
+                    fontSize = 11.sp
+                )
+            }
         }
     }
 }

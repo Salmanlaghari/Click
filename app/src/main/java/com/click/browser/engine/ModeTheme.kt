@@ -15,6 +15,7 @@ data class ModeTheme(
     val onSurface: Color,
     val topBarBg: Color,
     val onTopBar: Color,
+    val modeAccent: Color,
     val glow: Color,
     val modePillText: String
 )
@@ -115,6 +116,8 @@ object ModeThemes {
             onSurface = palette.onSurface,
             topBarBg = palette.topBarBg,
             onTopBar = palette.onTopBar,
+            // The selected light palette stays shared; this token adds a Power-only identity accent.
+            modeAccent = if (mode == BrowserMode.HACK) Color(0xFFB45309) else palette.primary,
             glow = palette.glow,
             modePillText = when (mode) {
                 BrowserMode.SIMPLE -> "SIMPLE MODE"
