@@ -98,11 +98,15 @@ fun SiteSettingsSheet(
     trackersBlocked: Int = 0,
     cookieCount: Int = 0,
     onManageCookies: () -> Unit = {},
-    onOpenHistory: () -> Unit = {}
+    onOpenHistory: () -> Unit = {},
+    historyScopeDescription: String = "current profile history",
+    otherHistoryScopeDescription: String = "other profile history",
+    onClearHistoryForHost: suspend (String) -> Int = { 0 }
 ) {
     val scope = rememberCoroutineScope()
     val context = LocalContext.current
     var showClearConfirm by remember { mutableStateOf(false) }
+    var showClearHistoryConfirm by remember(host, historyScopeDescription) { mutableStateOf(false) }
 
     ModalBottomSheet(
         onDismissRequest = onDismiss,
@@ -333,6 +337,19 @@ fun SiteSettingsSheet(
                 actionLabel = "Open",
                 onClick = onOpenHistory
             )
+            TextButton(
+                onClick = { showClearHistoryConfirm = true },
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Icon(
+                    Icons.Default.DeleteSweep,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.error,
+                    modifier = Modifier.size(18.dp)
+                )
+                Spacer(Modifier.width(8.dp))
+                Text("Clear site history", color = MaterialTheme.colorScheme.error)
+            }
 
             // ================= USAGE =================
             SectionTitle(theme, "Usage")
@@ -407,6 +424,48 @@ fun SiteSettingsSheet(
                 },
                 dismissButton = {
                     TextButton(onClick = { showClearConfirm = false }) { Text("Cancel") }
+                }
+            )
+        }
+        if (showClearHistoryConfirm) {
+            AlertDialog(
+                onDismissRequest = { showClearHistoryConfirm = false },
+                title = { Text("Clear history for $host?") },
+                text = {
+                    Text(
+                        "This removes recorded visits to $host from $historyScopeDescription only. " +
+                            "Other website hosts and $otherHistoryScopeDescription are unchanged. " +
+                            "Future visits may be recorded again."
+                    )
+                },
+                confirmButton = {
+                    TextButton(
+                        onClick = {
+                            showClearHistoryConfirm = false
+                            scope.launch {
+                                try {
+                                    val removed = onClearHistoryForHost(host)
+                                    val message = if (removed == 0) {
+                                        "No saved history entries for $host"
+                                    } else {
+                                        "Cleared $removed history entr${if (removed == 1) "y" else "ies"} for $host"
+                                    }
+                                    Toast.makeText(context, message, Toast.LENGTH_SHORT).show()
+                                } catch (_: Exception) {
+                                    Toast.makeText(
+                                        context,
+                                        "Unable to clear this site's history",
+                                        Toast.LENGTH_LONG
+                                    ).show()
+                                }
+                            }
+                        }
+                    ) {
+                        Text("Clear history", color = MaterialTheme.colorScheme.error)
+                    }
+                },
+                dismissButton = {
+                    TextButton(onClick = { showClearHistoryConfirm = false }) { Text("Cancel") }
                 }
             )
         }

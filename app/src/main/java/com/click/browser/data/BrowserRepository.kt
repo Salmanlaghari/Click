@@ -159,6 +159,34 @@ class BrowserRepository(private val context: Context) {
     }
 
     /**
+     * Clears only visits whose URL has [host]'s exact normalized hostname from the current
+     * profile store. Simple, Developer, and Power share one history store; Advanced has a
+     * separate store selected by [context.profileDataStore]. Unparseable URLs are preserved.
+     */
+    suspend fun clearHistoryForHost(host: String): Int {
+        val normalizedHost = requireNotNull(HistoryHostFilter.normalizeHost(host)) {
+            "Invalid history host"
+        }
+        var removedCount = 0
+        context.profileDataStore.edit { preferences ->
+            val source = JSONArray(preferences[HISTORY_KEY] ?: "[]")
+            val entries = List(source.length()) { index -> source.getJSONObject(index) }
+            val retained = HistoryHostFilter.retainOtherHosts(
+                entries = entries,
+                normalizedHost = normalizedHost,
+                urlOf = { it.optString("url") }
+            )
+            removedCount = entries.size - retained.size
+            if (removedCount > 0) {
+                val updated = JSONArray()
+                retained.forEach { updated.put(it) }
+                preferences[HISTORY_KEY] = updated.toString()
+            }
+        }
+        return removedCount
+    }
+
+    /**
      * Clears the history of ANY mode's isolated profile store — no mode
      * switch or app restart needed (history lives in DataStore, not the
      * WebView data directory). Respects 4-mode isolation: only the chosen

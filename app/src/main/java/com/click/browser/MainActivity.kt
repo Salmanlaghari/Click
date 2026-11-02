@@ -4820,6 +4820,19 @@ class MainActivity : FragmentActivity() {
                                         // Brave-style Shields panel data.
                                         trackersBlocked = blockedCount,
                                         cookieCount = siteCookieCount,
+                                        historyScopeDescription = if (V9Engine.bootMode == BrowserMode.ADVANCED) {
+                                            "Advanced history"
+                                        } else {
+                                            "shared Simple, Developer, and Power history"
+                                        },
+                                        otherHistoryScopeDescription = if (V9Engine.bootMode == BrowserMode.ADVANCED) {
+                                            "shared Simple, Developer, and Power history"
+                                        } else {
+                                            "Advanced history"
+                                        },
+                                        onClearHistoryForHost = { targetHost ->
+                                            repository.clearHistoryForHost(targetHost)
+                                        },
                                         onManageCookies = {
                                             showSiteSettings = false
                                             showCookieManager = true
