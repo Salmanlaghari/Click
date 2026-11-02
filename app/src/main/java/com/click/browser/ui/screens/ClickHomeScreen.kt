@@ -1267,10 +1267,11 @@ fun homeGreeting(): String {
 /**
  * 2026-style premium address bar for the browsing surface.
  *
- * Layout: [☰ Sidebar] [🔒 URL field] [＋ new tab in Simple / ↻ elsewhere] [▭ Tabs] [⋮]
+ * Layout: [☰ Sidebar · extensions · reload/new tab · tabs · menu]
+ *          [full-width address/search box]
  * - Hamburger opens the navigation drawer (sidebar) — restores sidebar access
  *   directly from the top bar, 2026 browser style.
- * - Elevated URL field with soft shadow (not just a border).
+ * - A separate, taller address box gives long URLs room and a clear tap target.
  * - Search-provider branding appears on the new-tab search field; loaded pages
  *   show their site security affordance instead.
  * - Tab counter button for quick tab switching.
@@ -1301,6 +1302,7 @@ fun CompactBrowseBar(
     onTabsClick: () -> Unit,
     showExtensionsButton: Boolean = false,
     onExtensionsClick: () -> Unit = {},
+    onTranslateClick: () -> Unit = {},
     modifier: Modifier = Modifier,
     // Location indicator: null = no indicator; otherwise the effective mode.
     locationMode: LocationGuard.LocationMode? = null,
@@ -1308,59 +1310,152 @@ fun CompactBrowseBar(
 ) {
     var textInput by remember(currentUrl) { mutableStateOf(currentUrl) }
     val isHttps = currentUrl.startsWith("https://")
-    // 2026 style: elevated bar with soft shadow, rounded container.
+    // Keep toolbar actions on their own row so the address field can use the
+    // full available width and a generous touch target.
     Surface(
         color = theme.topBarBg,
         shadowElevation = 4.dp,
         modifier = modifier.fillMaxWidth()
     ) {
-        Row(
+        Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 6.dp, vertical = 8.dp),
-            verticalAlignment = Alignment.CenterVertically
+                .padding(horizontal = 10.dp, vertical = 8.dp),
+            verticalArrangement = Arrangement.spacedBy(6.dp)
         ) {
-            // Sidebar (drawer) button — 2026 style: hamburger opens the
-            // navigation sidebar with all browser options.
-            IconButton(
-                onClick = onDrawerClick,
-                modifier = Modifier.size(40.dp)
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(2.dp)
             ) {
-                Icon(
-                    Icons.Default.Menu,
-                    contentDescription = "Open sidebar menu",
-                    tint = theme.onTopBar,
-                    modifier = Modifier.size(22.dp)
-                )
+                IconButton(onClick = onDrawerClick, modifier = Modifier.size(40.dp)) {
+                    Icon(
+                        Icons.Default.Menu,
+                        contentDescription = "Open sidebar menu",
+                        tint = theme.onTopBar,
+                        modifier = Modifier.size(22.dp)
+                    )
+                }
+                Spacer(modifier = Modifier.weight(1f))
+                IconButton(
+                    onClick = onTranslateClick,
+                    modifier = Modifier
+                        .size(40.dp)
+                        .clip(CircleShape)
+                        .background(
+                            if (currentUrl.startsWith("http")) theme.primary.copy(alpha = 0.12f)
+                            else Color.Transparent
+                        )
+                ) {
+                    Icon(
+                        Icons.Default.Translate,
+                        contentDescription = "Translate page or text",
+                        tint = if (currentUrl.startsWith("http")) theme.primary else theme.onTopBar,
+                        modifier = Modifier.size(21.dp)
+                    )
+                }
+                if (showExtensionsButton) {
+                    IconButton(
+                        onClick = onExtensionsClick,
+                        modifier = Modifier
+                            .size(40.dp)
+                            .clip(CircleShape)
+                            .background(theme.primary.copy(alpha = 0.12f))
+                    ) {
+                        Icon(
+                            Icons.Default.Extension,
+                            contentDescription = "Manage installed extensions in the separate browser",
+                            tint = theme.primary,
+                            modifier = Modifier.size(21.dp)
+                        )
+                    }
+                }
+                // On Simple's web surface use a direct new-tab affordance;
+                // reload remains available in the browser drawer.
+                if (activeMode == BrowserMode.SIMPLE && currentUrl.isNotBlank()) {
+                    IconButton(onClick = onNewTab, modifier = Modifier.size(40.dp)) {
+                        Icon(
+                            Icons.Default.Add,
+                            contentDescription = "New tab",
+                            tint = theme.onTopBar,
+                            modifier = Modifier.size(22.dp)
+                        )
+                    }
+                } else {
+                    IconButton(onClick = onReload, modifier = Modifier.size(40.dp)) {
+                        Icon(
+                            Icons.Default.Refresh,
+                            contentDescription = "Reload",
+                            tint = theme.onTopBar,
+                            modifier = Modifier.size(22.dp)
+                        )
+                    }
+                }
+                IconButton(onClick = onTabsClick, modifier = Modifier.size(40.dp)) {
+                    BadgedBox(
+                        badge = {
+                            Badge(
+                                containerColor = theme.primary,
+                                contentColor = Color.White,
+                                modifier = Modifier.offset(x = 6.dp, y = (-6).dp)
+                            ) {
+                                Text(
+                                    tabBadgeText(tabCount),
+                                    fontSize = 9.sp,
+                                    fontWeight = FontWeight.Bold
+                                )
+                            }
+                        }
+                    ) {
+                        Icon(
+                            Icons.Default.Tab,
+                            contentDescription = "Tabs ($tabCount)",
+                            tint = theme.onTopBar,
+                            modifier = Modifier.size(22.dp)
+                        )
+                    }
+                }
+                IconButton(onClick = onMenuClick, modifier = Modifier.size(40.dp)) {
+                    Icon(
+                        Icons.Default.MoreVert,
+                        contentDescription = "Browser menu",
+                        tint = theme.onTopBar,
+                        modifier = Modifier.size(22.dp)
+                    )
+                }
             }
-            // URL field: elevated pill with soft shadow, 2026 premium look.
-            // animateContentSize smooths the bar when the location
-            // indicator appears/disappears or the URL length changes.
+
             Surface(
-                shape = RoundedCornerShape(28.dp),
-                color = theme.surfaceVariant.copy(alpha = 0.65f),
+                shape = RoundedCornerShape(18.dp),
+                color = theme.surfaceVariant.copy(alpha = 0.72f),
                 shadowElevation = 2.dp,
                 border = androidx.compose.foundation.BorderStroke(
-                    1.dp, theme.primary.copy(alpha = 0.18f)
+                    1.dp, theme.primary.copy(alpha = 0.28f)
                 ),
                 modifier = Modifier
-                    .weight(1f)
+                    .fillMaxWidth()
+                    .height(58.dp)
                     .animateContentSize()
             ) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    // On a new tab this becomes a neutral search affordance;
-                    // on real pages it opens Site Settings and reflects the URL scheme only.
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    // On a new tab this is a neutral search affordance;
+                    // on real pages it opens site settings and reflects URL scheme only.
                     if (currentUrl.isBlank()) {
                         Icon(
                             Icons.Default.Search,
                             contentDescription = null,
                             tint = theme.onSurface.copy(alpha = 0.58f),
-                            modifier = Modifier.padding(start = 12.dp).size(18.dp)
+                            modifier = Modifier.padding(start = 8.dp).size(18.dp)
                         )
                     } else {
                         IconButton(
                             onClick = onSiteSettingsClick,
-                            modifier = Modifier.padding(start = 4.dp).size(34.dp)
+                            modifier = Modifier.size(34.dp)
                         ) {
                             Icon(
                                 Icons.Default.Shield,
@@ -1370,7 +1465,6 @@ fun CompactBrowseBar(
                             )
                         }
                     }
-                    // Show an indicator only when location requests are blocked.
                     if (locationMode == LocationGuard.LocationMode.BLOCK && currentUrl.isNotBlank()) {
                         IconButton(
                             onClick = onLocationClick,
@@ -1418,13 +1512,10 @@ fun CompactBrowseBar(
                             .weight(1f)
                             .padding(horizontal = 8.dp, vertical = 12.dp)
                     )
-                    // Clear button whenever there's text (2026 UX pattern).
-                    // Kilo: shown even when text matches the URL so the user
-                    // can always clear the field to type a fresh address.
                     if (textInput.isNotEmpty()) {
                         IconButton(
                             onClick = { textInput = "" },
-                            modifier = Modifier.size(32.dp)
+                            modifier = Modifier.size(34.dp)
                         ) {
                             Icon(
                                 Icons.Default.Close,
@@ -1435,80 +1526,6 @@ fun CompactBrowseBar(
                         }
                     }
                 }
-            }
-            if (showExtensionsButton) {
-                IconButton(
-                    onClick = onExtensionsClick,
-                    modifier = Modifier
-                        .size(40.dp)
-                        .clip(CircleShape)
-                        .background(theme.primary.copy(alpha = 0.12f))
-                ) {
-                    Icon(
-                        Icons.Default.Extension,
-                        contentDescription = "Manage installed extensions in the separate browser",
-                        tint = theme.primary,
-                        modifier = Modifier.size(21.dp)
-                    )
-                }
-            }
-            Spacer(modifier = Modifier.width(4.dp))
-            // On Simple's web surface the approved compact row uses a direct
-            // new-tab affordance; reload remains available in the browser drawer.
-            if (activeMode == BrowserMode.SIMPLE && currentUrl.isNotBlank()) {
-                IconButton(onClick = onNewTab, modifier = Modifier.size(40.dp)) {
-                    Icon(
-                        Icons.Default.Add,
-                        contentDescription = "New tab",
-                        tint = theme.onTopBar,
-                        modifier = Modifier.size(22.dp)
-                    )
-                }
-            } else {
-                // Kilo: never wipes what the user typed — the field resets via
-                // remember(currentUrl) when the URL actually changes.
-                IconButton(onClick = onReload, modifier = Modifier.size(40.dp)) {
-                    Icon(
-                        Icons.Default.Refresh,
-                        contentDescription = "Reload",
-                        tint = theme.onTopBar,
-                        modifier = Modifier.size(22.dp)
-                    )
-                }
-            }
-            // Tab counter button (2026 style: quick tab access from top bar).
-            IconButton(onClick = onTabsClick, modifier = Modifier.size(40.dp)) {
-                BadgedBox(
-                    badge = {
-                        Badge(
-                            containerColor = theme.primary,
-                            contentColor = Color.White,
-                            modifier = Modifier.offset(x = 6.dp, y = (-6).dp)
-                        ) {
-                            Text(
-                                tabBadgeText(tabCount),
-                                fontSize = 9.sp,
-                                fontWeight = FontWeight.Bold
-                            )
-                        }
-                    }
-                ) {
-                    Icon(
-                        Icons.Default.Tab,
-                        contentDescription = "Tabs ($tabCount)",
-                        tint = theme.onTopBar,
-                        modifier = Modifier.size(22.dp)
-                    )
-                }
-            }
-            // Browser menu button.
-            IconButton(onClick = onMenuClick, modifier = Modifier.size(40.dp)) {
-                Icon(
-                    Icons.Default.MoreVert,
-                    contentDescription = "Browser menu",
-                    tint = theme.onTopBar,
-                    modifier = Modifier.size(22.dp)
-                )
             }
         }
     }
