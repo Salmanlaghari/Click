@@ -1127,6 +1127,9 @@ class MainActivity : FragmentActivity() {
             val tabs = remember { mutableStateListOf<TabItem>(TabItem(url = startViewUrl ?: homeUrl(), title = "New Tab")) }
             var activeTabIndex by remember { mutableStateOf(0) }
             val currentTab = tabs.getOrNull(activeTabIndex) ?: TabItem(url = "about:blank")
+            // Only address/search submissions request keyboard dismissal after page load;
+            // do not hide keyboards opened by page forms or unrelated tab navigation.
+            var pendingKeyboardDismissTabId by remember { mutableStateOf<String?>(null) }
             SideEffect {
                 val (snapshot, active) = buildRestorableSnapshot(
                     tabs.map { Triple(it.url, it.title, it.isIncognito) },
@@ -2927,6 +2930,7 @@ class MainActivity : FragmentActivity() {
                                                     currentUrl = if (showOverlays) "" else currentTab.url,
                                                     searchEngine = currentSearchEngineSetting,
                                                     onNavigate = { input ->
+                                                        pendingKeyboardDismissTabId = currentTab.id
                                                         val destination = cleanTrackingUrl(formatUrl(input, currentSearchEngineSetting))
                                                         currentTab.url = destination
                                                         currentTab.webView?.loadUrl(destination)
@@ -3019,6 +3023,7 @@ class MainActivity : FragmentActivity() {
                                             onShieldToggle = { toggleDnsShield() },
                                             onGamesClick = { showClickPage = "games" },
                                             onNavigate = { input ->
+                                                pendingKeyboardDismissTabId = currentTab.id
                                                 val destination = cleanTrackingUrl(formatUrl(input, currentSearchEngineSetting))
                                                 currentTab.url = destination
                                                 currentTab.webView?.loadUrl(destination)
@@ -3270,6 +3275,15 @@ class MainActivity : FragmentActivity() {
                                                                 if (finishedTab === currentTab) {
                                                                     pageLoadTime = System.currentTimeMillis() - lastPageStart
                                                                     if (isRefreshing) isRefreshing = false
+                                                                }
+                                                                if (pendingKeyboardDismissTabId == finishedTab.id) {
+                                                                    pendingKeyboardDismissTabId = null
+                                                                    if (finishedTab === currentTab) {
+                                                                        WindowInsetsControllerCompat(
+                                                                            this@MainActivity.window,
+                                                                            this@MainActivity.window.decorView
+                                                                        ).hide(WindowInsetsCompat.Type.ime())
+                                                                    }
                                                                 }
 
                                                                 // Password manager: inspect only secure pages. Detection and
