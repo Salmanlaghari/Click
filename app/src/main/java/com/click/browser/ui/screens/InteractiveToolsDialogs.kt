@@ -667,7 +667,7 @@ fun InteractiveImageGalleryDialog(onClose: () -> Unit) {
 }
 
 // ---------------------------------------------------------------------------
-// Built-in quick toggle plus the separately isolated extension browser.
+// Built-in quick toggle plus the separately isolated Firefox/AMO add-on browser.
 // ---------------------------------------------------------------------------
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -680,7 +680,7 @@ fun InteractiveExtensionsDialog(
 ) {
     AlertDialog(
         onDismissRequest = onClose,
-        title = { Text("Extensions & Quick Toggles", fontWeight = FontWeight.Bold) },
+        title = { Text("Firefox/AMO compatible add-ons & Quick Toggles", fontWeight = FontWeight.Bold) },
         text = {
             Column(
                 modifier = Modifier
@@ -702,10 +702,10 @@ fun InteractiveExtensionsDialog(
                 )
                 Button(onClick = onOpenExtensionBrowser, modifier = Modifier.fillMaxWidth()) {
                     Icon(Icons.Default.Extension, contentDescription = null, modifier = Modifier.padding(end = 6.dp))
-                    Text("Open Extension Browser")
+                    Text("Open Firefox/AMO compatible add-ons")
                 }
                 Text(
-                    "It uses a separate profile and accepts only Mozilla Recommended, fully reviewed, non-blocklisted add-ons from addons.mozilla.org. Chrome .crx and userscripts are not supported. Extensions can still affect the exact HTTPS sites you approve.",
+                    "It uses a separate GeckoView profile. The limited catalog links to official AMO listings; choosing a listing never installs automatically. Every imported package is rechecked for Mozilla signature, Recommended status, and Click's existing permission and site-access limits.",
                     fontSize = 11.sp,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
@@ -738,8 +738,8 @@ fun PrivacyPolicyDialog(onClose: () -> Unit) {
                 Text(
                     text = "Click Browser Privacy Policy\n\n" +
                         "• Bookmarks, history, download records, settings and Click's on-device credential vault are kept in app-private storage. Credentials saved to Google Password Manager are handled by Google. Android may include some app data in device backups when backups are enabled; private tabs skip local history recording but are not anonymous.\n\n" +
-                        "• The four regular browser profiles use Android System WebView and your current network or VPN settings. The optional Extension Browser uses GeckoView in a separate profile; its cookies, history and saved passwords are not shared with regular Click tabs. Click denies website geolocation, camera, microphone and notification requests there.\n\n" +
-                        "• The Extension Browser accepts only Mozilla Recommended add-ons that are fully signed, not blocklisted, and listed on addons.mozilla.org. GeckoView validates signatures. Click shows requested permissions and exact HTTPS site access; wildcard, HTTP, local-network, and over-10-site access plus sensitive APIs are blocked. Approved extensions can still read or change the sites they access and may process or send data under their own code and privacy terms. Native messaging, Chrome .crx files and userscripts are not supported.\n\n" +
+                        "• The four regular browser profiles use Android System WebView and your current network or VPN settings. Firefox/AMO compatible add-ons open in GeckoView in a separate profile; its cookies, history and saved passwords are not shared with regular Click tabs. Click denies website geolocation, camera, microphone and notification requests there.\n\n" +
+                        "• Firefox/AMO compatible add-ons are accepted only when Mozilla Recommended, fully signed, not blocklisted, and listed on addons.mozilla.org. GeckoView validates signatures. Click shows requested permissions and exact HTTPS site access; wildcard, HTTP, local-network, and over-10-site access plus sensitive APIs are blocked. Approved add-ons can still read or change the sites they access and may process or send data under their own code and privacy terms. Native messaging remains blocked.\n\n" +
                         "• HTTPS mode upgrades or blocks navigation URLs according to your setting. HTTPS describes the connection scheme; it does not guarantee that a site is trustworthy. Optional DNT/GPC signals are voluntary and sites may ignore them.\n\n" +
                         "• If you use AI chat, the prompt and recent conversation sent with it go over HTTPS to the selected provider (Groq or OpenRouter). The provider's own privacy terms apply.\n\n" +
                         "• Google sign-in is handled by Google Play services. Click caches the selected profile name, email and photo in app storage and does not operate its own account backend.\n\n" +
@@ -773,7 +773,7 @@ fun AboutAppDialog(onClose: () -> Unit) {
                 Text("UI Design Built By: Prince Laghari", fontSize = 13.sp, fontWeight = FontWeight.ExtraBold)
                 Spacer(modifier = Modifier.height(12.dp))
                 Text(
-                    "Click Browser is an Android browser with four profiles: Simple, Developer, Power and Advance. Those profiles use Android System WebView; an optional Extension Browser uses GeckoView in a separate profile.",
+                    "Click Browser is an Android browser with four profiles: Simple, Developer, Power and Advance. Those profiles use Android System WebView; Firefox/AMO compatible add-ons open in GeckoView in a separate profile.",
                     fontSize = 11.sp,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
@@ -800,7 +800,7 @@ fun AboutAppDialog(onClose: () -> Unit) {
                 )
                 Spacer(modifier = Modifier.height(4.dp))
                 Text(
-                    "Click includes Safe Browsing when supported by the installed WebView, HTTPS controls, optional ad/tracker blocking and V9 Shield DNS-layer protection. These tools can reduce some risks, but they cannot guarantee every site is safe. The isolated Extension Browser accepts only Mozilla Recommended, fully reviewed, non-blocklisted add-ons from addons.mozilla.org and limits them to approved exact HTTPS site access. Native messaging and sensitive browser APIs are blocked; extensions can still affect sites they are allowed to access. Website geolocation, camera and microphone requests are denied.",
+                    "Click includes Safe Browsing when supported by the installed WebView, HTTPS controls, optional ad/tracker blocking and V9 Shield DNS-layer protection. These tools can reduce some risks, but they cannot guarantee every site is safe. The isolated Firefox/AMO compatible add-ons profile accepts only Mozilla Recommended, fully reviewed, non-blocklisted packages from addons.mozilla.org and limits them to approved exact HTTPS site access. Native messaging and sensitive browser APIs are blocked; add-ons can still affect sites they are allowed to access. Website geolocation, camera and microphone requests are denied.",
                     fontSize = 11.sp,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )

@@ -1,6 +1,7 @@
 package com.click.browser.extensions
 
 import android.content.Context
+import android.content.Intent
 import android.net.Uri
 import android.os.Bundle
 import android.provider.OpenableColumns
@@ -9,6 +10,8 @@ import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.Image
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -50,11 +53,13 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
@@ -161,6 +166,11 @@ private data class PendingExtensionPrompt(
     val decide: (allow: Boolean, allowDataCollection: Boolean) -> Unit
 )
 
+private data class ExtensionActionItem(
+    val extension: WebExtension,
+    val action: WebExtension.Action
+)
+
 private fun isMozillaRecommended(extension: WebExtension): Boolean {
     val metadata = extension.metaData
     return metadata.isRecommended &&
@@ -205,15 +215,82 @@ private fun ExtensionBrowserScreen(
                 ?: "https://duckduckgo.com/"
         )
     }
-    var title by remember { mutableStateOf("Extension Browser") }
+    var title by remember { mutableStateOf("Firefox/AMO compatible add-ons") }
     var statusMessage by remember { mutableStateOf<String?>(null) }
     var installedExtensions by remember { mutableStateOf<List<WebExtension>>(emptyList()) }
     var installedExtensionIds by remember { mutableStateOf<Set<String>>(emptySet()) }
+    var extensionActions by remember { mutableStateOf<Map<String, ExtensionActionItem>>(emptyMap()) }
+    var popupSession by remember { mutableStateOf<GeckoSession?>(null) }
+    var popupTitle by remember { mutableStateOf("") }
     var extensionListLoaded by remember { mutableStateOf(false) }
     var showManager by remember { mutableStateOf(false) }
     var removeTarget by remember { mutableStateOf<WebExtension?>(null) }
     var pendingPrompt by remember { mutableStateOf<PendingExtensionPrompt?>(null) }
     var selectedFileName by remember { mutableStateOf<String?>(null) }
+
+    val latestInstalledExtensions = rememberUpdatedState(installedExtensions)
+    val latestPopupSession = rememberUpdatedState(popupSession)
+
+    fun canExposeAction(extension: WebExtension): Boolean =
+        extension.metaData.enabled && extensionPolicyBlockers(extension).isEmpty()
+
+    fun openActionPopup(extension: WebExtension): GeckoResult<GeckoSession>? {
+        if (!canExposeAction(extension)) return null
+        popupSession?.close()
+        val nextPopup = GeckoSession().also {
+            it.open(runtime)
+            it.setPermissionDelegate(DenyWebsiteDevicePermissions)
+        }
+        popupTitle = extension.metaData.name.orEmpty().ifBlank { "Add-on" }
+        popupSession = nextPopup
+        return GeckoResult.fromValue(nextPopup)
+    }
+
+    fun updateAction(
+        extension: WebExtension,
+        actionSession: GeckoSession?,
+        action: WebExtension.Action,
+        isPageAction: Boolean
+    ) {
+        if (actionSession != null && actionSession !== session) return
+        val visible = canExposeAction(extension) && action.enabled != false &&
+            (!isPageAction || action.enabled == true)
+        extensionActions = if (visible) {
+            extensionActions + (extension.id to ExtensionActionItem(extension, action))
+        } else {
+            extensionActions - extension.id
+        }
+    }
+
+    val actionDelegate = remember(runtime, session) {
+        object : WebExtension.ActionDelegate {
+            override fun onBrowserAction(
+                extension: WebExtension,
+                session: GeckoSession?,
+                action: WebExtension.Action
+            ) {
+                updateAction(extension, session, action, isPageAction = false)
+            }
+
+            override fun onPageAction(
+                extension: WebExtension,
+                session: GeckoSession?,
+                action: WebExtension.Action
+            ) {
+                updateAction(extension, session, action, isPageAction = true)
+            }
+
+            override fun onOpenPopup(
+                extension: WebExtension,
+                action: WebExtension.Action
+            ): GeckoResult<GeckoSession>? = openActionPopup(extension)
+
+            override fun onTogglePopup(
+                extension: WebExtension,
+                action: WebExtension.Action
+            ): GeckoResult<GeckoSession>? = openActionPopup(extension)
+        }
+    }
 
     fun refreshExtensions() {
         controller.list().accept(
@@ -230,6 +307,13 @@ private fun ExtensionBrowserScreen(
                 if (disallowed.isNotEmpty()) {
                     statusMessage = "Disabled ${disallowed.size} extension(s) that do not meet Click's safe add-on policy."
                 }
+                val permittedActionExtensions = appExtensions.filter(::canExposeAction)
+                permittedActionExtensions.forEach { extension ->
+                    extension.setActionDelegate(actionDelegate)
+                    session.webExtensionController.setActionDelegate(extension, actionDelegate)
+                }
+                val permittedIds = permittedActionExtensions.map { it.id }.toSet()
+                extensionActions = extensionActions.filterKeys { it in permittedIds }
             },
             { error ->
                 extensionListLoaded = false
@@ -376,12 +460,23 @@ private fun ExtensionBrowserScreen(
         })
         session.setContentDelegate(object : GeckoSession.ContentDelegate {
             override fun onTitleChange(session: GeckoSession, newTitle: String?) {
-                title = newTitle.orEmpty().ifBlank { "Extension Browser" }
+                title = newTitle.orEmpty().ifBlank { "Firefox/AMO compatible add-ons" }
             }
         })
         onDispose {
             session.setNavigationDelegate(null)
             session.setContentDelegate(null)
+        }
+    }
+
+    DisposableEffect(controller, session, actionDelegate) {
+        onDispose {
+            latestInstalledExtensions.value.forEach { extension ->
+                extension.setActionDelegate(null)
+                session.webExtensionController.setActionDelegate(extension, null)
+            }
+            latestPopupSession.value?.close()
+            extensionActions = emptyMap()
         }
     }
 
@@ -401,7 +496,7 @@ private fun ExtensionBrowserScreen(
                 try {
                     val displayName = withContext(Dispatchers.IO) { queryDisplayName(context, uri) }
                     if (!ExtensionInstallPolicy.isSupportedPackageName(displayName)) {
-                        statusMessage = "Choose a Mozilla-signed .xpi package. .crx, .zip, and script files are not supported."
+                        statusMessage = "Choose an XPI package from an official AMO listing."
                         return@launch
                     }
                     val cleanName = displayName.orEmpty().replace('\n', ' ').replace('\r', ' ').take(160)
@@ -445,8 +540,15 @@ private fun ExtensionBrowserScreen(
         pendingPrompt?.decide(allow, allowDataCollection)
     }
 
-    BackHandler(enabled = pendingPrompt != null || showManager || removeTarget != null) {
+    fun closeActionPopup() {
+        popupSession?.close()
+        popupSession = null
+        popupTitle = ""
+    }
+
+    BackHandler(enabled = popupSession != null || pendingPrompt != null || showManager || removeTarget != null) {
         when {
+            popupSession != null -> closeActionPopup()
             pendingPrompt != null -> decidePrompt(false)
             removeTarget != null -> removeTarget = null
             else -> showManager = false
@@ -467,7 +569,7 @@ private fun ExtensionBrowserScreen(
                     Text("Separate GeckoView profile", fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
                 IconButton(onClick = { showManager = true }) {
-                    Icon(Icons.Default.Extension, contentDescription = "Manage extensions")
+                    Icon(Icons.Default.Extension, contentDescription = "Manage Firefox/AMO compatible add-ons")
                 }
             }
 
@@ -493,6 +595,25 @@ private fun ExtensionBrowserScreen(
                         }
                     })
                 )
+            }
+
+            if (extensionActions.isNotEmpty()) {
+                Row(
+                    modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 10.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    extensionActions.values.forEach { item ->
+                        OutlinedButton(onClick = {
+                            if (canExposeAction(item.extension)) item.action.click()
+                        }) {
+                            Text(
+                                item.action.title?.takeIf { it.isNotBlank() }
+                                    ?: item.extension.metaData.name.orEmpty().ifBlank { "Add-on" },
+                                maxLines = 1
+                            )
+                        }
+                    }
+                }
             }
 
             statusMessage?.let { message ->
@@ -529,7 +650,7 @@ private fun ExtensionBrowserScreen(
                 }) {
                     Icon(Icons.Default.Home, contentDescription = "Home")
                 }
-                Button(onClick = { showManager = true }) { Text("Extensions") }
+                Button(onClick = { showManager = true }) { Text("Add-ons") }
             }
         }
     }
@@ -537,9 +658,18 @@ private fun ExtensionBrowserScreen(
     if (showManager) {
         ExtensionManagerDialog(
             extensions = installedExtensions,
+            catalogEntries = FirefoxAmoCatalog.entries,
             isImportEnabled = extensionListLoaded,
             sourceFor = ::sourceDescription,
             onInstall = { pickXpi.launch(arrayOf("*/*")) },
+            onOpenListing = { entry ->
+                showManager = false
+                runCatching {
+                    context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(entry.listingUrl)))
+                }.onFailure {
+                    statusMessage = "Couldn't open the official AMO listing. You can still install a downloaded package here."
+                }
+            },
             onToggle = { extension, enabled ->
                 val policyBlockers = extensionPolicyBlockers(extension)
                 if (enabled && policyBlockers.isNotEmpty()) {
@@ -558,6 +688,20 @@ private fun ExtensionBrowserScreen(
             },
             onRemove = { extension -> removeTarget = extension },
             onClose = { showManager = false }
+        )
+    }
+
+    popupSession?.let { addOnPopupSession ->
+        AlertDialog(
+            onDismissRequest = ::closeActionPopup,
+            title = { Text(popupTitle, fontWeight = FontWeight.Bold) },
+            text = {
+                AndroidView(
+                    modifier = Modifier.fillMaxWidth().height(340.dp),
+                    factory = { viewContext -> GeckoView(viewContext).apply { setSession(addOnPopupSession) } }
+                )
+            },
+            confirmButton = { TextButton(onClick = ::closeActionPopup) { Text("Close") } }
         )
     }
 
@@ -651,27 +795,68 @@ private fun PermissionSection(label: String, values: List<String>) {
 @Composable
 private fun ExtensionManagerDialog(
     extensions: List<WebExtension>,
+    catalogEntries: List<FirefoxAmoCatalogEntry>,
     isImportEnabled: Boolean,
     sourceFor: (WebExtension) -> String,
     onInstall: () -> Unit,
+    onOpenListing: (FirefoxAmoCatalogEntry) -> Unit,
     onToggle: (WebExtension, Boolean) -> Unit,
     onRemove: (WebExtension) -> Unit,
     onClose: () -> Unit
 ) {
     AlertDialog(
         onDismissRequest = onClose,
-        title = { Text("Extensions", fontWeight = FontWeight.Bold) },
+        title = { Text("Firefox/AMO compatible add-ons", fontWeight = FontWeight.Bold) },
         text = {
             Column(
                 modifier = Modifier.heightIn(max = 500.dp).verticalScroll(rememberScrollState()),
                 verticalArrangement = Arrangement.spacedBy(10.dp)
             ) {
+                Text("Limited AMO catalog", fontWeight = FontWeight.SemiBold)
+                Text(
+                    "These are real Firefox for Android listings selected for the current isolated GeckoView policy. Opening a listing does not install an add-on.",
+                    fontSize = 12.sp
+                )
+                catalogEntries.forEach { entry ->
+                    Card(Modifier.fillMaxWidth()) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth().padding(10.dp),
+                            horizontalArrangement = Arrangement.spacedBy(10.dp),
+                            verticalAlignment = Alignment.Top
+                        ) {
+                            Image(
+                                painter = painterResource(entry.iconResource),
+                                contentDescription = "${entry.name} official AMO logo",
+                                modifier = Modifier.size(52.dp)
+                            )
+                            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                                Text(entry.name, fontWeight = FontWeight.SemiBold)
+                                Text("AMO Recommended · Firefox for Android", fontSize = 11.sp)
+                                Text("Version ${entry.version} · Android ${entry.minimumAndroidVersion}+", fontSize = 10.sp)
+                                Text(entry.summary, fontSize = 11.sp)
+                                Text(
+                                    "Required APIs: ${entry.requiredPermissions.joinToString()} · Site access: none declared",
+                                    fontSize = 10.sp,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                                OutlinedButton(onClick = { onOpenListing(entry) }) {
+                                    Text("Open official AMO listing")
+                                }
+                            }
+                        }
+                    }
+                }
+                Text(
+                    "To install, choose the listing yourself, download its XPI, return here, and import the downloaded package. GeckoView rechecks Mozilla signature, recommendation, and blocklist status; Click still blocks sensitive APIs and broad or insecure site access and asks you to approve permissions.",
+                    fontSize = 11.sp,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
                 Text(
                     "Add-ons run only in this separate GeckoView profile. They do not share Click's regular tabs, cookies, history, or saved passwords. Approved add-ons can still read or change the exact websites you allow.",
                     fontSize = 12.sp
                 )
                 Text(
-                    "Only Mozilla Recommended, fully reviewed, non-blocklisted add-ons listed on addons.mozilla.org are accepted. The package must be Mozilla-signed. Wildcard, HTTP, local-network, and over-10-site access plus native messaging and sensitive browser APIs are blocked. Chrome .crx files and userscripts are not supported.",
+                    "Only Firefox/AMO compatible add-ons that are Mozilla Recommended, fully reviewed, non-blocklisted, and Mozilla-signed are accepted. Wildcard, HTTP, local-network, and over-10-site access plus native messaging and sensitive browser APIs are blocked.",
                     fontSize = 12.sp,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
@@ -684,7 +869,7 @@ private fun ExtensionManagerDialog(
                     Text("Checking installed add-ons; import stays disabled until the check succeeds.", fontSize = 11.sp)
                 }
                 if (extensions.isEmpty() && isImportEnabled) {
-                    Text("No extensions installed.", fontSize = 13.sp)
+                    Text("No add-ons installed.", fontSize = 13.sp)
                 }
                 extensions.forEach { extension ->
                     val metadata = extension.metaData
@@ -710,7 +895,7 @@ private fun ExtensionManagerDialog(
                 }
                 OutlinedButton(onClick = onInstall, enabled = isImportEnabled, modifier = Modifier.fillMaxWidth()) {
                     Icon(Icons.Default.Extension, contentDescription = null, modifier = Modifier.padding(end = 6.dp))
-                    Text("Install an AMO-recommended .xpi")
+                    Text("Install a downloaded AMO XPI")
                 }
             }
         },
