@@ -2966,6 +2966,7 @@ class MainActivity : FragmentActivity() {
                                                         }
                                                         startActivity(extensionIntent)
                                                     },
+                                                    onTranslateClick = { showTranslateSheet = true },
                                                     // Location requests are always blocked by Click.
                                                     locationMode = LocationGuard.LocationMode.BLOCK,
                                                     onLocationClick = { showLocationSettings = true }
@@ -2994,10 +2995,10 @@ class MainActivity : FragmentActivity() {
 
                             Column(modifier = Modifier.fillMaxSize()) {
 
-                                // Premium browser chrome: web pages use the compact address
-                                // row and visual tab switcher; the tab strip stays on the
+                                // Premium browser chrome: web pages use the full-width address
+                                // box and visual tab switcher; the tab strip stays on the
                                 // new-tab surface. Simple keeps its bottom navigation compact.
-                                // SURFACE 2 — Browsing: compact address bar + privacy strip.
+                                // SURFACE 2 — Browsing: full-width address box + privacy strip.
                                 // Home keeps the same tab/address chrome, plus its own
                                 // prominent search field below the greeting.
                                 if (!flagsUi.bottomAddressBar || showOverlays) BrowseTopBarBlock()

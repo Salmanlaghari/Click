@@ -14,6 +14,8 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.SwapHoriz
 import androidx.compose.material.icons.filled.Translate
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -26,7 +28,10 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.Switch
+import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextFieldDefaults
 import androidx.compose.material3.rememberModalBottomSheetState
@@ -38,6 +43,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.platform.LocalContext
+import androidx.datastore.preferences.core.edit
 import com.click.browser.engine.AppSettings
 import com.click.browser.engine.MlKitTranslator
 import com.click.browser.engine.ModeTheme
@@ -59,7 +65,8 @@ import org.json.JSONObject
 /**
  * On-device translation sheet (ML Kit). Models download on demand —
  * nothing is bundled in the APK. Supports typed text and full-page
- * translation via JS text-node extraction.
+ * translation via JS text-node extraction, RTL layout switching for
+ * Urdu/Arabic, auto-translate preference, and in-place original restore.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -74,11 +81,22 @@ fun TranslateSheet(
     val context = LocalContext.current
     var sourceLang by remember { mutableStateOf(TranslateLanguage.ENGLISH) }
     var targetLang by remember { mutableStateOf(MlKitTranslator.defaultTargetLanguage()) }
+    var autoTranslatePages by remember { mutableStateOf(false) }
     var inputText by remember { mutableStateOf("") }
     var resultText by remember { mutableStateOf("") }
     var status by remember { mutableStateOf("") }
     var busy by remember { mutableStateOf(false) }
+    var pageTranslated by remember { mutableStateOf(false) }
     var pageProgress by remember { mutableStateOf<Float?>(null) }
+
+    fun saveTargetPreference(code: String) {
+        targetLang = code
+        scope.launch {
+            try {
+                context.dataStore.edit { it[AppSettings.TRANSLATE_TARGET] = code }
+            } catch (_: Exception) { }
+        }
+    }
 
     fun startPageTranslation(target: String = targetLang) {
         if (busy) return
@@ -100,7 +118,8 @@ fun TranslateSheet(
                         translatePageInPlace(wv, sourceLang, target) { done, total ->
                             pageProgress = if (total == 0) 1f else done.toFloat() / total
                         }
-                        status = "Page translated ✓"
+                        pageTranslated = true
+                        status = "Page translated to ${MlKitTranslator.languageName(target)} ✓"
                     }
                 }
             } catch (e: Exception) {
@@ -121,9 +140,13 @@ fun TranslateSheet(
             try {
                 val prefs = context.dataStore.data.first()
                 val saved = prefs[AppSettings.TRANSLATE_TARGET]
+                val autoPref = prefs[AppSettings.TRANSLATE_AUTO] == true
+                autoTranslatePages = autoPref
                 val effectiveTarget = if (!saved.isNullOrBlank()) saved else targetLang
                 if (!saved.isNullOrBlank()) targetLang = saved
-                if (prefs[AppSettings.TRANSLATE_AUTO] == true) startPageTranslation(effectiveTarget)
+                if (autoPref && webView != null && pageUrl.startsWith("http")) {
+                    startPageTranslation(effectiveTarget)
+                }
             } catch (_: Exception) { }
         }
     }
@@ -148,7 +171,7 @@ fun TranslateSheet(
                 Icon(Icons.Filled.Translate, contentDescription = null, tint = theme.primary)
                 Spacer(Modifier.size(8.dp))
                 Text(
-                    "Translate (on-device)",
+                    "Translate Page & Text",
                     color = theme.onSurface,
                     fontSize = 18.sp,
                     fontWeight = FontWeight.Bold,
@@ -159,7 +182,10 @@ fun TranslateSheet(
                 }
             }
 
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
                 LanguagePicker(
                     label = "From",
                     selected = sourceLang,
@@ -167,23 +193,117 @@ fun TranslateSheet(
                     theme = theme,
                     modifier = Modifier.weight(1f)
                 )
+                IconButton(
+                    onClick = {
+                        val previousSource = sourceLang
+                        sourceLang = targetLang
+                        saveTargetPreference(previousSource)
+                    },
+                    modifier = Modifier.padding(top = 6.dp)
+                ) {
+                    Icon(
+                        Icons.Filled.SwapHoriz,
+                        contentDescription = "Swap languages",
+                        tint = theme.primary
+                    )
+                }
                 LanguagePicker(
                     label = "To",
                     selected = targetLang,
-                    onSelect = { targetLang = it },
+                    onSelect = { saveTargetPreference(it) },
                     theme = theme,
                     modifier = Modifier.weight(1f)
                 )
             }
 
             if (status.isNotEmpty()) {
-                Text(status, color = theme.primary, fontSize = 13.sp)
+                Text(status, color = theme.primary, fontSize = 13.sp, fontWeight = FontWeight.Medium)
+            }
+
+            // ---- Full-page translation controls (shown first when browsing a live page) ----
+            if (webView != null && pageUrl.startsWith("http")) {
+                if (pageProgress != null) {
+                    LinearProgressIndicator(
+                        progress = { pageProgress ?: 0f },
+                        modifier = Modifier.fillMaxWidth(),
+                        color = theme.primary
+                    )
+                    Text(
+                        "Translating page… ${((pageProgress ?: 0f) * 100).toInt()}%",
+                        color = theme.onSurface.copy(alpha = 0.7f),
+                        fontSize = 13.sp
+                    )
+                }
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Button(
+                        onClick = { startPageTranslation() },
+                        enabled = !busy,
+                        modifier = Modifier.weight(1f),
+                        colors = ButtonDefaults.buttonColors(containerColor = theme.primary),
+                        shape = RoundedCornerShape(12.dp)
+                    ) {
+                        Text("Translate this page")
+                    }
+                    if (pageTranslated) {
+                        OutlinedButton(
+                            onClick = {
+                                scope.launch {
+                                    restoreOriginalPageInPlace(webView)
+                                    pageTranslated = false
+                                    status = "Restored original page"
+                                }
+                            },
+                            enabled = !busy,
+                            shape = RoundedCornerShape(12.dp)
+                        ) {
+                            Icon(
+                                Icons.Filled.Refresh,
+                                contentDescription = null,
+                                modifier = Modifier.size(16.dp),
+                                tint = theme.primary
+                            )
+                            Spacer(Modifier.size(4.dp))
+                            Text("Original", color = theme.primary)
+                        }
+                    }
+                }
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            "Auto-translate web pages",
+                            color = theme.onSurface,
+                            fontSize = 14.sp,
+                            fontWeight = FontWeight.Medium
+                        )
+                        Text(
+                            "Automatically translate opened pages into ${MlKitTranslator.languageName(targetLang)}",
+                            color = theme.onSurface.copy(alpha = 0.6f),
+                            fontSize = 12.sp
+                        )
+                    }
+                    Switch(
+                        checked = autoTranslatePages,
+                        onCheckedChange = { enabled ->
+                            autoTranslatePages = enabled
+                            scope.launch {
+                                try {
+                                    context.dataStore.edit { it[AppSettings.TRANSLATE_AUTO] = enabled }
+                                } catch (_: Exception) { }
+                            }
+                        },
+                        colors = SwitchDefaults.colors(checkedThumbColor = Color.White, checkedTrackColor = theme.primary)
+                    )
+                }
             }
 
             OutlinedTextField(
                 value = inputText,
                 onValueChange = { inputText = it },
-                label = { Text("Text to translate") },
+                label = { Text("Or enter custom text to translate") },
                 modifier = Modifier.fillMaxWidth(),
                 minLines = 2,
                 colors = TextFieldDefaults.colors(
@@ -220,7 +340,7 @@ fun TranslateSheet(
                 },
                 enabled = !busy,
                 modifier = Modifier.fillMaxWidth(),
-                colors = ButtonDefaults.buttonColors(containerColor = theme.primary),
+                colors = ButtonDefaults.buttonColors(containerColor = theme.secondary),
                 shape = RoundedCornerShape(12.dp)
             ) {
                 if (busy && pageProgress == null) {
@@ -235,43 +355,15 @@ fun TranslateSheet(
             }
 
             if (resultText.isNotEmpty()) {
+                val isRtlTarget = targetLang == TranslateLanguage.URDU || targetLang == TranslateLanguage.ARABIC
                 Text(
                     resultText,
                     color = theme.onSurface,
                     fontSize = 15.sp,
+                    textAlign = if (isRtlTarget) androidx.compose.ui.text.style.TextAlign.End else androidx.compose.ui.text.style.TextAlign.Start,
                     modifier = Modifier
                         .fillMaxWidth()
                         .padding(4.dp)
-                )
-            }
-
-            // ---- Page translation ----
-            if (webView != null && pageUrl.startsWith("http")) {
-                if (pageProgress != null) {
-                    LinearProgressIndicator(
-                        progress = { pageProgress ?: 0f },
-                        modifier = Modifier.fillMaxWidth(),
-                        color = theme.primary
-                    )
-                    Text(
-                        "Translating page… ${((pageProgress ?: 0f) * 100).toInt()}%",
-                        color = theme.onSurface.copy(alpha = 0.7f),
-                        fontSize = 13.sp
-                    )
-                }
-                Button(
-                    onClick = { startPageTranslation() },
-                    enabled = !busy,
-                    modifier = Modifier.fillMaxWidth(),
-                    colors = ButtonDefaults.buttonColors(containerColor = theme.secondary),
-                    shape = RoundedCornerShape(12.dp)
-                ) {
-                    Text("Translate this page")
-                }
-                Text(
-                    "Replaces visible text in place. Reload the page to restore the original.",
-                    color = theme.onSurface.copy(alpha = 0.5f),
-                    fontSize = 12.sp
                 )
             }
             Spacer(Modifier.height(8.dp))
@@ -322,20 +414,40 @@ private fun LanguagePicker(
     }
 }
 
-/** JS: collect visible text nodes (same filter must be used for inject). */
+/** JS: collect visible text nodes and cache originals once so restore does not require a reload. */
 private const val EXTRACT_JS = """(function(){
 var out=[];
+var orig=window.__clickOrigTextNodes||{};
+var hasOrig=Object.keys(orig).length>0;
+if(!window.__clickOrigDir){window.__clickOrigDir=document.documentElement.getAttribute('dir')||'';}
 var w=document.createTreeWalker(document.body,NodeFilter.SHOW_TEXT,{acceptNode:function(n){
 var t=n.nodeValue;if(!t||!t.trim())return NodeFilter.FILTER_REJECT;
 var p=n.parentElement;if(p&&/^(SCRIPT|STYLE|NOSCRIPT|TEXTAREA|INPUT|SELECT|OPTION)$/.test(p.tagName))return NodeFilter.FILTER_REJECT;
 return NodeFilter.FILTER_ACCEPT;}});
-var i=0;while(w.nextNode()&&i<400){out.push({i:i,t:w.currentNode.nodeValue});i++;}
+var i=0;while(w.nextNode()&&i<400){
+var raw=hasOrig&&orig[i]!=null?orig[i]:w.currentNode.nodeValue;
+if(!hasOrig){orig[i]=raw;}
+out.push({i:i,t:raw});
+i++;
+}
+window.__clickOrigTextNodes=orig;
 return JSON.stringify(out);})();"""
+
+private const val RESTORE_JS = """(function(){
+var orig=window.__clickOrigTextNodes;
+if(!orig)return;
+var w=document.createTreeWalker(document.body,NodeFilter.SHOW_TEXT,{acceptNode:function(n){
+var t=n.nodeValue;if(!t||!t.trim())return NodeFilter.FILTER_REJECT;
+var p=n.parentElement;if(p&&/^(SCRIPT|STYLE|NOSCRIPT|TEXTAREA|INPUT|SELECT|OPTION)$/.test(p.tagName))return NodeFilter.FILTER_REJECT;
+return NodeFilter.FILTER_ACCEPT;}});
+var i=0;while(w.nextNode()&&i<400){if(orig[i]!=null)w.currentNode.nodeValue=orig[i];i++;}
+if(window.__clickOrigDir){document.documentElement.setAttribute('dir',window.__clickOrigDir);}
+else{document.documentElement.removeAttribute('dir');}
+})();"""
 
 /**
  * Extracts visible text nodes via JS, translates them with ML Kit, and
- * writes them back in place. Suspends on IO/default dispatchers; all
- * WebView calls happen on the main thread.
+ * writes them back in place with automatic RTL direction for Urdu/Arabic.
  */
 private suspend fun translatePageInPlace(
     webView: WebView,
@@ -359,7 +471,6 @@ private suspend fun translatePageInPlace(
             continue
         }
         try {
-            // Translate in small batches on Default to keep the UI alive.
             val out = withContext(Dispatchers.Default) {
                 MlKitTranslator.translate(text, source, target)
             }
@@ -370,8 +481,10 @@ private suspend fun translatePageInPlace(
         onProgress(i + 1, total)
     }
     val mapJson = JSONObject.quote(translated.toString())
+    val dirValue = if (target == TranslateLanguage.URDU || target == TranslateLanguage.ARABIC) "rtl" else "ltr"
     val injectJs = """(function(mapStr){
 var map=JSON.parse(mapStr);
+document.documentElement.setAttribute('dir','$dirValue');
 var w=document.createTreeWalker(document.body,NodeFilter.SHOW_TEXT,{acceptNode:function(n){
 var t=n.nodeValue;if(!t||!t.trim())return NodeFilter.FILTER_REJECT;
 var p=n.parentElement;if(p&&/^(SCRIPT|STYLE|NOSCRIPT|TEXTAREA|INPUT|SELECT|OPTION)$/.test(p.tagName))return NodeFilter.FILTER_REJECT;
@@ -379,6 +492,12 @@ return NodeFilter.FILTER_ACCEPT;}});
 var i=0;while(w.nextNode()&&i<400){var v=map[i];if(v!=null)w.currentNode.nodeValue=v;i++;}})($mapJson);"""
     withContext(Dispatchers.Main) {
         webView.evaluateJavascript(injectJs, null)
+    }
+}
+
+private suspend fun restoreOriginalPageInPlace(webView: WebView) {
+    withContext(Dispatchers.Main) {
+        webView.evaluateJavascript(RESTORE_JS, null)
     }
 }
 
