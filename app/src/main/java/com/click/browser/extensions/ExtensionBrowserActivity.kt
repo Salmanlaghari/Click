@@ -96,12 +96,14 @@ class ExtensionBrowserActivity : ComponentActivity() {
         }
 
         val requestedStartUrl = intent.getStringExtra(EXTRA_START_URL).orEmpty()
+        val openManagerOnStart = intent.getBooleanExtra(EXTRA_SHOW_MANAGER, false)
         setContent {
             MaterialTheme {
                 ExtensionBrowserScreen(
                     runtime = geckoRuntime,
                     session = requireNotNull(session),
                     requestedStartUrl = requestedStartUrl,
+                    openManagerOnStart = openManagerOnStart,
                     onExit = { finish() }
                 )
             }
@@ -119,6 +121,7 @@ class ExtensionBrowserActivity : ComponentActivity() {
 
     companion object {
         const val EXTRA_START_URL = "com.click.browser.extensions.START_URL"
+        const val EXTRA_SHOW_MANAGER = "com.click.browser.extensions.SHOW_MANAGER"
     }
 }
 
@@ -169,7 +172,7 @@ private fun isMozillaRecommended(extension: WebExtension): Boolean {
         ExtensionInstallPolicy.isOfficialAmoListing(metadata.amoListingUrl)
 }
 
-private fun extensionPolicyBlockers(extension: WebExtension): List<String> {
+internal fun extensionPolicyBlockers(extension: WebExtension): List<String> {
     val metadata = extension.metaData
     val currentPermissions = metadata.requiredPermissions.orEmpty().asList() +
         metadata.grantedOptionalPermissions.orEmpty().asList()
@@ -189,6 +192,7 @@ private fun ExtensionBrowserScreen(
     runtime: GeckoRuntime,
     session: GeckoSession,
     requestedStartUrl: String,
+    openManagerOnStart: Boolean,
     onExit: () -> Unit
 ) {
     val context = LocalContext.current
@@ -210,7 +214,7 @@ private fun ExtensionBrowserScreen(
     var installedExtensions by remember { mutableStateOf<List<WebExtension>>(emptyList()) }
     var installedExtensionIds by remember { mutableStateOf<Set<String>>(emptySet()) }
     var extensionListLoaded by remember { mutableStateOf(false) }
-    var showManager by remember { mutableStateOf(false) }
+    var showManager by remember { mutableStateOf(openManagerOnStart) }
     var removeTarget by remember { mutableStateOf<WebExtension?>(null) }
     var pendingPrompt by remember { mutableStateOf<PendingExtensionPrompt?>(null) }
     var selectedFileName by remember { mutableStateOf<String?>(null) }
@@ -221,6 +225,7 @@ private fun ExtensionBrowserScreen(
                 val appExtensions = extensions.orEmpty().filterNot { it.isBuiltIn }
                 installedExtensionIds = appExtensions.map { it.id }.toSet()
                 extensionListLoaded = true
+                ExtensionToolbarState.updateFromExtensions(context, appExtensions)
                 val disallowed = appExtensions.filter { extensionPolicyBlockers(it).isNotEmpty() }
                 disallowed.filter { it.metaData.enabled }.forEach { extension ->
                     controller.disable(extension, WebExtensionController.EnableSource.APP)
@@ -233,6 +238,7 @@ private fun ExtensionBrowserScreen(
             },
             { error ->
                 extensionListLoaded = false
+                ExtensionToolbarState.invalidate(context)
                 statusMessage = "Couldn't load extensions: ${error?.message ?: "unknown error"}"
             }
         )
@@ -385,10 +391,10 @@ private fun ExtensionBrowserScreen(
         }
     }
 
-    LaunchedEffect(session) {
+    LaunchedEffect(session, openManagerOnStart) {
         val start = ExtensionBrowserInput.resolve(requestedStartUrl) ?: address
         session.loadUri(start)
-        refreshExtensions()
+        if (!openManagerOnStart) refreshExtensions()
     }
     LaunchedEffect(showManager) {
         if (showManager) refreshExtensions()
