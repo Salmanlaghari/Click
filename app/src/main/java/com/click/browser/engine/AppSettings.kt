@@ -156,8 +156,9 @@ object AppSettings {
     /** Wall-clock ms of the last successful news check. */
     val NEWS_LAST_CHECK_MS = longPreferencesKey("news_last_check_ms")
 
-    /** Auto-detect provider from the key prefix. `gsk_` -> Groq, `sk-or-` -> OpenRouter. */
+    /** Auto-detect provider from the key prefix: `AIza` -> Gemini, `gsk_` -> Groq, `sk-or-` -> OpenRouter. */
     fun detectProvider(apiKey: String): String = when {
+        apiKey.startsWith("AIza") -> "gemini"
         apiKey.startsWith("sk-or-") -> "openrouter"
         apiKey.startsWith("gsk_") -> "groq"
         else -> "groq"

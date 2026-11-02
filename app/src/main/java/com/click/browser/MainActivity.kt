@@ -5272,14 +5272,41 @@ class MainActivity : FragmentActivity() {
                                 }
                                 val usingBuiltInKey = aiApiKey.isBlank() &&
                                     BuildConfig.GROQ_API_KEY_OBF.isNotBlank()
+                                var activePageExcerpt by remember(currentTab.id, currentTab.url) {
+                                    mutableStateOf("")
+                                }
+                                LaunchedEffect(currentTab.id, currentTab.url) {
+                                    val wv = currentTab.webView
+                                    if (wv != null && !currentTab.isIncognito &&
+                                        (currentTab.url.startsWith("https://") || currentTab.url.startsWith("http://"))
+                                    ) {
+                                        wv.evaluateJavascript(
+                                            "(function(){try{return (document.body&&document.body.innerText||'').replace(/\\s+/g,' ').trim().slice(0,3000);}catch(e){return '';}})()"
+                                        ) { raw ->
+                                            activePageExcerpt = try {
+                                                if (raw != null && raw != "null") org.json.JSONTokener(raw).nextValue().toString()
+                                                else ""
+                                            } catch (_: Exception) {
+                                                ""
+                                            }
+                                        }
+                                    }
+                                }
                                 AiChatScreen(
                                     apiKey = effectiveAiKey,
-                                    providerId = aiProvider,
+                                    providerId = if (usingBuiltInKey) "groq" else aiProvider,
                                     model = aiModel,
                                     secureDns = secureDnsEnabled,
                                     usingBuiltInKey = usingBuiltInKey,
                                     pageTitle = currentTab.title,
                                     pageUrl = currentTab.url,
+                                    pageExcerpt = activePageExcerpt,
+                                    onOpenUrl = { targetUri ->
+                                        showAiChat = false
+                                        val destination = cleanTrackingUrl(formatUrl(targetUri, currentSearchEngineSetting))
+                                        currentTab.url = destination
+                                        currentTab.webView?.loadUrl(destination)
+                                    },
                                     onReportMessage = { text ->
                                         // In-app reporting (Play AI-Generated Content policy):
                                         // persist the flagged response on-device, then confirm.

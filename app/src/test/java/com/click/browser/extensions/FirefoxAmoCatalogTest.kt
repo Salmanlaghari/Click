@@ -7,7 +7,7 @@ import org.junit.Test
 class FirefoxAmoCatalogTest {
     @Test
     fun catalogContainsOnlyOfficialFirefoxAmoListingsAndIcons() {
-        assertTrue(FirefoxAmoCatalog.entries.isNotEmpty())
+        assertTrue(FirefoxAmoCatalog.entries.size >= 500)
         assertEquals(
             FirefoxAmoCatalog.entries.map { it.slug }.distinct().size,
             FirefoxAmoCatalog.entries.size
