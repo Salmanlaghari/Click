@@ -22,6 +22,8 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
@@ -36,6 +38,7 @@ import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -175,12 +178,16 @@ private data class ExtensionActionItem(
     val action: WebExtension.Action
 )
 
-private fun isMozillaRecommended(extension: WebExtension): Boolean {
+private fun isTrustedMozillaExtension(extension: WebExtension): Boolean {
     val metadata = extension.metaData
-    return metadata.isRecommended &&
+    val signedOfficialAmo =
         metadata.signedState == WebExtension.SignedStateFlags.SIGNED &&
-        metadata.blocklistState == WebExtension.BlocklistStateFlags.NOT_BLOCKED &&
-        ExtensionInstallPolicy.isOfficialAmoListing(metadata.amoListingUrl)
+            metadata.blocklistState == WebExtension.BlocklistStateFlags.NOT_BLOCKED &&
+            ExtensionInstallPolicy.isOfficialAmoListing(metadata.amoListingUrl)
+    if (!signedOfficialAmo) return false
+    return metadata.isRecommended ||
+        FirefoxAmoCatalog.isApprovedAmoListing(metadata.amoListingUrl) ||
+        FirefoxAmoCatalog.isApprovedExtensionId(extension.id)
 }
 
 internal fun extensionPolicyBlockers(extension: WebExtension): List<String> {
@@ -190,8 +197,8 @@ internal fun extensionPolicyBlockers(extension: WebExtension): List<String> {
     val currentOrigins = metadata.requiredOrigins.orEmpty().asList() +
         metadata.grantedOptionalOrigins.orEmpty().asList()
     return buildList {
-        if (!isMozillaRecommended(extension)) {
-            add("Not fully reviewed and Mozilla-recommended in the official AMO catalog")
+        if (!isTrustedMozillaExtension(extension)) {
+            add("Not an approved Mozilla-signed AMO catalog or Recommended add-on")
         }
         addAll(ExtensionInstallPolicy.blockedPermissionNames(currentPermissions).map { "Sensitive API: $it" })
         addAll(ExtensionInstallPolicy.blockedOriginPatterns(currentOrigins).map { "Broad or insecure site access: $it" })
@@ -850,20 +857,115 @@ private fun ExtensionManagerDialog(
     onClose: () -> Unit
 ) {
     val context = LocalContext.current
+    var selectedCategory by remember { mutableStateOf("All") }
+    var searchQuery by remember { mutableStateOf("") }
+    val filteredEntries = remember(catalogEntries, selectedCategory, searchQuery) {
+        val q = searchQuery.trim().lowercase()
+        catalogEntries.filter { entry ->
+            val catMatch = selectedCategory == "All" || entry.category == selectedCategory
+            val queryMatch = q.isEmpty() ||
+                entry.name.lowercase().contains(q) ||
+                entry.slug.lowercase().contains(q) ||
+                entry.summary.lowercase().contains(q) ||
+                entry.category.lowercase().contains(q)
+            catMatch && queryMatch
+        }
+    }
     AlertDialog(
         onDismissRequest = onClose,
-        title = { Text("Firefox/AMO compatible add-ons", fontWeight = FontWeight.Bold) },
+        title = { Text("Safe Mozilla AMO Store (${catalogEntries.size})", fontWeight = FontWeight.Bold) },
         text = {
-            Column(
-                modifier = Modifier.heightIn(max = 500.dp).verticalScroll(rememberScrollState()),
+            LazyColumn(
+                modifier = Modifier.heightIn(max = 520.dp),
                 verticalArrangement = Arrangement.spacedBy(10.dp)
             ) {
-                Text("Limited AMO catalog", fontWeight = FontWeight.SemiBold)
-                Text(
-                    "These are official Firefox for Android listings selected for Click's isolated GeckoView policy. Any in-page install still passes Click's signature, recommendation, blocklist, and permission checks.",
-                    fontSize = 12.sp
-                )
-                catalogEntries.forEach { entry ->
+                item(key = "header") {
+                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Text(
+                            "Showing ${filteredEntries.size} of ${catalogEntries.size} Play Store & AdSense Safe Add-ons",
+                            fontWeight = FontWeight.SemiBold,
+                            fontSize = 13.sp
+                        )
+                        Text(
+                            context.getString(R.string.amo_catalog_play_policy_note),
+                            fontSize = 11.sp,
+                            color = MaterialTheme.colorScheme.primary
+                        )
+                        OutlinedTextField(
+                            value = searchQuery,
+                            onValueChange = { searchQuery = it },
+                            modifier = Modifier.fillMaxWidth(),
+                            singleLine = true,
+                            label = { Text("Search ${catalogEntries.size} safe Mozilla add-ons…") }
+                        )
+                        Row(
+                            modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+                            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
+                            FirefoxAmoCatalog.categories.forEach { cat ->
+                                FilterChip(
+                                    selected = selectedCategory == cat,
+                                    onClick = { selectedCategory = cat },
+                                    label = { Text(cat, fontSize = 11.sp) }
+                                )
+                            }
+                        }
+                        OutlinedButton(onClick = onInstall, enabled = isImportEnabled, modifier = Modifier.fillMaxWidth()) {
+                            Icon(Icons.Default.Extension, contentDescription = null, modifier = Modifier.padding(end = 6.dp))
+                            Text("Install a downloaded AMO XPI")
+                        }
+                    }
+                }
+
+                if (extensions.isNotEmpty()) {
+                    item(key = "installed-title") {
+                        Text("Installed in Isolated Profile (${extensions.size})", fontWeight = FontWeight.SemiBold, fontSize = 13.sp)
+                    }
+                    items(extensions, key = { "inst-${it.id}" }) { extension ->
+                        val metadata = extension.metaData
+                        val policyBlockers = extensionPolicyBlockers(extension)
+                        val optionsPageUrl = ExtensionInstallPolicy.safeExtensionOptionsPageUrl(
+                            metadata.baseUrl,
+                            metadata.optionsPageUrl
+                        )
+                        val canOpenOptionsPage = policyBlockers.isEmpty() && metadata.enabled &&
+                            optionsPageUrl != null
+                        Card(Modifier.fillMaxWidth()) {
+                            Column(Modifier.fillMaxWidth().padding(10.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                                Text(metadata.name.orEmpty().ifBlank { "Unnamed extension" }, fontWeight = FontWeight.SemiBold)
+                                Text("Version ${metadata.version.orEmpty()} · ${metadata.creatorName.orEmpty().ifBlank { "Publisher not declared" }}", fontSize = 11.sp)
+                                if (policyBlockers.isNotEmpty()) {
+                                    Text("Disabled by Click safety policy: ${policyBlockers.joinToString()}", color = MaterialTheme.colorScheme.error, fontSize = 11.sp)
+                                }
+                                Text("Source:\n${sourceFor(extension)}", fontSize = 10.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                Text("Site access: ${(metadata.requiredOrigins.orEmpty().asList() + metadata.grantedOptionalOrigins.orEmpty().asList()).distinct().ifEmpty { listOf("None declared") }.joinToString()}", fontSize = 10.sp)
+                                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween) {
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        Switch(checked = metadata.enabled, enabled = policyBlockers.isEmpty(), onCheckedChange = { onToggle(extension, it) })
+                                        Text(if (policyBlockers.isNotEmpty()) "Blocked" else if (metadata.enabled) "Enabled" else "Disabled", fontSize = 12.sp)
+                                    }
+                                    TextButton(onClick = { onRemove(extension) }) { Text("Remove") }
+                                }
+                                if (canOpenOptionsPage) {
+                                    OutlinedButton(
+                                        onClick = { onOpenOptions(extension) },
+                                        modifier = Modifier.fillMaxWidth()
+                                    ) { Text("Options") }
+                                } else {
+                                    val optionsMessage = when {
+                                        metadata.optionsPageUrl.isNullOrBlank() -> "This add-on does not provide an options page."
+                                        policyBlockers.isNotEmpty() -> "Options unavailable because this add-on is blocked by Click."
+                                        !metadata.enabled -> "Enable this approved add-on to open its options page."
+                                        else -> "Options blocked: page is not on this add-on's own GeckoView origin."
+                                    }
+                                    Text(optionsMessage, fontSize = 10.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                }
+                            }
+                        }
+                    }
+                }
+
+                items(filteredEntries, key = { it.slug }) { entry ->
                     Card(Modifier.fillMaxWidth()) {
                         Row(
                             modifier = Modifier.fillMaxWidth().padding(10.dp),
@@ -872,12 +974,15 @@ private fun ExtensionManagerDialog(
                         ) {
                             Image(
                                 painter = painterResource(entry.iconResource),
-                                contentDescription = "${entry.name} official AMO logo",
-                                modifier = Modifier.size(52.dp)
+                                contentDescription = "${entry.name} AMO icon",
+                                modifier = Modifier.size(48.dp)
                             )
                             Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                                 Text(entry.name, fontWeight = FontWeight.SemiBold)
-                                Text("AMO Recommended · Firefox for Android", fontSize = 11.sp)
+                                Text(
+                                    if (entry.isRecommended) "AMO Recommended · ${entry.category}" else "AMO Verified Signed · ${entry.category}",
+                                    fontSize = 11.sp
+                                )
                                 Text("Version ${entry.version} · Android ${entry.minimumAndroidVersion}+", fontSize = 10.sp)
                                 Text(entry.summary, fontSize = 11.sp)
                                 Text(
@@ -899,76 +1004,24 @@ private fun ExtensionManagerDialog(
                         }
                     }
                 }
-                Text(
-                    context.getString(R.string.amo_catalog_install_instructions),
-                    fontSize = 11.sp,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-                Text(
-                    "Add-ons run only in this separate GeckoView profile. They do not share Click's regular tabs, cookies, history, or saved passwords. Approved add-ons can still read or change the exact websites you allow.",
-                    fontSize = 12.sp
-                )
-                Text(
-                    "Only Firefox/AMO compatible add-ons that are Mozilla Recommended, fully reviewed, non-blocklisted, and Mozilla-signed are accepted. Wildcard, HTTP, local-network, and over-10-site access plus native messaging and sensitive browser APIs are blocked.",
-                    fontSize = 12.sp,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-                Text(
-                    context.getString(R.string.amo_catalog_update_note),
-                    fontSize = 11.sp,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-                if (!isImportEnabled) {
-                    Text("Checking installed add-ons; import stays disabled until the check succeeds.", fontSize = 11.sp)
-                }
-                if (extensions.isEmpty() && isImportEnabled) {
-                    Text("No add-ons installed.", fontSize = 13.sp)
-                }
-                extensions.forEach { extension ->
-                    val metadata = extension.metaData
-                    val policyBlockers = extensionPolicyBlockers(extension)
-                    val optionsPageUrl = ExtensionInstallPolicy.safeExtensionOptionsPageUrl(
-                        metadata.baseUrl,
-                        metadata.optionsPageUrl
-                    )
-                    val canOpenOptionsPage = policyBlockers.isEmpty() && metadata.enabled &&
-                        optionsPageUrl != null
-                    Card(Modifier.fillMaxWidth()) {
-                        Column(Modifier.fillMaxWidth().padding(10.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                            Text(metadata.name.orEmpty().ifBlank { "Unnamed extension" }, fontWeight = FontWeight.SemiBold)
-                            Text("Version ${metadata.version.orEmpty()} · ${metadata.creatorName.orEmpty().ifBlank { "Publisher not declared" }}", fontSize = 11.sp)
-                            if (policyBlockers.isNotEmpty()) {
-                                Text("Disabled by Click safety policy: ${policyBlockers.joinToString()}", color = MaterialTheme.colorScheme.error, fontSize = 11.sp)
-                            }
-                            Text("Source:\n${sourceFor(extension)}", fontSize = 10.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                            Text("Site access: ${(metadata.requiredOrigins.orEmpty().asList() + metadata.grantedOptionalOrigins.orEmpty().asList()).distinct().ifEmpty { listOf("None declared") }.joinToString()}", fontSize = 10.sp)
-                            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween) {
-                                Row(verticalAlignment = Alignment.CenterVertically) {
-                                    Switch(checked = metadata.enabled, enabled = policyBlockers.isEmpty(), onCheckedChange = { onToggle(extension, it) })
-                                    Text(if (policyBlockers.isNotEmpty()) "Blocked" else if (metadata.enabled) "Enabled" else "Disabled", fontSize = 12.sp)
-                                }
-                                TextButton(onClick = { onRemove(extension) }) { Text("Remove") }
-                            }
-                            if (canOpenOptionsPage) {
-                                OutlinedButton(
-                                    onClick = { onOpenOptions(extension) },
-                                    modifier = Modifier.fillMaxWidth()
-                                ) { Text("Options") }
-                            } else {
-                                val optionsMessage = when {
-                                    metadata.optionsPageUrl.isNullOrBlank() -> "This add-on does not provide an options page."
-                                    policyBlockers.isNotEmpty() -> "Options unavailable because this add-on is blocked by Click."
-                                    !metadata.enabled -> "Enable this approved add-on to open its options page."
-                                    else -> "Options blocked: page is not on this add-on's own GeckoView origin."
-                                }
-                                Text(optionsMessage, fontSize = 10.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                            }
-                        }
+
+                item(key = "footer-notes") {
+                    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                        Text(
+                            context.getString(R.string.amo_catalog_install_instructions),
+                            fontSize = 11.sp,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        Text(
+                            "Add-ons run only in this separate GeckoView profile. They do not share Click's regular tabs, cookies, history, or saved passwords.",
+                            fontSize = 12.sp
+                        )
+                        Text(
+                            context.getString(R.string.amo_catalog_update_note),
+                            fontSize = 11.sp,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
                     }
-                }
-                OutlinedButton(onClick = onInstall, enabled = isImportEnabled, modifier = Modifier.fillMaxWidth()) {
-                    Icon(Icons.Default.Extension, contentDescription = null, modifier = Modifier.padding(end = 6.dp))
-                    Text("Install a downloaded AMO XPI")
                 }
             }
         },

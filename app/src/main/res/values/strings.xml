@@ -3,4 +3,5 @@
     <string name="amo_catalog_permission_summary">Catalog-declared APIs (expected): %1$s · catalog-declared site access: %2$s. The downloaded package is checked again before installation.</string>
     <string name="amo_catalog_install_instructions">Open an official listing in Click first. If the page offers an in-page install action, Click shows its existing safety prompt. Otherwise choose “Download XPI in default browser,” then return and import the package here. GeckoView rechecks Mozilla signature, recommendation, and blocklist status; Click blocks sensitive APIs and broad or insecure site access and asks you to approve permissions.</string>
     <string name="amo_catalog_update_note">Updates are not automatic in this version. To update safely, remove the add-on and import its new AMO XPI; replacing an installed ID directly is blocked.</string>
+    <string name="amo_catalog_play_policy_note">Google Play &amp; AdSense Safe Policy: Curated entries exclude ad/monetization interferers, media downloaders, background-playback bypasses, and wildcard site injectors.</string>
 </resources>

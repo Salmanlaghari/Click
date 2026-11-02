@@ -2,10 +2,14 @@ package com.click.browser.ui.screens
 
 import android.Manifest
 import android.app.Activity
+import android.content.ClipData
+import android.content.ClipboardManager
+import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.speech.RecognizerIntent
 import android.speech.SpeechRecognizer
+import android.speech.tts.TextToSpeech
 import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -18,6 +22,8 @@ import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.slideInVertically
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -32,25 +38,31 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
-import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.Send
+import androidx.compose.material.icons.automirrored.filled.VolumeUp
 import androidx.compose.material.icons.filled.AutoAwesome
+import androidx.compose.material.icons.filled.ContentCopy
+import androidx.compose.material.icons.filled.DeleteOutline
 import androidx.compose.material.icons.filled.ErrorOutline
 import androidx.compose.material.icons.filled.Flag
 import androidx.compose.material.icons.filled.Key
 import androidx.compose.material.icons.filled.Mic
+import androidx.compose.material.icons.filled.Public
 import androidx.compose.material.icons.filled.Shield
+import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -74,33 +86,30 @@ import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextDecoration
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
 import com.click.browser.engine.AiChatClient
 import com.click.browser.engine.AiProviders
+import com.click.browser.engine.AiRolePresets
 import com.click.browser.engine.AiSafetyFilter
 import com.click.browser.engine.ChatMessage
 import com.click.browser.engine.PrivacyGuards
 import kotlinx.coroutines.launch
 import okhttp3.Dns
+import java.util.Locale
 
 /**
- * Real AI chat screen. Talks to Groq or OpenRouter (OpenAI-compatible
- * /chat/completions) using the user's own key from Settings, or the
- * built-in Groq key (BuildConfig) when the user hasn't pasted one.
+ * Real AI chat screen supporting Google Gemini (with optional Google Search
+ * Grounding citations), Groq, and OpenRouter, plus Role Presets, active page
+ * context summarization, voice input, and TTS read-aloud.
  *
  * Safety (Google Play AI-Generated Content policy):
  * - Every prompt passes [AiSafetyFilter] BEFORE any network call.
  * - Every assistant message has a flag button for in-app reporting.
- *
- * There are NO demo or canned responses anywhere in this screen.
- *
- * Premium upgrades: bouncing-dot typing indicator, voice input (mic button),
- * suggestion chips, and animated message arrivals. The safety contract is
- * untouched: AiSafetyFilter pre-call moderation, the per-message report
- * button, and key precedence all behave exactly as before.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -110,47 +119,108 @@ fun AiChatScreen(
     model: String,
     secureDns: Boolean,
     usingBuiltInKey: Boolean = false,
-    /** Current browser page — used to build the "Summarize this page" prompt. */
     pageTitle: String = "",
     pageUrl: String = "",
+    pageExcerpt: String = "",
+    onOpenUrl: (String) -> Unit = {},
     onReportMessage: (String) -> Unit = {},
     onOpenSettings: () -> Unit,
     onClose: () -> Unit
 ) {
-    val provider = AiProviders.byId(providerId)
+    val context = LocalContext.current
+    val effectiveProviderId = if (apiKey.startsWith("AIza")) "gemini" else providerId
+    val provider = AiProviders.byId(effectiveProviderId)
+    val isGemini = provider.id == "gemini"
     val scope = rememberCoroutineScope()
     val messages = remember { mutableStateListOf<ChatMessage>() }
     var input by remember { mutableStateOf("") }
     var typing by remember { mutableStateOf(false) }
-    // Single screen-level report dialog (Kilo review: per-bubble dialogs could stack).
+    var selectedRole by remember { mutableStateOf("browser") }
+    var searchGroundingEnabled by remember { mutableStateOf(true) }
     var reportTarget by remember { mutableStateOf<String?>(null) }
+    var speakingText by remember { mutableStateOf<String?>(null) }
     val listState = rememberLazyListState()
 
     val client = remember(secureDns) {
         AiChatClient(dns = if (secureDns) PrivacyGuards.safeSecureDns() else Dns.SYSTEM)
     }
 
+    var ttsEngine by remember { mutableStateOf<TextToSpeech?>(null) }
+    DisposableEffect(context) {
+        var engineRef: TextToSpeech? = null
+        engineRef = TextToSpeech(context.applicationContext) { status ->
+            if (status == TextToSpeech.SUCCESS) {
+                engineRef?.language = Locale.getDefault()
+            }
+        }
+        ttsEngine = engineRef
+        onDispose {
+            try {
+                engineRef?.stop()
+                engineRef?.shutdown()
+            } catch (_: Exception) {
+            }
+            ttsEngine = null
+        }
+    }
+
+    fun toggleSpeak(text: String) {
+        val engine = ttsEngine ?: return
+        if (speakingText == text) {
+            engine.stop()
+            speakingText = null
+        } else {
+            speakingText = text
+            engine.speak(text.take(3500), TextToSpeech.QUEUE_FLUSH, null, "click_ai_tts")
+        }
+    }
+
+    fun copyReply(text: String) {
+        val cm = context.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager
+        cm?.setPrimaryClip(ClipData.newPlainText("Click AI Reply", text))
+        Toast.makeText(context, "Copied to clipboard", Toast.LENGTH_SHORT).show()
+    }
+
     LaunchedEffect(messages.size, typing) {
         if (messages.isNotEmpty()) listState.animateScrollToItem(messages.size - 1)
     }
 
-    /** Sends [prompt] as the user message. Runs the unchanged safety pipeline. */
     fun sendMessage(prompt: String) {
         val text = prompt.trim()
         if (text.isEmpty() || typing) return
         input = ""
         messages.add(ChatMessage("user", text))
-        // Pre-call content moderation — blocked prompts never reach the API.
         if (AiSafetyFilter.isBlocked(text)) {
             messages.add(ChatMessage("system", "This prompt was blocked by content safety."))
             return
         }
         typing = true
+        val sysInstruction = AiRolePresets.instructionFor(
+            roleId = selectedRole,
+            pageTitle = pageTitle,
+            pageUrl = pageUrl,
+            pageExcerpt = pageExcerpt
+        )
         scope.launch {
-            val result = client.send(apiKey, provider, model, messages.toList())
+            val result = client.sendRich(
+                apiKey = apiKey,
+                provider = provider,
+                model = model,
+                history = messages.toList(),
+                systemInstruction = sysInstruction,
+                enableGoogleSearch = isGemini && searchGroundingEnabled
+            )
             typing = false
             result
-                .onSuccess { reply -> messages.add(ChatMessage("assistant", reply)) }
+                .onSuccess { reply ->
+                    messages.add(
+                        ChatMessage(
+                            role = "assistant",
+                            content = reply.text,
+                            sources = reply.sources
+                        )
+                    )
+                }
                 .onFailure { e ->
                     messages.add(
                         ChatMessage(
@@ -169,10 +239,14 @@ fun AiChatScreen(
             TopAppBar(
                 title = {
                     Column {
-                        Text("AI Chat", fontWeight = FontWeight.Bold, fontSize = 18.sp)
+                        Text("Click AI Assistant", fontWeight = FontWeight.Bold, fontSize = 18.sp)
                         Text(
-                            if (usingBuiltInKey) "${provider.displayName} • built-in key active"
-                            else "${provider.displayName} • ${model.ifBlank { provider.defaultModel }}",
+                            buildString {
+                                append(provider.displayName)
+                                append(" • ")
+                                if (usingBuiltInKey) append("built-in key active")
+                                else append(model.ifBlank { provider.defaultModel })
+                            },
                             fontSize = 11.sp,
                             color = Color.Gray
                         )
@@ -181,6 +255,17 @@ fun AiChatScreen(
                 navigationIcon = {
                     IconButton(onClick = onClose) {
                         Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
+                    }
+                },
+                actions = {
+                    if (messages.isNotEmpty()) {
+                        IconButton(onClick = {
+                            ttsEngine?.stop()
+                            speakingText = null
+                            messages.clear()
+                        }) {
+                            Icon(Icons.Default.DeleteOutline, contentDescription = "Clear conversation")
+                        }
                     }
                 }
             )
@@ -192,7 +277,6 @@ fun AiChatScreen(
                 .padding(padding)
         ) {
             if (apiKey.isBlank()) {
-                // Honest setup guide — no fake chat without a key.
                 Card(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -210,7 +294,7 @@ fun AiChatScreen(
                         Text("AI Chat needs an API key", fontWeight = FontWeight.Bold, fontSize = 17.sp)
                         Spacer(modifier = Modifier.height(8.dp))
                         Text(
-                            "This is a real AI chat — it calls the provider's API with YOUR key. " +
+                            "This is a real AI assistant — it calls Google Gemini, Groq, or OpenRouter with YOUR key. " +
                                 "No key is bundled with the app and nothing is sent anywhere until you add one.",
                             fontSize = 13.sp,
                             color = Color.Gray
@@ -227,7 +311,7 @@ fun AiChatScreen(
                         }
                         Spacer(modifier = Modifier.height(8.dp))
                         Text(
-                            "2. Paste it in Settings → AI Assistant.\n3. Keys starting with gsk_ auto-select Groq, sk-or- auto-selects OpenRouter.",
+                            "2. Paste it in Settings → AI Assistant.\n3. Keys starting with AIza auto-select Google Gemini, gsk_ auto-selects Groq, and sk-or- auto-selects OpenRouter.",
                             fontSize = 13.sp
                         )
                         Spacer(modifier = Modifier.height(16.dp))
@@ -237,6 +321,54 @@ fun AiChatScreen(
                     }
                 }
             } else {
+                // Role Presets + Google Search Grounding toolbar
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .horizontalScroll(rememberScrollState())
+                        .padding(horizontal = 12.dp, vertical = 4.dp),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    AiRolePresets.ALL.forEach { preset ->
+                        FilterChip(
+                            selected = selectedRole == preset.id,
+                            onClick = { selectedRole = preset.id },
+                            label = { Text(preset.label, fontSize = 11.sp) }
+                        )
+                    }
+                    if (isGemini) {
+                        FilterChip(
+                            selected = searchGroundingEnabled,
+                            onClick = { searchGroundingEnabled = !searchGroundingEnabled },
+                            leadingIcon = {
+                                Icon(
+                                    Icons.Default.Public,
+                                    contentDescription = null,
+                                    modifier = Modifier.size(14.dp)
+                                )
+                            },
+                            label = {
+                                Text(
+                                    if (searchGroundingEnabled) "Google Search ON" else "Google Search OFF",
+                                    fontSize = 11.sp
+                                )
+                            }
+                        )
+                    }
+                }
+
+                if (pageUrl.isNotBlank() && pageUrl != "about:blank") {
+                    Text(
+                        text = "Page context ready: ${pageTitle.ifBlank { pageUrl }}",
+                        fontSize = 11.sp,
+                        color = Color.Gray,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.padding(horizontal = 14.dp, vertical = 2.dp)
+                    )
+                }
+
                 LazyColumn(
                     state = listState,
                     modifier = Modifier
@@ -250,7 +382,7 @@ fun AiChatScreen(
                             Column(
                                 modifier = Modifier
                                     .fillMaxWidth()
-                                    .padding(top = 48.dp),
+                                    .padding(top = 36.dp),
                                 horizontalAlignment = Alignment.CenterHorizontally
                             ) {
                                 Icon(
@@ -274,8 +406,6 @@ fun AiChatScreen(
                             }
                         }
                     }
-                    // Append-only list: index keys are stable, and each new
-                    // message slides/fades in on arrival.
                     items(messages.size, key = { it }) { index ->
                         val msg = messages[index]
                         AnimatedVisibility(
@@ -283,7 +413,14 @@ fun AiChatScreen(
                             enter = fadeIn(animationSpec = tween(280)) +
                                 slideInVertically(animationSpec = tween(280)) { it / 4 }
                         ) {
-                            ChatBubble(msg, onFlagClick = { reportTarget = it })
+                            ChatBubble(
+                                msg = msg,
+                                isSpeaking = speakingText == msg.content,
+                                onSpeakClick = { toggleSpeak(msg.content) },
+                                onCopyClick = { copyReply(msg.content) },
+                                onSourceClick = { uri -> onOpenUrl(uri) },
+                                onFlagClick = { reportTarget = it }
+                            )
                         }
                     }
                     if (typing) {
@@ -291,7 +428,6 @@ fun AiChatScreen(
                     }
                 }
 
-                // Suggestion chips — shown before the conversation starts.
                 if (messages.isEmpty() && !typing) {
                     SuggestionChipsRow(
                         pageTitle = pageTitle,
@@ -310,7 +446,7 @@ fun AiChatScreen(
                         value = input,
                         onValueChange = { input = it },
                         modifier = Modifier.weight(1f),
-                        placeholder = { Text("Type a message…") },
+                        placeholder = { Text("Ask about this page or the web…") },
                         shape = RoundedCornerShape(24.dp),
                         singleLine = false,
                         maxLines = 4
@@ -340,8 +476,6 @@ fun AiChatScreen(
             }
         }
 
-        // Single screen-level report dialog for flagged AI responses
-        // (Play AI-Generated Content policy — in-app reporting).
         reportTarget?.let { target ->
             AlertDialog(
                 onDismissRequest = { reportTarget = null },
@@ -362,7 +496,14 @@ fun AiChatScreen(
 }
 
 @Composable
-private fun ChatBubble(msg: ChatMessage, onFlagClick: (String) -> Unit) {
+private fun ChatBubble(
+    msg: ChatMessage,
+    isSpeaking: Boolean,
+    onSpeakClick: () -> Unit,
+    onCopyClick: () -> Unit,
+    onSourceClick: (String) -> Unit,
+    onFlagClick: (String) -> Unit
+) {
     val isUser = msg.role == "user"
     val isError = msg.role == "error"
     val isSystem = msg.role == "system"
@@ -383,58 +524,100 @@ private fun ChatBubble(msg: ChatMessage, onFlagClick: (String) -> Unit) {
                     else -> MaterialTheme.colorScheme.surfaceVariant
                 }
             ),
-            modifier = Modifier.fillMaxWidth(if (isAssistant) 0.78f else 0.85f)
+            modifier = Modifier.fillMaxWidth(if (isAssistant) 0.84f else 0.85f)
         ) {
-            Row(modifier = Modifier.padding(12.dp)) {
-                if (isError) {
-                    Icon(
-                        Icons.Default.ErrorOutline,
-                        contentDescription = null,
-                        tint = Color.White,
-                        modifier = Modifier
-                            .size(18.dp)
-                            .padding(end = 4.dp)
+            Column(modifier = Modifier.padding(12.dp)) {
+                Row {
+                    if (isError) {
+                        Icon(
+                            Icons.Default.ErrorOutline,
+                            contentDescription = null,
+                            tint = Color.White,
+                            modifier = Modifier
+                                .size(18.dp)
+                                .padding(end = 4.dp)
+                        )
+                    }
+                    if (isSystem) {
+                        Icon(
+                            Icons.Default.Shield,
+                            contentDescription = null,
+                            tint = Color(0xFFFFD54F),
+                            modifier = Modifier
+                                .size(18.dp)
+                                .padding(end = 4.dp)
+                        )
+                    }
+                    Text(
+                        msg.content,
+                        fontSize = 14.sp,
+                        color = if (isUser || isError || isSystem) Color.White else MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }
-                if (isSystem) {
-                    Icon(
-                        Icons.Default.Shield,
-                        contentDescription = null,
-                        tint = Color(0xFFFFD54F),
-                        modifier = Modifier
-                            .size(18.dp)
-                            .padding(end = 4.dp)
+
+                if (isAssistant && msg.sources.isNotEmpty()) {
+                    Spacer(modifier = Modifier.height(8.dp))
+                    HorizontalDivider(color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.16f))
+                    Spacer(modifier = Modifier.height(6.dp))
+                    Text(
+                        "Google Search Sources",
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.75f)
                     )
+                    msg.sources.forEach { src ->
+                        Text(
+                            text = "↗ ${src.title}",
+                            fontSize = 11.sp,
+                            color = MaterialTheme.colorScheme.primary,
+                            textDecoration = TextDecoration.Underline,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable { onSourceClick(src.uri) }
+                                .padding(vertical = 2.dp)
+                        )
+                    }
                 }
-                Text(
-                    msg.content,
-                    fontSize = 14.sp,
-                    color = if (isUser || isError || isSystem) Color.White else MaterialTheme.colorScheme.onSurfaceVariant
-                )
-            }
-        }
-        // In-app reporting (Play AI-Generated Content policy) on every assistant message.
-        // The dialog itself lives at screen level (single dialog) — see reportTarget below.
-        if (isAssistant) {
-            IconButton(
-                onClick = { onFlagClick(msg.content) },
-                modifier = Modifier.size(36.dp)
-            ) {
-                Icon(
-                    Icons.Default.Flag,
-                    contentDescription = "Report this response",
-                    tint = Color.Gray,
-                    modifier = Modifier.size(18.dp)
-                )
+
+                if (isAssistant) {
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Row(
+                        horizontalArrangement = Arrangement.spacedBy(2.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        IconButton(onClick = onSpeakClick, modifier = Modifier.size(32.dp)) {
+                            Icon(
+                                if (isSpeaking) Icons.Default.Stop else Icons.AutoMirrored.Filled.VolumeUp,
+                                contentDescription = if (isSpeaking) "Stop reading" else "Read aloud",
+                                tint = Color.Gray,
+                                modifier = Modifier.size(16.dp)
+                            )
+                        }
+                        IconButton(onClick = onCopyClick, modifier = Modifier.size(32.dp)) {
+                            Icon(
+                                Icons.Default.ContentCopy,
+                                contentDescription = "Copy response",
+                                tint = Color.Gray,
+                                modifier = Modifier.size(15.dp)
+                            )
+                        }
+                        IconButton(onClick = { onFlagClick(msg.content) }, modifier = Modifier.size(32.dp)) {
+                            Icon(
+                                Icons.Default.Flag,
+                                contentDescription = "Report this response",
+                                tint = Color.Gray,
+                                modifier = Modifier.size(16.dp)
+                            )
+                        }
+                    }
+                }
             }
         }
     }
 }
 
-/**
- * Premium typing indicator: three dots bouncing in a wave while the
- * provider response is on its way.
- */
 @Composable
 private fun TypingIndicator() {
     val transition = rememberInfiniteTransition(label = "typingDots")
@@ -465,7 +648,6 @@ private fun TypingIndicator() {
     }
 }
 
-/** One suggestion chip: visible label + how to build the prompt it sends. */
 private data class SuggestionChip(
     val label: String,
     val buildPrompt: (pageTitle: String, pageUrl: String) -> String
@@ -474,17 +656,22 @@ private data class SuggestionChip(
 private val SUGGESTION_CHIPS = listOf(
     SuggestionChip("Summarize this page") { title, url ->
         buildString {
-            append("Please summarize this page for me.")
+            append("Please summarize this page in 4 concise bullet points.")
             if (title.isNotBlank() && title != "New Tab") append("\n\nPage title: ").append(title)
             if (url.isNotBlank() && url != "about:blank") append("\nPage URL: ").append(url)
         }
     },
-    SuggestionChip("Explain simply") { _, _ -> "Explain simply:" },
-    SuggestionChip("Translate to Urdu") { _, _ -> "Translate to Urdu:" },
-    SuggestionChip("Key points") { _, _ -> "List the key points:" }
+    SuggestionChip("Translate summary to Urdu") { title, url ->
+        buildString {
+            append("Summarize this page in easy Urdu (اردو) and Roman Urdu.")
+            if (title.isNotBlank() && title != "New Tab") append("\n\nPage title: ").append(title)
+            if (url.isNotBlank() && url != "about:blank") append("\nPage URL: ").append(url)
+        }
+    },
+    SuggestionChip("Explain simply") { _, _ -> "Explain the main topic on this page in simple everyday words." },
+    SuggestionChip("Key takeaways") { _, _ -> "List the top key takeaways and verify important facts." }
 )
 
-/** Horizontal scroll of suggestion chips above the input bar. */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun SuggestionChipsRow(
@@ -516,13 +703,6 @@ private fun SuggestionChipsRow(
     }
 }
 
-/**
- * Mic button for voice input. Uses Android's [SpeechRecognizer] to transcribe
- * speech into the chat text field. RECORD_AUDIO is requested at runtime;
- * when the system recommends it, a rationale dialog explains the usage
- * first (mic is only used for transcription — nothing is recorded or
- * uploaded by the browser itself).
- */
 @Composable
 private fun MicButton(
     enabled: Boolean,
@@ -592,7 +772,6 @@ private fun MicButton(
 
     fun onMicClick() {
         if (listening) {
-            // Tap again to stop: the listener's onResults/onError fires → onEnd.
             try {
                 recognizer?.stopListening()
             } catch (_: Exception) {
@@ -643,7 +822,6 @@ private fun MicButton(
         )
     }
 
-    // Gentle pulse while listening so the state is obvious.
     val pulse = rememberInfiniteTransition(label = "micPulse")
     val pulseAlpha by pulse.animateFloat(
         initialValue = 1f,
