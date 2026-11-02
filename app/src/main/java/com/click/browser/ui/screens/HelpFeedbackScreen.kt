@@ -38,7 +38,7 @@ private val FAQS = listOf(
         "Click is one browser with four data profiles. Simple is the everyday " +
             "light mode (Google search). Developer is the dark-glass mode for " +
             "coders (DuckDuckGo search, dev tools). Power includes additional " +
-            "browser controls and desktop-layout browsing. Advance is a " +
+            "browser controls and wide-viewport layout. Advance is a " +
             "fresh isolated space — its own cookies, history, bookmarks, " +
             "passwords that start empty, so nothing carries over from the " +
             "other modes. All profiles use Android System WebView and do not " +
@@ -71,7 +71,7 @@ private val FAQS = listOf(
     Faq(
         "What is click://flags?",
         "Type click://flags in the address bar to open the experimental " +
-            "features lab — toggles for desktop mode, aggressive ad-blocking, " +
+            "features lab — toggles for wide layout, aggressive ad-blocking, " +
             "bottom address bar, and more. Also try click://version."
     ),
     Faq(

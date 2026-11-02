@@ -152,7 +152,7 @@ fun AdvanceSpecsSheet(
             AdvanceSpecRow(
                 icon = Icons.Filled.Language,
                 title = "Full web support",
-                body = "Complete JavaScript and HTML5 - every modern site works, with desktop-mode rendering available.",
+                body = "Complete JavaScript and HTML5 support with wide-viewport layout controls; each site still chooses its own content.",
                 accent = blue
             )
             AdvanceSpecRow(

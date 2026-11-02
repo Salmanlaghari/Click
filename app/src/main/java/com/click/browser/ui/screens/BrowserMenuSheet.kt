@@ -159,7 +159,7 @@ fun BrowserMenuSheet(
                         )
                         MenuCustomization.MenuItemId.DESKTOP_SITE -> MenuRow(
                             theme = theme, icon = Icons.Default.DesktopWindows,
-                            label = "Desktop site",
+                            label = "Wide layout",
                             trailing = {
                                 Switch(
                                     checked = isDesktopForSite,
