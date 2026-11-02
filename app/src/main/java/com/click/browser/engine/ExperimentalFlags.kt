@@ -98,7 +98,7 @@ data class ExperimentalFlags(
         val set: (ExperimentalFlags, Boolean) -> ExperimentalFlags,
         val key: Preferences.Key<Boolean>,
     ) {
-        DESKTOP_DEFAULT("Desktop by default", "Always request desktop sites",
+        DESKTOP_DEFAULT("Wide layout by default", "Use a wide viewport by default; keep the normal WebView identity",
             { it.desktopDefault }, { f, v -> f.copy(desktopDefault = v) }, K_DESKTOP_DEFAULT),
         AGGRESSIVE_ADBLOCK("Aggressive ad-block", "Block extra trackers & analytics",
             { it.aggressiveAdblock }, { f, v -> f.copy(aggressiveAdblock = v) }, K_AGGRESSIVE_ADBLOCK),

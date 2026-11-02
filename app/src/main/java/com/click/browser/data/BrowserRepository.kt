@@ -197,26 +197,31 @@ class BrowserRepository(private val context: Context) {
         }
     }
 
-    // --- Per-site Desktop/Mobile preference (host -> true = always desktop) ---
+    // --- Per-site wide-layout preference (host -> explicit true or false) ---
     //
     // DELIBERATE: stored in the per-profile DataStore, so each engine keeps
-    // its own desktop-site choices. Click Advance is a fresh isolated space —
+    // its own layout choices. Click Advance is a fresh isolated space —
     // Prince's requirement is that nothing from Simple / Developer / Power
-    // carries over, and per-site desktop preferences are browsing-profile
+    // carries over, and per-site layout preferences are browsing-profile
     // state (like bookmarks and history), not device configuration. The
     // device-level settings that intentionally stay shared are listed in
     // ProfileData.kt's KDoc (mode selector, AI API key, V9 Shield/VPN toggle,
     // DoH provider).
-    val desktopHostsFlow: Flow<Set<String>> = context.profileDataStore.data.map { preferences ->
+    val desktopOverridesFlow: Flow<Map<String, Boolean>> = context.profileDataStore.data.map { preferences ->
         val jsonStr = preferences[DESKTOP_HOSTS_KEY] ?: "{}"
         val obj = JSONObject(jsonStr)
-        val set = mutableSetOf<String>()
+        val overrides = mutableMapOf<String, Boolean>()
         val keys = obj.keys()
         while (keys.hasNext()) {
             val host = keys.next()
-            if (obj.optBoolean(host, false)) set.add(host)
+            overrides[host] = obj.optBoolean(host, false)
         }
-        set
+        overrides
+    }
+
+    /** Compatibility view for screens that only display opted-in wide layouts. */
+    val desktopHostsFlow: Flow<Set<String>> = desktopOverridesFlow.map { overrides ->
+        overrides.filterValues { it }.keys
     }
 
     suspend fun setDesktopHost(host: String, desktop: Boolean) {
@@ -224,6 +229,26 @@ class BrowserRepository(private val context: Context) {
             val jsonStr = preferences[DESKTOP_HOSTS_KEY] ?: "{}"
             val obj = JSONObject(jsonStr)
             if (desktop) obj.put(host, true) else obj.remove(host)
+            preferences[DESKTOP_HOSTS_KEY] = obj.toString()
+        }
+    }
+
+    suspend fun setDesktopOverride(host: String, desktop: Boolean) {
+        context.profileDataStore.edit { preferences ->
+            val jsonStr = preferences[DESKTOP_HOSTS_KEY] ?: "{}"
+            val obj = JSONObject(jsonStr)
+            // False is retained as an explicit per-site mobile-layout override;
+            // the legacy setDesktopHost(host, false) remains a reset operation.
+            obj.put(host, desktop)
+            preferences[DESKTOP_HOSTS_KEY] = obj.toString()
+        }
+    }
+
+    suspend fun clearDesktopHost(host: String) {
+        context.profileDataStore.edit { preferences ->
+            val jsonStr = preferences[DESKTOP_HOSTS_KEY] ?: "{}"
+            val obj = JSONObject(jsonStr)
+            obj.remove(host)
             preferences[DESKTOP_HOSTS_KEY] = obj.toString()
         }
     }

@@ -224,8 +224,10 @@ class MainActivity : FragmentActivity() {
     // DNT + GPC privacy signals (opt-in, default off).
     private var liveDntEnabled = false
     private var liveGpcEnabled = false
-    // Live copy of per-site desktop hosts (persisted per host via BrowserRepository).
-    private var liveDesktopHosts: Set<String> = emptySet()
+    // Live copy of explicit per-site wide-layout preferences. Updating this
+    // immediately after a DataStore write prevents reloads from seeing stale state.
+    private var liveDesktopOverrides: Map<String, Boolean> = emptyMap()
+    private var liveForceDesktopMode = false
     // Live copy of supported per-site content settings, persisted per host
     // and engine mode via BrowserRepository.
     private var liveSiteSettings: Map<String, com.click.browser.engine.SiteSettings> = emptyMap()
@@ -680,20 +682,28 @@ class MainActivity : FragmentActivity() {
             window.clearFlags(android.view.WindowManager.LayoutParams.FLAG_SECURE)
         }
     }
-    /**
-     * Applies the per-site desktop/mobile override for the given URL.
-     * If the URL's host is in the persisted desktop-hosts set, the WebView gets
-     * a desktop UA + wide viewport; otherwise the current mode's settings apply.
-     */
+    /** Applies the resolved per-site layout, preserving profile and global defaults. */
     private fun applyPerSiteDesktop(webView: WebView, url: String?) {
         val host = try {
             android.net.Uri.parse(url ?: "").host?.lowercase().orEmpty()
         } catch (e: Exception) {
             ""
         }
-        val desktop = host.isNotEmpty() && (host in liveDesktopHosts
-            || liveDesktopHosts.any { h -> host == h || host.endsWith(".$h") })
+        val desktop = DesktopLayoutPolicy.enabledForHost(
+            host = host,
+            overrides = liveDesktopOverrides,
+            mode = liveMode,
+            forceDesktopMode = liveForceDesktopMode,
+            desktopDefault = liveFlags.desktopDefault
+        )
         modeManager.applyDesktopOverride(webView, liveMode, desktop)
+    }
+
+    /** Persist and publish the choice before a caller reloads the current page. */
+    private suspend fun persistDesktopOverride(host: String, desktop: Boolean) {
+        val normalizedHost = host.trim().trimEnd('.').lowercase()
+        repository.setDesktopOverride(normalizedHost, desktop)
+        liveDesktopOverrides = liveDesktopOverrides + (normalizedHost to desktop)
     }
 
     /**
@@ -709,7 +719,7 @@ class MainActivity : FragmentActivity() {
      * - Pop-ups: javaScriptCanOpenWindowsAutomatically per WebView.
      * - Ad-block is stored here for shouldInterceptRequest. Website camera,
      *   microphone and notification permissions are not granted by this build.
-     * Desktop mode stays in the existing desktop-hosts path.
+     * Wide layout stays in the existing per-site preference path.
      */
     private fun applyPerSiteSettings(
         webView: WebView,
@@ -1560,8 +1570,8 @@ class MainActivity : FragmentActivity() {
 
             // Pull-to-refresh state for web pages.
             var isRefreshing by remember { mutableStateOf(false) }
-            // Per-site desktop preference (persisted per host).
-            val desktopHosts by repository.desktopHostsFlow.collectAsState(initial = emptySet())
+            // Per-site layout preference (true or false override, persisted per host).
+            val desktopOverrides by repository.desktopOverridesFlow.collectAsState(initial = emptyMap())
             // Per-site settings overrides (persisted per host, per engine mode).
             val siteSettings by repository.siteSettingsFlow.collectAsState(initial = emptyMap())
 
@@ -1614,16 +1624,22 @@ class MainActivity : FragmentActivity() {
                             if (host.isEmpty() || currentTab.url == "about:blank") {
                                 Toast.makeText(this@MainActivity, "Open a page first.", Toast.LENGTH_SHORT).show()
                             } else {
-                                val isDesktop = host in desktopHosts ||
-                                    desktopHosts.any { h -> host == h || host.endsWith(".$h") }
-                                repository.setDesktopHost(host, !isDesktop)
+                                val isWideLayout = DesktopLayoutPolicy.enabledForHost(
+                                    host, liveDesktopOverrides, activeMode,
+                                    forceDesktopMode, liveFlags.desktopDefault
+                                )
+                                persistDesktopOverride(host, !isWideLayout)
+                                val nextWideLayout = DesktopLayoutPolicy.enabledForHost(
+                                    host, liveDesktopOverrides, activeMode,
+                                    forceDesktopMode, liveFlags.desktopDefault
+                                )
                                 currentTab.webView?.let { wv ->
-                                    modeManager.applyDesktopOverride(wv, activeMode, !isDesktop)
+                                    modeManager.applyDesktopOverride(wv, activeMode, nextWideLayout)
+                                    wv.reload()
                                 }
-                                currentTab.webView?.reload()
                                 Toast.makeText(
                                     this@MainActivity,
-                                    if (!isDesktop) "Desktop site ON" else "Desktop site OFF",
+                                    if (nextWideLayout) "Wide layout ON" else "Wide layout OFF",
                                     Toast.LENGTH_SHORT
                                 ).show()
                             }
@@ -1809,7 +1825,8 @@ class MainActivity : FragmentActivity() {
             LaunchedEffect(readerModeEnabled) { liveReaderMode = readerModeEnabled }
             LaunchedEffect(reducedMotionEnabled) { liveReducedMotion = reducedMotionEnabled }
             LaunchedEffect(sharpViewEnabled) { liveSharpViewEnabled = sharpViewEnabled }
-            LaunchedEffect(desktopHosts) { liveDesktopHosts = desktopHosts }
+            LaunchedEffect(desktopOverrides) { liveDesktopOverrides = desktopOverrides }
+            LaunchedEffect(forceDesktopMode) { liveForceDesktopMode = forceDesktopMode }
             LaunchedEffect(adBlockerEnabled) { liveAdBlockerEnabled = adBlockerEnabled }
             LaunchedEffect(siteSettings) { liveSiteSettings = siteSettings }
 
@@ -2386,31 +2403,37 @@ class MainActivity : FragmentActivity() {
                                     }
                                 }
                                 item {
-                                    // Per-site desktop/mobile toggle (persisted per host).
+                                    // Per-site wide-layout toggle (persisted per host).
                                     val pageHost = try {
                                         android.net.Uri.parse(currentTab.url).host?.lowercase().orEmpty()
                                     } catch (e: Exception) { "" }
-                                    val isDesktopForSite = pageHost.isNotEmpty() && (pageHost in desktopHosts
-                                        || desktopHosts.any { h -> pageHost == h || pageHost.endsWith(".$h") })
+                                    val isWideLayoutForSite = DesktopLayoutPolicy.enabledForHost(
+                                        pageHost, desktopOverrides, activeMode,
+                                        forceDesktopMode, liveFlags.desktopDefault
+                                    )
                                     DrawerItem(
-                                        label = if (isDesktopForSite) "Desktop site: ON (this site)" else "Desktop site (this site)",
+                                        label = if (isWideLayoutForSite) "Wide layout: ON (this site)" else "Wide layout (this site)",
                                         icon = Icons.Default.DesktopWindows,
-                                        color = Color(0xFF60A5FA)
+                                        color = theme.secondary
                                     ) {
                                         scope.launch {
                                             drawerState.close()
                                             if (pageHost.isEmpty() || currentTab.url == "about:blank") {
                                                 Toast.makeText(this@MainActivity, "Open a page first.", Toast.LENGTH_SHORT).show()
                                             } else {
-                                                repository.setDesktopHost(pageHost, !isDesktopForSite)
+                                                persistDesktopOverride(pageHost, !isWideLayoutForSite)
+                                                val nextWideLayout = DesktopLayoutPolicy.enabledForHost(
+                                                    pageHost, liveDesktopOverrides, activeMode,
+                                                    forceDesktopMode, liveFlags.desktopDefault
+                                                )
                                                 currentTab.webView?.let { wv ->
-                                                    modeManager.applyDesktopOverride(wv, activeMode, !isDesktopForSite)
+                                                    modeManager.applyDesktopOverride(wv, activeMode, nextWideLayout)
                                                     wv.reload()
                                                 }
                                                 Toast.makeText(
                                                     this@MainActivity,
-                                                    if (!isDesktopForSite) "Desktop site enabled for $pageHost"
-                                                    else "Mobile site restored for $pageHost",
+                                                    if (nextWideLayout) "Wide layout enabled for $pageHost"
+                                                    else "Mobile layout restored for $pageHost",
                                                     Toast.LENGTH_SHORT
                                                 ).show()
                                             }
@@ -2989,9 +3012,9 @@ class MainActivity : FragmentActivity() {
                                                                                 }
                                                                             }
                                                                         }
-                                                                        // Power mode desktop host preference: sites like YouTube
-                                                                        // redirect to their mobile domain (m.youtube.com)
-                                                                        // even with a desktop UA. Force the desktop host
+                                                                        // Power mode host preference: some sites redirect to a
+                                                                        // mobile-specific subdomain. Keep the selected host; wide
+                                                                        // layout does not change the WebView identity.
                                                                         // so Power mode stays on the desktop host.
                                                                         if (liveMode == BrowserMode.HACK) {
                                                                             urlStr = forceDesktopHost(urlStr)
@@ -3002,7 +3025,7 @@ class MainActivity : FragmentActivity() {
                                                                             return true
                                                                         }
                                                                         if (urlStr.startsWith("http://") || urlStr.startsWith("https://")) {
-                                                                            // Per-site desktop override BEFORE loading (UA must be set first).
+                                                                            // Apply viewport/layout settings before loading the page.
                                                                             if (view != null) this@MainActivity.applyPerSiteDesktop(view, urlStr)
                                                                             if (view != null) this@MainActivity.applyPerSiteSettings(view, urlStr)
                                                                             // Optional DNT/GPC privacy signals ride on
@@ -3775,6 +3798,13 @@ class MainActivity : FragmentActivity() {
                                 }
                             }
 
+                            val featureMenuPageHost = try {
+                                android.net.Uri.parse(currentTab.url).host?.lowercase().orEmpty()
+                            } catch (_: Exception) { "" }
+                            val featureMenuWideLayout = DesktopLayoutPolicy.enabledForHost(
+                                featureMenuPageHost, desktopOverrides, activeMode,
+                                forceDesktopMode, liveFlags.desktopDefault
+                            )
                             // Premium UI v2: always-visible bottom-left feature menu FAB
                             // (replaces the old floating home button; the 32-feature
                             // panel covers navigation, and Home stays in the bottom
@@ -3784,6 +3814,7 @@ class MainActivity : FragmentActivity() {
                                     theme = theme,
                                     expanded = showFeatureMenu,
                                     activeMode = activeMode,
+                                    desktopLayoutEnabled = featureMenuWideLayout,
                                     onToggle = { showFeatureMenu = !showFeatureMenu },
                                     onDismiss = { showFeatureMenu = false },
                                     onModeChange = { mode ->
@@ -4649,10 +4680,10 @@ class MainActivity : FragmentActivity() {
                                     val siteCurrent =
                                         siteSettings.forHost(siteHost)
                                             ?: com.click.browser.engine.SiteSettings()
-                                    val siteDesktop = siteHost in desktopHosts ||
-                                        desktopHosts.any { h ->
-                                            siteHost == h || siteHost.endsWith(".$h")
-                                        }
+                                    val siteDesktop = DesktopLayoutPolicy.enabledForHost(
+                                        siteHost, desktopOverrides, activeMode,
+                                        forceDesktopMode, liveFlags.desktopDefault
+                                    )
                                     com.click.browser.ui.screens.SiteSettingsSheet(
                                         theme = theme,
                                         host = siteHost,
@@ -4669,13 +4700,17 @@ class MainActivity : FragmentActivity() {
                                         },
                                         onDesktopModeChange = { desktop ->
                                             scope.launch {
-                                                repository.setDesktopHost(siteHost, desktop)
+                                                persistDesktopOverride(siteHost, desktop)
+                                                val nextWideLayout = DesktopLayoutPolicy.enabledForHost(
+                                                    siteHost, liveDesktopOverrides, activeMode,
+                                                    forceDesktopMode, liveFlags.desktopDefault
+                                                )
                                                 currentTab.webView?.let { wv ->
                                                     modeManager.applyDesktopOverride(
-                                                        wv, activeMode, desktop
+                                                        wv, activeMode, nextWideLayout
                                                     )
+                                                    wv.reload()
                                                 }
-                                                currentTab.webView?.reload()
                                             }
                                         },
                                         onApplyToWebView = { next ->
@@ -5179,13 +5214,15 @@ class MainActivity : FragmentActivity() {
                             // works — New tab, New private tab, Tabs switcher,
                             // History, Delete browsing data, Downloads, Bookmarks,
                             // Recent tabs, Share,
-                            // Find in page, Translate, Desktop site, Settings.
+                            // Find in page, Translate, Wide layout, Settings.
                             if (showBrowserMenu) {
                                 val menuPageHost = try {
                                     android.net.Uri.parse(currentTab.url).host?.lowercase().orEmpty()
                                 } catch (_: Exception) { "" }
-                                val menuDesktopForSite = menuPageHost.isNotEmpty() && (menuPageHost in desktopHosts
-                                    || desktopHosts.any { h -> menuPageHost == h || menuPageHost.endsWith(".$h") })
+                                val menuDesktopForSite = DesktopLayoutPolicy.enabledForHost(
+                                    menuPageHost, desktopOverrides, activeMode,
+                                    forceDesktopMode, liveFlags.desktopDefault
+                                )
                                 BrowserMenuSheet(
                                     theme = theme,
                                     isDesktopForSite = menuDesktopForSite,
@@ -5260,15 +5297,19 @@ class MainActivity : FragmentActivity() {
                                             if (menuPageHost.isEmpty() || currentTab.url == "about:blank") {
                                                 Toast.makeText(this@MainActivity, "Open a page first.", Toast.LENGTH_SHORT).show()
                                             } else {
-                                                repository.setDesktopHost(menuPageHost, !menuDesktopForSite)
+                                                persistDesktopOverride(menuPageHost, !menuDesktopForSite)
+                                                val nextWideLayout = DesktopLayoutPolicy.enabledForHost(
+                                                    menuPageHost, liveDesktopOverrides, activeMode,
+                                                    forceDesktopMode, liveFlags.desktopDefault
+                                                )
                                                 currentTab.webView?.let { wv ->
-                                                    modeManager.applyDesktopOverride(wv, activeMode, !menuDesktopForSite)
+                                                    modeManager.applyDesktopOverride(wv, activeMode, nextWideLayout)
                                                     wv.reload()
                                                 }
                                                 Toast.makeText(
                                                     this@MainActivity,
-                                                    if (!menuDesktopForSite) "Desktop site enabled for $menuPageHost"
-                                                    else "Mobile site restored for $menuPageHost",
+                                                    if (nextWideLayout) "Wide layout enabled for $menuPageHost"
+                                                    else "Mobile layout restored for $menuPageHost",
                                                     Toast.LENGTH_SHORT
                                                 ).show()
                                             }

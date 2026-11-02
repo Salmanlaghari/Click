@@ -38,8 +38,8 @@ class ModeManager(private val context: Context) {
 
     /**
      * Applies mode-specific WebSettings without changing the browser identity.
-     * All modes use Android System WebView's actual User-Agent. Desktop mode
-     * changes only layout/viewport behavior, as a normal browser setting.
+     * All modes use Android System WebView's actual User-Agent. Wide layout
+     * changes only standard viewport settings, not the requested site identity.
      */
     fun applySettings(webView: WebView, mode: BrowserMode, forceDesktop: Boolean = false) {
         val settings = webView.settings
@@ -49,9 +49,11 @@ class ModeManager(private val context: Context) {
         settings.allowFileAccess = true
         settings.allowContentAccess = true
 
-        val desktopLayout = forceDesktop || mode == BrowserMode.HACK || mode == BrowserMode.ADVANCED
-        settings.useWideViewPort = desktopLayout
-        settings.loadWithOverviewMode = desktopLayout
+        val layout = DesktopLayoutPolicy.webViewLayout(
+            DesktopLayoutPolicy.defaultEnabled(mode, forceDesktop)
+        )
+        settings.useWideViewPort = layout.useWideViewPort
+        settings.loadWithOverviewMode = layout.loadWithOverviewMode
         settings.layoutAlgorithm = WebSettings.LayoutAlgorithm.NORMAL
 
         if (mode == BrowserMode.ADVANCED) {
@@ -63,13 +65,14 @@ class ModeManager(private val context: Context) {
         }
     }
 
-    /** Toggle the requested layout without substituting another device identity. */
+    /**
+     * Apply only the resolved per-site viewport setting. A layout toggle must
+     * not reset unrelated JavaScript, playback, or privacy preferences.
+     */
+    @Suppress("UNUSED_PARAMETER")
     fun applyDesktopOverride(webView: WebView, mode: BrowserMode, desktop: Boolean) {
-        if (desktop) {
-            webView.settings.useWideViewPort = true
-            webView.settings.loadWithOverviewMode = true
-        } else {
-            applySettings(webView, mode, forceDesktop = false)
-        }
+        val layout = DesktopLayoutPolicy.webViewLayout(desktop)
+        webView.settings.useWideViewPort = layout.useWideViewPort
+        webView.settings.loadWithOverviewMode = layout.loadWithOverviewMode
     }
 }

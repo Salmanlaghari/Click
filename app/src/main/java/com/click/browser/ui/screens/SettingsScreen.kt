@@ -2,9 +2,15 @@ package com.click.browser.ui.screens
 
 import android.content.Intent
 import android.net.Uri
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.animateContentSize
+import androidx.compose.animation.core.tween
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.ui.draw.clip
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.rememberLazyListState
@@ -840,7 +846,13 @@ fun SettingsScreen(
             rows.forEachIndexed { i, row -> row.section?.let { put(it, i) } }
         }
     }
-    val sections = listOf("General", "Safety & DNS", "Browser", "Modes", "About")
+    val sections = listOf(
+        "General" to Icons.Default.Tune,
+        "Safety & DNS" to Icons.Default.Shield,
+        "Browser" to Icons.Default.Language,
+        "Modes" to Icons.Default.Speed,
+        "About" to Icons.Default.Info
+    )
     var activeSection by remember { mutableStateOf("General") }
 
     Scaffold(
@@ -863,12 +875,12 @@ fun SettingsScreen(
         Column(Modifier.padding(padding).fillMaxSize()) {
             // Section quick-nav chips
             ScrollableTabRow(
-                selectedTabIndex = sections.indexOf(activeSection),
+                selectedTabIndex = sections.indexOfFirst { it.first == activeSection }.coerceAtLeast(0),
                 containerColor = theme.background,
                 contentColor = theme.primary,
                 edgePadding = 16.dp
             ) {
-                sections.forEach { s ->
+                sections.forEach { (s, icon) ->
                     Tab(
                         selected = activeSection == s,
                         onClick = {
@@ -877,7 +889,18 @@ fun SettingsScreen(
                                 scope.launch { listState.animateScrollToItem(idx) }
                             }
                         },
-                        text = { Text(s, fontSize = 13.sp) }
+                        text = {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Icon(
+                                    icon,
+                                    contentDescription = null,
+                                    tint = if (activeSection == s) theme.primary else theme.onSurface.copy(alpha = 0.62f),
+                                    modifier = Modifier.size(16.dp)
+                                )
+                                Spacer(Modifier.width(6.dp))
+                                Text(s, fontSize = 12.sp)
+                            }
+                        }
                     )
                 }
             }
@@ -923,9 +946,22 @@ private fun HourPicker(
 
 @Composable
 private fun SectionHeader(title: String, icon: ImageVector, theme: ModeTheme) {
-    Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(top = 8.dp)) {
-        Icon(icon, contentDescription = null, tint = theme.primary, modifier = Modifier.size(20.dp))
-        Spacer(Modifier.width(8.dp))
+    val iconContainer by animateColorAsState(
+        targetValue = theme.primary.copy(alpha = 0.10f),
+        animationSpec = tween(180),
+        label = "settingsSectionIcon"
+    )
+    Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(top = 10.dp, bottom = 2.dp)) {
+        Box(
+            Modifier
+                .size(34.dp)
+                .clip(RoundedCornerShape(12.dp))
+                .background(iconContainer),
+            contentAlignment = Alignment.Center
+        ) {
+            Icon(icon, contentDescription = null, tint = theme.primary, modifier = Modifier.size(18.dp))
+        }
+        Spacer(Modifier.width(10.dp))
         Text(title, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold, color = theme.primary)
     }
 }
@@ -933,11 +969,13 @@ private fun SectionHeader(title: String, icon: ImageVector, theme: ModeTheme) {
 @Composable
 private fun CardRow(theme: ModeTheme, content: @Composable ColumnScope.() -> Unit) {
     Card(
-        shape = RoundedCornerShape(16.dp),
+        shape = RoundedCornerShape(20.dp),
+        border = BorderStroke(1.dp, theme.primary.copy(alpha = 0.08f)),
         colors = CardDefaults.cardColors(containerColor = theme.surface),
+        elevation = CardDefaults.cardElevation(defaultElevation = 1.dp),
         modifier = Modifier.fillMaxWidth()
     ) {
-        Column(Modifier.padding(12.dp), content = content)
+        Column(Modifier.animateContentSize().padding(16.dp), content = content)
     }
 }
 
@@ -1002,7 +1040,15 @@ private fun ActionRow(
             .padding(vertical = 10.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
-        Icon(icon, contentDescription = null, tint = theme.primary, modifier = Modifier.size(22.dp))
+        Box(
+            Modifier
+                .size(38.dp)
+                .clip(RoundedCornerShape(12.dp))
+                .background(theme.surfaceVariant),
+            contentAlignment = Alignment.Center
+        ) {
+            Icon(icon, contentDescription = null, tint = theme.primary, modifier = Modifier.size(20.dp))
+        }
         Spacer(Modifier.width(12.dp))
         Column(Modifier.weight(1f)) {
             Text(title, color = theme.onSurface, fontWeight = FontWeight.SemiBold, fontSize = 14.sp)

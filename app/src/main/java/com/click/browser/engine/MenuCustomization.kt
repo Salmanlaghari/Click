@@ -31,7 +31,7 @@ object MenuCustomization {
         SHARE("Share…"),
         FIND_IN_PAGE("Find in page"),
         TRANSLATE("Translate"),
-        DESKTOP_SITE("Desktop site"),
+        DESKTOP_SITE("Wide layout"),
         SITE_SETTINGS("Site settings"),
         VPN("Click VPN"),
         SETTINGS("Settings"),

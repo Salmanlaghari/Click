@@ -24,8 +24,8 @@ import kotlinx.coroutines.launch
  * All-sites settings list (Settings -> Site settings). The per-site sheet
  * reached from the address-bar shield edits ONE site (the one open); this
  * screen is the management view Chrome users expect: every site that has
- * saved per-site choices — content overrides from [SiteSettings] plus the
- * desktop-site hosts set — with a per-site reset and a reset-all.
+ * saved per-site choices — content overrides from [SiteSettings] plus
+ * explicit wide/mobile layout overrides — with a per-site reset and a reset-all.
  *
  * Editing happens on the site itself (open it, tap the shield); this list
  * is view + reset only, so nothing here can silently change a live page.
@@ -42,15 +42,15 @@ fun AllSiteSettingsScreen(
 ) {
     val scope = rememberCoroutineScope()
     val settingsMap by repository.siteSettingsFlow.collectAsState(initial = emptyMap())
-    val desktopHosts by repository.desktopHostsFlow.collectAsState(initial = emptySet())
+    val desktopOverrides by repository.desktopOverridesFlow.collectAsState(initial = emptyMap())
     var query by remember { mutableStateOf("") }
     var showResetAll by remember { mutableStateOf(false) }
     var siteToReset by remember { mutableStateOf<String?>(null) }
 
     // Union of both per-site stores: a host appears when it has content
-    // overrides, a desktop-site flag, or both.
-    val hosts = remember(settingsMap, desktopHosts) {
-        (settingsMap.keys + desktopHosts).sorted()
+    // overrides, a wide-layout preference (on or off), or both.
+    val hosts = remember(settingsMap, desktopOverrides) {
+        (settingsMap.keys + desktopOverrides.keys).sorted()
     }
     val visible = remember(hosts, query) {
         if (query.isBlank()) hosts
@@ -60,7 +60,7 @@ fun AllSiteSettingsScreen(
     fun resetHost(host: String) {
         scope.launch {
             repository.clearSiteSettings(host)
-            repository.setDesktopHost(host, false)
+            repository.clearDesktopHost(host)
         }
     }
 
@@ -163,7 +163,7 @@ fun AllSiteSettingsScreen(
                                         Text(
                                             siteSettingsSummary(
                                                 settingsMap[host],
-                                                desktop = host in desktopHosts
+                                                desktopLayout = desktopOverrides[host]
                                             ),
                                             color = theme.onSurface.copy(alpha = 0.6f),
                                             fontSize = 12.sp
@@ -199,7 +199,7 @@ fun AllSiteSettingsScreen(
                         scope.launch {
                             hosts.forEach { host ->
                                 repository.clearSiteSettings(host)
-                                repository.setDesktopHost(host, false)
+                                repository.clearDesktopHost(host)
                             }
                         }
                     }) {
@@ -218,7 +218,7 @@ fun AllSiteSettingsScreen(
                 title = { Text("Reset settings for $host?") },
                 text = {
                     Text("This site goes back to the global defaults — content rules, " +
-                        "permissions and desktop-site choice are all removed.")
+                        "and its wide-layout choice are removed.")
                 },
                 confirmButton = {
                     TextButton(onClick = {
@@ -237,7 +237,7 @@ fun AllSiteSettingsScreen(
 }
 
 /** Plain-words summary of one site's overrides, e.g. "JavaScript off · Camera: Block". */
-private fun siteSettingsSummary(settings: SiteSettings?, desktop: Boolean): String {
+private fun siteSettingsSummary(settings: SiteSettings?, desktopLayout: Boolean?): String {
     val parts = mutableListOf<String>()
     settings?.let { s ->
         s.javaScript?.let { parts += if (it) "JavaScript on" else "JavaScript off" }
@@ -249,6 +249,10 @@ private fun siteSettingsSummary(settings: SiteSettings?, desktop: Boolean): Stri
         }
         s.textZoom?.let { parts += "Text zoom $it%" }
     }
-    if (desktop) parts += "Desktop site"
+    when (desktopLayout) {
+        true -> parts += "Wide layout"
+        false -> parts += "Mobile layout"
+        null -> Unit
+    }
     return if (parts.isEmpty()) "Custom settings" else parts.joinToString(" · ")
 }

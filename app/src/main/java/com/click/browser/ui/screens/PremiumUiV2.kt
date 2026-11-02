@@ -1,6 +1,7 @@
 package com.click.browser.ui.screens
 
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
@@ -8,6 +9,7 @@ import androidx.compose.animation.fadeOut
 import androidx.compose.animation.scaleIn
 import androidx.compose.animation.scaleOut
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
@@ -105,7 +107,7 @@ val ALL_FEATURES: List<FeatureDef> = listOf(
     FeatureDef(FeatureId.BOOKMARKS, "Bookmarks", Icons.Default.Bookmark),
     FeatureDef(FeatureId.AI_CHAT, "AI Chat", Icons.Default.AutoAwesome),
     FeatureDef(FeatureId.TRANSLATE, "Translate", Icons.Default.Translate),
-    FeatureDef(FeatureId.DESKTOP, "Desktop", Icons.Default.Computer),
+    FeatureDef(FeatureId.DESKTOP, "Wide layout", Icons.Default.Computer),
     FeatureDef(FeatureId.NEW_TAB, "New Tab", Icons.Default.Add),
     FeatureDef(FeatureId.PRIVATE_TAB, "Private", Icons.Default.VisibilityOff),
     FeatureDef(FeatureId.TABS, "Tabs", Icons.Default.Tab),
@@ -247,6 +249,7 @@ fun FeatureMenuFabOverlay(
     theme: ModeTheme,
     expanded: Boolean,
     activeMode: BrowserMode,
+    desktopLayoutEnabled: Boolean,
     onToggle: () -> Unit,
     onDismiss: () -> Unit,
     onModeChange: (BrowserMode) -> Unit,
@@ -332,6 +335,16 @@ fun FeatureMenuFabOverlay(
                         modifier = Modifier.height(320.dp)
                     ) {
                         items(ALL_FEATURES, key = { it.id }) { feature ->
+                            val isWideLayoutTile = feature.id == FeatureId.DESKTOP
+                            val tileContainerColor by animateColorAsState(
+                                targetValue = when {
+                                    isWideLayoutTile && desktopLayoutEnabled -> theme.secondary.copy(alpha = 0.30f)
+                                    isWideLayoutTile -> theme.secondary.copy(alpha = 0.14f)
+                                    else -> theme.surfaceVariant.copy(alpha = 0.7f)
+                                },
+                                animationSpec = tween(180),
+                                label = "featureTileColor"
+                            )
                             Column(
                                 horizontalAlignment = Alignment.CenterHorizontally,
                                 modifier = Modifier.clickable { onFeature(feature.id) }
@@ -340,15 +353,35 @@ fun FeatureMenuFabOverlay(
                                     modifier = Modifier
                                         .size(48.dp)
                                         .clip(RoundedCornerShape(14.dp))
-                                        .background(theme.surfaceVariant.copy(alpha = 0.7f)),
+                                        .background(tileContainerColor)
+                                        .then(
+                                            if (isWideLayoutTile) {
+                                                Modifier.border(
+                                                    width = 1.dp,
+                                                    color = theme.secondary.copy(alpha = if (desktopLayoutEnabled) 0.7f else 0.4f),
+                                                    shape = RoundedCornerShape(14.dp)
+                                                )
+                                            } else Modifier
+                                        ),
                                     contentAlignment = Alignment.Center
                                 ) {
                                     Icon(
                                         feature.icon,
-                                        contentDescription = feature.label,
-                                        tint = accent,
+                                        contentDescription = if (isWideLayoutTile) {
+                                            if (desktopLayoutEnabled) "Wide layout on" else "Wide layout off"
+                                        } else feature.label,
+                                        tint = if (isWideLayoutTile) theme.primary else accent,
                                         modifier = Modifier.size(24.dp)
                                     )
+                                    if (isWideLayoutTile && desktopLayoutEnabled) {
+                                        Box(
+                                            Modifier
+                                                .align(Alignment.TopEnd)
+                                                .padding(4.dp)
+                                                .size(6.dp)
+                                                .background(theme.primary, CircleShape)
+                                        )
+                                    }
                                 }
                                 Spacer(modifier = Modifier.height(4.dp))
                                 Text(

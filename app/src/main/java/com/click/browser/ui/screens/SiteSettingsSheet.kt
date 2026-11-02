@@ -250,12 +250,12 @@ fun SiteSettingsSheet(
                     onApplyToWebView(next)
                 }
             )
-            // Desktop site — plain toggle (existing desktop-hosts path).
+            // Per-site wide-layout override; the WebView identity is unchanged.
             SettingToggleRow(
                 theme = theme,
                 icon = Icons.Default.Speed,
-                title = "Desktop site",
-                subtitle = "Always load the desktop version",
+                title = "Wide layout",
+                subtitle = "Use a wide viewport where supported; some sites may still show mobile content.",
                 checked = desktopMode,
                 onChange = { onDesktopModeChange(it) }
             )
