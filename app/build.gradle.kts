@@ -131,6 +131,14 @@ android {
     }
 }
 
+androidComponents {
+    onVariants { variant ->
+        // `useLegacyPackaging` above affects directly assembled APKs only.
+        // Also compress .so files in APKs generated from the App Bundle for Play delivery.
+        variant.packaging.jniLibs.useLegacyPackagingFromBundle.set(true)
+    }
+}
+
 kotlin {
     compilerOptions {
         jvmTarget = JvmTarget.fromTarget("17")
