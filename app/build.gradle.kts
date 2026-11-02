@@ -119,6 +119,12 @@ android {
         buildConfig = true
     }
     packaging {
+        // The release APK currently stores every native library uncompressed.
+        // Compress the distributed artifact; Android extracts .so files on install,
+        // so this reduces APK/download size but can increase installed storage.
+        jniLibs {
+            useLegacyPackaging = true
+        }
         resources {
             excludes += "/META-INF/{AL2.0,LGPL2.1}"
         }
