@@ -3897,8 +3897,8 @@ class MainActivity : FragmentActivity() {
                                 )
                             }
 
-                            // SURFACE 2 — Browsing bottom nav: ☰ Menu(drawer) · ‹ Back ·
-                            // › Forward · ⌂ Home · ▭ Tabs (count badge) · ⋮ More.
+                            // SURFACE 2 — Browsing bottom nav: Menu · Home · Tabs · More.
+                            // Back/forward stay in the address bar to avoid duplicate controls.
                             // (No center AI tab here — AI lives in the floating pill.)
                             // Polish: one-shot theme crossfade (battery-safe).
                             // Bottom-address-bar option: bar renders below the page,
@@ -3918,11 +3918,7 @@ class MainActivity : FragmentActivity() {
                                         theme = themed,
                                         activeMode = activeMode,
                                         tabCount = tabs.size,
-                                        canGoBack = currentTab.webView?.canGoBack() == true,
-                                        canGoForward = currentTab.webView?.canGoForward() == true,
                                         onDrawerClick = { scope.launch { drawerState.open() } },
-                                        onBack = { currentTab.webView?.goBack() },
-                                        onForward = { currentTab.webView?.goForward() },
                                         onHome = { currentTab.url = "about:blank" },
                                         onTabs = { showTabsManager = true },
                                         onMenu = { showBrowserMenu = true }

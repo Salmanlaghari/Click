@@ -43,8 +43,6 @@ import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material.icons.automirrored.filled.ArrowForward
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.LocationOff
 import androidx.compose.material.icons.filled.LocationOn
@@ -1673,8 +1671,8 @@ private fun AiPopupItem(
 }
 
 /**
- * Bottom nav for the browsing surface. Simple uses ⌂ Home plus the approved
- * Previous/Next pill; other modes retain the full drawer, navigation, tab, and menu footer.
+ * Bottom nav for the browsing surface. Back/forward stay in the address bar;
+ * this footer contains only the home, tabs, drawer, and menu actions.
  * Per the "Same Website. 3 Beautiful Modes." reference image — compact icons +
  * labels, mode-aware colors. (No center AI tab here — AI lives in the floating pill.)
  *
@@ -1687,11 +1685,7 @@ fun BrowseBottomNav(
     theme: ModeTheme,
     activeMode: BrowserMode,
     tabCount: Int,
-    canGoBack: Boolean,
-    canGoForward: Boolean,
     onDrawerClick: () -> Unit,
-    onBack: () -> Unit,
-    onForward: () -> Unit,
     onHome: () -> Unit,
     onTabs: () -> Unit,
     onMenu: () -> Unit,
@@ -1729,11 +1723,7 @@ fun BrowseBottomNav(
                     horizontal = if (activeMode == BrowserMode.SIMPLE) 12.dp else 2.dp,
                     vertical = if (activeMode == BrowserMode.SIMPLE) 6.dp else 3.dp
                 ),
-            horizontalArrangement = if (activeMode == BrowserMode.SIMPLE) {
-                Arrangement.spacedBy(10.dp)
-            } else {
-                Arrangement.SpaceEvenly
-            },
+            horizontalArrangement = Arrangement.SpaceEvenly,
             verticalAlignment = Alignment.CenterVertically
         ) {
             if (activeMode == BrowserMode.SIMPLE) {
@@ -1744,85 +1734,11 @@ fun BrowseBottomNav(
                     theme = theme,
                     onClick = onHome
                 )
-                Surface(
-                    shape = RoundedCornerShape(24.dp),
-                    color = theme.surfaceVariant.copy(alpha = 0.72f),
-                    border = androidx.compose.foundation.BorderStroke(
-                        1.dp, theme.primary.copy(alpha = 0.22f)
-                    ),
-                    modifier = Modifier.weight(1f)
-                ) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        val backTint = if (canGoBack) theme.onSurface else theme.onSurface.copy(alpha = 0.35f)
-                        val forwardTint = if (canGoForward) theme.onSurface else theme.onSurface.copy(alpha = 0.35f)
-                        Row(
-                            modifier = Modifier
-                                .weight(1f)
-                                .clickable(enabled = canGoBack, onClick = onBack)
-                                .padding(horizontal = 5.dp, vertical = 10.dp),
-                            horizontalArrangement = Arrangement.Center,
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Previous", tint = backTint, modifier = Modifier.size(16.dp))
-                            Spacer(Modifier.width(3.dp))
-                            Text("Previous", color = backTint, fontSize = 10.sp, maxLines = 1)
-                        }
-                        Box(Modifier.width(1.dp).height(20.dp).background(theme.onSurface.copy(alpha = 0.16f)))
-                        Row(
-                            modifier = Modifier
-                                .weight(1f)
-                                .clickable(enabled = canGoForward, onClick = onForward)
-                                .padding(horizontal = 5.dp, vertical = 10.dp),
-                            horizontalArrangement = Arrangement.Center,
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Text("Next", color = forwardTint, fontSize = 10.sp, maxLines = 1)
-                            Spacer(Modifier.width(3.dp))
-                            Icon(Icons.AutoMirrored.Filled.ArrowForward, contentDescription = "Next", tint = forwardTint, modifier = Modifier.size(16.dp))
-                        }
-                    }
-                }
             } else {
                 BrowseNavButton(
                     icon = Icons.Default.Menu, label = "Menu",
                     enabled = true, theme = theme, onClick = onDrawerClick
                 )
-                Surface(
-                    shape = RoundedCornerShape(24.dp),
-                    color = theme.surfaceVariant.copy(alpha = 0.72f),
-                    border = androidx.compose.foundation.BorderStroke(1.dp, theme.primary.copy(alpha = 0.22f)),
-                    modifier = Modifier.weight(1.55f).padding(horizontal = 4.dp)
-                ) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        val backTint = if (canGoBack) theme.onSurface else theme.onSurface.copy(alpha = 0.35f)
-                        val forwardTint = if (canGoForward) theme.onSurface else theme.onSurface.copy(alpha = 0.35f)
-                        Row(
-                            modifier = Modifier
-                                .weight(1f)
-                                .clickable(enabled = canGoBack, onClick = onBack)
-                                .padding(horizontal = 5.dp, vertical = 10.dp),
-                            horizontalArrangement = Arrangement.Center,
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Previous", tint = backTint, modifier = Modifier.size(16.dp))
-                            Spacer(Modifier.width(3.dp))
-                            Text("Previous", color = backTint, fontSize = 10.sp, maxLines = 1)
-                        }
-                        Box(Modifier.width(1.dp).height(20.dp).background(theme.onSurface.copy(alpha = 0.16f)))
-                        Row(
-                            modifier = Modifier
-                                .weight(1f)
-                                .clickable(enabled = canGoForward, onClick = onForward)
-                                .padding(horizontal = 5.dp, vertical = 10.dp),
-                            horizontalArrangement = Arrangement.Center,
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Text("Next", color = forwardTint, fontSize = 10.sp, maxLines = 1)
-                            Spacer(Modifier.width(3.dp))
-                            Icon(Icons.AutoMirrored.Filled.ArrowForward, contentDescription = "Next", tint = forwardTint, modifier = Modifier.size(16.dp))
-                        }
-                    }
-                }
                 BrowseNavButton(
                     icon = Icons.Default.Home, label = "Home",
                     enabled = true, theme = theme, onClick = onHome,
