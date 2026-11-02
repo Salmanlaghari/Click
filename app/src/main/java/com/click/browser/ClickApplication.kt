@@ -23,6 +23,10 @@ class ClickApplication : Application() {
     override fun onCreate() {
         V9Engine.applyDataDirectorySuffix(this)
         super.onCreate()
+        if (V9Engine.isBootBlocked) {
+            Log.e("ClickApplication", "Skipping browsing startup tasks because the selected profile could not be initialized safely")
+            return
+        }
         // Run policy-remediation cleanup before any Activity can observe legacy
         // state, but skip coroutine startup after its versioned marker is written.
         if (!com.click.browser.engine.LegacyPolicyFeatureCleanup.isComplete(this)) {

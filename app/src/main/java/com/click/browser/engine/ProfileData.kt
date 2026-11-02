@@ -30,8 +30,12 @@ val Context.advancedDataStore: DataStore<Preferences> by preferencesDataStore(
 )
 
 /** DataStore holding [mode]'s private app data. ADVANCED never falls back to the shared store. */
-fun Context.profileDataStoreFor(mode: BrowserMode): DataStore<Preferences> =
-    if (mode == BrowserMode.ADVANCED) advancedDataStore else dataStore
+fun Context.profileDataStoreFor(mode: BrowserMode): DataStore<Preferences> {
+    check(!V9Engine.isBootBlocked) {
+        "Browser profile initialization failed; browsing data is unavailable to prevent cross-profile access"
+    }
+    return if (mode == BrowserMode.ADVANCED) advancedDataStore else dataStore
+}
 
 /** DataStore holding the current engine's private app data.
  *

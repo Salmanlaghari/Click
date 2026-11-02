@@ -455,6 +455,10 @@ class MainActivity : FragmentActivity() {
     }
 
     override fun onDestroy() {
+        if (V9Engine.isBootBlocked) {
+            super.onDestroy()
+            return
+        }
         try { ttsEngine?.shutdown() } catch (_: Exception) { }
         // Experimental flags: clear data / history on exit.
         if (liveFlags.clearOnExit) {
@@ -931,6 +935,99 @@ class MainActivity : FragmentActivity() {
         // API 35+ enforces edge-to-edge for targetSdk 35+ — opt in and handle
         // WindowInsets in Compose so no chrome is hidden behind system bars.
         enableEdgeToEdge()
+
+        if (V9Engine.isBootBlocked) {
+            val recoveryModeManager = ModeManager(this)
+            setContent {
+                val scope = rememberCoroutineScope()
+                var simpleModeSaved by rememberSaveable { mutableStateOf(false) }
+                var isSaving by remember { mutableStateOf(false) }
+                var recoveryMessage by remember { mutableStateOf<String?>(null) }
+
+                MaterialTheme {
+                    Surface(
+                        modifier = Modifier.fillMaxSize(),
+                        color = MaterialTheme.colorScheme.background
+                    ) {
+                        Column(
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .windowInsetsPadding(WindowInsets.safeDrawing)
+                                .verticalScroll(rememberScrollState())
+                                .padding(24.dp),
+                            verticalArrangement = Arrangement.Center,
+                            horizontalAlignment = Alignment.CenterHorizontally
+                        ) {
+                            Text(
+                                text = "Browser startup paused",
+                                style = MaterialTheme.typography.headlineSmall,
+                                fontWeight = FontWeight.Bold
+                            )
+                            Spacer(Modifier.height(16.dp))
+                            Text(
+                                text = "Click couldn't initialize the selected browser profile. Browsing is paused to avoid opening data from a different mode.",
+                                style = MaterialTheme.typography.bodyLarge,
+                                textAlign = TextAlign.Center
+                            )
+                            Spacer(Modifier.height(12.dp))
+                            Text(
+                                text = if (simpleModeSaved) {
+                                    "Simple mode is saved. Close and reopen Click to continue in a fresh process."
+                                } else {
+                                    "You can choose Simple mode below. Click will save that choice, then you can reopen the app."
+                                },
+                                style = MaterialTheme.typography.bodyMedium,
+                                textAlign = TextAlign.Center
+                            )
+                            recoveryMessage?.let { message ->
+                                Spacer(Modifier.height(12.dp))
+                                Text(
+                                    text = message,
+                                    color = MaterialTheme.colorScheme.error,
+                                    textAlign = TextAlign.Center
+                                )
+                            }
+                            Spacer(Modifier.height(24.dp))
+                            Button(
+                                enabled = !isSaving,
+                                onClick = {
+                                    if (simpleModeSaved) {
+                                        finishAffinity()
+                                    } else {
+                                        isSaving = true
+                                        recoveryMessage = null
+                                        scope.launch {
+                                            try {
+                                                recoveryModeManager.setMode(BrowserMode.SIMPLE)
+                                                simpleModeSaved = true
+                                            } catch (_: Exception) {
+                                                recoveryMessage = "Click couldn't save Simple mode. Please try again."
+                                            } finally {
+                                                isSaving = false
+                                            }
+                                        }
+                                    }
+                                }
+                            ) {
+                                Text(
+                                    when {
+                                        isSaving -> "Saving Simple mode…"
+                                        simpleModeSaved -> "Close Click"
+                                        else -> "Switch to Simple mode"
+                                    }
+                                )
+                            }
+                            if (!simpleModeSaved) {
+                                TextButton(onClick = { finishAffinity() }) {
+                                    Text("Exit")
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            return
+        }
 
         // News notification deep link (cold start): consume the article URL
         // once so the composable below opens it in a new tab. Skipped on
