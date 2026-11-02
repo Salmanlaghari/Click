@@ -51,6 +51,7 @@ import androidx.compose.material.icons.filled.LocationOn
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Extension
 import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.Bookmark
 import androidx.compose.material.icons.filled.Description
@@ -1300,6 +1301,8 @@ fun CompactBrowseBar(
     onDrawerClick: () -> Unit,
     tabCount: Int,
     onTabsClick: () -> Unit,
+    showExtensionsButton: Boolean = false,
+    onExtensionsClick: () -> Unit = {},
     modifier: Modifier = Modifier,
     // Location indicator: null = no indicator; otherwise the effective mode.
     locationMode: LocationGuard.LocationMode? = null,
@@ -1433,6 +1436,22 @@ fun CompactBrowseBar(
                             )
                         }
                     }
+                }
+            }
+            if (showExtensionsButton) {
+                IconButton(
+                    onClick = onExtensionsClick,
+                    modifier = Modifier
+                        .size(40.dp)
+                        .clip(CircleShape)
+                        .background(theme.primary.copy(alpha = 0.12f))
+                ) {
+                    Icon(
+                        Icons.Default.Extension,
+                        contentDescription = "Manage installed extensions in the separate browser",
+                        tint = theme.primary,
+                        modifier = Modifier.size(21.dp)
+                    )
                 }
             }
             Spacer(modifier = Modifier.width(4.dp))
