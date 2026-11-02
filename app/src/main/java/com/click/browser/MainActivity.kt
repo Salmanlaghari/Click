@@ -254,17 +254,14 @@ class MainActivity : FragmentActivity() {
     // Text scaling live copies for WebViewClient callbacks (per-host map).
     private var liveGlobalTextScale = com.click.browser.engine.TextScaleStore.DEFAULT
     private var liveHostTextScales: Map<String, Int> = emptyMap()
-    // DevTools console/network state — Activity-level (NOT compose remember).
-    // The WebView factory's onConsoleMessage and the JS-bridge callbacks must
-    // NEVER diverge onto a different list object after recomposition; keeping
-    // them here guarantees a single source of truth for the DevToolsPanel.
-    // All mutations go through the helpers below, which marshal to the main
-    // thread (JavascriptInterface callbacks run on WebView's bridge thread,
-    // and SnapshotStateList must be touched on the UI thread).
+    // DevTools captures only while its Developer-mode panel is open. The
+    // target WebView is volatile because shouldInterceptRequest runs off UI.
     private val devToolsLogs = androidx.compose.runtime.mutableStateListOf<com.click.browser.engine.LogEntry>()
     private val devToolsNetwork = androidx.compose.runtime.mutableStateListOf<com.click.browser.engine.NetworkRequest>()
     private val devToolsDomHtml = androidx.compose.runtime.mutableStateOf("")
     private val devToolsSources = androidx.compose.runtime.mutableStateListOf<String>()
+    @Volatile private var devToolsCaptureEnabled: Boolean = false
+    @Volatile private var devToolsTargetWebView: WebView? = null
 
     /** Thread-safe DevTools log append (caps at 500 entries, drops oldest). */
     private fun addDevToolsLog(entry: com.click.browser.engine.LogEntry) {
@@ -279,12 +276,84 @@ class MainActivity : FragmentActivity() {
         }
     }
 
-    /** Thread-safe DevTools network-request append. */
-    private fun addDevToolsNetwork(entry: com.click.browser.engine.NetworkRequest) {
-        if (android.os.Looper.myLooper() == android.os.Looper.getMainLooper()) {
-            devToolsNetwork.add(entry)
-        } else {
-            runOnUiThread { devToolsNetwork.add(entry) }
+    /** Apply a pure network-log update on the UI thread; the model enforces its cap. */
+    private fun updateDevToolsNetwork(
+        update: (List<com.click.browser.engine.NetworkRequest>) -> List<com.click.browser.engine.NetworkRequest>
+    ) {
+        val apply = {
+            val updated = update(devToolsNetwork.toList())
+            devToolsNetwork.clear()
+            devToolsNetwork.addAll(updated)
+        }
+        if (android.os.Looper.myLooper() == android.os.Looper.getMainLooper()) apply()
+        else runOnUiThread { apply() }
+    }
+
+    private fun recordDevToolsRequest(
+        view: WebView?,
+        request: WebResourceRequest?,
+        blockedByClick: Boolean = false
+    ) {
+        if (!devToolsCaptureEnabled || view == null || view !== devToolsTargetWebView || request == null) return
+        val url = request.url.toString()
+        val scheme = request.url.scheme?.lowercase()
+        if (scheme != "http" && scheme != "https") return
+        val method = request.method.orEmpty().ifBlank { "GET" }
+        val isMainFrame = request.isForMainFrame
+        val webViewKey = System.identityHashCode(view)
+        updateDevToolsNetwork { entries ->
+            if (blockedByClick) {
+                com.click.browser.engine.DevToolsNetworkLog.blocked(
+                    entries, method, url, isMainFrame, webViewKey
+                )
+            } else {
+                com.click.browser.engine.DevToolsNetworkLog.observed(
+                    entries, method, url, isMainFrame, webViewKey
+                )
+            }
+        }
+    }
+
+    private fun recordDevToolsHttpError(
+        view: WebView?,
+        request: WebResourceRequest?,
+        response: WebResourceResponse?
+    ) {
+        if (!devToolsCaptureEnabled || view == null || view !== devToolsTargetWebView || request == null || response == null) return
+        val url = request.url.toString()
+        val scheme = request.url.scheme?.lowercase()
+        if (scheme != "http" && scheme != "https") return
+        val method = request.method.orEmpty().ifBlank { "GET" }
+        val isMainFrame = request.isForMainFrame
+        val webViewKey = System.identityHashCode(view)
+        updateDevToolsNetwork { entries ->
+            com.click.browser.engine.DevToolsNetworkLog.httpError(
+                entries, method, url, isMainFrame, webViewKey,
+                response.statusCode, response.reasonPhrase
+            )
+        }
+    }
+
+    private fun recordDevToolsLoadError(
+        view: WebView?,
+        request: WebResourceRequest?,
+        error: WebResourceError?
+    ) {
+        if (!devToolsCaptureEnabled || view == null || view !== devToolsTargetWebView || request == null) return
+        val url = request.url.toString()
+        val scheme = request.url.scheme?.lowercase()
+        if (scheme != "http" && scheme != "https") return
+        val method = request.method.orEmpty().ifBlank { "GET" }
+        val isMainFrame = request.isForMainFrame
+        val webViewKey = System.identityHashCode(view)
+        val description = listOfNotNull(
+            error?.errorCode?.let { "WebView error $it" },
+            error?.description?.toString()?.takeIf { it.isNotBlank() }
+        ).joinToString(": ").ifBlank { "WebView load error" }
+        updateDevToolsNetwork { entries ->
+            com.click.browser.engine.DevToolsNetworkLog.loadError(
+                entries, method, url, isMainFrame, webViewKey, description
+            )
         }
     }
     // Crash-restore: latest restorable-tab snapshot for this boot mode, kept
@@ -1441,7 +1510,6 @@ class MainActivity : FragmentActivity() {
 
 
             // Dev tools states
-            var elementInspectorEnabled by remember { mutableStateOf(false) }
             var deviceEmulatorMode by remember { mutableStateOf("Mobile") } // Mobile, Tablet, Desktop
             var pageLoadTime by remember { mutableStateOf(0L) }
             var lastPageStart by remember { mutableStateOf(0L) }
@@ -1470,6 +1538,21 @@ class MainActivity : FragmentActivity() {
             var showDevToolsSheet by remember { mutableStateOf(false) }
             // Live viewport/device facts for the DevTools Device tab.
             var devToolsDeviceInfo by remember { mutableStateOf<DeviceInfo?>(null) }
+
+            LaunchedEffect(showDevToolsSheet, activeMode, activeTabIndex) {
+                val capture = showDevToolsSheet && activeMode == BrowserMode.DEVELOPER
+                if (capture) {
+                    if (devToolsTargetWebView !== currentTab.webView) {
+                        devToolsLogs.clear()
+                        devToolsNetwork.clear()
+                    }
+                    devToolsTargetWebView = currentTab.webView
+                    devToolsCaptureEnabled = true
+                } else {
+                    devToolsCaptureEnabled = false
+                    devToolsTargetWebView = null
+                }
+            }
 
             // Full-view / immersive browsing: MANUAL fullscreen toggle only.
             // (Prince: no auto-hide on scroll — user control via the drawer toggle.)
@@ -1936,6 +2019,40 @@ class MainActivity : FragmentActivity() {
                 }
             }
 
+            /** Reads a bounded, read-only page snapshot only when the user opens/refreshes DevTools. */
+            fun refreshDevToolsPageSnapshot() {
+                val wv = currentTab.webView
+                val pageUrl = wv?.url.orEmpty()
+                if (wv == null || pageUrl.isBlank() || pageUrl == "about:blank") {
+                    devToolsDomHtml.value = ""
+                    devToolsSources.clear()
+                    return
+                }
+                wv.evaluateJavascript(
+                    "(function(){try{return document.documentElement ? document.documentElement.outerHTML.slice(0,100000) : ''; }catch(e){return '';}})()"
+                ) { result ->
+                    val html = try {
+                        if (result.isNullOrBlank() || result == "null") ""
+                        else org.json.JSONArray("[$result]").optString(0, "")
+                    } catch (_: Exception) { "" }
+                    if (currentTab.webView === wv && wv.url == pageUrl) {
+                        devToolsDomHtml.value = html
+                    }
+                }
+                wv.evaluateJavascript(
+                    "(function(){try{return Array.from(document.querySelectorAll('script[src],link[rel=\\\"stylesheet\\\"],img[src]')).slice(0,500).map(function(el){return el.src||el.href||'';}).filter(Boolean);}catch(e){return [];}})()"
+                ) { result ->
+                    val sources = try {
+                        val array = org.json.JSONArray(result ?: "[]")
+                        (0 until array.length()).map { array.optString(it) }.filter { it.isNotBlank() }
+                    } catch (_: Exception) { emptyList() }
+                    if (currentTab.webView === wv && wv.url == pageUrl) {
+                        devToolsSources.clear()
+                        devToolsSources.addAll(sources)
+                    }
+                }
+            }
+
             // Opens the real DevTools bottom sheet on the requested tab (0=Elements,
             // 1=Console, 2=Network, 3=Sources, 4=Device), switching to Developer
             // mode if needed. Declared after drawerState so the drawer can be
@@ -1953,6 +2070,9 @@ class MainActivity : FragmentActivity() {
                         if (!restarting) currentTab.webView?.reload()
                     }
                     devToolsTab = tab
+                    if (activeMode == BrowserMode.DEVELOPER && (tab == 0 || tab == 3)) {
+                        refreshDevToolsPageSnapshot()
+                    }
                     // Refresh device facts when the Device tab is requested.
                     if (tab == 4) refreshDevToolsDeviceInfo()
                     showDevToolsSheet = true
@@ -2481,27 +2601,7 @@ class MainActivity : FragmentActivity() {
                                     }
                                 }
                                 item {
-                                    DrawerItem(label = "Inspect HTML Elements", icon = Icons.Default.ManageSearch, color = Color(0xFFF472B6)) {
-                                        scope.launch {
-                                            drawerState.close()
-                                            elementInspectorEnabled = !elementInspectorEnabled
-                                            val wv = currentTab.webView
-                                            if (elementInspectorEnabled) {
-                                                wv?.evaluateJavascript(
-                                                    DevToolsInjections.ELEMENT_INSPECTOR_ENABLE, null
-                                                )
-                                                Toast.makeText(this@MainActivity, "Page Inspector: Click elements to view tag details", Toast.LENGTH_SHORT).show()
-                                            } else {
-                                                wv?.evaluateJavascript(
-                                                    DevToolsInjections.ELEMENT_INSPECTOR_DISABLE, null
-                                                )
-                                                Toast.makeText(this@MainActivity, "Page Inspector OFF", Toast.LENGTH_SHORT).show()
-                                            }
-                                        }
-                                    }
-                                }
-                                item {
-                                    DrawerItem(label = "Active DOM Explorer", icon = Icons.Default.AccountTree, color = Color(0xFF34D399)) {
+                                    DrawerItem(label = "Read-only DOM Snapshot", icon = Icons.Default.ManageSearch, color = Color(0xFFF472B6)) {
                                         openDevToolsTab(0)
                                     }
                                 }
@@ -2993,6 +3093,7 @@ class MainActivity : FragmentActivity() {
                                                                     pageTransitionTick++
                                                                     networkRequests.clear()
                                                                     sourcesList.clear()
+                                                                    devToolsDomHtml.value = ""
                                                                 }
                                                             }
 
@@ -3122,28 +3223,17 @@ class MainActivity : FragmentActivity() {
                                                                     }
                                                                 }
 
-                                                                // JS tools injections based on the CURRENT browser mode
-                                                                // (liveMode is used — the factory-time capture would go stale
-                                                                // after a mode switch)
-                                                                if (liveMode == BrowserMode.DEVELOPER) {
-                                                                    view?.evaluateJavascript(DevToolsInjections.CONSOLE_HIJACK, null)
-                                                                    view?.evaluateJavascript(DevToolsInjections.NETWORK_INTERCEPT, null)
-                                                                    view?.evaluateJavascript(DevToolsInjections.GET_DOM, null)
-                                                                    view?.evaluateJavascript(DevToolsInjections.GET_SOURCES, null)
-                                                                }
-
-
                                                             }
 
                                                             override fun shouldInterceptRequest(view: WebView?, request: WebResourceRequest?): WebResourceResponse? {
-                                                                // Ad Blocker check with per-site override: a site
-                                                                // setting of adBlock=false whitelists the page host.
-                                                                val pageHost = try {
-                                                                    android.net.Uri.parse(view?.url ?: "").host
-                                                                } catch (_: Exception) { null }
-                                                                if (this@MainActivity.isAdBlockEnabledForHost(pageHost) &&
-                                                                    AdBlocker.shouldBlock(request?.url?.toString())
-                                                                ) {
+                                                                // Passive DevTools observation only; normal requests still
+                                                                // continue through WebView unless Click's existing ad filter blocks them.
+                                                                val shouldBlock = request != null &&
+                                                                    this@MainActivity.isAdBlockEnabledForHost(
+                                                                        try { android.net.Uri.parse(view?.url ?: "").host } catch (_: Exception) { null }
+                                                                    ) && AdBlocker.shouldBlock(request.url.toString())
+                                                                recordDevToolsRequest(view, request, blockedByClick = shouldBlock)
+                                                                if (shouldBlock) {
                                                                     return WebResourceResponse("text/plain", "UTF-8", null)
                                                                 }
                                                                 return super.shouldInterceptRequest(view, request)
@@ -3155,6 +3245,7 @@ class MainActivity : FragmentActivity() {
                                                                 error: WebResourceError?
                                                             ) {
                                                                 super.onReceivedError(view, request, error)
+                                                                recordDevToolsLoadError(view, request, error)
                                                                 if (request?.isForMainFrame != true) return
                                                                 val failedTab = view?.let { target -> tabs.firstOrNull { it.webView === target } } ?: return
                                                                 failedTab.isPageLoading = false
@@ -3164,18 +3255,25 @@ class MainActivity : FragmentActivity() {
                                                                 this@MainActivity.showBrowserErrorPage(view, error?.description?.toString(), retryUrl)
                                                             }
 
+                                                            override fun onReceivedHttpError(
+                                                                view: WebView?,
+                                                                request: WebResourceRequest?,
+                                                                errorResponse: WebResourceResponse?
+                                                            ) {
+                                                                super.onReceivedHttpError(view, request, errorResponse)
+                                                                recordDevToolsHttpError(view, request, errorResponse)
+                                                            }
+
                                                         }
 
+                                                        val devToolsOwnerWebView = this
                                                         webChromeClient = object : WebChromeClient() {
 
-                                                            // DevTools Console: capture ALL page console messages
-                                                            // natively (console.log/warn/error/info + uncaught
-                                                            // exceptions). This is the reliable path — the JS
-                                                            // console-hijack injection can miss early/late logs
-                                                            // and cross-frame messages; onConsoleMessage sees
-                                                            // everything at the WebView level.
+                                                            // Read page console output from the native WebView callback only.
+                                                            // No page-side console patch or DevTools JavaScript bridge is used.
                                                             override fun onConsoleMessage(consoleMessage: ConsoleMessage?): Boolean {
                                                                 val msg = consoleMessage ?: return true
+                                                                if (!devToolsCaptureEnabled || devToolsTargetWebView !== devToolsOwnerWebView) return false
                                                                 val type = when (msg.messageLevel()) {
                                                                     ConsoleMessage.MessageLevel.ERROR -> "error"
                                                                     ConsoleMessage.MessageLevel.WARNING -> "warning"
@@ -3288,24 +3386,8 @@ class MainActivity : FragmentActivity() {
                                                             }
                                                         }
 
-                                                        // Setup Bridges (callbacks may run on WebView's
-                                                        // bridge thread — the helpers marshal to main).
-                                                        addJavascriptInterface(
-                                                            DevToolsBridge(
-                                                                onLogAdded = { addDevToolsLog(it) },
-                                                                onNetworkAdded = { addDevToolsNetwork(it) },
-                                                                onDomUpdated = { runOnUiThread { devToolsDomHtml.value = it } },
-                                                                onSourcesUpdated = { list ->
-                                                                    runOnUiThread {
-                                                                        devToolsSources.clear()
-                                                                        devToolsSources.addAll(list)
-                                                                    }
-                                                                }
-                                                            ),
-                                                            "DevToolsBridge"
-                                                        )
-
-                                                        // Receives the result of the real WebRTC leak test.
+                                                        // The DevTools panel does not expose a JavaScript bridge to page content.
+                                                        // This separate legacy bridge is limited to the built-in WebRTC check.
                                                         addJavascriptInterface(
                                                             WebRtcTestBridge(
                                                                 onResult = { ips ->
@@ -3541,10 +3623,14 @@ class MainActivity : FragmentActivity() {
                                             // DevTools panel toggle — top-right corner.
                                             IconButton(
                                                 onClick = {
-                                                    if (!showDevToolsSheet && devToolsTab == 4) {
-                                                        refreshDevToolsDeviceInfo()
+                                                    val opening = !showDevToolsSheet
+                                                    if (opening) {
+                                                        when (devToolsTab) {
+                                                            0, 3 -> refreshDevToolsPageSnapshot()
+                                                            4 -> refreshDevToolsDeviceInfo()
+                                                        }
                                                     }
-                                                    showDevToolsSheet = !showDevToolsSheet
+                                                    showDevToolsSheet = opening
                                                 },
                                                 modifier = Modifier
                                                     .size(44.dp)
@@ -3818,29 +3904,12 @@ class MainActivity : FragmentActivity() {
                                         selectedTab = devToolsTab,
                                         onTabSelected = {
                                             devToolsTab = it
+                                            if (it == 0 || it == 3) refreshDevToolsPageSnapshot()
                                             if (it == 4) refreshDevToolsDeviceInfo()
                                         },
                                         onClearLogs = { logs.clear() },
                                         onClearNetwork = { networkRequests.clear() },
-                                        inspectorEnabled = elementInspectorEnabled,
-                                        onToggleInspector = {
-                                            elementInspectorEnabled = !elementInspectorEnabled
-                                            val wv = currentTab.webView
-                                            if (elementInspectorEnabled) {
-                                                wv?.evaluateJavascript(
-                                                    DevToolsInjections.ELEMENT_INSPECTOR_ENABLE, null
-                                                )
-                                                Toast.makeText(
-                                                    this@MainActivity,
-                                                    "Inspector ON — tap any page element.",
-                                                    Toast.LENGTH_SHORT
-                                                ).show()
-                                            } else {
-                                                wv?.evaluateJavascript(
-                                                    DevToolsInjections.ELEMENT_INSPECTOR_DISABLE, null
-                                                )
-                                            }
-                                        },
+                                        onRefreshPageSnapshot = { refreshDevToolsPageSnapshot() },
                                         deviceInfo = devToolsDeviceInfo,
                                         onRefreshDeviceInfo = { refreshDevToolsDeviceInfo() }
                                     )

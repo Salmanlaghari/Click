@@ -18,6 +18,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.click.browser.engine.LogEntry
 import com.click.browser.engine.NetworkRequest
+import com.click.browser.engine.NetworkRequestOutcome
 
 /**
  * Viewport / device facts gathered from the live page via JS.
@@ -45,8 +46,7 @@ fun DevToolsPanel(
     onTabSelected: (Int) -> Unit,
     onClearLogs: () -> Unit,
     onClearNetwork: () -> Unit,
-    inspectorEnabled: Boolean,
-    onToggleInspector: () -> Unit,
+    onRefreshPageSnapshot: () -> Unit,
     deviceInfo: DeviceInfo?,
     onRefreshDeviceInfo: () -> Unit
 ) {
@@ -76,10 +76,10 @@ fun DevToolsPanel(
                 .padding(8.dp)
         ) {
             when (selectedTab) {
-                0 -> ElementsTab(domHtml, inspectorEnabled, onToggleInspector)
+                0 -> ElementsTab(domHtml, onRefreshPageSnapshot)
                 1 -> ConsoleTab(logs, onClearLogs)
                 2 -> NetworkTab(networkRequests, onClearNetwork)
-                3 -> SourcesTab(sourcesList)
+                3 -> SourcesTab(sourcesList, onRefreshPageSnapshot)
                 4 -> DeviceTab(deviceInfo, onRefreshDeviceInfo)
             }
         }
@@ -87,11 +87,7 @@ fun DevToolsPanel(
 }
 
 @Composable
-fun ElementsTab(
-    domHtml: String,
-    inspectorEnabled: Boolean,
-    onToggleInspector: () -> Unit
-) {
+fun ElementsTab(domHtml: String, onRefresh: () -> Unit) {
     var displayModeHtml by remember { mutableStateOf(true) }
 
     Column(modifier = Modifier.fillMaxSize()) {
@@ -100,30 +96,25 @@ fun ElementsTab(
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically
         ) {
-            Text("DOM Tree / Selected Element HTML", color = Color.Gray, fontSize = 12.sp)
+            Text("DOM snapshot · read-only", color = Color.Gray, fontSize = 12.sp)
             Row(verticalAlignment = Alignment.CenterVertically) {
-                // Real element inspector toggle — tap page elements to inspect them.
-                Button(
-                    onClick = onToggleInspector,
-                    colors = ButtonDefaults.buttonColors(
-                        containerColor = if (inspectorEnabled) Color(0xFF7B1FA2) else Color.DarkGray
-                    ),
-                    contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp)
-                ) {
-                    Text(
-                        if (inspectorEnabled) "Inspect: ON" else "Inspect: OFF",
-                        color = Color.White, fontSize = 10.sp
-                    )
+                TextButton(onClick = onRefresh) {
+                    Text("Refresh", color = Color(0xFF80CBC4), fontSize = 11.sp)
                 }
-                Spacer(modifier = Modifier.width(6.dp))
                 Button(
                     onClick = { displayModeHtml = !displayModeHtml },
                     colors = ButtonDefaults.filledTonalButtonColors(containerColor = Color.DarkGray)
                 ) {
-                    Text(if (displayModeHtml) "Formatted View" else "HTML Code", color = Color.White, fontSize = 10.sp)
+                    Text(if (displayModeHtml) "Tag list" else "HTML", color = Color.White, fontSize = 10.sp)
                 }
             }
         }
+        Text(
+            "Page snapshot only (first 100 KB); no live editing or element-click inspection.",
+            color = Color.LightGray,
+            fontSize = 10.sp,
+            modifier = Modifier.padding(bottom = 5.dp)
+        )
 
         Box(
             modifier = Modifier
@@ -133,7 +124,7 @@ fun ElementsTab(
         ) {
             if (displayModeHtml) {
                 Text(
-                    text = domHtml.ifEmpty { "No DOM element inspected/loaded yet." },
+                    text = domHtml.ifEmpty { "Tap Refresh to read the current page snapshot." },
                     color = Color(0xFF80CBC4),
                     fontFamily = FontFamily.Monospace,
                     fontSize = 11.sp
@@ -149,7 +140,7 @@ fun ElementsTab(
                     list
                 }
                 if (tags.isEmpty()) {
-                    Text("No tags parsed.", color = Color.White)
+                        Text("No tags in this snapshot.", color = Color.White)
                 } else {
                     Column {
                         tags.forEach { tag ->
@@ -173,11 +164,12 @@ fun ConsoleTab(
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically
         ) {
-            Text("Page Console (read-only)", color = Color.Gray, fontSize = 12.sp)
+            Text("WebView console · read-only", color = Color.Gray, fontSize = 12.sp)
             TextButton(onClick = onClearLogs) {
                 Text("Clear", color = Color.Red, fontSize = 12.sp)
             }
         }
+        Text("Native WebView messages only; no command prompt or page-script execution.", color = Color.LightGray, fontSize = 10.sp)
 
         // Logs Display list
         Box(
@@ -234,20 +226,37 @@ fun NetworkTab(requests: List<NetworkRequest>, onClearNetwork: () -> Unit) {
             verticalAlignment = Alignment.CenterVertically
         ) {
             Text(
-                "Network Interceptor (${requests.size})",
+                "Native WebView requests (${requests.size})",
                 color = Color.Gray, fontSize = 12.sp
             )
             TextButton(onClick = onClearNetwork) {
                 Text("Clear", color = Color.Red, fontSize = 12.sp)
             }
         }
+        Text(
+            "Passive log while this panel is open. Errors are separate events (WebView provides no request IDs); successful status/body and some redirects are not exposed.",
+            color = Color.LightGray,
+            fontSize = 10.sp,
+            modifier = Modifier.padding(bottom = 5.dp)
+        )
 
         LazyColumn(modifier = Modifier.fillMaxWidth().weight(1f)) {
-            items(requests) { req ->
-                val statusColor = when {
-                    req.status in 200..299 -> Color(0xFF66BB6A) // green
-                    req.status in 300..399 -> Color(0xFFFFA726) // yellow
-                    else -> Color(0xFFEF5350) // red
+            items(requests.asReversed()) { req ->
+                val statusColor = when (req.outcome) {
+                    NetworkRequestOutcome.HTTP_ERROR, NetworkRequestOutcome.LOAD_ERROR -> Color(0xFFEF5350)
+                    NetworkRequestOutcome.BLOCKED_BY_CLICK -> Color(0xFFFFA726)
+                    NetworkRequestOutcome.OBSERVED -> Color(0xFFB0BEC5)
+                }
+                val statusLabel = when (req.outcome) {
+                    NetworkRequestOutcome.OBSERVED -> "Observed · status n/a"
+                    NetworkRequestOutcome.BLOCKED_BY_CLICK -> "Blocked by Click"
+                    NetworkRequestOutcome.HTTP_ERROR -> "HTTP error · ${req.statusCode ?: "?"}"
+                    NetworkRequestOutcome.LOAD_ERROR -> "Load error"
+                }
+                val entryType = when (req.outcome) {
+                    NetworkRequestOutcome.OBSERVED -> if (req.isMainFrame) "Document" else "Resource"
+                    NetworkRequestOutcome.BLOCKED_BY_CLICK -> "Request"
+                    NetworkRequestOutcome.HTTP_ERROR, NetworkRequestOutcome.LOAD_ERROR -> "Error event"
                 }
 
                 Row(
@@ -260,19 +269,20 @@ fun NetworkTab(requests: List<NetworkRequest>, onClearNetwork: () -> Unit) {
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Column(modifier = Modifier.weight(1f)) {
-                        Row {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
                             Text(req.method, color = Color.Cyan, fontWeight = FontWeight.Bold, fontSize = 11.sp)
                             Spacer(modifier = Modifier.width(6.dp))
-                            Text(req.url, color = Color.White, fontSize = 11.sp, maxLines = 1)
+                            Text(entryType, color = Color.LightGray, fontSize = 10.sp)
                         }
-                        Text("Time: ${req.time} ms | Size: ${req.size}", color = Color.LightGray, fontSize = 10.sp)
+                        Text(req.url, color = Color.White, fontFamily = FontFamily.Monospace, fontSize = 10.sp, maxLines = 2)
+                        req.detail?.let { Text(it, color = Color.LightGray, fontSize = 10.sp, maxLines = 2) }
                     }
                     Spacer(modifier = Modifier.width(6.dp))
                     Text(
-                        text = req.status.toString(),
+                        text = statusLabel,
                         color = statusColor,
                         fontWeight = FontWeight.Bold,
-                        fontSize = 12.sp
+                        fontSize = 10.sp
                     )
                 }
             }
@@ -281,13 +291,23 @@ fun NetworkTab(requests: List<NetworkRequest>, onClearNetwork: () -> Unit) {
 }
 
 @Composable
-fun SourcesTab(sources: List<String>) {
+fun SourcesTab(sources: List<String>, onRefresh: () -> Unit) {
     Column(modifier = Modifier.fillMaxSize()) {
-        Text("Page Sources & Resources", color = Color.Gray, fontSize = 12.sp, modifier = Modifier.padding(bottom = 4.dp))
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text("Markup resource references", color = Color.Gray, fontSize = 12.sp)
+            TextButton(onClick = onRefresh) {
+                Text("Refresh", color = Color(0xFF80CBC4), fontSize = 11.sp)
+            }
+        }
+        Text("Scripts, stylesheets and images found in the current page markup (up to 500); source contents are not loaded.", color = Color.LightGray, fontSize = 10.sp, modifier = Modifier.padding(bottom = 5.dp))
 
         if (sources.isEmpty()) {
             Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                Text("No sources detected.", color = Color.Gray, fontSize = 12.sp)
+                Text("Tap Refresh to list page references.", color = Color.Gray, fontSize = 12.sp)
             }
         } else {
             LazyColumn(modifier = Modifier.fillMaxSize()) {
