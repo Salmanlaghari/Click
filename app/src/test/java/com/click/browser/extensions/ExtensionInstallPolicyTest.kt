@@ -87,6 +87,43 @@ class ExtensionInstallPolicyTest {
     }
 
     @Test
+    fun optionsPagesMustStayOnTheirOwnMozExtensionOrigin() {
+        val baseUrl = "moz-extension://click-addon-id/addon-root/"
+        assertEquals(
+            "moz-extension://click-addon-id/addon-root/options.html",
+            ExtensionInstallPolicy.safeExtensionOptionsPageUrl(baseUrl, "options.html")
+        )
+        assertEquals(
+            "moz-extension://click-addon-id/addon-root/options.html",
+            ExtensionInstallPolicy.safeExtensionOptionsPageUrl(
+                baseUrl,
+                "moz-extension://click-addon-id/addon-root/options.html"
+            )
+        )
+        assertNull(
+            ExtensionInstallPolicy.safeExtensionOptionsPageUrl(
+                baseUrl,
+                "moz-extension://click-addon-id/addon-root-elsewhere/options.html"
+            )
+        )
+        assertNull(
+            ExtensionInstallPolicy.safeExtensionOptionsPageUrl(
+                baseUrl,
+                "moz-extension://another-addon-id/addon-root/options.html"
+            )
+        )
+        assertNull(ExtensionInstallPolicy.safeExtensionOptionsPageUrl(baseUrl, "https://example.com/options"))
+        assertNull(ExtensionInstallPolicy.safeExtensionOptionsPageUrl(baseUrl, "javascript:alert(1)"))
+        assertNull(
+            ExtensionInstallPolicy.safeExtensionOptionsPageUrl(
+                baseUrl,
+                "moz-extension://user@click-addon-id/addon-root/options.html"
+            )
+        )
+        assertNull(ExtensionInstallPolicy.safeExtensionOptionsPageUrl(baseUrl, null))
+    }
+
+    @Test
     fun addressBarAllowsOnlyHttpAndHttpsSchemes() {
         assertEquals("https://example.com", ExtensionBrowserInput.resolve("example.com"))
         assertEquals("http://example.com/path", ExtensionBrowserInput.resolve("http://example.com/path"))
