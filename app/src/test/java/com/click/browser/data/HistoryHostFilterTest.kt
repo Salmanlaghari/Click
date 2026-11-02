@@ -67,6 +67,37 @@ class HistoryHostFilterTest {
     }
 
     @Test
+    fun ipv6LiteralsNormalizeAcrossBracketsCompressionAndUriParsing() {
+        val canonical = "[2001:db8::1]"
+
+        assertEquals("[::1]", HistoryHostFilter.normalizeHost("::1"))
+        assertEquals("[::1]", HistoryHostFilter.normalizeHost("[0:0:0:0:0:0:0:1]"))
+        assertEquals(canonical, HistoryHostFilter.normalizeHost("2001:0db8:0:0:0:0:0:1"))
+        assertEquals(canonical, HistoryHostFilter.normalizeHost("[2001:db8::1]"))
+        assertEquals(
+            canonical,
+            HistoryHostFilter.hostForUrl("https://[2001:0db8:0:0:0:0:0:1]:8443/page")
+        )
+        assertEquals(canonical, HistoryHostFilter.hostForUrl("https://[2001:db8::1]/"))
+
+        val entries = listOf(
+            HistoryItem("compressed", "https://[2001:db8::1]/", 1L),
+            HistoryItem("expanded with port", "https://[2001:0db8:0:0:0:0:0:1]:8443/", 2L),
+            HistoryItem("different address", "https://[2001:db8::2]/", 3L),
+            HistoryItem("similar prefix", "https://[2001:db8::10]/", 4L),
+            HistoryItem("hostless malformed", "https://[2001:db8::1/", 5L)
+        )
+        assertEquals(
+            entries.drop(2),
+            HistoryHostFilter.retainOtherHosts(entries, canonical) { it.url }
+        )
+
+        assertNull(HistoryHostFilter.normalizeHost("2001::xyz"))
+        assertNull(HistoryHostFilter.normalizeHost("[2001:db8::1"))
+        assertNull(HistoryHostFilter.normalizeHost("2001:db8::1%eth0"))
+    }
+
+    @Test
     fun malformedUrlsAndInvalidTargetsFailClosed() {
         assertNull(HistoryHostFilter.hostForUrl("not a valid URL"))
         assertNull(HistoryHostFilter.hostForUrl("file:///private/page.html"))
