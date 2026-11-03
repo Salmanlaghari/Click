@@ -1,7 +1,7 @@
 <resources>
     <string name="app_name">Click Browser</string>
-    <string name="amo_catalog_permission_summary">Catalog-declared APIs (expected): %1$s · catalog-declared site access: %2$s. The downloaded package is checked again before installation.</string>
-    <string name="amo_catalog_install_instructions">Open an official listing in Click first. If the page offers an in-page install action, Click shows its existing safety prompt. Otherwise choose “Download XPI in default browser,” then return and import the package here. GeckoView rechecks Mozilla signature, recommendation, and blocklist status; Click blocks sensitive APIs and broad or insecure site access and asks you to approve permissions.</string>
-    <string name="amo_catalog_update_note">Updates are not automatic in this version. To update safely, remove the add-on and import its new AMO XPI; replacing an installed ID directly is blocked.</string>
-    <string name="amo_catalog_play_policy_note">Google Play &amp; AdSense Safe Policy: Curated entries exclude ad/monetization interferers, media downloaders, background-playback bypasses, and wildcard site injectors.</string>
+    <string name="amo_catalog_permission_summary">Catalog snapshot of expected APIs: %1$s · expected site access: %2$s. Click checks the current AMO package before installing.</string>
+    <string name="amo_catalog_install_instructions">Tap “Install in Click” here, or open the official AMO listing in Click and use its “Add to Firefox” button. For page-triggered downloads, Click asks you to confirm before checking the current Android Recommended status. GeckoView then validates the Mozilla signature and compatibility and shows the permission prompt. A downloaded XPI can still be imported, but the same allowlist and safety checks apply.</string>
+    <string name="amo_catalog_update_note">This catalog currently contains only Mozilla add-ons Recommended for Firefox Android. Click rechecks the live AMO record at install time; remove an installed add-on before replacing its ID.</string>
+    <string name="amo_catalog_play_policy_note">Only curated add-ons currently Recommended for Firefox Android are eligible. Installs run in the isolated GeckoView profile; sensitive browser APIs, broad or insecure site access, Chrome CRX files and arbitrary extensions/scripts are not supported.</string>
 </resources>

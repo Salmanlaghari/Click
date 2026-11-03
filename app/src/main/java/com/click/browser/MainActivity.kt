@@ -1682,6 +1682,7 @@ class MainActivity : FragmentActivity() {
             // Full-view / immersive browsing: MANUAL fullscreen toggle only.
             // (Prince: no auto-hide on scroll — user control via the drawer toggle.)
             var immersiveMode by remember { mutableStateOf(false) }
+            var videoFullscreenActive by remember { mutableStateOf(false) }
 
             // Pull-to-refresh state for web pages.
             var isRefreshing by remember { mutableStateOf(false) }
@@ -2074,7 +2075,7 @@ class MainActivity : FragmentActivity() {
             BackHandler(enabled = exitFullscreenVideo != null) {
                 exitFullscreenVideo?.invoke()
             }
-            BackHandler(enabled = currentTab.url != "about:blank") {
+            BackHandler(enabled = currentTab.url != "about:blank" && exitFullscreenVideo == null) {
                 val wv = currentTab.webView
                 if (wv != null && wv.canGoBack()) {
                     wv.goBack()
@@ -2830,10 +2831,10 @@ class MainActivity : FragmentActivity() {
                             // Immersive Fullscreen WebView setup: if loaded, hide overlays for full screen coverage!
                             val showOverlays = currentTab.url == "about:blank"
 
-                            // Manual immersive mode also hides the Android system bars.
-                            LaunchedEffect(immersiveMode) {
+                            // Manual immersive mode and site video fullscreen both hide system bars.
+                            LaunchedEffect(immersiveMode, videoFullscreenActive) {
                                 val controller = WindowInsetsControllerCompat(window, window.decorView)
-                                if (immersiveMode) {
+                                if (immersiveMode || videoFullscreenActive) {
                                     controller.hide(WindowInsetsCompat.Type.systemBars())
                                     controller.systemBarsBehavior =
                                         WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
@@ -2929,6 +2930,10 @@ class MainActivity : FragmentActivity() {
                                                     activeMode = activeMode,
                                                     currentUrl = if (showOverlays) "" else currentTab.url,
                                                     searchEngine = currentSearchEngineSetting,
+                                                    canGoBack = !showOverlays && currentTab.webView?.canGoBack() == true,
+                                                    onBack = { currentTab.webView?.takeIf { it.canGoBack() }?.goBack() },
+                                                    canGoForward = !showOverlays && currentTab.webView?.canGoForward() == true,
+                                                    onForward = { currentTab.webView?.takeIf { it.canGoForward() }?.goForward() },
                                                     onNavigate = { input ->
                                                         pendingKeyboardDismissTabId = currentTab.id
                                                         val destination = cleanTrackingUrl(formatUrl(input, currentSearchEngineSetting))
@@ -3485,26 +3490,35 @@ class MainActivity : FragmentActivity() {
                                                                 view: android.view.View?,
                                                                 callback: CustomViewCallback?
                                                             ) {
+                                                                if (view == null) {
+                                                                    callback?.onCustomViewHidden()
+                                                                    return
+                                                                }
                                                                 if (customView != null) {
+                                                                    callback?.onCustomViewHidden()
+                                                                    return
+                                                                }
+                                                                val decor = this@MainActivity.window.decorView as? android.view.ViewGroup
+                                                                if (decor == null) {
+                                                                    callback?.onCustomViewHidden()
+                                                                    return
+                                                                }
+                                                                val params = android.widget.FrameLayout.LayoutParams(
+                                                                    android.widget.FrameLayout.LayoutParams.MATCH_PARENT,
+                                                                    android.widget.FrameLayout.LayoutParams.MATCH_PARENT
+                                                                )
+                                                                try {
+                                                                    decor.addView(view, params)
+                                                                } catch (_: Exception) {
                                                                     callback?.onCustomViewHidden()
                                                                     return
                                                                 }
                                                                 customView = view
                                                                 customViewCallback = callback
+                                                                videoFullscreenActive = true
                                                                 // Register the back-press exit hook.
                                                                 this@MainActivity.exitFullscreenVideo = {
                                                                     onHideCustomView()
-                                                                }
-                                                                // Hide the browser UI and show video fullscreen.
-                                                                this@MainActivity.window.addFlags(
-                                                                    android.view.WindowManager.LayoutParams.FLAG_FULLSCREEN
-                                                                )
-                                                                (this@MainActivity.window.decorView as? android.view.ViewGroup)?.let { decor ->
-                                                                    val params = android.widget.FrameLayout.LayoutParams(
-                                                                        android.widget.FrameLayout.LayoutParams.MATCH_PARENT,
-                                                                        android.widget.FrameLayout.LayoutParams.MATCH_PARENT
-                                                                    )
-                                                                    decor.addView(view, params)
                                                                 }
                                                             }
 
@@ -3513,10 +3527,8 @@ class MainActivity : FragmentActivity() {
                                                                     (this@MainActivity.window.decorView as? android.view.ViewGroup)?.removeView(v)
                                                                 }
                                                                 customView = null
+                                                                videoFullscreenActive = false
                                                                 this@MainActivity.exitFullscreenVideo = null
-                                                                this@MainActivity.window.clearFlags(
-                                                                    android.view.WindowManager.LayoutParams.FLAG_FULLSCREEN
-                                                                )
                                                                 customViewCallback?.onCustomViewHidden()
                                                                 customViewCallback = null
 

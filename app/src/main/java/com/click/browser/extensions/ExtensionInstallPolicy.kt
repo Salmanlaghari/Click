@@ -84,6 +84,23 @@ internal object ExtensionInstallPolicy {
             uri.path.orEmpty().contains("/firefox/addon/")
     }
 
+    fun officialAmoLatestXpiUrl(slug: String?): String? {
+        val normalized = slug?.trim()?.lowercase().orEmpty()
+        if (!normalized.matches(Regex("^[a-z0-9][a-z0-9-]{0,127}$"))) return null
+        return "https://addons.mozilla.org/firefox/downloads/latest/$normalized/latest.xpi"
+    }
+
+    fun isOfficialAmoXpiUrl(url: String?): Boolean {
+        val uri = runCatching { url?.let { java.net.URI(it) } }.getOrNull() ?: return false
+        if (uri.scheme != "https" || !uri.host.equals("addons.mozilla.org", ignoreCase = true) ||
+            uri.userInfo != null || (uri.port != -1 && uri.port != 443)
+        ) return false
+        val path = uri.path.orEmpty()
+        val latestPackage = Regex("^/firefox/downloads/latest/[a-z0-9-]+/[^/]+\\.xpi$", RegexOption.IGNORE_CASE)
+        val versionedPackage = Regex("^/firefox/downloads/file/[0-9]+/[^/]+\\.xpi$", RegexOption.IGNORE_CASE)
+        return latestPackage.matches(path) || versionedPackage.matches(path)
+    }
+
     /** Resolve a manifest options page, but only within that add-on's own GeckoView base URL. */
     fun safeExtensionOptionsPageUrl(baseUrl: String?, optionsPageUrl: String?): String? {
         val base = runCatching { baseUrl?.let { java.net.URI(it).normalize() } }.getOrNull() ?: return null

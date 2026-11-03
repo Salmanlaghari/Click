@@ -64,30 +64,24 @@ class LightThemeVariantTest {
     }
 
     @Test
-    fun powerAccentIsDistinctWithoutOverridingTheSharedLightPalette() {
+    fun everyModeHasItsOwnLightIdentityAndHonorsTheSelectedPalette() {
         val variants = LightThemeVariant.values().toList()
 
         variants.forEach { variant ->
-            val simple = ModeThemes.forMode(BrowserMode.SIMPLE, dark = false, lightVariant = variant)
-            val power = ModeThemes.forMode(BrowserMode.HACK, dark = false, lightVariant = variant)
-
-            assertEquals(simple.background, power.background)
-            assertEquals(simple.surface, power.surface)
-            assertEquals(simple.surfaceVariant, power.surfaceVariant)
-            assertEquals(simple.primary, power.primary)
-            assertEquals(simple.secondary, power.secondary)
-            assertEquals(simple.onBackground, power.onBackground)
-            assertEquals(simple.onSurface, power.onSurface)
-            assertEquals(simple.topBarBg, power.topBarBg)
-            assertEquals(simple.onTopBar, power.onTopBar)
-            assertEquals(simple.glow, power.glow)
-            assertNotEquals("Power should have a distinct identity accent for ${variant.label}", simple.modeAccent, power.modeAccent)
-            assertFalse("Power stays light for ${variant.label}", power.dark)
+            val themes = BrowserMode.values().map { mode ->
+                ModeThemes.forMode(mode, dark = false, lightVariant = variant)
+            }
+            assertEquals("Each mode needs a distinct background for ${variant.label}", themes.size, themes.map { it.background }.distinct().size)
+            assertEquals("Each mode needs a distinct accent for ${variant.label}", themes.size, themes.map { it.modeAccent }.distinct().size)
+            assertEquals("Each mode needs a distinct label for ${variant.label}", themes.size, themes.map { it.modePillText }.distinct().size)
+            themes.forEach { theme -> assertFalse("${theme.mode} stays light", theme.dark) }
         }
 
-        val powerAccents = variants.map {
-            ModeThemes.forMode(BrowserMode.HACK, dark = false, lightVariant = it).modeAccent
-        }.distinct()
-        assertEquals("The Power identity accent is stable across global light palettes", 1, powerAccents.size)
+        BrowserMode.values().forEach { mode ->
+            val backgrounds = variants.map {
+                ModeThemes.forMode(mode, dark = false, lightVariant = it).background
+            }.distinct()
+            assertEquals("${mode} should still reflect the user's selected palette", variants.size, backgrounds.size)
+        }
     }
 }

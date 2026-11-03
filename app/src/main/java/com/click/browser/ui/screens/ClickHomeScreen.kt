@@ -43,6 +43,8 @@ import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.ArrowForward
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.LocationOff
 import androidx.compose.material.icons.filled.LocationOn
@@ -96,6 +98,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
@@ -206,6 +209,7 @@ fun ClickHomeScreen(
 
         HomeTopRow(
             theme = theme,
+            activeMode = activeMode,
             adBlockerEnabled = adBlockerEnabled,
             blockedCount = blockedCount,
             neon = false,
@@ -250,6 +254,7 @@ fun ClickHomeScreen(
 
         NewsSection(
             theme = theme,
+            activeMode = activeMode,
             cardBg = cardBg,
             cardBorder = cardBorder,
             neon = false,
@@ -355,6 +360,7 @@ private fun V9ShieldCard(
 @Composable
 private fun HomeTopRow(
     theme: ModeTheme,
+    activeMode: BrowserMode,
     adBlockerEnabled: Boolean,
     blockedCount: Int,
     neon: Boolean,
@@ -375,7 +381,12 @@ private fun HomeTopRow(
                 fontSize = 26.sp
             )
             Text(
-                "A faster, safer web for what's next.",
+                when (activeMode) {
+                    BrowserMode.SIMPLE -> "Everyday browsing, kept straightforward."
+                    BrowserMode.DEVELOPER -> "Inspect pages and build with developer tools."
+                    BrowserMode.HACK -> "Wide pages and focused workflows."
+                    BrowserMode.ADVANCED -> "An isolated workspace for research and exploration."
+                },
                 color = theme.onSurface.copy(alpha = 0.72f),
                 fontSize = 13.sp
             )
@@ -516,6 +527,9 @@ private fun SmartSearchBar(
                 keyboardOptions = KeyboardOptions(imeAction = ImeAction.Go),
                 keyboardActions = KeyboardActions(onGo = { submit() }),
                 colors = OutlinedTextFieldDefaults.colors(
+                    focusedContainerColor = Color.Transparent,
+                    unfocusedContainerColor = Color.Transparent,
+                    disabledContainerColor = Color.Transparent,
                     focusedBorderColor = Color.Transparent,
                     unfocusedBorderColor = Color.Transparent,
                     cursorColor = theme.primary,
@@ -850,6 +864,7 @@ private fun QuickSiteEditDialog(
 @Composable
 private fun CategoryTabs(
     selected: NewsCategory,
+    categories: List<NewsCategory>,
     onSelect: (NewsCategory) -> Unit,
     theme: ModeTheme
 ) {
@@ -857,7 +872,7 @@ private fun CategoryTabs(
         horizontalArrangement = Arrangement.spacedBy(8.dp),
         modifier = Modifier.fillMaxWidth()
     ) {
-        items(NewsCategory.values()) { cat ->
+        items(categories) { cat ->
             val isSel = cat == selected
             Surface(
                 shape = RoundedCornerShape(18.dp),
@@ -888,16 +903,27 @@ private fun CategoryTabs(
 @Composable
 private fun NewsSection(
     theme: ModeTheme,
+    activeMode: BrowserMode,
     cardBg: Color,
     cardBorder: Color,
     neon: Boolean,
     onNavigate: (String) -> Unit
 ) {
     val context = LocalContext.current
+    val scope = rememberCoroutineScope()
     var category by remember { mutableStateOf(NewsCategory.ALL) }
     var refreshKey by remember { mutableStateOf(0) }
     var result by remember { mutableStateOf<NewsResult?>(null) }
     var loading by remember { mutableStateOf(true) }
+    val visibleCategories = remember(activeMode) {
+        NewsCategory.values().filter { activeMode == BrowserMode.ADVANCED || it != NewsCategory.RESEARCH }
+    }
+
+    LaunchedEffect(activeMode) {
+        if (activeMode != BrowserMode.ADVANCED && category == NewsCategory.RESEARCH) {
+            category = NewsCategory.ALL
+        }
+    }
 
     LaunchedEffect(category, refreshKey) {
         loading = true
@@ -906,7 +932,14 @@ private fun NewsSection(
     }
 
     Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-        CategoryTabs(selected = category, onSelect = { category = it }, theme = theme)
+        if (category == NewsCategory.RESEARCH) {
+            Text(
+                "arXiv AI & ML · preprints are not necessarily peer-reviewed",
+                color = theme.onSurface.copy(alpha = 0.62f),
+                fontSize = 11.sp
+            )
+        }
+        CategoryTabs(selected = category, categories = visibleCategories, onSelect = { category = it }, theme = theme)
 
         when {
             loading -> {
@@ -925,13 +958,19 @@ private fun NewsSection(
                         modifier = Modifier.padding(18.dp).fillMaxWidth(),
                         horizontalAlignment = Alignment.CenterHorizontally
                     ) {
-                        Text("📰", fontSize = 28.sp)
-                        Spacer(modifier = Modifier.height(6.dp))
+                        if (category != NewsCategory.RESEARCH) Spacer(modifier = Modifier.height(6.dp))
                         Text(
-                            when (result?.status) {
-                                NewsStatus.OFFLINE -> "You're offline — news will appear when you're back online."
-                                NewsStatus.ERROR -> "Couldn't load news. Check your connection and tap Retry."
-                                else -> "Couldn't load news right now."
+                            when (category) {
+                                NewsCategory.RESEARCH -> when (result?.status) {
+                                    NewsStatus.OFFLINE -> "You're offline. No recent cached research papers are available."
+                                    NewsStatus.ERROR -> "Couldn't verify current arXiv results. Older papers are hidden. Tap Retry."
+                                    else -> "No recent AI/ML papers are available. Older arXiv items are hidden."
+                                }
+                                else -> when (result?.status) {
+                                    NewsStatus.OFFLINE -> "You're offline — news will appear when you're back online."
+                                    NewsStatus.ERROR -> "Couldn't load news. Check your connection and tap Retry."
+                                    else -> "Couldn't load news right now."
+                                }
                             },
                             color = theme.onSurface.copy(alpha = 0.7f),
                             fontSize = 12.5.sp
@@ -945,7 +984,16 @@ private fun NewsSection(
                             modifier = Modifier.clickable(
                                 interactionSource = remember { MutableInteractionSource() },
                                 indication = null
-                            ) { refreshKey++ }
+                            ) {
+                                if (category == NewsCategory.RESEARCH) {
+                                    scope.launch {
+                                        NewsFeed.invalidateResearchCache(context)
+                                        refreshKey++
+                                    }
+                                } else {
+                                    refreshKey++
+                                }
+                            }
                         )
                     }
                 }
@@ -967,10 +1015,12 @@ private fun NewsSection(
                         ) { onNavigate(hero.link) }
                 ) {
                     Column {
-                        NewsThumbnail(
-                            url = hero.thumbnailUrl,
-                            modifier = Modifier.fillMaxWidth().aspectRatio(16f / 9f)
-                        )
+                        hero.thumbnailUrl?.let { url ->
+                            NewsThumbnail(
+                                url = url,
+                                modifier = Modifier.fillMaxWidth().aspectRatio(16f / 9f)
+                            )
+                        }
                         Row(
                             modifier = Modifier.padding(12.dp),
                             verticalAlignment = Alignment.Top
@@ -1013,11 +1063,13 @@ private fun NewsSection(
                             modifier = Modifier.padding(8.dp),
                             verticalAlignment = Alignment.CenterVertically
                         ) {
-                            NewsThumbnail(
-                                url = article.thumbnailUrl,
-                                modifier = Modifier.size(72.dp, 56.dp).clip(RoundedCornerShape(8.dp))
-                            )
-                            Spacer(modifier = Modifier.width(10.dp))
+                            if (!article.thumbnailUrl.isNullOrBlank()) {
+                                NewsThumbnail(
+                                    url = article.thumbnailUrl,
+                                    modifier = Modifier.size(72.dp, 56.dp).clip(RoundedCornerShape(8.dp))
+                                )
+                                Spacer(modifier = Modifier.width(10.dp))
+                            }
                             Column(modifier = Modifier.weight(1f)) {
                                 Text(
                                     article.title,
@@ -1043,7 +1095,7 @@ private fun NewsSection(
     }
 }
 
-/** News thumbnail with memory+disk cache; gradient placeholder while loading. */
+/** Source thumbnail with memory+disk cache; omit the image area rather than invent a placeholder. */
 @Composable
 private fun NewsThumbnail(url: String?, modifier: Modifier = Modifier) {
     val context = LocalContext.current
@@ -1059,15 +1111,6 @@ private fun NewsThumbnail(url: String?, modifier: Modifier = Modifier) {
             contentScale = ContentScale.Crop,
             modifier = modifier
         )
-    } else {
-        Box(
-            modifier = modifier.background(
-                Brush.linearGradient(listOf(Color(0xFF2A3A5F), Color(0xFF16224A)))
-            ),
-            contentAlignment = Alignment.Center
-        ) {
-            Text("📰", fontSize = 26.sp)
-        }
     }
 }
 
@@ -1283,6 +1326,10 @@ fun homeGreeting(): String {
 internal fun tabBadgeText(count: Int): String =
     if (count > 99) "99+" else count.coerceAtLeast(0).toString()
 
+internal fun shouldShowToolbarTranslate(screenWidthDp: Int): Boolean = screenWidthDp >= 370
+
+internal fun shouldShowToolbarExtensions(screenWidthDp: Int): Boolean = screenWidthDp >= 420
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun CompactBrowseBar(
@@ -1298,6 +1345,10 @@ fun CompactBrowseBar(
     // Kilo: these are required (no defaults) so missing wiring fails at
     // compile time instead of silently doing nothing.
     onDrawerClick: () -> Unit,
+    canGoBack: Boolean,
+    onBack: () -> Unit,
+    canGoForward: Boolean,
+    onForward: () -> Unit,
     tabCount: Int,
     onTabsClick: () -> Unit,
     showExtensionsButton: Boolean = false,
@@ -1310,6 +1361,7 @@ fun CompactBrowseBar(
 ) {
     var textInput by remember(currentUrl) { mutableStateOf(currentUrl) }
     val isHttps = currentUrl.startsWith("https://")
+    val screenWidthDp = LocalConfiguration.current.screenWidthDp
     // Keep toolbar actions on their own row so the address field can use the
     // full available width and a generous touch target.
     Surface(
@@ -1336,25 +1388,43 @@ fun CompactBrowseBar(
                         modifier = Modifier.size(22.dp)
                     )
                 }
-                Spacer(modifier = Modifier.weight(1f))
-                IconButton(
-                    onClick = onTranslateClick,
-                    modifier = Modifier
-                        .size(40.dp)
-                        .clip(CircleShape)
-                        .background(
-                            if (currentUrl.startsWith("http")) theme.primary.copy(alpha = 0.12f)
-                            else Color.Transparent
-                        )
-                ) {
+                IconButton(onClick = onBack, enabled = canGoBack, modifier = Modifier.size(40.dp)) {
                     Icon(
-                        Icons.Default.Translate,
-                        contentDescription = "Translate page or text",
-                        tint = if (currentUrl.startsWith("http")) theme.primary else theme.onTopBar,
+                        Icons.AutoMirrored.Filled.ArrowBack,
+                        contentDescription = "Back",
+                        tint = if (canGoBack) theme.onTopBar else theme.onTopBar.copy(alpha = 0.34f),
                         modifier = Modifier.size(21.dp)
                     )
                 }
-                if (showExtensionsButton) {
+                IconButton(onClick = onForward, enabled = canGoForward, modifier = Modifier.size(40.dp)) {
+                    Icon(
+                        Icons.AutoMirrored.Filled.ArrowForward,
+                        contentDescription = "Forward",
+                        tint = if (canGoForward) theme.onTopBar else theme.onTopBar.copy(alpha = 0.34f),
+                        modifier = Modifier.size(21.dp)
+                    )
+                }
+                Spacer(modifier = Modifier.weight(1f))
+                if (shouldShowToolbarTranslate(screenWidthDp)) {
+                    IconButton(
+                        onClick = onTranslateClick,
+                        modifier = Modifier
+                            .size(40.dp)
+                            .clip(CircleShape)
+                            .background(
+                                if (currentUrl.startsWith("http")) theme.primary.copy(alpha = 0.12f)
+                                else Color.Transparent
+                            )
+                    ) {
+                        Icon(
+                            Icons.Default.Translate,
+                            contentDescription = "Translate page or text",
+                            tint = if (currentUrl.startsWith("http")) theme.primary else theme.onTopBar,
+                            modifier = Modifier.size(21.dp)
+                        )
+                    }
+                }
+                if (showExtensionsButton && shouldShowToolbarExtensions(screenWidthDp)) {
                     IconButton(
                         onClick = onExtensionsClick,
                         modifier = Modifier
@@ -1370,9 +1440,8 @@ fun CompactBrowseBar(
                         )
                     }
                 }
-                // On Simple's web surface use a direct new-tab affordance;
-                // reload remains available in the browser drawer.
-                if (activeMode == BrowserMode.SIMPLE && currentUrl.isNotBlank()) {
+                // Simple mode consistently offers New tab; reload remains in the browser drawer.
+                if (activeMode == BrowserMode.SIMPLE) {
                     IconButton(onClick = onNewTab, modifier = Modifier.size(40.dp)) {
                         Icon(
                             Icons.Default.Add,
@@ -1427,7 +1496,7 @@ fun CompactBrowseBar(
 
             Surface(
                 shape = RoundedCornerShape(18.dp),
-                color = theme.surfaceVariant.copy(alpha = 0.72f),
+                color = theme.surfaceVariant,
                 shadowElevation = 2.dp,
                 border = androidx.compose.foundation.BorderStroke(
                     1.dp, theme.primary.copy(alpha = 0.28f)
