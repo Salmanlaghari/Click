@@ -98,6 +98,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
@@ -1325,6 +1326,10 @@ fun homeGreeting(): String {
 internal fun tabBadgeText(count: Int): String =
     if (count > 99) "99+" else count.coerceAtLeast(0).toString()
 
+internal fun shouldShowToolbarTranslate(screenWidthDp: Int): Boolean = screenWidthDp >= 370
+
+internal fun shouldShowToolbarExtensions(screenWidthDp: Int): Boolean = screenWidthDp >= 420
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun CompactBrowseBar(
@@ -1356,6 +1361,7 @@ fun CompactBrowseBar(
 ) {
     var textInput by remember(currentUrl) { mutableStateOf(currentUrl) }
     val isHttps = currentUrl.startsWith("https://")
+    val screenWidthDp = LocalConfiguration.current.screenWidthDp
     // Keep toolbar actions on their own row so the address field can use the
     // full available width and a generous touch target.
     Surface(
@@ -1399,24 +1405,26 @@ fun CompactBrowseBar(
                     )
                 }
                 Spacer(modifier = Modifier.weight(1f))
-                IconButton(
-                    onClick = onTranslateClick,
-                    modifier = Modifier
-                        .size(40.dp)
-                        .clip(CircleShape)
-                        .background(
-                            if (currentUrl.startsWith("http")) theme.primary.copy(alpha = 0.12f)
-                            else Color.Transparent
+                if (shouldShowToolbarTranslate(screenWidthDp)) {
+                    IconButton(
+                        onClick = onTranslateClick,
+                        modifier = Modifier
+                            .size(40.dp)
+                            .clip(CircleShape)
+                            .background(
+                                if (currentUrl.startsWith("http")) theme.primary.copy(alpha = 0.12f)
+                                else Color.Transparent
+                            )
+                    ) {
+                        Icon(
+                            Icons.Default.Translate,
+                            contentDescription = "Translate page or text",
+                            tint = if (currentUrl.startsWith("http")) theme.primary else theme.onTopBar,
+                            modifier = Modifier.size(21.dp)
                         )
-                ) {
-                    Icon(
-                        Icons.Default.Translate,
-                        contentDescription = "Translate page or text",
-                        tint = if (currentUrl.startsWith("http")) theme.primary else theme.onTopBar,
-                        modifier = Modifier.size(21.dp)
-                    )
+                    }
                 }
-                if (showExtensionsButton) {
+                if (showExtensionsButton && shouldShowToolbarExtensions(screenWidthDp)) {
                     IconButton(
                         onClick = onExtensionsClick,
                         modifier = Modifier
@@ -1432,9 +1440,8 @@ fun CompactBrowseBar(
                         )
                     }
                 }
-                // On Simple's web surface use a direct new-tab affordance;
-                // reload remains available in the browser drawer.
-                if (activeMode == BrowserMode.SIMPLE && currentUrl.isNotBlank()) {
+                // Simple mode consistently offers New tab; reload remains in the browser drawer.
+                if (activeMode == BrowserMode.SIMPLE) {
                     IconButton(onClick = onNewTab, modifier = Modifier.size(40.dp)) {
                         Icon(
                             Icons.Default.Add,
