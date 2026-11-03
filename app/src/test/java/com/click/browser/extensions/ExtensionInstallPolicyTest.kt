@@ -87,6 +87,29 @@ class ExtensionInstallPolicyTest {
     }
 
     @Test
+    fun onlyOfficialHttpsAmoXpiDownloadUrlsAreAccepted() {
+        assertEquals(
+            "https://addons.mozilla.org/firefox/downloads/latest/tomato-clock/latest.xpi",
+            ExtensionInstallPolicy.officialAmoLatestXpiUrl("tomato-clock")
+        )
+        assertNull(ExtensionInstallPolicy.officialAmoLatestXpiUrl("../other-addon"))
+        assertTrue(
+            ExtensionInstallPolicy.isOfficialAmoXpiUrl(
+                "https://addons.mozilla.org/firefox/downloads/latest/tomato-clock/latest.xpi"
+            )
+        )
+        assertTrue(
+            ExtensionInstallPolicy.isOfficialAmoXpiUrl(
+                "https://addons.mozilla.org/firefox/downloads/file/4810430/tomato_clock-7.8.0.xpi?src=addon-manager"
+            )
+        )
+        assertFalse(ExtensionInstallPolicy.isOfficialAmoXpiUrl("http://addons.mozilla.org/firefox/downloads/latest/tomato-clock/latest.xpi"))
+        assertFalse(ExtensionInstallPolicy.isOfficialAmoXpiUrl("https://addons.mozilla.org.evil.example/firefox/downloads/latest/tomato-clock/latest.xpi"))
+        assertFalse(ExtensionInstallPolicy.isOfficialAmoXpiUrl("https://addons.mozilla.org/firefox/downloads/latest/tomato-clock/latest.crx"))
+        assertFalse(ExtensionInstallPolicy.isOfficialAmoXpiUrl("https://addons.mozilla.org/firefox/addon/tomato-clock/"))
+    }
+
+    @Test
     fun optionsPagesMustStayOnTheirOwnMozExtensionOrigin() {
         val baseUrl = "moz-extension://click-addon-id/addon-root/"
         assertEquals(

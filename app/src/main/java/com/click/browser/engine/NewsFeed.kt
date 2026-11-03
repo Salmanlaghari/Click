@@ -11,13 +11,19 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import org.xmlpull.v1.XmlPullParser
 import java.io.File
+import java.net.URI
+import java.text.ParsePosition
 import java.text.SimpleDateFormat
 import java.util.Locale
+import java.util.TimeZone
 import java.util.concurrent.TimeUnit
 
 /**
@@ -34,6 +40,7 @@ enum class NewsCategory(val label: String) {
     NEWS("News"),
     TECH("Tech"),
     AI("AI"),
+    RESEARCH("Research"),
     SPORTS("Sports")
 }
 
@@ -65,6 +72,26 @@ private data class FeedDef(
     val category: NewsCategory
 )
 
+private data class FeedFetchResult(
+    val articles: List<NewsArticle>,
+    val succeeded: Boolean
+)
+
+internal data class NewsImageCandidate(
+    val url: String,
+    val width: Int = 0,
+    val height: Int = 0,
+    val sourcePriority: Int = 0
+) {
+    val pixelArea: Long
+        get() = if (width > 0 && height > 0) width.toLong() * height.toLong() else 0L
+}
+
+internal fun selectBestNewsImageCandidate(candidates: List<NewsImageCandidate>): NewsImageCandidate? =
+    candidates.asSequence()
+        .filter { it.url.isNotBlank() }
+        .maxWithOrNull(compareBy<NewsImageCandidate> { it.pixelArea }.thenBy { it.sourcePriority })
+
 object NewsFeed {
 
     private val client: OkHttpClient by lazy {
@@ -85,13 +112,29 @@ object NewsFeed {
         FeedDef("https://news.google.com/rss/search?q=technology&hl=en-US&gl=US&ceid=US:en", "Google Tech", NewsCategory.TECH),
         FeedDef("https://techcrunch.com/category/artificial-intelligence/feed/", "TechCrunch AI", NewsCategory.AI),
         FeedDef("https://news.google.com/rss/search?q=artificial%20intelligence&hl=en-US&gl=US&ceid=US:en", "Google AI", NewsCategory.AI),
+        FeedDef("https://export.arxiv.org/api/query?search_query=cat%3Acs.AI%20OR%20cat%3Acs.LG&start=0&max_results=40&sortBy=submittedDate&sortOrder=descending", "arXiv AI/ML", NewsCategory.RESEARCH),
         FeedDef("https://feeds.bbci.co.uk/sport/rss.xml", "BBC Sport", NewsCategory.SPORTS),
         FeedDef("https://news.google.com/rss/search?q=sports&hl=en-US&gl=US&ceid=US:en", "Google Sports", NewsCategory.SPORTS)
     )
 
     private const val CACHE_TTL_MS = 30 * 60 * 1000L // 30 minutes
+    internal const val MAX_RESEARCH_AGE_MS = 14L * 24 * 60 * 60 * 1000
+    private const val ARXIV_CACHE_TTL_MS = 6L * 60 * 60 * 1000
+    private const val ARXIV_EMPTY_CACHE_TTL_MS = 15L * 60 * 1000
+    private const val ARXIV_MIN_INTERVAL_MS = 3_000L
     private val memoryCache = mutableMapOf<NewsCategory, Pair<Long, List<NewsArticle>>>()
     private val cacheLock = Any()
+    private val arxivMutex = Mutex()
+    private var arxivCache: Pair<Long, List<NewsArticle>>? = null
+
+    internal fun isFreshResearchArticle(article: NewsArticle, now: Long): Boolean {
+        if (article.category != NewsCategory.RESEARCH) return true
+        val age = now - article.publishedAt
+        return article.publishedAt > 0L && age >= 0L - 24L * 60 * 60 * 1000 && age <= MAX_RESEARCH_AGE_MS
+    }
+
+    private fun filterFreshResearchArticles(articles: List<NewsArticle>, now: Long = System.currentTimeMillis()): List<NewsArticle> =
+        articles.filter { isFreshResearchArticle(it, now) }
 
     /** Real connectivity check: any active network (Wi-Fi, mobile data, …) with internet capability. */
     fun hasInternetConnection(context: Context): Boolean {
@@ -107,13 +150,23 @@ object NewsFeed {
         }
     }
 
+    suspend fun invalidateResearchCache(context: Context) = withContext(Dispatchers.IO) {
+        synchronized(cacheLock) { memoryCache.remove(NewsCategory.RESEARCH) }
+        arxivMutex.withLock {
+            arxivCache = null
+            if (hasInternetConnection(context)) {
+                runCatching { cacheFile(context, NewsCategory.RESEARCH).delete() }
+            }
+        }
+    }
+
     suspend fun getArticles(context: Context, category: NewsCategory): NewsResult =
         withContext(Dispatchers.IO) {
             // 1. Memory cache
             synchronized(cacheLock) {
                 val cached = memoryCache[category]
                 if (cached != null && System.currentTimeMillis() - cached.first < CACHE_TTL_MS) {
-                    return@withContext NewsResult(cached.second, NewsStatus.OK)
+                    return@withContext NewsResult(filterFreshResearchArticles(cached.second), NewsStatus.OK)
                 }
             }
             // 2. Disk cache (survives process death)
@@ -123,18 +176,19 @@ object NewsFeed {
             if (!hasInternetConnection(context)) {
                 val fallback = diskCached?.takeIf {
                     System.currentTimeMillis() - it.first < 24 * 60 * 60 * 1000L
-                }?.second.orEmpty()
+                }?.second.orEmpty().let(::filterFreshResearchArticles)
                 return@withContext NewsResult(fallback, NewsStatus.OFFLINE)
             }
 
             // 4. Network (device is online — a total failure here is ERROR, not OFFLINE)
             val wanted = feeds.filter { category == NewsCategory.ALL || it.category == category }
-            val fetched = try {
+            val fetchedRaw = try {
                 coroutineScope {
                     wanted.map { feed ->
                         async {
                             try {
-                                fetchFeed(feed)
+                                if (feed.category == NewsCategory.RESEARCH) fetchArxivFeed(context, feed)
+                                else fetchFeed(feed)
                             } catch (_: Exception) {
                                 emptyList()
                             }
@@ -144,18 +198,30 @@ object NewsFeed {
             } catch (_: Exception) {
                 emptyList()
             }
+            val fetched = filterFreshResearchArticles(fetchedRaw)
 
             return@withContext if (fetched.isNotEmpty()) {
                 val sorted = fetched.sortedByDescending { it.publishedAt }.take(20)
                 synchronized(cacheLock) { memoryCache[category] = System.currentTimeMillis() to sorted }
                 writeDiskCache(context, category, sorted)
+                val freshResearch = fetched.asSequence()
+                    .filter { it.category == NewsCategory.RESEARCH }
+                    .sortedByDescending { it.publishedAt }
+                    .take(20)
+                    .toList()
+                if (freshResearch.isNotEmpty()) writeDiskCache(context, NewsCategory.RESEARCH, freshResearch)
+                else if (fetchedRaw.any { it.category == NewsCategory.RESEARCH }) writeDiskCache(context, NewsCategory.RESEARCH, emptyList())
                 NewsResult(sorted, NewsStatus.OK)
+            } else if (category == NewsCategory.RESEARCH && fetchedRaw.any { it.category == NewsCategory.RESEARCH }) {
+                synchronized(cacheLock) { memoryCache[category] = System.currentTimeMillis() to emptyList() }
+                writeDiskCache(context, category, emptyList())
+                NewsResult(emptyList(), NewsStatus.OK)
             } else {
                 // Online, but every feed failed (server errors, timeouts, blocks):
                 // fall back to disk cache if fresh enough (< 24h), marked ERROR.
                 val fallback = diskCached?.takeIf {
                     System.currentTimeMillis() - it.first < 24 * 60 * 60 * 1000L
-                }?.second.orEmpty()
+                }?.second.orEmpty().let(::filterFreshResearchArticles)
                 NewsResult(fallback, NewsStatus.ERROR)
             }
         }
@@ -164,7 +230,38 @@ object NewsFeed {
     internal val FEED_USER_AGENT =
         "ClickBrowser/${com.click.browser.BuildConfig.VERSION_NAME} (Android)"
 
-    private fun fetchFeed(feed: FeedDef): List<NewsArticle> {
+    private suspend fun fetchArxivFeed(context: Context, feed: FeedDef): List<NewsArticle> = arxivMutex.withLock {
+        val now = System.currentTimeMillis()
+        val cached = arxivCache
+        if (cached != null) {
+            val ttl = if (cached.second.isEmpty()) ARXIV_EMPTY_CACHE_TTL_MS else ARXIV_CACHE_TTL_MS
+            if (now - cached.first < ttl) return@withLock cached.second
+        }
+
+        val diskCached = readDiskCache(context, NewsCategory.RESEARCH)
+        if (diskCached != null) {
+            val ttl = if (diskCached.second.isEmpty()) ARXIV_EMPTY_CACHE_TTL_MS else ARXIV_CACHE_TTL_MS
+            if (now - diskCached.first < ttl) {
+                arxivCache = diskCached
+                return@withLock diskCached.second
+            }
+        }
+
+        val throttleFile = File(File(context.cacheDir, "news").apply { mkdirs() }, "arxiv_last_request_ms.txt")
+        val lastRequest = runCatching { throttleFile.readText().trim().toLongOrNull() ?: 0L }.getOrDefault(0L)
+        val waitMs = (ARXIV_MIN_INTERVAL_MS - (now - lastRequest)).coerceAtLeast(0L)
+        if (waitMs > 0L) delay(waitMs)
+        val requestAt = System.currentTimeMillis()
+        runCatching { throttleFile.writeText(requestAt.toString()) }
+
+        val fetched = fetchFeedWithStatus(feed)
+        if (fetched.succeeded) arxivCache = requestAt to fetched.articles
+        fetched.articles
+    }
+
+    private fun fetchFeed(feed: FeedDef): List<NewsArticle> = fetchFeedWithStatus(feed).articles
+
+    private fun fetchFeedWithStatus(feed: FeedDef): FeedFetchResult {
         val request = Request.Builder()
             .url(feed.url)
             .header("User-Agent", FEED_USER_AGENT)
@@ -173,20 +270,51 @@ object NewsFeed {
             client.newCall(request).execute().use { resp ->
                 if (!resp.isSuccessful) {
                     android.util.Log.w("NewsFeed", "${feed.source}: HTTP ${resp.code}")
-                    return emptyList()
+                    return FeedFetchResult(emptyList(), succeeded = false)
                 }
-                val body = resp.body?.string() ?: return emptyList()
+                val body = resp.body?.string() ?: return FeedFetchResult(emptyList(), succeeded = false)
                 val articles = parseRss(body, feed)
                 if (articles.isEmpty()) {
                     android.util.Log.w("NewsFeed", "${feed.source}: parsed 0 articles (${body.length} chars)")
                 }
-                return articles
+                return FeedFetchResult(articles, succeeded = body.isNotBlank())
             }
         } catch (e: Exception) {
             android.util.Log.w("NewsFeed", "${feed.source}: ${e.javaClass.simpleName}: ${e.message}")
-            return emptyList()
+            return FeedFetchResult(emptyList(), succeeded = false)
         }
     }
+
+    internal fun parseDate(raw: String): Long {
+        val value = raw.trim()
+        if (value.isEmpty()) return 0L
+        val patterns = listOf(
+            "EEE, dd MMM yyyy HH:mm:ss z",
+            "EEE, dd MMM yyyy HH:mm:ss Z",
+            "yyyy-MM-dd'T'HH:mm:ss'Z'",
+            "yyyy-MM-dd'T'HH:mm:ssXXX"
+        )
+        for (pattern in patterns) {
+            try {
+                val format = SimpleDateFormat(pattern, Locale.US).apply {
+                    isLenient = false
+                    if (pattern.endsWith("'Z'")) timeZone = TimeZone.getTimeZone("UTC")
+                }
+                val position = ParsePosition(0)
+                val parsed = format.parse(value, position)
+                if (parsed != null && position.index == value.length) return parsed.time
+            } catch (_: Exception) { /* try the next supported date format */ }
+        }
+        return 0L
+    }
+
+    private fun normalizedImageUrl(raw: String?, baseUrl: String): String? = runCatching {
+        val candidate = raw?.trim()?.replace("&amp;", "&")?.takeIf { it.isNotEmpty() } ?: return null
+        val uri = URI(baseUrl).resolve(candidate).normalize()
+        if (uri.scheme.equals("https", ignoreCase = true) && !uri.host.isNullOrBlank() && uri.userInfo == null) {
+            uri.toASCIIString()
+        } else null
+    }.getOrNull()
 
     private fun parseRss(xml: String, feed: FeedDef): List<NewsArticle> {
         val articles = mutableListOf<NewsArticle>()
@@ -196,8 +324,12 @@ object NewsFeed {
             parser.setInput(xml.reader())
             var event = parser.eventType
             var inItem = false
-            var title = ""; var link = ""; var pubDate = ""; var thumb: String? = null
+            var title = ""; var link = ""; var itemId = ""; var pubDate = ""
+            var imageCandidates = mutableListOf<NewsImageCandidate>()
             var description = ""
+            fun addImageCandidate(raw: String?, priority: Int, width: Int = 0, height: Int = 0) {
+                normalizedImageUrl(raw, feed.url)?.let { imageCandidates += NewsImageCandidate(it, width, height, priority) }
+            }
             // Track the current open tag: parser.name is null during TEXT events,
             // so we must remember it from the last START_TAG (root cause of the
             // "news never loads" bug — text was silently dropped for every feed).
@@ -210,20 +342,48 @@ object NewsFeed {
                         currentTag = name
                         if (name.equals("item", ignoreCase = true) || name.equals("entry", ignoreCase = true)) {
                             inItem = true
-                            title = ""; link = ""; pubDate = ""; thumb = null; description = ""
+                            title = ""; link = ""; itemId = ""; pubDate = ""
+                            imageCandidates = mutableListOf(); description = ""
                             currentTag = ""
                         } else if (inItem) {
                             when {
                                 name.equals("thumbnail", ignoreCase = true) &&
                                     (ns.contains("media") || parser.getAttributeValue(null, "url") != null) ->
-                                    thumb = thumb ?: parser.getAttributeValue(null, "url")?.takeIf { it.isNotBlank() }
+                                    addImageCandidate(
+                                        parser.getAttributeValue(null, "url"), 2,
+                                        parser.getAttributeValue(null, "width")?.toIntOrNull() ?: 0,
+                                        parser.getAttributeValue(null, "height")?.toIntOrNull() ?: 0
+                                    )
                                 name.equals("content", ignoreCase = true) && ns.contains("media") ->
-                                    thumb = thumb ?: parser.getAttributeValue(null, "url")
-                                        ?.takeIf { it.isNotBlank() && it.matches(Regex(".*\\.(jpg|jpeg|png|webp)(\\?.*)?", RegexOption.IGNORE_CASE)) }
+                                    run {
+                                        val url = parser.getAttributeValue(null, "url")
+                                        val type = parser.getAttributeValue(null, "type").orEmpty()
+                                        if (type.startsWith("image/", ignoreCase = true) || isImageUrl(url)) {
+                                            addImageCandidate(
+                                                url, 3,
+                                                parser.getAttributeValue(null, "width")?.toIntOrNull() ?: 0,
+                                                parser.getAttributeValue(null, "height")?.toIntOrNull() ?: 0
+                                            )
+                                        }
+                                    }
                                 name.equals("enclosure", ignoreCase = true) -> {
                                     val type = parser.getAttributeValue(null, "type").orEmpty()
                                     if (type.startsWith("image/")) {
-                                        thumb = thumb ?: parser.getAttributeValue(null, "url")?.takeIf { it.isNotBlank() }
+                                        addImageCandidate(
+                                            parser.getAttributeValue(null, "url"), 1,
+                                            parser.getAttributeValue(null, "width")?.toIntOrNull() ?: 0,
+                                            parser.getAttributeValue(null, "height")?.toIntOrNull() ?: 0
+                                        )
+                                    }
+                                }
+                                name.equals("link", ignoreCase = true) -> {
+                                    val href = parser.getAttributeValue(null, "href")
+                                    val rel = parser.getAttributeValue(null, "rel").orEmpty()
+                                    if (link.isBlank() && !href.isNullOrBlank() && (rel.isBlank() || rel == "alternate")) {
+                                        link = href.trim().replaceFirst(
+                                            Regex("^http://arxiv\\.org/abs/", RegexOption.IGNORE_CASE),
+                                            "https://arxiv.org/abs/"
+                                        )
                                     }
                                 }
                             }
@@ -236,6 +396,7 @@ object NewsFeed {
                                 currentTag.equals("title", ignoreCase = true) -> title += text
                                 currentTag.equals("link", ignoreCase = true) ->
                                     if (link.isBlank()) link = text.trim()
+                                currentTag.equals("id", ignoreCase = true) -> if (itemId.isBlank()) itemId = text.trim()
                                 currentTag.equals("pubDate", ignoreCase = true) || currentTag.equals("published", ignoreCase = true) ||
                                     currentTag.equals("updated", ignoreCase = true) -> if (pubDate.isBlank()) pubDate = text.trim()
                                 currentTag.equals("description", ignoreCase = true) || currentTag.equals("summary", ignoreCase = true) ->
@@ -244,18 +405,14 @@ object NewsFeed {
                         }
                     }
                     XmlPullParser.END_TAG -> {
-                        if ((name.equals("link", ignoreCase = true)) && inItem && link.isBlank()) {
-                            // Atom-style <link href="..."/>
-                            link = parser.getAttributeValue(null, "href")?.trim().orEmpty()
-                        }
                         if (name.equals("item", ignoreCase = true) || name.equals("entry", ignoreCase = true)) {
                             inItem = false
-                            if (thumb == null) {
-                                // Fallback: first <img> in the description HTML.
-                                thumb = Regex("<img[^>]+src=[\"']([^\"']+)[\"']")
-                                    .find(description)?.groupValues?.getOrNull(1)
-                                    ?.takeIf { it.startsWith("http") }
-                            }
+                            if (link.isBlank()) link = itemId.trim()
+                                .replaceFirst(Regex("^http://arxiv\\.org/abs/", RegexOption.IGNORE_CASE), "https://arxiv.org/abs/")
+                            val descriptionImage = Regex("<img[^>]+src=[\"']([^\"']+)[\"']", RegexOption.IGNORE_CASE)
+                                .find(description)?.groupValues?.getOrNull(1)
+                            addImageCandidate(descriptionImage, 0)
+                            val thumb = selectBestNewsImageCandidate(imageCandidates)?.url
                             if (title.isNotBlank() && link.isNotBlank()) {
                                 articles.add(
                                     NewsArticle(
@@ -280,24 +437,8 @@ object NewsFeed {
         return articles
     }
 
-    private val dateFormats = listOf(
-        SimpleDateFormat("EEE, dd MMM yyyy HH:mm:ss z", Locale.US),
-        SimpleDateFormat("EEE, dd MMM yyyy HH:mm:ss Z", Locale.US),
-        SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss'Z'", Locale.US),
-        SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ssXXX", Locale.US)
-    )
-
-    private fun parseDate(raw: String): Long {
-        if (raw.isBlank()) return System.currentTimeMillis()
-        for (f in dateFormats) {
-            try {
-                return f.parse(raw)?.time ?: continue
-            } catch (_: Exception) { /* try next */ }
-        }
-        return System.currentTimeMillis()
-    }
-
     fun timeAgo(ts: Long): String {
+        if (ts <= 0L) return "date unavailable"
         val diff = System.currentTimeMillis() - ts
         val mins = diff / 60_000
         return when {
@@ -307,6 +448,9 @@ object NewsFeed {
             else -> "${mins / 1440}d ago"
         }
     }
+
+    private fun isImageUrl(url: String?): Boolean =
+        url?.matches(Regex(".*\\.(jpg|jpeg|png|webp|avif)(\\?.*)?", RegexOption.IGNORE_CASE)) == true
 
     // ---- Disk cache (raw article list, pipe-separated) ----
     private fun cacheFile(context: Context, category: NewsCategory): File {
@@ -352,7 +496,9 @@ object NewsFeed {
  * memory LRU + disk cache in cacheDir, OkHttp download on IO.
  */
 object NewsImageCache {
-    private val memCache = LruCache<String, Bitmap>(40)
+    private val memCache = object : LruCache<String, Bitmap>(24 * 1024 * 1024) {
+        override fun sizeOf(key: String, value: Bitmap): Int = value.allocationByteCount.coerceAtLeast(value.byteCount)
+    }
     private val lock = Any()
 
     private val client: OkHttpClient by lazy {
@@ -376,8 +522,10 @@ object NewsImageCache {
                 .header("User-Agent", NewsFeed.FEED_USER_AGENT).build()
             client.newCall(req).execute().use { resp ->
                 if (!resp.isSuccessful) return@withContext null
-                val bytes = resp.body?.bytes() ?: return@withContext null
-                if (bytes.size > 4 * 1024 * 1024) return@withContext null // sanity cap
+                val body = resp.body ?: return@withContext null
+                if (body.contentLength() > 8 * 1024 * 1024) return@withContext null // sanity cap
+                val bytes = body.bytes()
+                if (bytes.size > 8 * 1024 * 1024) return@withContext null
                 file.parentFile?.mkdirs()
                 file.writeBytes(bytes)
                 decode(file)?.let {
@@ -401,8 +549,8 @@ object NewsImageCache {
             }
             BitmapFactory.decodeFile(file.absolutePath, opts)
             var sample = 1
-            val target = 480
-            while (opts.outWidth / (sample * 2) >= target && opts.outHeight / (sample * 2) >= target) sample *= 2
+            val target = 1600
+            while (maxOf(opts.outWidth, opts.outHeight) / (sample * 2) >= target) sample *= 2
             BitmapFactory.decodeFile(file.absolutePath, BitmapFactory.Options().apply { inSampleSize = sample })
         } catch (_: Exception) { null }
     }

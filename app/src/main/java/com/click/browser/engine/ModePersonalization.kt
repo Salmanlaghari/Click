@@ -44,7 +44,7 @@ object ModePersonalization {
         BrowserMode.SIMPLE -> "Google"
         BrowserMode.DEVELOPER -> "DuckDuckGo"
         BrowserMode.HACK -> "Brave Search"
-        BrowserMode.ADVANCED -> "Google"
+        BrowserMode.ADVANCED -> "Perplexity"
     }
 
     /** Engines offered per mode in Settings (default first). */
@@ -52,7 +52,7 @@ object ModePersonalization {
         BrowserMode.SIMPLE -> listOf("Google", "Bing", "Yahoo", "DuckDuckGo")
         BrowserMode.DEVELOPER -> listOf("DuckDuckGo", "Google", "Bing", "Yandex")
         BrowserMode.HACK -> listOf("Brave Search", "Startpage", "DuckDuckGo", "Perplexity")
-        BrowserMode.ADVANCED -> listOf("Google", "Brave Search", "DuckDuckGo", "Startpage")
+        BrowserMode.ADVANCED -> listOf("Perplexity", "Google", "Brave Search", "Startpage")
     }
 
     /**
@@ -105,10 +105,10 @@ object ModePersonalization {
             QuickSiteDef("YouTube", "https://youtube.com", 0xFFFF0000, "▶", 0xFFFFFFFF),
             QuickSiteDef("Stack Overflow", "https://stackoverflow.com", 0xFFF48024, "S", 0xFFFFFFFF)
         )
-        // Click Advance: minimal fresh-space starter set.
+        // Click Advance: minimal fresh-space starter set for research and study.
         BrowserMode.ADVANCED -> listOf(
-            QuickSiteDef("Google", "https://google.com", 0xFF4285F4, "G", 0xFFFFFFFF),
-            QuickSiteDef("YouTube", "https://youtube.com", 0xFFFF0000, "▶", 0xFFFFFFFF),
+            QuickSiteDef("arXiv", "https://arxiv.org", 0xFFB31B1B, "a", 0xFFFFFFFF),
+            QuickSiteDef("Perplexity", "https://www.perplexity.ai", 0xFF202020, "P", 0xFFFFFFFF),
             QuickSiteDef("GitHub", "https://github.com", 0xFF24292F, "G", 0xFFFFFFFF),
             QuickSiteDef("Wikipedia", "https://wikipedia.org", 0xFFF5F5F5, "W", 0xFF333333)
         )
