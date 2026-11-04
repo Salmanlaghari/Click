@@ -62,6 +62,15 @@ class InstalledAddonsPanelTest {
     }
 
     @Test
+    fun metadataMappingFailureCanBeHandledWithoutEscapingTheCallback() {
+        val result = safeBuildInstalledAddonPanelItems {
+            throw IllegalStateException("invalid add-on metadata")
+        }
+
+        assertTrue(result.isFailure)
+    }
+
+    @Test
     fun actionAndOptionsRequireAnEnabledPolicyApprovedAddonAndSafeOptionsUrl() {
         val enabledAddon = InstalledAddonPanelItem(
             id = "action@example",

@@ -31,8 +31,12 @@ internal fun dispatchNormalTabActionClick(
 ): Boolean {
     if (tabId !in attachedTabIds || !isEnabled || !isPolicyApproved) return false
     activateTab(tabId)
-    clickAction()
-    return true
+    return try {
+        clickAction()
+        true
+    } catch (_: RuntimeException) {
+        false
+    }
 }
 
 /**

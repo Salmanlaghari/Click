@@ -24,6 +24,26 @@ class NormalTabExtensionSupportTest {
     }
 
     @Test
+    fun clickActionFailureReturnsFalseAfterReactivatingTheRequestedTab() {
+        val events = mutableListOf<String>()
+
+        val dispatched = dispatchNormalTabActionClick(
+            tabId = "visible-tab",
+            attachedTabIds = setOf("visible-tab"),
+            isEnabled = true,
+            isPolicyApproved = true,
+            activateTab = { events += "activate:$it" },
+            clickAction = {
+                events += "click"
+                throw IllegalStateException("action no longer available")
+            }
+        )
+
+        assertFalse(dispatched)
+        assertEquals(listOf("activate:visible-tab", "click"), events)
+    }
+
+    @Test
     fun clickIsRejectedWhenTheRequestedSessionIsNoLongerAttached() {
         val events = mutableListOf<String>()
 

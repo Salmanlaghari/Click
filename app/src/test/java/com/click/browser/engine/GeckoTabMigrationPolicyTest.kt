@@ -106,6 +106,32 @@ class GeckoTabMigrationPolicyTest {
     }
 
     @Test
+    fun exitCleanupIncludesBootAndUsedContextsAndDeduplicatesSharedModes() {
+        val defaultProfile = geckoContextIdFor(BrowserMode.SIMPLE)
+        val advancedProfile = geckoContextIdFor(BrowserMode.ADVANCED)
+
+        assertEquals(
+            listOf(defaultProfile),
+            geckoContextIdsToClearOnExit(BrowserMode.SIMPLE, emptyList())
+        )
+        assertEquals(
+            listOf(defaultProfile, advancedProfile),
+            geckoContextIdsToClearOnExit(BrowserMode.SIMPLE, listOf(advancedProfile))
+        )
+        assertEquals(
+            listOf(advancedProfile, defaultProfile),
+            geckoContextIdsToClearOnExit(BrowserMode.ADVANCED, listOf(defaultProfile))
+        )
+        assertEquals(
+            listOf(defaultProfile),
+            geckoContextIdsToClearOnExit(
+                BrowserMode.SIMPLE,
+                listOf(defaultProfile, geckoContextIdFor(BrowserMode.DEVELOPER), geckoContextIdFor(BrowserMode.HACK))
+            )
+        )
+    }
+
+    @Test
     fun targetBlankAllowsWebPagesAndBlankButRejectsExecutableOrExternalSchemes() {
         assertTrue(isAllowedGeckoNewWindowUri("https://example.com/path"))
         assertTrue(isAllowedGeckoNewWindowUri("http://example.org/"))

@@ -16,6 +16,11 @@ import com.click.browser.extensions.NormalTabExtensionRouter
 internal fun geckoContextIdFor(mode: BrowserMode): String =
     if (mode == BrowserMode.ADVANCED) "click-profile-advanced" else "click-profile-default"
 
+internal fun geckoContextIdsToClearOnExit(
+    bootMode: BrowserMode,
+    usedContextIds: Collection<String>
+): List<String> = (listOf(geckoContextIdFor(bootMode)) + usedContextIds).distinct()
+
 internal fun isAllowedGeckoNewWindowUri(uri: String): Boolean {
     if (uri == "about:blank") return true
     val scheme = runCatching { java.net.URI(uri).scheme?.lowercase() }.getOrNull()

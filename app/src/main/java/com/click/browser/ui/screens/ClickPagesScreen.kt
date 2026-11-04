@@ -113,7 +113,7 @@ private fun FlagsScreen(
             fontWeight = FontWeight.ExtraBold
         )
         Text(
-            "These features are experimental. Every toggle works for real — changes apply to new and existing pages.",
+            "These features are experimental. Page-level controls backed by WebView settings affect WebView tabs only, not regular GeckoView tabs. GeckoView still enforces Click's HTTPS/navigation, tracking-protection, and denied-device-permission policies.",
             color = theme.onBackground.copy(alpha = 0.65f),
             fontSize = 13.sp
         )

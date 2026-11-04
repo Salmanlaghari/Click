@@ -105,6 +105,7 @@ import com.click.browser.extensions.ExtensionInstallPolicy
 import com.click.browser.extensions.InstalledAddonPanelAction
 import com.click.browser.extensions.InstalledAddonPanelItem
 import com.click.browser.extensions.InstalledAddonsPanel
+import com.click.browser.extensions.safeBuildInstalledAddonPanelItems
 import com.click.browser.extensions.NormalTabExtensionAction
 import com.click.browser.extensions.NormalTabExtensionPopup
 import com.click.browser.extensions.NormalTabExtensionRouter
@@ -422,6 +423,8 @@ class MainActivity : FragmentActivity() {
     // Engine-neutral lifecycle registry for regular Gecko tabs. Private tabs
     // remain on WebView until Gecko's private-profile cleanup is verified.
     private val liveBrowserSessions = mutableListOf<BrowserTabSession>()
+    // Main-thread set of exact Gecko storage contexts used during this Activity.
+    private val geckoContextIdsUsedInActivity = linkedSetOf<String>()
     private val geckoTabActionsState = androidx.compose.runtime.mutableStateOf(
         emptyMap<String, List<NormalTabExtensionAction>>()
     )
@@ -553,7 +556,8 @@ class MainActivity : FragmentActivity() {
         if (liveFlags.clearOnExit) {
             // GeckoView requires sessions for a context to be closed before its
             // persistent context data can be fully removed.
-            requestGeckoModeDataClear(V9Engine.bootMode)
+            geckoContextIdsToClearOnExit(V9Engine.bootMode, geckoContextIdsUsedInActivity)
+                .forEach(::requestGeckoContextDataClear)
             try {
                 liveWebViews.forEach { it.clearCache(true) }
                 android.webkit.CookieManager.getInstance().removeAllCookies(null)
@@ -1651,34 +1655,48 @@ class MainActivity : FragmentActivity() {
                 try {
                     ExtensionBrowserRuntime.get(applicationContext).webExtensionController.list().accept(
                         { extensions ->
-                            val items = extensions.orEmpty()
-                                .filterNot { it.isBuiltIn }
-                                .map { extension ->
-                                    val metadata = extension.metaData
-                                    val safeOptionsUrl = ExtensionInstallPolicy.safeExtensionOptionsPageUrl(
-                                        metadata.baseUrl,
-                                        metadata.optionsPageUrl
-                                    )
-                                    InstalledAddonPanelItem(
-                                        id = extension.id,
-                                        name = metadata.name?.takeIf(String::isNotBlank) ?: "Unnamed add-on",
-                                        version = metadata.version.takeIf(String::isNotBlank) ?: "Unknown",
-                                        enabled = metadata.enabled,
-                                        policyBlockers = extensionPolicyBlockers(extension),
-                                        description = metadata.description?.takeIf(String::isNotBlank),
-                                        optionsPageUrl = safeOptionsUrl,
-                                        optionsPageBaseUrl = metadata.baseUrl.takeIf { safeOptionsUrl != null },
-                                        hasDeclaredOptionsPage = !metadata.optionsPageUrl.isNullOrBlank()
-                                    )
-                                }
-                                .sortedBy { it.name.lowercase(Locale.ROOT) }
-                            runOnUiThread {
-                                if (requestId == installedAddonPanelRequestId) {
-                                    installedAddonPanelItems = items
-                                    installedAddonPanelLoading = false
-                                    installedAddonPanelError = null
-                                }
+                            val itemResult = safeBuildInstalledAddonPanelItems {
+                                extensions.orEmpty()
+                                    .filterNot { it.isBuiltIn }
+                                    .map { extension ->
+                                        val metadata = extension.metaData
+                                        val safeOptionsUrl = ExtensionInstallPolicy.safeExtensionOptionsPageUrl(
+                                            metadata.baseUrl,
+                                            metadata.optionsPageUrl
+                                        )
+                                        InstalledAddonPanelItem(
+                                            id = extension.id,
+                                            name = metadata.name?.takeIf(String::isNotBlank) ?: "Unnamed add-on",
+                                            version = metadata.version.takeIf(String::isNotBlank) ?: "Unknown",
+                                            enabled = metadata.enabled,
+                                            policyBlockers = extensionPolicyBlockers(extension),
+                                            description = metadata.description?.takeIf(String::isNotBlank),
+                                            optionsPageUrl = safeOptionsUrl,
+                                            optionsPageBaseUrl = metadata.baseUrl.takeIf { safeOptionsUrl != null },
+                                            hasDeclaredOptionsPage = !metadata.optionsPageUrl.isNullOrBlank()
+                                        )
+                                    }
+                                    .sortedBy { it.name.lowercase(Locale.ROOT) }
                             }
+                            itemResult.fold(
+                                onSuccess = { items ->
+                                    runOnUiThread {
+                                        if (requestId == installedAddonPanelRequestId) {
+                                            installedAddonPanelItems = items
+                                            installedAddonPanelLoading = false
+                                            installedAddonPanelError = null
+                                        }
+                                    }
+                                },
+                                onFailure = {
+                                    runOnUiThread {
+                                        if (requestId == installedAddonPanelRequestId) {
+                                            installedAddonPanelLoading = false
+                                            installedAddonPanelError = "Couldn't load installed add-ons. Please try again."
+                                        }
+                                    }
+                                }
+                            )
                         },
                         { error ->
                             runOnUiThread {
@@ -3549,6 +3567,9 @@ class MainActivity : FragmentActivity() {
                                                             existingSession.detachFromParent()
                                                             existingSession.view
                                                         } else if (currentTab.engine == BrowserTabEngine.GECKOVIEW) {
+                                                            geckoContextIdsUsedInActivity +=
+                                                                currentTab.pendingGeckoSession?.settings?.contextId
+                                                                    ?: geckoContextIdFor(activeMode)
                                                             val tabId = currentTab.id
                                                             var createdGeckoSession: GeckoBrowserTabSession? = null
                                                             val geckoSession = GeckoBrowserTabSession(

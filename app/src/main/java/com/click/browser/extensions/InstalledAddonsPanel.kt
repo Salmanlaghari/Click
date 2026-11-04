@@ -68,6 +68,14 @@ internal data class InstalledAddonPanelItem(
         get() = enabled && policyBlockers.isEmpty() && toolbarAction == null && optionsPageUrl == null
 }
 
+internal fun safeBuildInstalledAddonPanelItems(
+    buildItems: () -> List<InstalledAddonPanelItem>
+): Result<List<InstalledAddonPanelItem>> = try {
+    Result.success(buildItems())
+} catch (exception: Exception) {
+    Result.failure(exception)
+}
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 internal fun InstalledAddonsPanel(
