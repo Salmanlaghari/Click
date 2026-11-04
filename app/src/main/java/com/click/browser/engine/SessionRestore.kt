@@ -13,8 +13,12 @@ import org.json.JSONObject
 data class SavedTab(
     val url: String,
     val title: String,
-    val engine: BrowserTabEngine = BrowserTabEngine.WEBVIEW
+    val engine: BrowserTabEngine = BrowserTabEngine.GECKOVIEW
 )
+
+/** Legacy persisted WebView tabs are restored into the regular GeckoView provider. */
+internal fun migrateRestoredRegularTabEngine(storedEngine: BrowserTabEngine): BrowserTabEngine =
+    if (storedEngine == BrowserTabEngine.WEBVIEW) BrowserTabEngine.GECKOVIEW else storedEngine
 
 internal data class RestorableTabState(
     val url: String,
@@ -155,10 +159,16 @@ object SessionRestore {
                 if (isRestorableUrl(url)) {
                     val engine = runCatching {
                         BrowserTabEngine.valueOf(
-                            obj.optString("engine", BrowserTabEngine.WEBVIEW.name)
+                            obj.optString("engine", BrowserTabEngine.GECKOVIEW.name)
                         )
-                    }.getOrDefault(BrowserTabEngine.WEBVIEW)
-                    list.add(SavedTab(url, obj.optString("title", url), engine))
+                    }.getOrDefault(BrowserTabEngine.GECKOVIEW)
+                    list.add(
+                        SavedTab(
+                            url,
+                            obj.optString("title", url),
+                            migrateRestoredRegularTabEngine(engine)
+                        )
+                    )
                 }
             }
         } catch (_: Exception) {

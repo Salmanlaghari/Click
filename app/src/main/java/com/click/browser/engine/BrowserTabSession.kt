@@ -9,6 +9,10 @@ enum class BrowserTabEngine {
     GECKOVIEW
 }
 
+/** Regular browsing uses GeckoView; private tabs stay on the existing WebView path. */
+internal fun defaultBrowserTabEngine(isIncognito: Boolean): BrowserTabEngine =
+    if (isIncognito) BrowserTabEngine.WEBVIEW else BrowserTabEngine.GECKOVIEW
+
 /**
  * Navigation operations shared by a logical browser tab regardless of its
  * rendering engine. Keep profile-wide storage, cookies, history, downloads,
@@ -28,8 +32,9 @@ internal interface BrowserTabNavigation {
  * The rendering/lifecycle owner for one Click tab.
  *
  * The view may be detached and reattached when Compose switches tabs. Only the
- * tab LRU path should destroy the underlying view. WebView remains the default
- * provider; GeckoView can be selected explicitly for a normal tab in this phase.
+ * tab LRU path should destroy the underlying view. GeckoView is used for regular
+ * tabs; private tabs remain on the existing WebView path until private storage
+ * isolation and cleanup are proven.
  */
 internal interface BrowserTabSession : BrowserTabNavigation {
     val view: View
@@ -44,7 +49,7 @@ internal interface BrowserTabSession : BrowserTabNavigation {
     fun destroy()
 }
 
-/** The compatibility adapter used for the existing default WebView tabs. */
+/** Compatibility adapter retained for private tabs and explicit WebView fallback. */
 internal class WebViewBrowserTabSession(
     val webView: WebView,
 ) : BrowserTabSession {

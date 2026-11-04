@@ -124,9 +124,9 @@ class TabItem(
     title: String = "New Tab",
     isIncognito: Boolean = false,
     initialWebView: WebView? = null,
-    initialEngine: BrowserTabEngine = BrowserTabEngine.WEBVIEW
+    initialEngine: BrowserTabEngine = defaultBrowserTabEngine(isIncognito)
 ) {
-    /** Per-tab engine selection; WebView remains the default. */
+    /** Per-tab engine selection; regular tabs use GeckoView, private tabs stay WebView-only. */
     var engine by mutableStateOf(initialEngine)
 
     internal var browserSession: BrowserTabSession? by mutableStateOf(
@@ -402,8 +402,9 @@ class MainActivity : FragmentActivity() {
 
     // Registry of live WebViews for flag-driven cleanup (clear-on-exit).
     private val liveWebViews = mutableListOf<android.webkit.WebView>()
-    // Engine-neutral lifecycle registry. WebView remains the default provider;
-    // opt-in Gecko sessions use a profile-scoped context clear on clear-on-exit.
+    // Engine-neutral lifecycle registry. Regular tabs use GeckoView; WebView
+    // remains for private tabs and explicit fallback. Gecko contexts are cleared
+    // through the profile-scoped clear-on-exit path.
     private val liveBrowserSessions = mutableListOf<BrowserTabSession>()
     private val geckoTabActionsState = androidx.compose.runtime.mutableStateOf(
         emptyMap<String, List<NormalTabExtensionAction>>()
@@ -1776,7 +1777,8 @@ class MainActivity : FragmentActivity() {
             var devToolsDeviceInfo by remember { mutableStateOf<DeviceInfo?>(null) }
 
             LaunchedEffect(showDevToolsSheet, activeMode, activeTabIndex) {
-                val capture = showDevToolsSheet && activeMode == BrowserMode.DEVELOPER
+                val capture = showDevToolsSheet && activeMode == BrowserMode.DEVELOPER &&
+                    currentTab.engine == BrowserTabEngine.WEBVIEW
                 if (capture) {
                     if (devToolsTargetWebView !== currentTab.webView) {
                         devToolsLogs.clear()
@@ -1794,6 +1796,45 @@ class MainActivity : FragmentActivity() {
             // (Prince: no auto-hide on scroll — user control via the drawer toggle.)
             var immersiveMode by remember { mutableStateOf(false) }
             var videoFullscreenActive by remember { mutableStateOf(false) }
+            LaunchedEffect(currentTab.id) {
+                if (videoFullscreenActive) runCatching { exitFullscreenVideo?.invoke() }
+                videoFullscreenActive = false
+                exitFullscreenVideo = null
+            }
+
+            // These screens/actions are still backed by android.webkit.WebView.
+            // If any secondary entry point requests one for Gecko, close it and
+            // explain the gap rather than silently showing stale/empty controls.
+            LaunchedEffect(
+                currentTab.engine,
+                showCookieManager,
+                showQuickTogglesDialog,
+                showFindInPageDialog,
+                showSiteSettings,
+                showTranslateSheet,
+                showTextScaleSheet,
+                showDevToolsSheet
+            ) {
+                if (currentTab.engine == BrowserTabEngine.GECKOVIEW) {
+                    val unavailable = when {
+                        showCookieManager -> { showCookieManager = false; "Cookie manager" }
+                        showQuickTogglesDialog -> { showQuickTogglesDialog = false; "Page quick toggles" }
+                        showFindInPageDialog -> { showFindInPageDialog = false; "Find in page" }
+                        showSiteSettings -> { showSiteSettings = false; "Per-site controls" }
+                        showTranslateSheet -> { showTranslateSheet = false; "Page translation" }
+                        showTextScaleSheet -> { showTextScaleSheet = false; "Page text zoom" }
+                        showDevToolsSheet -> { showDevToolsSheet = false; "DevTools" }
+                        else -> null
+                    }
+                    unavailable?.let {
+                        Toast.makeText(
+                            this@MainActivity,
+                            "$it is not yet connected to GeckoView; WebView data/settings were not used.",
+                            Toast.LENGTH_LONG
+                        ).show()
+                    }
+                }
+            }
 
             // Pull-to-refresh state for web pages.
             var isRefreshing by remember { mutableStateOf(false) }
@@ -1809,11 +1850,45 @@ class MainActivity : FragmentActivity() {
              */
             fun handleFeature(id: FeatureId) {
                 showFeatureMenu = false
+                if (currentTab.engine == BrowserTabEngine.GECKOVIEW) {
+                    val unavailable = when (id) {
+                        FeatureId.COOKIES -> "Cookie manager"
+                        FeatureId.DEVTOOLS -> "DevTools"
+                        FeatureId.TRANSLATE -> "Page translation"
+                        FeatureId.DESKTOP -> "Desktop-layout override"
+                        FeatureId.FIND_IN_PAGE -> "Find in page"
+                        FeatureId.ADBLOCK -> "Click's custom AdBlock filter"
+                        FeatureId.READER -> "Reader mode"
+                        FeatureId.SCREENSHOT -> "Page screenshot"
+                        FeatureId.SAVE_PDF -> "Print / Save as PDF"
+                        FeatureId.TEXT_SIZE -> "Page text zoom"
+                        FeatureId.TOOLS -> "WebView page quick toggles"
+                        else -> null
+                    }
+                    if (unavailable != null) {
+                        val detail = if (id == FeatureId.ADBLOCK) {
+                            "GeckoView tracking protection remains enabled."
+                        } else {
+                            "This tool is not yet connected to GeckoView; the page stays open."
+                        }
+                        Toast.makeText(this@MainActivity, "$unavailable unavailable. $detail", Toast.LENGTH_LONG).show()
+                        return
+                    }
+                }
                 when (id) {
                     FeatureId.HISTORY -> showHistory = true
                     FeatureId.SETTINGS -> showSettings = true
                     FeatureId.STORAGE, FeatureId.CLEAR_DATA -> showDeleteBrowsingConfirm = true
-                    FeatureId.PASSWORDS -> showPasswordManager = true
+                    FeatureId.PASSWORDS -> {
+                        showPasswordManager = true
+                        if (currentTab.engine == BrowserTabEngine.GECKOVIEW) {
+                            Toast.makeText(
+                                this@MainActivity,
+                                "Saved logins are available; page autofill/save capture is not wired to GeckoView yet.",
+                                Toast.LENGTH_LONG
+                            ).show()
+                        }
+                    }
                     FeatureId.COOKIES -> showCookieManager = true
                     FeatureId.TOOLS -> showQuickTogglesDialog = true
                     FeatureId.DEVTOOLS -> {
@@ -2189,6 +2264,7 @@ class MainActivity : FragmentActivity() {
             BackHandler(enabled = currentTab.url != "about:blank" && exitFullscreenVideo == null) {
                 if (!currentTab.browserSession.goBackIfPossible()) {
                     currentTab.url = "about:blank"
+                    currentTab.browserSession?.loadUrl("about:blank")
                 }
             }
 
@@ -3277,7 +3353,7 @@ class MainActivity : FragmentActivity() {
                                 // SURFACE 2 — Browsing: full-width address box + privacy strip.
                                 // Home keeps the same tab/address chrome, plus its own
                                 // prominent search field below the greeting.
-                                if (!flagsUi.bottomAddressBar || showOverlays) BrowseTopBarBlock()
+                                if (!videoFullscreenActive && (!flagsUi.bottomAddressBar || showOverlays)) BrowseTopBarBlock()
 
                                 // 4. MAIN CONTENT CONTAINER (WIDGET-STYLE DASHBOARD OR WEBVIEW)
                                 // Nested-scroll: drives the toolbar auto-hide on page scroll.
@@ -3423,6 +3499,19 @@ class MainActivity : FragmentActivity() {
                                                                 onTitleChanged = { title ->
                                                                     tabs.firstOrNull { it.id == tabId }?.title = title
                                                                 },
+                                                                onPageLoaded = { url ->
+                                                                    val loadedTab = tabs.firstOrNull { it.id == tabId }
+                                                                    if (loadedTab != null && !loadedTab.isIncognito &&
+                                                                        (url.startsWith("http://") || url.startsWith("https://"))
+                                                                    ) {
+                                                                        val title = loadedTab.title.ifBlank { url }
+                                                                        scope.launch {
+                                                                            repository.addHistoryItem(
+                                                                                HistoryItem(title, url, System.currentTimeMillis())
+                                                                            )
+                                                                        }
+                                                                    }
+                                                                },
                                                                 onProgressChanged = { progress, loading ->
                                                                     tabs.firstOrNull { it.id == tabId }?.let { tab ->
                                                                         tab.loadProgress = progress
@@ -3435,6 +3524,10 @@ class MainActivity : FragmentActivity() {
                                                                 onFullscreenChanged = { active ->
                                                                     if (tabs.getOrNull(activeTabIndex)?.id == tabId) {
                                                                         videoFullscreenActive = active
+                                                                        if (active) {
+                                                                            showFeatureMenu = false
+                                                                            showBrowserMenu = false
+                                                                        }
                                                                         exitFullscreenVideo = if (active) {
                                                                             { createdGeckoSession?.session?.exitFullScreen() }
                                                                         } else null
@@ -4321,11 +4414,14 @@ class MainActivity : FragmentActivity() {
                             // Premium bottom nav (Phase 1): Home · Tabs (count badge) · big glowing
                             // AI center · Bookmarks · Menu. Theme follows the selected palette
                             // and per-mode light/dark choice.
-                            if (showOverlays && !immersiveMode) {
+                            if (showOverlays && !immersiveMode && !videoFullscreenActive) {
                                 ClickBottomNav(
                                     theme = theme,
                                     tabCount = tabs.size,
-                                    onHome = { currentTab.url = "about:blank" },
+                                    onHome = {
+                                        currentTab.url = "about:blank"
+                                        currentTab.browserSession?.loadUrl("about:blank")
+                                    },
                                     onTabs = { showTabsManager = true },
                                     onAi = { if (tamperBlocked) showTamperDialog = true else showAiChat = true },
                                     onBookmarks = { showBookmarks = true },
@@ -4340,12 +4436,12 @@ class MainActivity : FragmentActivity() {
                             // Polish: one-shot theme crossfade (battery-safe).
                             // Bottom-address-bar option: bar renders below the page,
                             // padded above the overlaid bottom nav so they never overlap.
-                            if (flagsUi.bottomAddressBar && !showOverlays) {
+                            if (flagsUi.bottomAddressBar && !showOverlays && !videoFullscreenActive) {
                                 Box(modifier = Modifier.padding(bottom = 76.dp)) {
                                     BrowseTopBarBlock()
                                 }
                             }
-                            if (!showOverlays && !immersiveMode) {
+                            if (!showOverlays && !immersiveMode && !videoFullscreenActive) {
                                 Crossfade(
                                     targetState = theme,
                                     label = "browseNavTheme",
@@ -4356,7 +4452,10 @@ class MainActivity : FragmentActivity() {
                                         activeMode = activeMode,
                                         tabCount = tabs.size,
                                         onDrawerClick = { scope.launch { drawerState.open() } },
-                                        onHome = { currentTab.url = "about:blank" },
+                                        onHome = {
+                                            currentTab.url = "about:blank"
+                                            currentTab.browserSession?.loadUrl("about:blank")
+                                        },
                                         onTabs = { showTabsManager = true },
                                         onMenu = { showBrowserMenu = true }
                                     )
@@ -4374,7 +4473,7 @@ class MainActivity : FragmentActivity() {
                             // (replaces the old floating home button; the 32-feature
                             // panel covers navigation, and Home stays in the bottom
                             // nav). Hidden in immersive fullscreen for chrome-free view.
-                            if (!immersiveMode) {
+                            if (!immersiveMode && !videoFullscreenActive) {
                                 FeatureMenuFabOverlay(
                                     theme = theme,
                                     expanded = showFeatureMenu,
@@ -5649,13 +5748,23 @@ class MainActivity : FragmentActivity() {
                                             scope.launch {
                                                 val responseBody = accepted.responseBody
                                                 if (responseBody != null) {
-                                                    DownloadHelper.enqueueResponse(
+                                                    val saved = DownloadHelper.enqueueResponse(
                                                         this@MainActivity,
                                                         responseBody,
                                                         accepted.fileName,
                                                         accepted.mimeType,
                                                         locationOverride = downloadDestination
                                                     )
+                                                    if (saved != null) {
+                                                        repository.addDownloadItem(
+                                                            DownloadItem(
+                                                                saved.fileName,
+                                                                accepted.url,
+                                                                saved.location,
+                                                                System.currentTimeMillis()
+                                                            )
+                                                        )
+                                                    }
                                                 } else {
                                                     DownloadHelper.enqueue(
                                                         this@MainActivity,
@@ -6079,13 +6188,24 @@ class MainActivity : FragmentActivity() {
 
                             // Delete browsing data — confirmation first.
                             if (showDeleteBrowsingConfirm) {
+                                val hasOpenGeckoTabs = tabs.any { it.engine == BrowserTabEngine.GECKOVIEW }
                                 AlertDialog(
                                     onDismissRequest = { showDeleteBrowsingConfirm = false },
                                     title = { Text("Delete browsing data?") },
-                                    text = { Text("This clears history, cache, cookies and site data for all tabs.") },
+                                    text = {
+                                        Text(
+                                            if (hasOpenGeckoTabs) {
+                                                "Nothing will be deleted while GeckoView tabs are open. GeckoView 153 requires every session in the profile to be closed first; this screen cannot safely close and reopen those sessions yet. Switch/close Gecko tabs before retrying."
+                                            } else {
+                                                "This clears Click history and WebView data, and requests a clear of the current GeckoView mode profile."
+                                            }
+                                        )
+                                    },
                                     confirmButton = {
                                         TextButton(onClick = {
                                             scope.launch {
+                                                destroyLiveGeckoSessions()
+                                                requestGeckoModeDataClear(activeMode)
                                                 repository.clearHistory()
                                                 tabs.forEach { tab ->
                                                     tab.webView?.clearHistory()
@@ -6095,9 +6215,15 @@ class MainActivity : FragmentActivity() {
                                                 android.webkit.CookieManager.getInstance().flush()
                                                 android.webkit.WebStorage.getInstance().deleteAllData()
                                                 showDeleteBrowsingConfirm = false
-                                                Toast.makeText(this@MainActivity, "Browsing data deleted.", Toast.LENGTH_SHORT).show()
+                                                Toast.makeText(
+                                                    this@MainActivity,
+                                                    "Browsing-data clear requested for this profile.",
+                                                    Toast.LENGTH_SHORT
+                                                ).show()
                                             }
-                                        }) { Text("Delete") }
+                                        }, enabled = !hasOpenGeckoTabs) {
+                                            Text(if (hasOpenGeckoTabs) "Unavailable" else "Delete")
+                                        }
                                     },
                                     dismissButton = {
                                         TextButton(onClick = { showDeleteBrowsingConfirm = false }) { Text("Cancel") }

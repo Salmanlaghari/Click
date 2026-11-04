@@ -26,6 +26,8 @@ import java.io.InputStream
  *   OkHttp into the tree (DownloadManager can't write to SAF URIs).
  *   Falls back to public Downloads if the tree is gone.
  */
+data class SavedAuthenticatedDownload(val fileName: String, val location: String)
+
 object DownloadHelper {
 
     /** Shared OkHttpClient — reused across downloads (connection pooling). */
@@ -78,7 +80,7 @@ object DownloadHelper {
         fileName: String,
         mimeType: String?,
         locationOverride: String? = null
-    ) {
+    ): SavedAuthenticatedDownload? {
         val safeName = fileName.replace(Regex("[\\\\/:*?\"<>|]"), "_")
             .trim().take(180).ifBlank { "download" }
         val location = locationOverride?.let(DownloadSettings::normalize) ?: try {
@@ -86,7 +88,7 @@ object DownloadHelper {
         } catch (_: Exception) {
             DownloadSettings.LOCATION_PHONE
         }
-        val result = withContext(Dispatchers.IO) {
+        val savedLocation = withContext(Dispatchers.IO) {
             val staged = File.createTempFile("click-gecko-download-", ".tmp", context.cacheDir)
             try {
                 responseBody.use { input ->
@@ -97,20 +99,21 @@ object DownloadHelper {
                         val directory = context.getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS)
                             ?: File(context.filesDir, Environment.DIRECTORY_DOWNLOADS)
                         directory.mkdirs()
-                        File(directory, safeName).outputStream().use { output ->
+                        val destination = File(directory, safeName)
+                        destination.outputStream().use { output ->
                             staged.inputStream().use { input -> input.copyTo(output) }
                         }
-                        true
+                        destination.absolutePath
                     }
                     DownloadSettings.LOCATION_CUSTOM -> {
-                        if (copyToCustomFolder(context, staged, safeName, mimeType)) true
-                        else copyToPublicDownloads(context, staged, safeName, mimeType)
+                        copyToCustomFolder(context, staged, safeName, mimeType)
+                            ?: copyToPublicDownloads(context, staged, safeName, mimeType)
                     }
                     else -> copyToPublicDownloads(context, staged, safeName, mimeType)
                 }
             } catch (_: Exception) {
                 runCatching { responseBody.close() }
-                false
+                null
             } finally {
                 runCatching { staged.delete() }
             }
@@ -118,10 +121,11 @@ object DownloadHelper {
         withContext(Dispatchers.Main) {
             Toast.makeText(
                 context,
-                if (result) "Saved $safeName" else "Could not save the authenticated download. Check the selected folder.",
+                if (savedLocation != null) "Saved $safeName" else "Could not save the authenticated download. Check the selected folder.",
                 Toast.LENGTH_LONG
             ).show()
         }
+        return savedLocation?.let { SavedAuthenticatedDownload(safeName, it) }
     }
 
     private suspend fun copyToCustomFolder(
@@ -129,21 +133,21 @@ object DownloadHelper {
         source: File,
         fileName: String,
         mimeType: String?
-    ): Boolean {
-        val treeUri = DownloadSettings.customUri(context) ?: return false
-        val tree = DocumentFile.fromTreeUri(context, treeUri) ?: return false
-        if (!tree.canWrite()) return false
+    ): String? {
+        val treeUri = DownloadSettings.customUri(context) ?: return null
+        val tree = DocumentFile.fromTreeUri(context, treeUri) ?: return null
+        if (!tree.canWrite()) return null
         tree.findFile(fileName)?.delete()
         val document = tree.createFile(mimeType?.takeIf { it.isNotBlank() } ?: guessMime(fileName), fileName)
-            ?: return false
+            ?: return null
         return try {
             context.contentResolver.openOutputStream(document.uri)?.use { output ->
                 source.inputStream().use { it.copyTo(output) }
-            } ?: return false
-            true
+            } ?: return null
+            document.uri.toString()
         } catch (_: Exception) {
             runCatching { document.delete() }
-            false
+            null
         }
     }
 
@@ -152,7 +156,7 @@ object DownloadHelper {
         source: File,
         fileName: String,
         mimeType: String?
-    ): Boolean {
+    ): String? {
         val type = mimeType?.takeIf { it.isNotBlank() } ?: guessMime(fileName)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
             val values = ContentValues().apply {
@@ -162,35 +166,36 @@ object DownloadHelper {
                 put(MediaStore.MediaColumns.IS_PENDING, 1)
             }
             val uri = context.contentResolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values)
-                ?: return false
+                ?: return null
             return try {
                 context.contentResolver.openOutputStream(uri)?.use { output ->
                     source.inputStream().use { it.copyTo(output) }
                 } ?: throw IllegalStateException("Download output stream unavailable")
                 val ready = ContentValues().apply { put(MediaStore.MediaColumns.IS_PENDING, 0) }
                 context.contentResolver.update(uri, ready, null, null)
-                true
+                uri.toString()
             } catch (_: Exception) {
                 runCatching { context.contentResolver.delete(uri, null, null) }
-                false
+                null
             }
         }
 
         if (context.checkSelfPermission(android.Manifest.permission.WRITE_EXTERNAL_STORAGE) !=
             android.content.pm.PackageManager.PERMISSION_GRANTED
-        ) return false
+        ) return null
         return try {
             val directory = File(
                 Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS),
                 "ClickBrowser"
             )
-            if (!directory.exists() && !directory.mkdirs()) return false
-            File(directory, fileName).outputStream().use { output ->
+            if (!directory.exists() && !directory.mkdirs()) return null
+            val destination = File(directory, fileName)
+            destination.outputStream().use { output ->
                 source.inputStream().use { it.copyTo(output) }
             }
-            true
+            destination.absolutePath
         } catch (_: Exception) {
-            false
+            null
         }
     }
 

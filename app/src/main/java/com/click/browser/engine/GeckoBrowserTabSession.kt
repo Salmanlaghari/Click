@@ -17,8 +17,9 @@ internal fun geckoContextIdFor(mode: BrowserMode): String =
     if (mode == BrowserMode.ADVANCED) "click-profile-advanced" else "click-profile-default"
 
 /**
- * GeckoView provider for an explicitly selected, non-private ordinary tab.
- * The Activity owns the shared runtime and app UI; this class owns one GeckoSession.
+ * GeckoView provider for a regular browser tab. Private tabs remain on WebView
+ * until separate private storage isolation and cleanup are proven. The Activity
+ * owns the shared runtime and app UI; this class owns one GeckoSession.
  */
 internal class GeckoBrowserTabSession(
     context: Context,
@@ -34,6 +35,7 @@ internal class GeckoBrowserTabSession(
     private val onUrlChanged: (String) -> Unit,
     private val onTitleChanged: (String) -> Unit,
     private val onProgressChanged: (Int, Boolean) -> Unit,
+    private val onPageLoaded: (String) -> Unit,
     private val onCanGoBackChanged: (Boolean) -> Unit,
     private val onCanGoForwardChanged: (Boolean) -> Unit,
     private val onFullscreenChanged: (Boolean) -> Unit,
@@ -52,6 +54,7 @@ internal class GeckoBrowserTabSession(
     private var canBack = false
     private var canForward = false
     private var destroyed = false
+    private var historyCandidateUrl: String? = initialUrl
 
     override val view: View get() = geckoView
 
@@ -64,7 +67,10 @@ internal class GeckoBrowserTabSession(
                 perms: List<GeckoSession.PermissionDelegate.ContentPermission>,
                 hasUserGesture: Boolean
             ) {
-                url?.let(onUrlChanged)
+                url?.let {
+                    historyCandidateUrl = it
+                    onUrlChanged(it)
+                }
             }
 
             override fun onCanGoBack(session: GeckoSession, canGoBack: Boolean) {
@@ -99,12 +105,18 @@ internal class GeckoBrowserTabSession(
         })
         session.setProgressDelegate(object : GeckoSession.ProgressDelegate {
             override fun onPageStart(session: GeckoSession, url: String) {
+                historyCandidateUrl = url
                 onProgressChanged(0, true)
                 onUrlChanged(url)
             }
 
             override fun onPageStop(session: GeckoSession, success: Boolean) {
                 onProgressChanged(100, false)
+                if (success) {
+                    historyCandidateUrl
+                        ?.takeIf { it.startsWith("http://") || it.startsWith("https://") }
+                        ?.let(onPageLoaded)
+                }
             }
 
             override fun onProgressChange(session: GeckoSession, progress: Int) {

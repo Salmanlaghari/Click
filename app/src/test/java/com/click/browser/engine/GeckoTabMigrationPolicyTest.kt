@@ -46,10 +46,28 @@ class GeckoTabMigrationPolicyTest {
     }
 
     @Test
-    fun oldSavedTabRecordsDefaultToWebView() {
+    fun oldSavedTabRecordsDefaultToGeckoView() {
         assertEquals(
-            BrowserTabEngine.WEBVIEW,
+            BrowserTabEngine.GECKOVIEW,
             SavedTab(url = "https://legacy.example/", title = "Legacy").engine
+        )
+    }
+
+    @Test
+    fun regularTabsDefaultToGeckoAndPrivateTabsRemainWebView() {
+        assertEquals(BrowserTabEngine.GECKOVIEW, defaultBrowserTabEngine(isIncognito = false))
+        assertEquals(BrowserTabEngine.WEBVIEW, defaultBrowserTabEngine(isIncognito = true))
+    }
+
+    @Test
+    fun legacyNormalWebViewSessionRestoresInGeckoView() {
+        assertEquals(
+            BrowserTabEngine.GECKOVIEW,
+            migrateRestoredRegularTabEngine(BrowserTabEngine.WEBVIEW)
+        )
+        assertEquals(
+            BrowserTabEngine.GECKOVIEW,
+            migrateRestoredRegularTabEngine(BrowserTabEngine.GECKOVIEW)
         )
     }
 
