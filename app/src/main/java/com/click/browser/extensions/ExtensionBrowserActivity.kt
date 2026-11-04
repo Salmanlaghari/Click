@@ -123,6 +123,23 @@ class ExtensionBrowserActivity : ComponentActivity() {
         }
     }
 
+    override fun onResume() {
+        super.onResume()
+        setExtensionTabActive(true)
+    }
+
+    override fun onPause() {
+        setExtensionTabActive(false)
+        super.onPause()
+    }
+
+    private fun setExtensionTabActive(active: Boolean) {
+        val currentRuntime = runtime ?: return
+        val currentSession = session ?: return
+        // Action.click() resolves against GeckoView's active tab; the public click API carries no session ID.
+        currentRuntime.webExtensionController.setTabActive(currentSession, active)
+    }
+
     override fun onDestroy() {
         // The manager is only attached while this UI is alive; null means any background prompt
         // is denied by GeckoView rather than routed to a stale Activity.
