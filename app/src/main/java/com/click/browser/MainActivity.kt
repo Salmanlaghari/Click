@@ -104,8 +104,6 @@ import com.click.browser.extensions.ExtensionBrowserRuntime
 import com.click.browser.extensions.NormalTabExtensionAction
 import com.click.browser.extensions.NormalTabExtensionPopup
 import com.click.browser.extensions.NormalTabExtensionRouter
-import com.click.browser.extensions.ExtensionToolbarAction
-import com.click.browser.extensions.ExtensionToolbarState
 import com.click.browser.ui.screens.*
 import androidx.datastore.preferences.core.edit
 import kotlinx.coroutines.Dispatchers
@@ -236,8 +234,6 @@ class MainActivity : FragmentActivity() {
     // Set from onCreate (cold start) or onNewIntent (warm, singleTask); consumed
     // once by the composable, which opens it in a new tab.
     private val notificationOpenUrl = mutableStateOf<String?>(null)
-    private val extensionToolbarAction = mutableStateOf(ExtensionToolbarAction.HIDDEN)
-    private var extensionToolbarSyncInFlight = false
 
     // Live copies of composable state for use inside WebViewClient callbacks,
     // which are created once and would otherwise capture stale values.
@@ -486,16 +482,6 @@ class MainActivity : FragmentActivity() {
 
     override fun onResume() {
         super.onResume()
-        extensionToolbarAction.value = ExtensionToolbarState.currentAction(this)
-        if (!ExtensionToolbarState.isInitialized(this) && !extensionToolbarSyncInFlight) {
-            extensionToolbarSyncInFlight = true
-            ExtensionToolbarState.synchronizeIfNeeded(this) { action ->
-                runOnUiThread {
-                    extensionToolbarAction.value = action
-                    extensionToolbarSyncInFlight = false
-                }
-            }
-        }
         // The fallback default-apps page (pre-Android 10) does not return an
         // ActivityResult, so always refresh the role state when we come back.
         isDefaultBrowserState.value = DefaultBrowserHelper.isDefaultBrowser(this)
@@ -1609,7 +1595,11 @@ class MainActivity : FragmentActivity() {
             var showVideoDetails by remember { mutableStateOf(false) }
             var showPdfDetails by remember { mutableStateOf(false) }
             var showImageDetails by remember { mutableStateOf(false) }
-            var showExtensionsManager by remember { mutableStateOf(false) }
+            var showQuickTogglesDialog by remember { mutableStateOf(false) }
+            var showGeckoSwitchConfirmation by remember { mutableStateOf(false) }
+            var pendingGeckoSwitchTabId by remember { mutableStateOf<String?>(null) }
+            var showWebViewSwitchConfirmation by remember { mutableStateOf(false) }
+            var pendingWebViewSwitchTabId by remember { mutableStateOf<String?>(null) }
             var showPrivacyPolicy by remember { mutableStateOf(false) }
             var showAboutApp by remember { mutableStateOf(false) }
             var showLicenses by remember { mutableStateOf(false) }
@@ -1796,7 +1786,7 @@ class MainActivity : FragmentActivity() {
                     FeatureId.STORAGE, FeatureId.CLEAR_DATA -> showDeleteBrowsingConfirm = true
                     FeatureId.PASSWORDS -> showPasswordManager = true
                     FeatureId.COOKIES -> showCookieManager = true
-                    FeatureId.TOOLS -> showExtensionsManager = true
+                    FeatureId.TOOLS -> showQuickTogglesDialog = true
                     FeatureId.DEVTOOLS -> {
                         // Opens the DevTools bottom sheet (website stays visible).
                         // The FPS diagnostics overlay has its own drawer toggle.
@@ -2191,6 +2181,64 @@ class MainActivity : FragmentActivity() {
             // Drawer Navigation State (Simple, Dev, Power and shortcuts inside the hamburger menu)
             val drawerState = rememberDrawerState(initialValue = DrawerValue.Closed)
 
+            fun openExtensionManager() {
+                val intent = Intent(this@MainActivity, ExtensionBrowserActivity::class.java)
+                    .putExtra(ExtensionBrowserActivity.EXTRA_SHOW_MANAGER, true)
+                // Do not pass the current URL: the manager is not another copy of the page.
+                startActivity(intent)
+            }
+
+            fun replaceTabEngine(tab: TabItem, targetEngine: BrowserTabEngine): Boolean {
+                if (tab.engine == targetEngine) return true
+                if (targetEngine == BrowserTabEngine.GECKOVIEW && tab.isIncognito) return false
+
+                val previousSession = tab.browserSession
+                val currentUrl = (previousSession as? WebViewBrowserTabSession)?.webView?.url
+                    ?.takeIf { it.isNotBlank() } ?: tab.url
+                previousSession?.let { session ->
+                    runCatching { session.stopLoading() }
+                    runCatching { session.setSelected(false) }
+                    runCatching { session.detachFromParent() }
+                    liveBrowserSessions.remove(session)
+                    (session as? WebViewBrowserTabSession)?.webView?.let { liveWebViews.remove(it) }
+                    runCatching { session.destroy() }
+                }
+                tab.attachBrowserSession(null)
+                tab.url = currentUrl
+                tab.engine = targetEngine
+                tab.loadProgress = 0
+                tab.isPageLoading = currentUrl != "about:blank"
+                tab.hasCommittedContent = false
+                return true
+            }
+
+            fun requestExtensionsForTab(tab: TabItem) {
+                when (extensionTabEntryAction(tab.engine, tab.isIncognito)) {
+                    ExtensionTabEntryAction.PRIVATE_TAB_UNAVAILABLE -> {
+                        Toast.makeText(
+                            this@MainActivity,
+                            "Extensions are unavailable in Private tabs. Open a regular tab.",
+                            Toast.LENGTH_LONG
+                        ).show()
+                    }
+                    ExtensionTabEntryAction.OPEN_ADDON_MANAGER -> openExtensionManager()
+                    ExtensionTabEntryAction.CONFIRM_GECKOVIEW_SWITCH -> {
+                        val url = (tab.browserSession as? WebViewBrowserTabSession)?.webView?.url
+                            ?.takeIf { it.isNotBlank() } ?: tab.url
+                        if (!isSupportedGeckoTabUrl(url)) {
+                            Toast.makeText(
+                                this@MainActivity,
+                                "Open an HTTP(S) page or a blank tab before enabling extensions.",
+                                Toast.LENGTH_LONG
+                            ).show()
+                        } else {
+                            pendingGeckoSwitchTabId = tab.id
+                            showGeckoSwitchConfirmation = true
+                        }
+                    }
+                }
+            }
+
             /**
              * Reads live viewport/device facts from the current page via JS.
              * Updates [devToolsDeviceInfo]; safe to call when no page is loaded
@@ -2470,6 +2518,35 @@ class MainActivity : FragmentActivity() {
                                     }
                                 }
                                 item {
+                                    DrawerItem(
+                                        label = "Extensions",
+                                        subtitle = if (currentTab.isIncognito) "Unavailable in Private tabs" else "Install and use compatible add-ons in this tab",
+                                        icon = Icons.Default.Extension,
+                                        color = theme.primary
+                                    ) {
+                                        scope.launch {
+                                            drawerState.close()
+                                            requestExtensionsForTab(currentTab)
+                                        }
+                                    }
+                                }
+                                if (currentTab.engine == BrowserTabEngine.GECKOVIEW && !currentTab.isIncognito) {
+                                    item {
+                                        DrawerItem(
+                                            label = "Switch this tab to WebView",
+                                            subtitle = "Reload this page without add-on support",
+                                            icon = Icons.Default.Web,
+                                            color = Color(0xFF64748B)
+                                        ) {
+                                            scope.launch {
+                                                drawerState.close()
+                                                pendingWebViewSwitchTabId = currentTab.id
+                                                showWebViewSwitchConfirmation = true
+                                            }
+                                        }
+                                    }
+                                }
+                                item {
                                     DrawerItem(label = "Bookmarks Manager", icon = Icons.Default.Bookmark, color = Color.LightGray) {
                                         scope.launch { drawerState.close(); showBookmarks = true }
                                     }
@@ -2493,16 +2570,24 @@ class MainActivity : FragmentActivity() {
                                     }
                                 }
                                 item {
-                                    DrawerItem(label = "Quick Toggles", icon = Icons.Default.Extension, color = Color(0xFF00FF00)) {
-                                        scope.launch { drawerState.close(); showExtensionsManager = true }
+                                    DrawerItem(label = "Quick Toggles", icon = Icons.Default.Tune, color = Color(0xFF00FF00)) {
+                                        scope.launch { drawerState.close(); showQuickTogglesDialog = true }
                                     }
                                 }
                                 item {
                                     DrawerItem(label = "Incognito / Private Mode", icon = Icons.Default.Security, color = Color(0xFFFF9800)) {
                                         scope.launch {
                                             drawerState.close()
-                                            currentTab.isIncognito = !currentTab.isIncognito
-                                            Toast.makeText(this@MainActivity, "Incognito Mode is now " + (if(currentTab.isIncognito) "Enabled" else "Disabled"), Toast.LENGTH_SHORT).show()
+                                            if (currentTab.engine == BrowserTabEngine.GECKOVIEW) {
+                                                Toast.makeText(
+                                                    this@MainActivity,
+                                                    "Private mode is not available in GeckoView tabs. Switch this tab to WebView first.",
+                                                    Toast.LENGTH_LONG
+                                                ).show()
+                                            } else {
+                                                currentTab.isIncognito = !currentTab.isIncognito
+                                                Toast.makeText(this@MainActivity, "Incognito Mode is now " + (if(currentTab.isIncognito) "Enabled" else "Disabled"), Toast.LENGTH_SHORT).show()
+                                            }
                                         }
                                     }
                                 }
@@ -3060,27 +3145,6 @@ class MainActivity : FragmentActivity() {
                                                     onDrawerClick = { scope.launch { drawerState.open() } },
                                                     tabCount = tabs.size,
                                                     onTabsClick = { showTabsManager = true },
-                                                    showExtensionsButton = extensionToolbarAction.value ==
-                                                        ExtensionToolbarAction.OPEN_EXTENSION_MANAGER,
-                                                    onExtensionsClick = {
-                                                        val extensionIntent = Intent(
-                                                            this@MainActivity,
-                                                            ExtensionBrowserActivity::class.java
-                                                        ).putExtra(
-                                                            ExtensionBrowserActivity.EXTRA_SHOW_MANAGER,
-                                                            true
-                                                        )
-                                                        if (!currentTab.isIncognito &&
-                                                            (currentTab.url.startsWith("https://") || currentTab.url.startsWith("http://"))
-                                                        ) {
-                                                            extensionIntent.putExtra(
-                                                                ExtensionBrowserActivity.EXTRA_START_URL,
-                                                                currentTab.url
-                                                            )
-                                                        }
-                                                        startActivity(extensionIntent)
-                                                    },
-                                                    onTranslateClick = { showTranslateSheet = true },
                                                     // Location requests are always blocked by Click.
                                                     locationMode = LocationGuard.LocationMode.BLOCK,
                                                     onLocationClick = { showLocationSettings = true }
@@ -3278,7 +3342,7 @@ class MainActivity : FragmentActivity() {
                                             modifier = Modifier.fillMaxSize(),
                                             contentAlignment = Alignment.Center
                                         ) {
-                                            key(currentTab.id) {
+                                            key(currentTab.id, currentTab.engine) {
                                                 AndroidView(
                                                     modifier = emulatorWidthModifier,
                                                     factory = { ctx ->
@@ -4991,26 +5055,90 @@ class MainActivity : FragmentActivity() {
                             if (showImageDetails) {
                                 InteractiveImageGalleryDialog(onClose = { showImageDetails = false })
                             }
-                            if (showExtensionsManager) {
+                            if (showQuickTogglesDialog) {
                                 InteractiveExtensionsDialog(
                                     adblock = adBlockerEnabled,
                                     onToggleAdblock = { adBlockerEnabled = it },
                                     onOpenExtensionBrowser = {
-                                        showExtensionsManager = false
-                                        val sourceUrl = currentTab.url
-                                        val extensionIntent = Intent(
-                                            this@MainActivity,
-                                            com.click.browser.extensions.ExtensionBrowserActivity::class.java
-                                        )
-                                        if (sourceUrl.startsWith("https://") || sourceUrl.startsWith("http://")) {
-                                            extensionIntent.putExtra(
-                                                com.click.browser.extensions.ExtensionBrowserActivity.EXTRA_START_URL,
-                                                sourceUrl
-                                            )
-                                        }
-                                        startActivity(extensionIntent)
+                                        showQuickTogglesDialog = false
+                                        requestExtensionsForTab(currentTab)
                                     },
-                                    onClose = { showExtensionsManager = false }
+                                    onClose = { showQuickTogglesDialog = false }
+                                )
+                            }
+                            if (showGeckoSwitchConfirmation) {
+                                AlertDialog(
+                                    onDismissRequest = {
+                                        showGeckoSwitchConfirmation = false
+                                        pendingGeckoSwitchTabId = null
+                                    },
+                                    title = { Text("Enable extensions in this tab?") },
+                                    text = {
+                                        Text(
+                                            "This keeps the same tab (no duplicate tab) and reloads its current page in GeckoView. WebView sign-ins, cookies, back/forward history and page state are not transferred; you may need to sign in again. Private tabs remain on WebView."
+                                        )
+                                    },
+                                    confirmButton = {
+                                        TextButton(onClick = {
+                                            val tabId = pendingGeckoSwitchTabId
+                                            pendingGeckoSwitchTabId = null
+                                            showGeckoSwitchConfirmation = false
+                                            val tab = tabs.firstOrNull { it.id == tabId }
+                                            if (tab == null) return@TextButton
+                                            when (extensionTabEntryAction(tab.engine, tab.isIncognito)) {
+                                                ExtensionTabEntryAction.PRIVATE_TAB_UNAVAILABLE -> {
+                                                    Toast.makeText(this@MainActivity, "Extensions are unavailable in Private tabs.", Toast.LENGTH_LONG).show()
+                                                }
+                                                ExtensionTabEntryAction.OPEN_ADDON_MANAGER -> openExtensionManager()
+                                                ExtensionTabEntryAction.CONFIRM_GECKOVIEW_SWITCH -> {
+                                                    val url = (tab.browserSession as? WebViewBrowserTabSession)?.webView?.url
+                                                        ?.takeIf { it.isNotBlank() } ?: tab.url
+                                                    if (!isSupportedGeckoTabUrl(url)) {
+                                                        Toast.makeText(this@MainActivity, "Open an HTTP(S) page or a blank tab before enabling extensions.", Toast.LENGTH_LONG).show()
+                                                    } else if (replaceTabEngine(tab, BrowserTabEngine.GECKOVIEW)) {
+                                                        openExtensionManager()
+                                                    }
+                                                }
+                                            }
+                                        }) { Text("Switch tab & open add-ons") }
+                                    },
+                                    dismissButton = {
+                                        TextButton(onClick = {
+                                            showGeckoSwitchConfirmation = false
+                                            pendingGeckoSwitchTabId = null
+                                        }) { Text("Cancel") }
+                                    }
+                                )
+                            }
+                            if (showWebViewSwitchConfirmation) {
+                                AlertDialog(
+                                    onDismissRequest = {
+                                        showWebViewSwitchConfirmation = false
+                                        pendingWebViewSwitchTabId = null
+                                    },
+                                    title = { Text("Switch this tab to WebView?") },
+                                    text = {
+                                        Text(
+                                            "The same tab will reload in WebView. Gecko cookies, extension data and back history are not copied, and add-ons will not run in this tab. Private mode is not enabled automatically."
+                                        )
+                                    },
+                                    confirmButton = {
+                                        TextButton(onClick = {
+                                            val tabId = pendingWebViewSwitchTabId
+                                            pendingWebViewSwitchTabId = null
+                                            showWebViewSwitchConfirmation = false
+                                            val tab = tabs.firstOrNull { it.id == tabId }
+                                            if (tab != null && !tab.isIncognito && tab.engine == BrowserTabEngine.GECKOVIEW) {
+                                                replaceTabEngine(tab, BrowserTabEngine.WEBVIEW)
+                                            }
+                                        }) { Text("Switch to WebView") }
+                                    },
+                                    dismissButton = {
+                                        TextButton(onClick = {
+                                            showWebViewSwitchConfirmation = false
+                                            pendingWebViewSwitchTabId = null
+                                        }) { Text("Cancel") }
+                                    }
                                 )
                             }
                             if (showPrivacyPolicy) {
@@ -5793,30 +5921,6 @@ class MainActivity : FragmentActivity() {
                                 BrowserMenuSheet(
                                     theme = theme,
                                     isDesktopForSite = menuDesktopForSite,
-                                    showOpenInGecko = !currentTab.isIncognito &&
-                                        currentTab.engine != BrowserTabEngine.GECKOVIEW &&
-                                        (currentTab.url.startsWith("http://") || currentTab.url.startsWith("https://")),
-                                    onOpenInGecko = {
-                                        showBrowserMenu = false
-                                        val source = currentTab
-                                        if (!source.isIncognito &&
-                                            (source.url.startsWith("http://") || source.url.startsWith("https://"))
-                                        ) {
-                                            tabs.add(
-                                                TabItem(
-                                                    url = source.url,
-                                                    title = source.title,
-                                                    initialEngine = BrowserTabEngine.GECKOVIEW
-                                                )
-                                            )
-                                            activeTabIndex = tabs.lastIndex
-                                            Toast.makeText(
-                                                this@MainActivity,
-                                                "Opened an extension-ready GeckoView tab. The original tab is unchanged.",
-                                                Toast.LENGTH_LONG
-                                            ).show()
-                                        }
-                                    },
                                     onNewTab = {
                                         showBrowserMenu = false
                                         tabs.add(TabItem(url = homeUrl(), title = "New Tab"))

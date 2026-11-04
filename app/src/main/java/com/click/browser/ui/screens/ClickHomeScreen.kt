@@ -51,7 +51,6 @@ import androidx.compose.material.icons.filled.LocationOn
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Add
-import androidx.compose.material.icons.filled.Extension
 import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.Bookmark
 import androidx.compose.material.icons.filled.Description
@@ -98,7 +97,6 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
-import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
@@ -1326,10 +1324,6 @@ fun homeGreeting(): String {
 internal fun tabBadgeText(count: Int): String =
     if (count > 99) "99+" else count.coerceAtLeast(0).toString()
 
-internal fun shouldShowToolbarTranslate(screenWidthDp: Int): Boolean = screenWidthDp >= 370
-
-internal fun shouldShowToolbarExtensions(screenWidthDp: Int): Boolean = screenWidthDp >= 420
-
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun CompactBrowseBar(
@@ -1351,9 +1345,6 @@ fun CompactBrowseBar(
     onForward: () -> Unit,
     tabCount: Int,
     onTabsClick: () -> Unit,
-    showExtensionsButton: Boolean = false,
-    onExtensionsClick: () -> Unit = {},
-    onTranslateClick: () -> Unit = {},
     modifier: Modifier = Modifier,
     // Location indicator: null = no indicator; otherwise the effective mode.
     locationMode: LocationGuard.LocationMode? = null,
@@ -1361,7 +1352,6 @@ fun CompactBrowseBar(
 ) {
     var textInput by remember(currentUrl) { mutableStateOf(currentUrl) }
     val isHttps = currentUrl.startsWith("https://")
-    val screenWidthDp = LocalConfiguration.current.screenWidthDp
     // Keep toolbar actions on their own row so the address field can use the
     // full available width and a generous touch target.
     Surface(
@@ -1405,41 +1395,6 @@ fun CompactBrowseBar(
                     )
                 }
                 Spacer(modifier = Modifier.weight(1f))
-                if (shouldShowToolbarTranslate(screenWidthDp)) {
-                    IconButton(
-                        onClick = onTranslateClick,
-                        modifier = Modifier
-                            .size(40.dp)
-                            .clip(CircleShape)
-                            .background(
-                                if (currentUrl.startsWith("http")) theme.primary.copy(alpha = 0.12f)
-                                else Color.Transparent
-                            )
-                    ) {
-                        Icon(
-                            Icons.Default.Translate,
-                            contentDescription = "Translate page or text",
-                            tint = if (currentUrl.startsWith("http")) theme.primary else theme.onTopBar,
-                            modifier = Modifier.size(21.dp)
-                        )
-                    }
-                }
-                if (showExtensionsButton && shouldShowToolbarExtensions(screenWidthDp)) {
-                    IconButton(
-                        onClick = onExtensionsClick,
-                        modifier = Modifier
-                            .size(40.dp)
-                            .clip(CircleShape)
-                            .background(theme.primary.copy(alpha = 0.12f))
-                    ) {
-                        Icon(
-                            Icons.Default.Extension,
-                            contentDescription = "Manage installed extensions in the separate browser",
-                            tint = theme.primary,
-                            modifier = Modifier.size(21.dp)
-                        )
-                    }
-                }
                 // Simple mode consistently offers New tab; reload remains in the browser drawer.
                 if (activeMode == BrowserMode.SIMPLE) {
                     IconButton(onClick = onNewTab, modifier = Modifier.size(40.dp)) {

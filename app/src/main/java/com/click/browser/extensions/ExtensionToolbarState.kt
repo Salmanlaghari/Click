@@ -31,9 +31,9 @@ internal object ExtensionToolbarPolicy {
 }
 
 /**
- * Shares only eligible extension IDs between the isolated GeckoView screen and
- * the main browser toolbar. It does not expose extension files or run add-ons in
- * the main WebView.
+ * Caches eligible extension IDs for manager/UI synchronization. This state does
+ * not make add-ons executable in WebView; normal-tab actions are routed only
+ * through GeckoView sessions.
  */
 internal object ExtensionToolbarState {
     private const val PREFERENCES = "extension_toolbar_state"
