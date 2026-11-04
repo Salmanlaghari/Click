@@ -9,11 +9,32 @@ import kotlinx.coroutines.flow.firstOrNull
 import org.json.JSONArray
 import org.json.JSONObject
 
-/** One restorable tab — URL + title. The active-tab index is stored separately. */
+/** One restorable tab — URL, title and engine. The active-tab index is stored separately. */
 data class SavedTab(
     val url: String,
-    val title: String
+    val title: String,
+    val engine: BrowserTabEngine = BrowserTabEngine.WEBVIEW
 )
+
+internal data class RestorableTabState(
+    val url: String,
+    val title: String,
+    val isIncognito: Boolean,
+    val engine: BrowserTabEngine
+)
+
+/** Pure snapshot policy: keep eligible normal tabs and preserve their selected engine. */
+internal fun buildRestorableSnapshot(
+    tabStates: List<RestorableTabState>,
+    activeIdx: Int
+): Pair<List<SavedTab>, Int> {
+    val kept = tabStates.mapIndexed { index, tab -> index to tab }
+        .filter { (_, tab) -> !tab.isIncognito && SessionRestore.isRestorableUrl(tab.url) }
+        .take(SessionRestore.MAX_TABS)
+    val active = kept.indexOfFirst { (index, _) -> index == activeIdx }.takeIf { it >= 0 } ?: 0
+    val tabs = kept.map { (_, tab) -> SavedTab(tab.url, tab.title.ifBlank { tab.url }, tab.engine) }
+    return tabs to active
+}
 
 /**
  * Crash / force-close session restore.
@@ -69,7 +90,7 @@ object SessionRestore {
      * @param activeIndex index of the active tab within [tabs] (the already
      *   filtered list). It is clamped defensively, but callers that filter
      *   must translate the original index themselves — see
-     *   MainActivity.buildRestorableSnapshot.
+     *   [buildRestorableSnapshot].
      */
     suspend fun saveSession(
         context: Context,
@@ -101,6 +122,7 @@ object SessionRestore {
             array.put(JSONObject().apply {
                 put("url", t.url)
                 put("title", t.title)
+                put("engine", t.engine.name)
             })
         }
         context.profileDataStoreFor(mode).edit { prefs ->
@@ -131,7 +153,12 @@ object SessionRestore {
                 val obj = array.getJSONObject(i)
                 val url = obj.optString("url", "")
                 if (isRestorableUrl(url)) {
-                    list.add(SavedTab(url, obj.optString("title", url)))
+                    val engine = runCatching {
+                        BrowserTabEngine.valueOf(
+                            obj.optString("engine", BrowserTabEngine.WEBVIEW.name)
+                        )
+                    }.getOrDefault(BrowserTabEngine.WEBVIEW)
+                    list.add(SavedTab(url, obj.optString("title", url), engine))
                 }
             }
         } catch (_: Exception) {

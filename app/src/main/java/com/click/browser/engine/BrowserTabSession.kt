@@ -4,6 +4,11 @@ import android.view.View
 import android.view.ViewGroup
 import android.webkit.WebView
 
+enum class BrowserTabEngine {
+    WEBVIEW,
+    GECKOVIEW
+}
+
 /**
  * Navigation operations shared by a logical browser tab regardless of its
  * rendering engine. Keep profile-wide storage, cookies, history, downloads,
@@ -23,9 +28,8 @@ internal interface BrowserTabNavigation {
  * The rendering/lifecycle owner for one Click tab.
  *
  * The view may be detached and reattached when Compose switches tabs. Only the
- * tab LRU path should destroy the underlying view. The current production
- * provider is WebView; a GeckoView provider is deliberately not selectable in
- * this migration-preparation phase.
+ * tab LRU path should destroy the underlying view. WebView remains the default
+ * provider; GeckoView can be selected explicitly for a normal tab in this phase.
  */
 internal interface BrowserTabSession : BrowserTabNavigation {
     val view: View
@@ -34,11 +38,13 @@ internal interface BrowserTabSession : BrowserTabNavigation {
     fun pauseTimers()
     fun onResume()
     fun resumeTimers()
+    /** Called when this logical tab becomes (or ceases to be) the selected tab. */
+    fun setSelected(selected: Boolean) = Unit
     fun detachFromParent()
     fun destroy()
 }
 
-/** The sole production session provider in this phase. */
+/** The compatibility adapter used for the existing default WebView tabs. */
 internal class WebViewBrowserTabSession(
     val webView: WebView,
 ) : BrowserTabSession {

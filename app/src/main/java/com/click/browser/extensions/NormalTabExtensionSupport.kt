@@ -1,0 +1,231 @@
+package com.click.browser.extensions
+
+import org.mozilla.geckoview.GeckoResult
+import org.mozilla.geckoview.GeckoRuntime
+import org.mozilla.geckoview.GeckoSession
+import org.mozilla.geckoview.GeckoSessionSettings
+import org.mozilla.geckoview.WebExtension
+
+/** One policy-approved browser/page action that may be shown for a normal GeckoView tab. */
+internal data class NormalTabExtensionAction(
+    val extensionId: String,
+    val label: String,
+    val extension: WebExtension,
+    val action: WebExtension.Action,
+    val pageAction: Boolean
+)
+
+internal data class NormalTabExtensionPopup(
+    val ownerTabId: String,
+    val title: String,
+    val session: GeckoSession
+)
+
+/**
+ * Routes GeckoView's runtime-wide ActionDelegate callbacks to the currently active
+ * normal tab. Action.click() does not carry a session ID, so the active-tab state
+ * must stay synchronized with WebExtensionController.setTabActive().
+ */
+internal class NormalTabExtensionRouter(
+    private val runtime: GeckoRuntime,
+    private val onActionsChanged: (String, List<NormalTabExtensionAction>) -> Unit,
+    private val onPopupChanged: (NormalTabExtensionPopup?) -> Unit
+) : WebExtension.ActionDelegate {
+    private val sessions = linkedMapOf<String, GeckoSession>()
+    private val sessionIds = linkedMapOf<GeckoSession, String>()
+    private val defaultActions = linkedMapOf<String, NormalTabExtensionAction>()
+    private val sessionOverrides = linkedMapOf<GeckoSession, MutableMap<String, NormalTabExtensionAction?>>()
+    private var activeTabId: String? = null
+    private var popup: NormalTabExtensionPopup? = null
+
+    fun attach(tabId: String, session: GeckoSession) {
+        sessions[tabId] = session
+        sessionIds[session] = tabId
+        sessionOverrides.getOrPut(session) { linkedMapOf() }
+        refreshSession(session)
+    }
+
+    fun refreshAll() {
+        sessions.values.toList().forEach(::refreshSession)
+    }
+
+    /** Keep Action.click() pointed away from this Activity while it is backgrounded. */
+    fun deactivateActiveSession() {
+        val previousId = activeTabId ?: return
+        sessions[previousId]?.let { runtime.webExtensionController.setTabActive(it, false) }
+        activeTabId = null
+    }
+
+    private fun refreshSession(session: GeckoSession) {
+        runtime.webExtensionController.list().accept(
+            { installed ->
+                val permitted = installed.orEmpty().filter { extension ->
+                    !extension.isBuiltIn && extension.metaData.enabled &&
+                        extensionPolicyBlockers(extension).isEmpty()
+                }
+                val permittedIds = permitted.mapTo(mutableSetOf()) { it.id }
+                defaultActions.keys.retainAll(permittedIds)
+                sessionOverrides.values.forEach { it.keys.retainAll(permittedIds) }
+                permitted.forEach { extension ->
+                    // The extension-level delegate receives defaults and Action.click();
+                    // the per-session delegate receives tab-specific action overrides.
+                    extension.setActionDelegate(this)
+                    session.webExtensionController.setActionDelegate(extension, this)
+                }
+                sessionIds[session]?.let(::emitActions)
+            },
+            {
+                sessionIds[session]?.let { onActionsChanged(it, emptyList()) }
+            }
+        )
+    }
+
+    fun setSelected(tabId: String, selected: Boolean) {
+        val session = sessions[tabId] ?: return
+        if (selected) {
+            activeTabId?.takeIf { it != tabId }?.let { previousId ->
+                sessions[previousId]?.let { runtime.webExtensionController.setTabActive(it, false) }
+                if (popup?.ownerTabId == previousId) closePopup()
+            }
+            activeTabId = tabId
+            runtime.webExtensionController.setTabActive(session, true)
+            emitActions(tabId)
+        } else {
+            runtime.webExtensionController.setTabActive(session, false)
+            if (activeTabId == tabId) activeTabId = null
+            if (popup?.ownerTabId == tabId) closePopup()
+            onActionsChanged(tabId, emptyList())
+        }
+    }
+
+    fun detach(tabId: String, session: GeckoSession) {
+        setSelected(tabId, false)
+        sessions.remove(tabId, session)
+        sessionIds.remove(session)
+        sessionOverrides.remove(session)
+        onActionsChanged(tabId, emptyList())
+    }
+
+    fun closePopup(expected: GeckoSession? = null) {
+        val current = popup ?: return
+        if (expected != null && current.session !== expected) return
+        popup = null
+        onPopupChanged(null)
+        runCatching { current.session.close() }
+    }
+
+    private fun createPopup(extension: WebExtension): GeckoResult<GeckoSession>? {
+        val owner = activeTabId ?: return null
+        val ownerSession = sessions[owner] ?: return null
+        if (!extension.metaData.enabled || extensionPolicyBlockers(extension).isNotEmpty()) return null
+
+        closePopup()
+        val settings = GeckoSessionSettings.Builder()
+            .contextId(ownerSession.settings.contextId)
+            .build()
+        val popupSession = GeckoSession(settings).apply {
+            setPermissionDelegate(DenyNormalTabExtensionDevicePermissions)
+            open(runtime)
+        }
+        popup = NormalTabExtensionPopup(
+            ownerTabId = owner,
+            title = extension.metaData.name?.takeIf(String::isNotBlank) ?: "Add-on",
+            session = popupSession
+        )
+        onPopupChanged(popup)
+        return GeckoResult.fromValue(popupSession)
+    }
+
+    private fun actionFor(
+        extension: WebExtension,
+        action: WebExtension.Action,
+        pageAction: Boolean
+    ): NormalTabExtensionAction? {
+        if (extension.isBuiltIn || !extension.metaData.enabled ||
+            extensionPolicyBlockers(extension).isNotEmpty()
+        ) return null
+        if (pageAction && action.enabled != true) return null
+        if (!pageAction && action.enabled == false) return null
+        val label = action.title?.takeIf(String::isNotBlank)
+            ?: extension.metaData.name?.takeIf(String::isNotBlank)
+            ?: "Add-on"
+        return NormalTabExtensionAction(extension.id, label, extension, action, pageAction)
+    }
+
+    private fun updateAction(
+        extension: WebExtension,
+        session: GeckoSession?,
+        action: WebExtension.Action,
+        pageAction: Boolean
+    ) {
+        val item = actionFor(extension, action, pageAction)
+        if (session == null) {
+            if (item == null) defaultActions.remove(extension.id)
+            else defaultActions[extension.id] = item
+            activeTabId?.let(::emitActions)
+            return
+        }
+        val tabId = sessionIds[session] ?: return
+        sessionOverrides.getOrPut(session) { linkedMapOf() }[extension.id] = item
+        emitActions(tabId)
+    }
+
+    private fun emitActions(tabId: String) {
+        val session = sessions[tabId] ?: return
+        val visible = defaultActions.toMutableMap()
+        sessionOverrides[session].orEmpty().forEach { (id, override) ->
+            if (override == null) visible.remove(id) else visible[id] = override
+        }
+        onActionsChanged(tabId, visible.values.toList())
+    }
+
+    override fun onBrowserAction(
+        extension: WebExtension,
+        session: GeckoSession?,
+        action: WebExtension.Action
+    ) = updateAction(extension, session, action, pageAction = false)
+
+    override fun onPageAction(
+        extension: WebExtension,
+        session: GeckoSession?,
+        action: WebExtension.Action
+    ) = updateAction(extension, session, action, pageAction = true)
+
+    override fun onTogglePopup(
+        extension: WebExtension,
+        action: WebExtension.Action
+    ): GeckoResult<GeckoSession>? = createPopup(extension)
+
+    override fun onOpenPopup(
+        extension: WebExtension,
+        action: WebExtension.Action
+    ): GeckoResult<GeckoSession>? = createPopup(extension)
+}
+
+/** Deny website/add-on requests for Android device permissions in normal Gecko tabs. */
+private object DenyNormalTabExtensionDevicePermissions : GeckoSession.PermissionDelegate {
+    override fun onAndroidPermissionsRequest(
+        session: GeckoSession,
+        permissions: Array<out String>?,
+        callback: GeckoSession.PermissionDelegate.Callback
+    ) {
+        callback.reject()
+    }
+
+    override fun onContentPermissionRequest(
+        session: GeckoSession,
+        perm: GeckoSession.PermissionDelegate.ContentPermission
+    ): GeckoResult<Int> = GeckoResult.fromValue(
+        GeckoSession.PermissionDelegate.ContentPermission.VALUE_DENY
+    )
+
+    override fun onMediaPermissionRequest(
+        session: GeckoSession,
+        uri: String,
+        video: Array<out GeckoSession.PermissionDelegate.MediaSource>?,
+        audio: Array<out GeckoSession.PermissionDelegate.MediaSource>?,
+        callback: GeckoSession.PermissionDelegate.MediaCallback
+    ) {
+        callback.reject()
+    }
+}

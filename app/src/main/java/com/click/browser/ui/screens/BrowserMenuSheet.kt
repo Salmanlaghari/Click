@@ -51,6 +51,8 @@ import com.click.browser.engine.ModeTheme
 fun BrowserMenuSheet(
     theme: ModeTheme,
     isDesktopForSite: Boolean,
+    showOpenInGecko: Boolean = false,
+    onOpenInGecko: () -> Unit = {},
     visibleItems: List<MenuCustomization.MenuItemId> =
         MenuCustomization.effectiveVisibleItems(
             MenuCustomization.DEFAULT_ORDER,
@@ -88,6 +90,16 @@ fun BrowserMenuSheet(
                 .fillMaxWidth()
                 .padding(bottom = 24.dp)
         ) {
+            if (showOpenInGecko) {
+                item(key = "open_in_geckoview_extensions") {
+                    MenuRow(
+                        theme = theme,
+                        icon = Icons.Default.Extension,
+                        label = "Open in GeckoView (extensions)",
+                        onClick = onOpenInGecko
+                    )
+                }
+            }
             val items = visibleItems.ifEmpty { MenuCustomization.DEFAULT_ORDER }
             items.forEach { id ->
                 item(key = id.name) {

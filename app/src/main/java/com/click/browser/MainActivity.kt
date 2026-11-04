@@ -41,6 +41,7 @@ import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -99,6 +100,10 @@ import com.click.browser.data.HistoryItem
 import com.click.browser.data.DownloadItem
 import com.click.browser.engine.*
 import com.click.browser.extensions.ExtensionBrowserActivity
+import com.click.browser.extensions.ExtensionBrowserRuntime
+import com.click.browser.extensions.NormalTabExtensionAction
+import com.click.browser.extensions.NormalTabExtensionPopup
+import com.click.browser.extensions.NormalTabExtensionRouter
 import com.click.browser.extensions.ExtensionToolbarAction
 import com.click.browser.extensions.ExtensionToolbarState
 import com.click.browser.ui.screens.*
@@ -120,13 +125,20 @@ class TabItem(
     url: String = "about:blank",
     title: String = "New Tab",
     isIncognito: Boolean = false,
-    initialWebView: WebView? = null
+    initialWebView: WebView? = null,
+    initialEngine: BrowserTabEngine = BrowserTabEngine.WEBVIEW
 ) {
-    /** Per-tab engine seam. WebView remains the only provider in this phase. */
+    /** Per-tab engine selection; WebView remains the default. */
+    var engine by mutableStateOf(initialEngine)
+
     internal var browserSession: BrowserTabSession? by mutableStateOf(
         initialWebView?.let(::WebViewBrowserTabSession)
     )
         private set
+
+    internal fun attachBrowserSession(session: BrowserTabSession?) {
+        browserSession = session
+    }
 
     /** Compatibility access for existing WebView-specific UI/features. */
     var webView: WebView?
@@ -154,11 +166,19 @@ internal fun activeTabIndexAfterClose(activeIndex: Int, closedIndex: Int, remain
     }
 }
 
+private data class ClosedTabUndo(
+    val title: String,
+    val url: String,
+    val index: Int,
+    val engine: BrowserTabEngine
+)
+
 private data class PendingBrowserDownload(
     val url: String,
     val fileName: String,
     val mimeType: String?,
-    val userAgent: String?
+    val userAgent: String?,
+    val responseBody: java.io.InputStream? = null
 )
 
 private data class PendingPasswordSaveOffer(
@@ -384,28 +404,53 @@ class MainActivity : FragmentActivity() {
     private var liveRestoreActiveIndex: Int = 0
     @Volatile private var modeSwitchInProgress: Boolean = false
 
-    /**
-     * Builds the restorable-tab snapshot from live tab state: drops
-     * incognito / non-http(s) tabs, caps at [SessionRestore.MAX_TABS], and
-     * translates the active index through the filter. If the active tab was
-     * filtered out, the index falls back to 0.
-     */
-    private fun buildRestorableSnapshot(
-        tabStates: List<Triple<String, String, Boolean>>,
-        activeIdx: Int
-    ): Pair<List<SavedTab>, Int> {
-        val kept = tabStates.mapIndexed { i, t -> i to t }
-            .filter { (_, t) -> !t.third && SessionRestore.isRestorableUrl(t.first) }
-            .take(SessionRestore.MAX_TABS)
-        val active = kept.indexOfFirst { (i, _) -> i == activeIdx }.takeIf { it >= 0 } ?: 0
-        val tabs = kept.map { (_, t) -> SavedTab(t.first, t.second.ifBlank { t.first }) }
-        return tabs to active
-    }
     // Registry of live WebViews for flag-driven cleanup (clear-on-exit).
     private val liveWebViews = mutableListOf<android.webkit.WebView>()
-    // Engine-neutral lifecycle registry. WebView remains the only provider;
-    // clear-on-exit still uses the existing WebView data APIs.
+    // Engine-neutral lifecycle registry. WebView remains the default provider;
+    // opt-in Gecko sessions use a profile-scoped context clear on clear-on-exit.
     private val liveBrowserSessions = mutableListOf<BrowserTabSession>()
+    private val geckoTabActionsState = androidx.compose.runtime.mutableStateOf(
+        emptyMap<String, List<NormalTabExtensionAction>>()
+    )
+    private val geckoTabPopupState = androidx.compose.runtime.mutableStateOf<NormalTabExtensionPopup?>(null)
+    private var normalTabExtensionRouter: NormalTabExtensionRouter? = null
+
+    private fun normalTabExtensionRouter(): NormalTabExtensionRouter =
+        normalTabExtensionRouter ?: synchronized(this) {
+            normalTabExtensionRouter ?: NormalTabExtensionRouter(
+                runtime = ExtensionBrowserRuntime.get(applicationContext),
+                onActionsChanged = { tabId, actions ->
+                    val update = {
+                        geckoTabActionsState.value = geckoTabActionsState.value.toMutableMap().apply {
+                            if (actions.isEmpty()) remove(tabId) else put(tabId, actions)
+                        }
+                    }
+                    if (android.os.Looper.myLooper() == android.os.Looper.getMainLooper()) update()
+                    else runOnUiThread { update() }
+                },
+                onPopupChanged = { popup ->
+                    if (android.os.Looper.myLooper() == android.os.Looper.getMainLooper()) {
+                        geckoTabPopupState.value = popup
+                    } else {
+                        runOnUiThread { geckoTabPopupState.value = popup }
+                    }
+                }
+            ).also { normalTabExtensionRouter = it }
+        }
+
+    private fun destroyLiveGeckoSessions() {
+        val geckoSessions = liveBrowserSessions.filterIsInstance<GeckoBrowserTabSession>()
+        geckoSessions.forEach { session -> runCatching { session.destroy() } }
+        liveBrowserSessions.removeAll(geckoSessions.toSet())
+        geckoTabActionsState.value = emptyMap()
+    }
+
+    private fun requestGeckoModeDataClear(mode: BrowserMode) {
+        runCatching {
+            ExtensionBrowserRuntime.get(applicationContext).storageController
+                .clearDataForSessionContext(geckoContextIdFor(mode))
+        }
+    }
 
     private var ttsEngine: TextToSpeech? = null
 
@@ -419,6 +464,7 @@ class MainActivity : FragmentActivity() {
 
     override fun onPause() {
         super.onPause()
+        normalTabExtensionRouter?.deactivateActiveSession()
         // Standard browser behavior: pause live tab sessions when the app is
         // backgrounded, so page audio/video stops — UNLESS the user
         // explicitly enabled "Background audio" in Settings (a generic
@@ -457,6 +503,7 @@ class MainActivity : FragmentActivity() {
             try { session.onResume() } catch (_: Exception) { }
             try { session.resumeTimers() } catch (_: Exception) { }
         }
+        normalTabExtensionRouter?.refreshAll()
     }
 
     /**
@@ -493,8 +540,13 @@ class MainActivity : FragmentActivity() {
             return
         }
         try { ttsEngine?.shutdown() } catch (_: Exception) { }
+        normalTabExtensionRouter?.closePopup()
+        destroyLiveGeckoSessions()
         // Experimental flags: clear data / history on exit.
         if (liveFlags.clearOnExit) {
+            // GeckoView requires sessions for a context to be closed before its
+            // persistent context data can be fully removed.
+            requestGeckoModeDataClear(V9Engine.bootMode)
             try {
                 liveWebViews.forEach { it.clearCache(true) }
                 android.webkit.CookieManager.getInstance().removeAllCookies(null)
@@ -1143,12 +1195,17 @@ class MainActivity : FragmentActivity() {
             val tabs = remember { mutableStateListOf<TabItem>(TabItem(url = startViewUrl ?: homeUrl(), title = "New Tab")) }
             var activeTabIndex by remember { mutableStateOf(0) }
             val currentTab = tabs.getOrNull(activeTabIndex) ?: TabItem(url = "about:blank")
+            LaunchedEffect(activeTabIndex, currentTab.id, tabs.size) {
+                tabs.forEachIndexed { index, tab ->
+                    tab.browserSession?.setSelected(index == activeTabIndex)
+                }
+            }
             // Only address/search submissions request keyboard dismissal after page load;
             // do not hide keyboards opened by page forms or unrelated tab navigation.
             var pendingKeyboardDismissTabId by remember { mutableStateOf<String?>(null) }
             SideEffect {
                 val (snapshot, active) = buildRestorableSnapshot(
-                    tabs.map { Triple(it.url, it.title, it.isIncognito) },
+                    tabs.map { RestorableTabState(it.url, it.title, it.isIncognito, it.engine) },
                     activeTabIndex
                 )
                 liveRestoreTabs = snapshot
@@ -1171,7 +1228,7 @@ class MainActivity : FragmentActivity() {
             var showFeatureMenu by remember { mutableStateOf(false) }
             // Tab-close snackbar with UNDO (Premium UI v2).
             val snackbarHostState = remember { SnackbarHostState() }
-            var lastClosedTab by remember { mutableStateOf<Triple<String, String, Int>?>(null) }
+            var lastClosedTab by remember { mutableStateOf<ClosedTabUndo?>(null) }
             var showRecentTabs by remember { mutableStateOf(false) }
             var showDeleteBrowsingConfirm by remember { mutableStateOf(false) }
             // Bumps every time a tab thumbnail is captured → recomposes the
@@ -1187,7 +1244,9 @@ class MainActivity : FragmentActivity() {
             fun closeTabAt(idx: Int) {
                 if (idx !in tabs.indices) return
                 val closed = tabs[idx]
-                RecentlyClosedTabs.push(closed.title, closed.url, closed.isIncognito)
+                RecentlyClosedTabs.push(
+                    closed.title, closed.url, closed.isIncognito, closed.engine
+                )
                 TabThumbnailStore.remove(closed.id)
                 // Drop the closed tab from live registries so cleanup doesn't
                 // iterate stale, detached views or sessions.
@@ -1198,9 +1257,11 @@ class MainActivity : FragmentActivity() {
                 }
                 closed.webView?.let { liveWebViews.remove(it) }
                 // Remember for UNDO (not for private tabs — privacy first).
-                val undoInfo: Triple<String, String, Int>? =
+                val undoInfo: ClosedTabUndo? =
                     if (closed.isIncognito) null
-                    else Triple(closed.title, closed.url, idx.coerceAtMost(tabs.size - 1))
+                    else ClosedTabUndo(
+                        closed.title, closed.url, idx.coerceAtMost(tabs.size - 1), closed.engine
+                    )
                 if (tabs.size > 1) {
                     tabs.removeAt(idx)
                     activeTabIndex = activeTabIndexAfterClose(activeTabIndex, idx, tabs.size)
@@ -1229,9 +1290,13 @@ class MainActivity : FragmentActivity() {
                             duration = SnackbarDuration.Short
                         )
                         if (result == SnackbarResult.ActionPerformed) {
-                            lastClosedTab?.let { (title, url, atIdx) ->
-                                val restored = TabItem(url = url, title = title.ifBlank { "New Tab" })
-                                val insertAt = atIdx.coerceIn(0, tabs.size)
+                            lastClosedTab?.let { closedTab ->
+                                val restored = TabItem(
+                                    url = closedTab.url,
+                                    title = closedTab.title.ifBlank { "New Tab" },
+                                    initialEngine = closedTab.engine
+                                )
+                                val insertAt = closedTab.index.coerceIn(0, tabs.size)
                                 tabs.add(insertAt, restored)
                                 activeTabIndex = insertAt
                             }
@@ -1258,28 +1323,28 @@ class MainActivity : FragmentActivity() {
             var flagsLoaded by remember { mutableStateOf(false) }
 
             // LRU tab unloading (memory): with more than 10 tabs open,
-            // destroy the WebViews of the oldest background (non-active,
-            // non-incognito) tabs. Tab entries (URL/title/thumbnail) are
-            // kept; selecting an unloaded tab recreates its WebView and
-            // reloads the URL (the AndroidView factory already handles
-            // webView == null). Incognito tabs are never unloaded.
+            // destroy the oldest background (non-active, non-incognito)
+            // browser sessions. Tab entries retain URL/title/engine and reload
+            // through their selected provider. Incognito tabs are never unloaded.
             LaunchedEffect(tabs.size, activeTabIndex) {
                 if (tabs.size > 10) {
                     val excess = tabs.size - 10
                     tabs.indices
-                        .filter { it != activeTabIndex && !tabs[it].isIncognito && tabs[it].webView != null }
+                        .filter {
+                            it != activeTabIndex && !tabs[it].isIncognito &&
+                                tabs[it].browserSession != null
+                        }
                         .take(excess)
                         .forEach { idx ->
                             val tab = tabs.getOrNull(idx) ?: return@forEach
                             val session = tab.browserSession ?: return@forEach
-                            val wv = tab.webView ?: return@forEach
                             try {
                                 session.detachFromParent()
-                                liveWebViews.remove(wv)
+                                tab.webView?.let { liveWebViews.remove(it) }
                                 liveBrowserSessions.remove(session)
                                 session.destroy()
                             } catch (_: Exception) { }
-                            tab.webView = null
+                            tab.attachBrowserSession(null)
                         }
                 }
             }
@@ -1309,7 +1374,9 @@ class MainActivity : FragmentActivity() {
                 ) {
                     SessionRestoreStartupAction.AUTOMATIC_MODE_RESTORE -> {
                         tabs.clear()
-                        tabs.addAll(saved.map { TabItem(url = it.url, title = it.title) })
+                        tabs.addAll(saved.map {
+                            TabItem(url = it.url, title = it.title, initialEngine = it.engine)
+                        })
                         activeTabIndex = savedActive.coerceIn(0, (tabs.size - 1).coerceAtLeast(0))
                         sessionStartupReady = true
                     }
@@ -1334,11 +1401,13 @@ class MainActivity : FragmentActivity() {
                 // before DataStore loads would use the default (false).
                 snapshotFlow { flagsLoaded }.first { it }
                 snapshotFlow { sessionStartupReady }.first { it }
-                snapshotFlow { tabs.map { Triple(it.url, it.title, it.isIncognito) } to activeTabIndex }
+                snapshotFlow {
+                    tabs.map { RestorableTabState(it.url, it.title, it.isIncognito, it.engine) } to activeTabIndex
+                }
                     .collect { (tabStates, activeIdx) ->
                         val (snapshot, active) = buildRestorableSnapshot(tabStates, activeIdx)
                         // Biometric lock bookkeeping: does an incognito tab exist right now?
-                        liveHasIncognitoTabs = tabStates.any { it.third }
+                        liveHasIncognitoTabs = tabStates.any { it.isIncognito }
                         delay(1000) // trailing-edge debounce: rapid edits collapse into one write
                         if (modeSwitchInProgress) return@collect
                         val bootMode = V9Engine.bootMode
@@ -2499,8 +2568,16 @@ class MainActivity : FragmentActivity() {
                                     DrawerItem(label = "Clean Browser Cache", icon = Icons.Default.Delete, color = Color(0xFFF87171)) {
                                         scope.launch {
                                             drawerState.close()
-                                            currentTab.webView?.clearCache(true)
-                                            Toast.makeText(this@MainActivity, "Browser cache purged successfully.", Toast.LENGTH_SHORT).show()
+                                            if (currentTab.engine == BrowserTabEngine.GECKOVIEW) {
+                                                Toast.makeText(
+                                                    this@MainActivity,
+                                                    "Per-category Gecko cache clearing is unavailable; use Clear all current mode data.",
+                                                    Toast.LENGTH_LONG
+                                                ).show()
+                                            } else {
+                                                currentTab.webView?.clearCache(true)
+                                                Toast.makeText(this@MainActivity, "Browser cache purged successfully.", Toast.LENGTH_SHORT).show()
+                                            }
                                         }
                                     }
                                 }
@@ -2508,8 +2585,16 @@ class MainActivity : FragmentActivity() {
                                     DrawerItem(label = "Clear Web Cookies", icon = Icons.Default.Cookie, color = Color(0xFFF59E0B)) {
                                         scope.launch {
                                             drawerState.close()
-                                            android.webkit.CookieManager.getInstance().removeAllCookies(null)
-                                            Toast.makeText(this@MainActivity, "All persistent cookies cleared.", Toast.LENGTH_SHORT).show()
+                                            if (currentTab.engine == BrowserTabEngine.GECKOVIEW) {
+                                                Toast.makeText(
+                                                    this@MainActivity,
+                                                    "Per-category Gecko cookie clearing is unavailable; use Clear all current mode data.",
+                                                    Toast.LENGTH_LONG
+                                                ).show()
+                                            } else {
+                                                android.webkit.CookieManager.getInstance().removeAllCookies(null)
+                                                Toast.makeText(this@MainActivity, "All persistent WebView cookies cleared.", Toast.LENGTH_SHORT).show()
+                                            }
                                         }
                                     }
                                 }
@@ -2526,10 +2611,14 @@ class MainActivity : FragmentActivity() {
                                     DrawerItem(label = "Auto-Scroll Web Page", icon = Icons.Default.KeyboardDoubleArrowDown, color = Color(0xFFA78BFA)) {
                                         scope.launch {
                                             drawerState.close()
-                                            currentTab.webView?.evaluateJavascript(
-                                                "var scrollInterval = setInterval(function() { window.scrollBy(0, 2); }, 30);", null
-                                            )
-                                            Toast.makeText(this@MainActivity, "Continuous Auto-Scroll Active. Click address bar to focus.", Toast.LENGTH_SHORT).show()
+                                            if (currentTab.engine == BrowserTabEngine.GECKOVIEW) {
+                                                Toast.makeText(this@MainActivity, "Auto-scroll is not available in Gecko tabs yet.", Toast.LENGTH_SHORT).show()
+                                            } else {
+                                                currentTab.webView?.evaluateJavascript(
+                                                    "var scrollInterval = setInterval(function() { window.scrollBy(0, 2); }, 30);", null
+                                                )
+                                                Toast.makeText(this@MainActivity, "Continuous Auto-Scroll Active. Click address bar to focus.", Toast.LENGTH_SHORT).show()
+                                            }
                                         }
                                     }
                                 }
@@ -2996,6 +3085,92 @@ class MainActivity : FragmentActivity() {
                                                     locationMode = LocationGuard.LocationMode.BLOCK,
                                                     onLocationClick = { showLocationSettings = true }
                                                 )
+                                                if (currentTab.engine == BrowserTabEngine.GECKOVIEW &&
+                                                    !currentTab.isIncognito && !showOverlays
+                                                ) {
+                                                    val actions = geckoTabActionsState.value[currentTab.id].orEmpty()
+                                                    Row(
+                                                        modifier = Modifier.fillMaxWidth()
+                                                            .horizontalScroll(rememberScrollState())
+                                                            .padding(horizontal = 8.dp),
+                                                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                                        verticalAlignment = Alignment.CenterVertically
+                                                    ) {
+                                                        actions.forEach { item ->
+                                                            OutlinedButton(onClick = {
+                                                                if (item.extension.metaData.enabled &&
+                                                                    com.click.browser.extensions.extensionPolicyBlockers(item.extension).isEmpty()
+                                                                ) item.action.click()
+                                                            }) {
+                                                                Text(item.label, maxLines = 1)
+                                                            }
+                                                        }
+                                                        if (actions.isEmpty()) {
+                                                            Text(
+                                                                "Approved add-on actions appear here",
+                                                                color = themed.onSurface.copy(alpha = 0.55f),
+                                                                fontSize = 12.sp
+                                                            )
+                                                        }
+                                                        TextButton(onClick = {
+                                                            val managerIntent = Intent(
+                                                                this@MainActivity,
+                                                                ExtensionBrowserActivity::class.java
+                                                            ).putExtra(ExtensionBrowserActivity.EXTRA_SHOW_MANAGER, true)
+                                                            if (currentTab.url.startsWith("http://") || currentTab.url.startsWith("https://")) {
+                                                                managerIntent.putExtra(
+                                                                    ExtensionBrowserActivity.EXTRA_START_URL,
+                                                                    currentTab.url
+                                                                )
+                                                            }
+                                                            startActivity(managerIntent)
+                                                        }) { Text("Manage add-ons") }
+                                                    }
+                                                    val popup = geckoTabPopupState.value
+                                                    if (popup != null && popup.ownerTabId == currentTab.id) {
+                                                        androidx.compose.ui.window.Dialog(
+                                                            onDismissRequest = {
+                                                                normalTabExtensionRouter?.closePopup(popup.session)
+                                                            }
+                                                        ) {
+                                                            Surface(
+                                                                modifier = Modifier.fillMaxWidth().heightIn(max = 520.dp),
+                                                                shape = RoundedCornerShape(20.dp),
+                                                                color = themed.surface,
+                                                                tonalElevation = 8.dp
+                                                            ) {
+                                                                Column {
+                                                                    Row(
+                                                                        modifier = Modifier.fillMaxWidth().padding(start = 16.dp, end = 6.dp),
+                                                                        verticalAlignment = Alignment.CenterVertically
+                                                                    ) {
+                                                                        Text(
+                                                                            popup.title,
+                                                                            modifier = Modifier.weight(1f),
+                                                                            color = themed.onSurface,
+                                                                            fontWeight = FontWeight.SemiBold,
+                                                                            maxLines = 1,
+                                                                            overflow = TextOverflow.Ellipsis
+                                                                        )
+                                                                        IconButton(onClick = {
+                                                                            normalTabExtensionRouter?.closePopup(popup.session)
+                                                                        }) {
+                                                                            Icon(Icons.Default.Close, contentDescription = "Close add-on popup")
+                                                                        }
+                                                                    }
+                                                                    AndroidView(
+                                                                        modifier = Modifier.fillMaxWidth().height(420.dp),
+                                                                        factory = { popupContext ->
+                                                                            org.mozilla.geckoview.GeckoView(popupContext).apply {
+                                                                                setSession(popup.session)
+                                                                            }
+                                                                        }
+                                                                    )
+                                                                }
+                                                            }
+                                                        }
+                                                    }
+                                                }
                                                 // Thin page-load progress indicator.
                                                 val progress = currentTab.loadProgress
                                                 androidx.compose.animation.AnimatedVisibility(
@@ -3109,10 +3284,140 @@ class MainActivity : FragmentActivity() {
                                                     factory = { ctx ->
                                                         val existingSession = currentTab.browserSession
                                                         if (existingSession != null) {
-                                                            val existingWebView = existingSession.view as? WebView
-                                                                ?: error("A non-WebView tab provider is not enabled in this phase")
                                                             existingSession.detachFromParent()
-                                                            existingWebView
+                                                            existingSession.view
+                                                        } else if (currentTab.engine == BrowserTabEngine.GECKOVIEW) {
+                                                            val tabId = currentTab.id
+                                                            var createdGeckoSession: GeckoBrowserTabSession? = null
+                                                            val geckoSession = GeckoBrowserTabSession(
+                                                                context = ctx,
+                                                                runtime = ExtensionBrowserRuntime.get(applicationContext),
+                                                                tabId = tabId,
+                                                                mode = activeMode,
+                                                                initialUrl = currentTab.url,
+                                                                extensionRouter = normalTabExtensionRouter(),
+                                                                initiallySelected = true,
+                                                                initiallyResumed = lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED),
+                                                                navigationTarget = navigation@{ requestedUrl ->
+                                                                    var targetUrl = cleanTrackingUrl(requestedUrl)
+                                                                    if (targetUrl == "about:blank") return@navigation targetUrl
+                                                                    ClickInternalPages.interceptNavigation(targetUrl)?.let { pageKey ->
+                                                                        showClickPage = pageKey
+                                                                        return@navigation null
+                                                                    }
+                                                                    if (isGoogleAuthUrl(targetUrl)) {
+                                                                        openInCustomTab(targetUrl)
+                                                                        return@navigation null
+                                                                    }
+                                                                    if (isPdfUrl(targetUrl)) {
+                                                                        pdfOfferUrl = targetUrl
+                                                                        return@navigation null
+                                                                    }
+                                                                    if (!targetUrl.startsWith("http://") && !targetUrl.startsWith("https://")) {
+                                                                        return@navigation null
+                                                                    }
+                                                                    if (targetUrl.startsWith("http://")) {
+                                                                        val host = hostOfUrl(targetUrl)
+                                                                        if (!isIpAddress(host)) {
+                                                                            when (liveHttpsMode) {
+                                                                                "strict" -> if (!liveHttpsStrictExceptions.contains(host)) {
+                                                                                    return@navigation null
+                                                                                }
+                                                                                "standard" -> targetUrl = "https://" + targetUrl.removePrefix("http://")
+                                                                            }
+                                                                        }
+                                                                    }
+                                                                    if (liveMode == BrowserMode.HACK) targetUrl = forceDesktopHost(targetUrl)
+                                                                    targetUrl
+                                                                },
+                                                                onNavigationBlocked = { blockedUrl ->
+                                                                    val scheme = runCatching {
+                                                                        android.net.Uri.parse(blockedUrl).scheme?.lowercase()
+                                                                    }.getOrNull()
+                                                                    val message = if (scheme == "http" && liveHttpsMode == "strict") {
+                                                                        "Blocked by the current HTTPS policy."
+                                                                    } else {
+                                                                        "This destination is not available in the Gecko tab."
+                                                                    }
+                                                                    Toast.makeText(this@MainActivity, message, Toast.LENGTH_SHORT).show()
+                                                                },
+                                                                onUrlChanged = { url ->
+                                                                    tabs.firstOrNull { it.id == tabId }?.url = url
+                                                                },
+                                                                onTitleChanged = { title ->
+                                                                    tabs.firstOrNull { it.id == tabId }?.title = title
+                                                                },
+                                                                onProgressChanged = { progress, loading ->
+                                                                    tabs.firstOrNull { it.id == tabId }?.let { tab ->
+                                                                        tab.loadProgress = progress
+                                                                        tab.isPageLoading = loading
+                                                                        if (!loading) tab.hasCommittedContent = true
+                                                                    }
+                                                                },
+                                                                onCanGoBackChanged = {},
+                                                                onCanGoForwardChanged = {},
+                                                                onFullscreenChanged = { active ->
+                                                                    if (tabs.getOrNull(activeTabIndex)?.id == tabId) {
+                                                                        videoFullscreenActive = active
+                                                                        exitFullscreenVideo = if (active) {
+                                                                            { createdGeckoSession?.session?.exitFullScreen() }
+                                                                        } else null
+                                                                    }
+                                                                },
+                                                                onExternalResponse = { response ->
+                                                                    val body = response.body
+                                                                    val scheme = runCatching {
+                                                                        android.net.Uri.parse(response.uri).scheme?.lowercase()
+                                                                    }.getOrNull()
+                                                                    if (body == null || response.statusCode !in 200..299 ||
+                                                                        (scheme != "http" && scheme != "https")
+                                                                    ) {
+                                                                        runCatching { body?.close() }
+                                                                        Toast.makeText(
+                                                                            this@MainActivity,
+                                                                            "This download response cannot be saved.",
+                                                                            Toast.LENGTH_SHORT
+                                                                        ).show()
+                                                                    } else {
+                                                                        response.setReadTimeoutMillis(120_000)
+                                                                        val disposition = response.headers.entries
+                                                                            .firstOrNull { it.key.equals("content-disposition", true) }
+                                                                            ?.value
+                                                                        val mimeType = response.headers.entries
+                                                                            .firstOrNull { it.key.equals("content-type", true) }
+                                                                            ?.value?.substringBefore(';')?.trim()
+                                                                        val fileName = android.webkit.URLUtil.guessFileName(
+                                                                            response.uri, disposition, mimeType
+                                                                        )
+                                                                        pendingBrowserDownload?.responseBody?.let {
+                                                                            runCatching { it.close() }
+                                                                        }
+                                                                        scope.launch {
+                                                                            val savedLocation = DownloadSettings.location(this@MainActivity)
+                                                                            customDownloadFolderAvailable =
+                                                                                DownloadSettings.customUri(this@MainActivity) != null
+                                                                            downloadDestination = if (
+                                                                                savedLocation == DownloadSettings.LOCATION_CUSTOM &&
+                                                                                !customDownloadFolderAvailable
+                                                                            ) DownloadSettings.LOCATION_PHONE else savedLocation
+                                                                            pendingBrowserDownload = PendingBrowserDownload(
+                                                                                url = response.uri,
+                                                                                fileName = fileName,
+                                                                                mimeType = mimeType,
+                                                                                userAgent = null,
+                                                                                responseBody = body
+                                                                            )
+                                                                        }
+                                                                    }
+                                                                }
+                                                            )
+                                                            createdGeckoSession = geckoSession
+                                                            currentTab.attachBrowserSession(geckoSession)
+                                                            if (!liveBrowserSessions.contains(geckoSession)) {
+                                                                liveBrowserSessions.add(geckoSession)
+                                                            }
+                                                            geckoSession.setSelected(true)
+                                                            geckoSession.view
                                                         } else {
                                                             WebView(ctx).apply {
                                                                 webViewClient = object : WebViewClient() {
@@ -3787,17 +4092,19 @@ class MainActivity : FragmentActivity() {
                                                             }
                                                         }
                                                     },
-                                                    update = { webView ->
-                                                        webView.settings.javaScriptEnabled = javaScriptEnabledGlobal
-                                                        // Re-apply privacy toggles with the freshest state on every recomposition
-                                                        this@MainActivity.applyPrivacyToggles(
-                                                            webView,
-                                                            httpsMode,
-                                                            forceNightModeWebsites,
-                                                            dataSaverEnabled
-                                                        )
-                                                        // Re-apply experimental flags too.
-                                                        this@MainActivity.applyExperimentalFlags(webView)
+                                                    update = { browserView ->
+                                                        (browserView as? WebView)?.let { webView ->
+                                                            webView.settings.javaScriptEnabled = javaScriptEnabledGlobal
+                                                            // Re-apply privacy toggles with the freshest state on every recomposition
+                                                            this@MainActivity.applyPrivacyToggles(
+                                                                webView,
+                                                                httpsMode,
+                                                                forceNightModeWebsites,
+                                                                dataSaverEnabled
+                                                            )
+                                                            // Re-apply experimental flags too.
+                                                            this@MainActivity.applyExperimentalFlags(webView)
+                                                        }
                                                     }
                                                 )
                                                 if (currentTab.url != "about:blank" && currentTab.isPageLoading && !currentTab.hasCommittedContent) {
@@ -4247,7 +4554,11 @@ class MainActivity : FragmentActivity() {
                                             showRestoreDialog = false
                                             tabs.clear()
                                             tabs.addAll(crashedTabs.map { saved ->
-                                                TabItem(url = saved.url, title = saved.title)
+                                                TabItem(
+                                                    url = saved.url,
+                                                    title = saved.title,
+                                                    initialEngine = saved.engine
+                                                )
                                             })
                                             activeTabIndex = crashedActiveIndex.coerceIn(
                                                 0, (tabs.size - 1).coerceAtLeast(0)
@@ -4581,18 +4892,35 @@ class MainActivity : FragmentActivity() {
                                     onClearCookies = {
                                         // CookieManager is pinned to the current engine's data
                                         // directory — this clears the CURRENT mode's cookies only.
-                                        CookieStore.clearAll {
-                                            Toast.makeText(this@MainActivity, "Cookies cleared (current profile)", Toast.LENGTH_SHORT).show()
+                                        if (currentTab.engine == BrowserTabEngine.GECKOVIEW) {
+                                            Toast.makeText(
+                                                this@MainActivity,
+                                                "Gecko per-category cookie clearing is unavailable; use Clear all current mode data.",
+                                                Toast.LENGTH_LONG
+                                            ).show()
+                                        } else {
+                                            CookieStore.clearAll {
+                                                Toast.makeText(this@MainActivity, "Cookies cleared (current profile)", Toast.LENGTH_SHORT).show()
+                                            }
                                         }
                                     },
                                     onClearCache = {
-                                        currentTab.webView?.clearCache(true)
-                                        Toast.makeText(this@MainActivity, "Cache cleared (current profile)", Toast.LENGTH_SHORT).show()
+                                        if (currentTab.engine == BrowserTabEngine.GECKOVIEW) {
+                                            Toast.makeText(
+                                                this@MainActivity,
+                                                "Gecko per-category cache clearing is unavailable; use Clear all current mode data.",
+                                                Toast.LENGTH_LONG
+                                            ).show()
+                                        } else {
+                                            currentTab.webView?.clearCache(true)
+                                            Toast.makeText(this@MainActivity, "Cache cleared (current profile)", Toast.LENGTH_SHORT).show()
+                                        }
                                     },
                                     onClearAllCurrentMode = {
                                         scope.launch { repository.clearHistory() }
                                         CookieStore.clearAll()
                                         currentTab.webView?.clearCache(true)
+                                        requestGeckoModeDataClear(activeMode)
                                         val historyScope = if (activeMode == BrowserMode.ADVANCED) {
                                             "Advance"
                                         } else {
@@ -4600,7 +4928,7 @@ class MainActivity : FragmentActivity() {
                                         }
                                         Toast.makeText(
                                             this@MainActivity,
-                                            "Cookies/cache cleared for ${activeMode.display().title}; $historyScope history cleared",
+                                            "WebView cookies/cache and Gecko profile data clear requested for ${activeMode.display().title}; $historyScope history cleared",
                                             Toast.LENGTH_SHORT
                                         ).show()
                                     },
@@ -5120,7 +5448,10 @@ class MainActivity : FragmentActivity() {
                                     Triple(DownloadSettings.LOCATION_CUSTOM, "Custom folder", "Use the folder selected in Downloads settings")
                                 )
                                 AlertDialog(
-                                    onDismissRequest = { pendingBrowserDownload = null },
+                                    onDismissRequest = {
+                                        pendingBrowserDownload?.responseBody?.let { runCatching { it.close() } }
+                                        pendingBrowserDownload = null
+                                    },
                                     icon = {
                                         Icon(
                                             Icons.Default.Download,
@@ -5178,18 +5509,32 @@ class MainActivity : FragmentActivity() {
                                             val accepted = downloadPrompt
                                             pendingBrowserDownload = null
                                             scope.launch {
-                                                DownloadHelper.enqueue(
-                                                    this@MainActivity,
-                                                    accepted.url,
-                                                    accepted.fileName,
-                                                    locationOverride = downloadDestination,
-                                                    userAgent = accepted.userAgent
-                                                )
+                                                val responseBody = accepted.responseBody
+                                                if (responseBody != null) {
+                                                    DownloadHelper.enqueueResponse(
+                                                        this@MainActivity,
+                                                        responseBody,
+                                                        accepted.fileName,
+                                                        accepted.mimeType,
+                                                        locationOverride = downloadDestination
+                                                    )
+                                                } else {
+                                                    DownloadHelper.enqueue(
+                                                        this@MainActivity,
+                                                        accepted.url,
+                                                        accepted.fileName,
+                                                        locationOverride = downloadDestination,
+                                                        userAgent = accepted.userAgent
+                                                    )
+                                                }
                                             }
                                         }) { Text("Save") }
                                     },
                                     dismissButton = {
-                                        TextButton(onClick = { pendingBrowserDownload = null }) { Text("Cancel") }
+                                        TextButton(onClick = {
+                                            pendingBrowserDownload?.responseBody?.let { runCatching { it.close() } }
+                                            pendingBrowserDownload = null
+                                        }) { Text("Cancel") }
                                     },
                                     shape = RoundedCornerShape(24.dp),
                                     containerColor = theme.surface,
@@ -5448,6 +5793,30 @@ class MainActivity : FragmentActivity() {
                                 BrowserMenuSheet(
                                     theme = theme,
                                     isDesktopForSite = menuDesktopForSite,
+                                    showOpenInGecko = !currentTab.isIncognito &&
+                                        currentTab.engine != BrowserTabEngine.GECKOVIEW &&
+                                        (currentTab.url.startsWith("http://") || currentTab.url.startsWith("https://")),
+                                    onOpenInGecko = {
+                                        showBrowserMenu = false
+                                        val source = currentTab
+                                        if (!source.isIncognito &&
+                                            (source.url.startsWith("http://") || source.url.startsWith("https://"))
+                                        ) {
+                                            tabs.add(
+                                                TabItem(
+                                                    url = source.url,
+                                                    title = source.title,
+                                                    initialEngine = BrowserTabEngine.GECKOVIEW
+                                                )
+                                            )
+                                            activeTabIndex = tabs.lastIndex
+                                            Toast.makeText(
+                                                this@MainActivity,
+                                                "Opened an extension-ready GeckoView tab. The original tab is unchanged.",
+                                                Toast.LENGTH_LONG
+                                            ).show()
+                                        }
+                                    },
                                     onNewTab = {
                                         showBrowserMenu = false
                                         tabs.add(TabItem(url = homeUrl(), title = "New Tab"))
@@ -5581,7 +5950,9 @@ class MainActivity : FragmentActivity() {
                                     closedTabs = RecentlyClosedTabs.list(),
                                     theme = theme,
                                     onReopen = { ct ->
-                                        tabs.add(TabItem(url = ct.url, title = ct.title))
+                                        tabs.add(
+                                            TabItem(url = ct.url, title = ct.title, initialEngine = ct.engine)
+                                        )
                                         activeTabIndex = tabs.size - 1
                                         RecentlyClosedTabs.remove(ct)
                                         showRecentTabs = false
