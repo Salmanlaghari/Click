@@ -8,17 +8,6 @@ import org.junit.Test
 
 class ExtensionInstallPolicyTest {
     @Test
-    fun onlyXpiPackagesAreAccepted() {
-        assertTrue(ExtensionInstallPolicy.isSupportedPackageName("reader.xpi"))
-        assertTrue(ExtensionInstallPolicy.isSupportedPackageName("READER.XPI"))
-        assertFalse(ExtensionInstallPolicy.isSupportedPackageName("reader.crx"))
-        assertFalse(ExtensionInstallPolicy.isSupportedPackageName("reader.zip"))
-        assertFalse(ExtensionInstallPolicy.isSupportedPackageName("reader.xpi.exe"))
-        assertFalse(ExtensionInstallPolicy.isSupportedPackageName(null))
-        assertFalse(ExtensionInstallPolicy.isSupportedPackageName("  "))
-    }
-
-    @Test
     fun blocksNativeMessagingAndSensitiveBrowserApis() {
         assertEquals(
             listOf("cookies", "nativeMessaging", "proxy"),

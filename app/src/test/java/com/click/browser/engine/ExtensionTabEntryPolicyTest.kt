@@ -7,7 +7,7 @@ import org.junit.Test
 
 class ExtensionTabEntryPolicyTest {
     @Test
-    fun privateTabsNeverEnterTheExtensionFlow() {
+    fun privateTabsNeverEnterTheExtensionStoreFlow() {
         assertEquals(
             ExtensionTabEntryAction.PRIVATE_TAB_UNAVAILABLE,
             extensionTabEntryAction(BrowserTabEngine.WEBVIEW, isPrivate = true)
@@ -19,18 +19,72 @@ class ExtensionTabEntryPolicyTest {
     }
 
     @Test
-    fun normalWebViewTabsRequireAnExplicitInPlaceSwitch() {
+    fun extensionsTapOpensTheStoreImmediatelyForBothNormalTabEngines() {
         assertEquals(
-            ExtensionTabEntryAction.CONFIRM_GECKOVIEW_SWITCH,
+            ExtensionTabEntryAction.OPEN_AMO_STORE,
             extensionTabEntryAction(BrowserTabEngine.WEBVIEW, isPrivate = false)
+        )
+        assertEquals(
+            ExtensionTabEntryAction.OPEN_AMO_STORE,
+            extensionTabEntryAction(BrowserTabEngine.GECKOVIEW, isPrivate = false)
         )
     }
 
     @Test
-    fun normalGeckoTabsOpenTheAddonManagerWithoutAnotherTab() {
-        assertEquals(
-            ExtensionTabEntryAction.OPEN_ADDON_MANAGER,
-            extensionTabEntryAction(BrowserTabEngine.GECKOVIEW, isPrivate = false)
+    fun sameTabSwitchIsOfferedOnlyAfterInstallAndOnlyForTheOriginTab() {
+        assertTrue(
+            shouldOfferPostInstallGeckoSwitch(
+                originTabIsStillSelected = true,
+                hasEnabledInstalledExtension = true,
+                engine = BrowserTabEngine.WEBVIEW,
+                isPrivate = false,
+                url = "https://example.com/path"
+            )
+        )
+        assertFalse(
+            shouldOfferPostInstallGeckoSwitch(
+                originTabIsStillSelected = false,
+                hasEnabledInstalledExtension = true,
+                engine = BrowserTabEngine.WEBVIEW,
+                isPrivate = false,
+                url = "https://example.com/path"
+            )
+        )
+        assertFalse(
+            shouldOfferPostInstallGeckoSwitch(
+                originTabIsStillSelected = true,
+                hasEnabledInstalledExtension = false,
+                engine = BrowserTabEngine.WEBVIEW,
+                isPrivate = false,
+                url = "https://example.com/path"
+            )
+        )
+        assertFalse(
+            shouldOfferPostInstallGeckoSwitch(
+                originTabIsStillSelected = true,
+                hasEnabledInstalledExtension = true,
+                engine = BrowserTabEngine.GECKOVIEW,
+                isPrivate = false,
+                url = "https://example.com/path"
+            )
+        )
+        assertFalse(
+            shouldOfferPostInstallGeckoSwitch(
+                originTabIsStillSelected = true,
+                hasEnabledInstalledExtension = true,
+                engine = BrowserTabEngine.WEBVIEW,
+                isPrivate = true,
+                url = "https://example.com/path"
+            )
+        )
+        assertFalse(
+            shouldOfferPostInstallGeckoSwitch(
+                originTabIsStillSelected = true,
+                hasEnabledInstalledExtension = true,
+                engine = BrowserTabEngine.WEBVIEW,
+                isPrivate = false,
+                url = "click://settings"
+            )
         )
     }
 

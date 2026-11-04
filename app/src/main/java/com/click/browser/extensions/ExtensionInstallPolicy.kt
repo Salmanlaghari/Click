@@ -1,6 +1,6 @@
 package com.click.browser.extensions
 
-/** Narrow guardrails for user-initiated GeckoView add-on imports. */
+/** Narrow guardrails for user-initiated, verified Mozilla AMO add-on installs. */
 internal object ExtensionInstallPolicy {
     const val MAX_XPI_BYTES: Long = 30L * 1024L * 1024L
 
@@ -46,8 +46,6 @@ internal object ExtensionInstallPolicy {
         return parts.size in 1..4 && parts.all { browserIpv4Part.matches(it) }
     }
 
-    fun isSupportedPackageName(displayName: String?): Boolean =
-        !displayName.isNullOrBlank() && displayName.trim().endsWith(".xpi", ignoreCase = true)
 
     fun blockedPermissionNames(requested: Iterable<String>): List<String> =
         requested
@@ -79,14 +77,23 @@ internal object ExtensionInstallPolicy {
 
     fun isOfficialAmoListing(url: String?): Boolean {
         val uri = runCatching { url?.let { java.net.URI(it) } }.getOrNull() ?: return false
-        return uri.scheme == "https" && uri.host.equals("addons.mozilla.org", ignoreCase = true) &&
-            uri.userInfo == null && (uri.port == -1 || uri.port == 443) &&
-            uri.path.orEmpty().contains("/firefox/addon/")
+        if (uri.scheme != "https" || !uri.host.equals("addons.mozilla.org", ignoreCase = true) ||
+            uri.userInfo != null || (uri.port != -1 && uri.port != 443)
+        ) return false
+        val segments = uri.path.orEmpty().split('/').filter(String::isNotBlank)
+        val storeIndex = segments.indexOfLast { it.equals("android", true) || it.equals("firefox", true) }
+        if (storeIndex < 0 || storeIndex + 2 >= segments.size ||
+            !segments[storeIndex + 1].equals("addon", true)
+        ) return false
+        val slug = segments[storeIndex + 2]
+        if (!slug.matches(Regex("(?i)^[a-z0-9][a-z0-9_~-]{0,127}$"))) return false
+        val trailing = segments.drop(storeIndex + 3)
+        return trailing.size <= 1 && trailing.all { it in setOf("reviews", "versions", "support", "details") }
     }
 
     fun officialAmoLatestXpiUrl(slug: String?): String? {
         val normalized = slug?.trim()?.lowercase().orEmpty()
-        if (!normalized.matches(Regex("^[a-z0-9][a-z0-9-]{0,127}$"))) return null
+        if (!normalized.matches(Regex("^[a-z0-9][a-z0-9_~-]{0,127}$"))) return null
         return "https://addons.mozilla.org/firefox/downloads/latest/$normalized/latest.xpi"
     }
 
@@ -96,7 +103,7 @@ internal object ExtensionInstallPolicy {
             uri.userInfo != null || (uri.port != -1 && uri.port != 443)
         ) return false
         val path = uri.path.orEmpty()
-        val latestPackage = Regex("^/firefox/downloads/latest/[a-z0-9-]+/[^/]+\\.xpi$", RegexOption.IGNORE_CASE)
+        val latestPackage = Regex("^/firefox/downloads/latest/[a-z0-9_~-]+/[^/]+\\.xpi$", RegexOption.IGNORE_CASE)
         val versionedPackage = Regex("^/firefox/downloads/file/[0-9]+/[^/]+\\.xpi$", RegexOption.IGNORE_CASE)
         return latestPackage.matches(path) || versionedPackage.matches(path)
     }
