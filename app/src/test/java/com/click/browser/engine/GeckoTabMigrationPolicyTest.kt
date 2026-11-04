@@ -1,7 +1,9 @@
 package com.click.browser.engine
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotEquals
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class GeckoTabMigrationPolicyTest {
@@ -25,7 +27,8 @@ class GeckoTabMigrationPolicyTest {
                     url = "https://gecko.example/",
                     title = "Gecko tab",
                     isIncognito = false,
-                    engine = BrowserTabEngine.GECKOVIEW
+                    engine = BrowserTabEngine.GECKOVIEW,
+                    geckoSessionState = "serialized-gecko-state"
                 ),
                 RestorableTabState(
                     url = "about:blank",
@@ -42,7 +45,29 @@ class GeckoTabMigrationPolicyTest {
         assertEquals(BrowserTabEngine.WEBVIEW, tabs[0].engine)
         assertEquals("https://gecko.example/", tabs[1].url)
         assertEquals(BrowserTabEngine.GECKOVIEW, tabs[1].engine)
+        assertEquals("serialized-gecko-state", tabs[1].geckoSessionState)
+        assertEquals(null, tabs[0].geckoSessionState)
         assertEquals(1, activeIndex)
+    }
+
+    @Test
+    fun oversizedGeckoStateFallsBackToUrlAndTitleOnly() {
+        val oversized = "x".repeat(SessionRestore.MAX_GECKO_STATE_CHARS + 1)
+        val (tabs, _) = buildRestorableSnapshot(
+            tabStates = listOf(
+                RestorableTabState(
+                    url = "https://example.com/",
+                    title = "Example",
+                    isIncognito = false,
+                    engine = BrowserTabEngine.GECKOVIEW,
+                    geckoSessionState = oversized
+                )
+            ),
+            activeIdx = 0
+        )
+
+        assertEquals(1, tabs.size)
+        assertEquals(null, tabs.single().geckoSessionState)
     }
 
     @Test
@@ -78,5 +103,52 @@ class GeckoTabMigrationPolicyTest {
         assertEquals(defaultProfile, geckoContextIdFor(BrowserMode.HACK))
         assertEquals(defaultProfile, geckoContextIdFor(BrowserMode.SIMPLE))
         assertNotEquals(defaultProfile, geckoContextIdFor(BrowserMode.ADVANCED))
+    }
+
+    @Test
+    fun targetBlankAllowsWebPagesAndBlankButRejectsExecutableOrExternalSchemes() {
+        assertTrue(isAllowedGeckoNewWindowUri("https://example.com/path"))
+        assertTrue(isAllowedGeckoNewWindowUri("http://example.org/"))
+        assertTrue(isAllowedGeckoNewWindowUri("about:blank"))
+        assertFalse(isAllowedGeckoNewWindowUri("javascript:alert(1)"))
+        assertFalse(isAllowedGeckoNewWindowUri("file:///etc/passwd"))
+        assertFalse(isAllowedGeckoNewWindowUri("intent://open"))
+    }
+
+    @Test
+    fun targetBlankMustNotBypassNavigationPolicyUrlChanges() {
+        assertTrue(shouldAcceptGeckoNewWindowUri("https://example.com/", "https://example.com/"))
+        assertTrue(shouldAcceptGeckoNewWindowUri("about:blank", "about:blank"))
+        assertFalse(shouldAcceptGeckoNewWindowUri("http://example.com/", "https://example.com/"))
+        assertFalse(shouldAcceptGeckoNewWindowUri("https://example.com/?utm_source=x", "https://example.com/"))
+        assertFalse(shouldAcceptGeckoNewWindowUri("javascript:alert(1)", "javascript:alert(1)"))
+    }
+
+    @Test
+    fun adoptedChildSessionIsOpenedAndNavigatedOnlyByGecko() {
+        assertEquals(
+            GeckoSessionStartupPlan(openLocally = false, restoreSavedState = false, loadInitialUrl = false),
+            geckoSessionStartupPlan(
+                adoptedChildSession = true,
+                hasRestorableState = true,
+                initialUrl = "https://child.example/"
+            )
+        )
+    }
+
+    @Test
+    fun ordinarySessionOpensOnceAndChoosesRestoreStateOrInitialUrl() {
+        assertEquals(
+            GeckoSessionStartupPlan(openLocally = true, restoreSavedState = true, loadInitialUrl = false),
+            geckoSessionStartupPlan(false, true, "https://restored.example/")
+        )
+        assertEquals(
+            GeckoSessionStartupPlan(openLocally = true, restoreSavedState = false, loadInitialUrl = true),
+            geckoSessionStartupPlan(false, false, "https://new.example/")
+        )
+        assertEquals(
+            GeckoSessionStartupPlan(openLocally = true, restoreSavedState = false, loadInitialUrl = false),
+            geckoSessionStartupPlan(false, false, "about:blank")
+        )
     }
 }

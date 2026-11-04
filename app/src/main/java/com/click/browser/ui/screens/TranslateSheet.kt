@@ -298,6 +298,12 @@ fun TranslateSheet(
                         colors = SwitchDefaults.colors(checkedThumbColor = Color.White, checkedTrackColor = theme.primary)
                     )
                 }
+            } else if (pageUrl.startsWith("http")) {
+                Text(
+                    "For GeckoView pages, page translation is not connected yet. You can still translate text below; the page will not be modified.",
+                    color = theme.onSurface.copy(alpha = 0.7f),
+                    fontSize = 12.sp
+                )
             }
 
             OutlinedTextField(

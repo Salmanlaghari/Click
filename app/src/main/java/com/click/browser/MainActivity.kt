@@ -124,9 +124,11 @@ class TabItem(
     title: String = "New Tab",
     isIncognito: Boolean = false,
     initialWebView: WebView? = null,
-    initialEngine: BrowserTabEngine = defaultBrowserTabEngine(isIncognito)
+    initialEngine: BrowserTabEngine = defaultBrowserTabEngine(isIncognito),
+    initialGeckoSessionState: String? = null,
+    initialGeckoSession: org.mozilla.geckoview.GeckoSession? = null
 ) {
-    /** Per-tab engine selection; regular tabs use GeckoView, private tabs stay WebView-only. */
+    /** Regular tabs default to GeckoView; private tabs stay on WebView. */
     var engine by mutableStateOf(initialEngine)
 
     internal var browserSession: BrowserTabSession? by mutableStateOf(
@@ -138,7 +140,13 @@ class TabItem(
         browserSession = session
     }
 
-    /** Compatibility access for existing WebView-specific UI/features. */
+    internal var pendingGeckoSession: org.mozilla.geckoview.GeckoSession? = initialGeckoSession
+        private set
+
+    internal fun takePendingGeckoSession(): org.mozilla.geckoview.GeckoSession? =
+        pendingGeckoSession.also { pendingGeckoSession = null }
+
+    /** Compatibility access for existing WebView-only UI/features. */
     var webView: WebView?
         get() = (browserSession as? WebViewBrowserTabSession)?.webView
         set(value) {
@@ -148,6 +156,10 @@ class TabItem(
     var url by mutableStateOf(url)
     var title by mutableStateOf(title)
     var isIncognito by mutableStateOf(isIncognito)
+    /** Gecko's serialized history/scroll/form snapshot; never written for private tabs. */
+    var geckoSessionState by mutableStateOf(initialGeckoSessionState)
+    var canGoBack by mutableStateOf(false)
+    var canGoForward by mutableStateOf(false)
     /** 0..100 page-load progress (drives the thin progress bar under the top bar). */
     var loadProgress by mutableStateOf(0)
     var isPageLoading by mutableStateOf(false)
@@ -402,9 +414,8 @@ class MainActivity : FragmentActivity() {
 
     // Registry of live WebViews for flag-driven cleanup (clear-on-exit).
     private val liveWebViews = mutableListOf<android.webkit.WebView>()
-    // Engine-neutral lifecycle registry. Regular tabs use GeckoView; WebView
-    // remains for private tabs and explicit fallback. Gecko contexts are cleared
-    // through the profile-scoped clear-on-exit path.
+    // Engine-neutral lifecycle registry for regular Gecko tabs. Private tabs
+    // remain on WebView until Gecko's private-profile cleanup is verified.
     private val liveBrowserSessions = mutableListOf<BrowserTabSession>()
     private val geckoTabActionsState = androidx.compose.runtime.mutableStateOf(
         emptyMap<String, List<NormalTabExtensionAction>>()
@@ -443,9 +454,13 @@ class MainActivity : FragmentActivity() {
     }
 
     private fun requestGeckoModeDataClear(mode: BrowserMode) {
+        requestGeckoContextDataClear(geckoContextIdFor(mode))
+    }
+
+    private fun requestGeckoContextDataClear(contextId: String) {
         runCatching {
             ExtensionBrowserRuntime.get(applicationContext).storageController
-                .clearDataForSessionContext(geckoContextIdFor(mode))
+                .clearDataForSessionContext(contextId)
         }
     }
 
@@ -1192,7 +1207,11 @@ class MainActivity : FragmentActivity() {
             var pendingKeyboardDismissTabId by remember { mutableStateOf<String?>(null) }
             SideEffect {
                 val (snapshot, active) = buildRestorableSnapshot(
-                    tabs.map { RestorableTabState(it.url, it.title, it.isIncognito, it.engine) },
+                    tabs.map {
+                        RestorableTabState(
+                            it.url, it.title, it.isIncognito, it.engine, it.geckoSessionState
+                        )
+                    },
                     activeTabIndex
                 )
                 liveRestoreTabs = snapshot
@@ -1241,6 +1260,9 @@ class MainActivity : FragmentActivity() {
                     liveBrowserSessions.remove(session)
                     try { session.detachFromParent() } catch (_: Exception) { }
                     try { session.destroy() } catch (_: Exception) { }
+                }
+                closed.takePendingGeckoSession()?.let { pending ->
+                    runCatching { pending.close() }
                 }
                 closed.webView?.let { liveWebViews.remove(it) }
                 // Remember for UNDO (not for private tabs — privacy first).
@@ -1362,7 +1384,12 @@ class MainActivity : FragmentActivity() {
                     SessionRestoreStartupAction.AUTOMATIC_MODE_RESTORE -> {
                         tabs.clear()
                         tabs.addAll(saved.map {
-                            TabItem(url = it.url, title = it.title, initialEngine = it.engine)
+                            TabItem(
+                                url = it.url,
+                                title = it.title,
+                                initialEngine = it.engine,
+                                initialGeckoSessionState = it.geckoSessionState
+                            )
                         })
                         activeTabIndex = savedActive.coerceIn(0, (tabs.size - 1).coerceAtLeast(0))
                         sessionStartupReady = true
@@ -1389,7 +1416,11 @@ class MainActivity : FragmentActivity() {
                 snapshotFlow { flagsLoaded }.first { it }
                 snapshotFlow { sessionStartupReady }.first { it }
                 snapshotFlow {
-                    tabs.map { RestorableTabState(it.url, it.title, it.isIncognito, it.engine) } to activeTabIndex
+                    tabs.map {
+                        RestorableTabState(
+                            it.url, it.title, it.isIncognito, it.engine, it.geckoSessionState
+                        )
+                    } to activeTabIndex
                 }
                     .collect { (tabStates, activeIdx) ->
                         val (snapshot, active) = buildRestorableSnapshot(tabStates, activeIdx)
@@ -1707,6 +1738,9 @@ class MainActivity : FragmentActivity() {
             var showPaymentMethods by remember { mutableStateOf(false) }
             // Per-site settings sheet (opened from the lock icon in the address bar).
             var showSiteSettings by remember { mutableStateOf(false) }
+            var showClearSiteDataConfirm by remember { mutableStateOf(false) }
+            var clearSiteDataInProgress by remember { mutableStateOf(false) }
+            var browserSessionGeneration by remember { mutableStateOf(0) }
             // Mode-switch confirmation: pending target mode, null = no dialog.
             // Mode changes require a process restart (WebView data dir is pinned
             // at boot), so the user must confirm before switching.
@@ -1809,9 +1843,6 @@ class MainActivity : FragmentActivity() {
                 currentTab.engine,
                 showCookieManager,
                 showQuickTogglesDialog,
-                showFindInPageDialog,
-                showSiteSettings,
-                showTranslateSheet,
                 showTextScaleSheet,
                 showDevToolsSheet
             ) {
@@ -1819,9 +1850,6 @@ class MainActivity : FragmentActivity() {
                     val unavailable = when {
                         showCookieManager -> { showCookieManager = false; "Cookie manager" }
                         showQuickTogglesDialog -> { showQuickTogglesDialog = false; "Page quick toggles" }
-                        showFindInPageDialog -> { showFindInPageDialog = false; "Find in page" }
-                        showSiteSettings -> { showSiteSettings = false; "Per-site controls" }
-                        showTranslateSheet -> { showTranslateSheet = false; "Page translation" }
                         showTextScaleSheet -> { showTextScaleSheet = false; "Page text zoom" }
                         showDevToolsSheet -> { showDevToolsSheet = false; "DevTools" }
                         else -> null
@@ -1854,13 +1882,10 @@ class MainActivity : FragmentActivity() {
                     val unavailable = when (id) {
                         FeatureId.COOKIES -> "Cookie manager"
                         FeatureId.DEVTOOLS -> "DevTools"
-                        FeatureId.TRANSLATE -> "Page translation"
                         FeatureId.DESKTOP -> "Desktop-layout override"
-                        FeatureId.FIND_IN_PAGE -> "Find in page"
                         FeatureId.ADBLOCK -> "Click's custom AdBlock filter"
                         FeatureId.READER -> "Reader mode"
                         FeatureId.SCREENSHOT -> "Page screenshot"
-                        FeatureId.SAVE_PDF -> "Print / Save as PDF"
                         FeatureId.TEXT_SIZE -> "Page text zoom"
                         FeatureId.TOOLS -> "WebView page quick toggles"
                         else -> null
@@ -2039,12 +2064,20 @@ class MainActivity : FragmentActivity() {
                         }
                     }
                     FeatureId.SAVE_PDF -> {
-                        val printManager = getSystemService(Context.PRINT_SERVICE) as? android.print.PrintManager
-                        val adapter = currentTab.webView?.createPrintDocumentAdapter("Click Browser Print Job")
-                        if (printManager != null && adapter != null) {
-                            printManager.print("Click Browser Document", adapter, android.print.PrintAttributes.Builder().build())
+                        val geckoSession = currentTab.browserSession as? GeckoBrowserTabSession
+                        if (geckoSession != null) {
+                            runCatching { geckoSession.session.printPageContent() }
+                                .onFailure {
+                                    Toast.makeText(this@MainActivity, "Gecko print could not start.", Toast.LENGTH_SHORT).show()
+                                }
                         } else {
-                            Toast.makeText(this@MainActivity, "Printing not available.", Toast.LENGTH_SHORT).show()
+                            val printManager = getSystemService(Context.PRINT_SERVICE) as? android.print.PrintManager
+                            val adapter = currentTab.webView?.createPrintDocumentAdapter("Click Browser Print Job")
+                            if (printManager != null && adapter != null) {
+                                printManager.print("Click Browser Document", adapter, android.print.PrintAttributes.Builder().build())
+                            } else {
+                                Toast.makeText(this@MainActivity, "Printing not available.", Toast.LENGTH_SHORT).show()
+                            }
                         }
                     }
                     // Real Add to Home: pinned shortcut to the current page
@@ -2083,8 +2116,7 @@ class MainActivity : FragmentActivity() {
                         }
                     }
                     FeatureId.SITE_INFO -> {
-                        val host = try { android.net.Uri.parse(currentTab.url).host ?: currentTab.url } catch (_: Exception) { currentTab.url }
-                        Toast.makeText(this@MainActivity, host, Toast.LENGTH_LONG).show()
+                        showSiteSettings = true
                     }
                     FeatureId.PRIVACY_GUARDS -> showPrivacyGuards = true
                     // V9: Shield screen (built-in VPN and DNS controls).
@@ -2301,6 +2333,71 @@ class MainActivity : FragmentActivity() {
                     .putExtra(ExtensionBrowserActivity.EXTRA_SHOW_MANAGER, false)
                 extensionStoreLauncher.launch(intent)
             }
+            fun clearGeckoSiteData(host: String) {
+                val normalizedHost = host.trim().lowercase().trimEnd('.')
+                if (normalizedHost.isBlank() || clearSiteDataInProgress) return
+                clearSiteDataInProgress = true
+                normalTabExtensionRouter?.closePopup()
+                tabs.forEach { tab ->
+                    if (tab.engine != BrowserTabEngine.GECKOVIEW) return@forEach
+                    val browserSession = tab.browserSession
+                    if (browserSession != null) {
+                        runCatching { browserSession.stopLoading() }
+                        runCatching { browserSession.setSelected(false) }
+                        runCatching { browserSession.detachFromParent() }
+                        liveBrowserSessions.remove(browserSession)
+                        runCatching { browserSession.destroy() }
+                        tab.attachBrowserSession(null)
+                    }
+                    tab.takePendingGeckoSession()?.let { pending -> runCatching { pending.close() } }
+                    tab.canGoBack = false
+                    tab.canGoForward = false
+                }
+                val result = try {
+                    ExtensionBrowserRuntime.get(applicationContext).storageController
+                        .clearDataFromHost(
+                            normalizedHost, org.mozilla.geckoview.StorageController.ClearFlags.SITE_DATA
+                        )
+                } catch (error: Exception) {
+                    browserSessionGeneration += 1
+                    clearSiteDataInProgress = false
+                    showClearSiteDataConfirm = false
+                    Toast.makeText(
+                        this@MainActivity,
+                        "Could not start site-data clearing: ${error.message ?: "GeckoView error"}",
+                        Toast.LENGTH_LONG
+                    ).show()
+                    return
+                }
+                result.accept(
+                    {
+                        runOnUiThread {
+                            browserSessionGeneration += 1
+                            clearSiteDataInProgress = false
+                            showClearSiteDataConfirm = false
+                            showSiteSettings = false
+                            Toast.makeText(
+                                this@MainActivity,
+                                "Gecko site data cleared for $normalizedHost. Normal Gecko tabs are reopening; new site data can be created as you browse.",
+                                Toast.LENGTH_LONG
+                            ).show()
+                        }
+                    },
+                    { error ->
+                        runOnUiThread {
+                            browserSessionGeneration += 1
+                            clearSiteDataInProgress = false
+                            showClearSiteDataConfirm = false
+                            Toast.makeText(
+                                this@MainActivity,
+                                "Could not confirm site-data clearing: ${error?.message ?: "GeckoView error"}",
+                                Toast.LENGTH_LONG
+                            ).show()
+                        }
+                    }
+                )
+            }
+
             fun replaceTabEngine(tab: TabItem, targetEngine: BrowserTabEngine): Boolean {
                 if (tab.engine == targetEngine) return true
                 if (targetEngine == BrowserTabEngine.GECKOVIEW && tab.isIncognito) return false
@@ -3222,9 +3319,13 @@ class MainActivity : FragmentActivity() {
                                                     activeMode = activeMode,
                                                     currentUrl = if (showOverlays) "" else currentTab.url,
                                                     searchEngine = currentSearchEngineSetting,
-                                                    canGoBack = !showOverlays && currentTab.browserSession?.canGoBack() == true,
+                                                    canGoBack = !showOverlays && if (currentTab.engine == BrowserTabEngine.GECKOVIEW) {
+                                                        currentTab.canGoBack
+                                                    } else currentTab.browserSession?.canGoBack() == true,
                                                     onBack = { currentTab.browserSession.goBackIfPossible() },
-                                                    canGoForward = !showOverlays && currentTab.browserSession?.canGoForward() == true,
+                                                    canGoForward = !showOverlays && if (currentTab.engine == BrowserTabEngine.GECKOVIEW) {
+                                                        currentTab.canGoForward
+                                                    } else currentTab.browserSession?.canGoForward() == true,
                                                     onForward = { currentTab.browserSession.goForwardIfPossible() },
                                                     onNavigate = { input ->
                                                         pendingKeyboardDismissTabId = currentTab.id
@@ -3430,7 +3531,7 @@ class MainActivity : FragmentActivity() {
                                             modifier = Modifier.fillMaxSize(),
                                             contentAlignment = Alignment.Center
                                         ) {
-                                            key(currentTab.id, currentTab.engine) {
+                                            key(currentTab.id, currentTab.engine, browserSessionGeneration) {
                                                 AndroidView(
                                                     modifier = emulatorWidthModifier,
                                                     factory = { ctx ->
@@ -3447,7 +3548,9 @@ class MainActivity : FragmentActivity() {
                                                                 tabId = tabId,
                                                                 mode = activeMode,
                                                                 initialUrl = currentTab.url,
-                                                                extensionRouter = normalTabExtensionRouter(),
+                                                                initialSessionState = currentTab.geckoSessionState,
+                                                                extensionRouter = if (currentTab.isIncognito) null else normalTabExtensionRouter(),
+                                                                initialGeckoSession = currentTab.takePendingGeckoSession(),
                                                                 initiallySelected = true,
                                                                 initiallyResumed = lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED),
                                                                 navigationTarget = navigation@{ requestedUrl ->
@@ -3459,10 +3562,6 @@ class MainActivity : FragmentActivity() {
                                                                     }
                                                                     if (isGoogleAuthUrl(targetUrl)) {
                                                                         openInCustomTab(targetUrl)
-                                                                        return@navigation null
-                                                                    }
-                                                                    if (isPdfUrl(targetUrl)) {
-                                                                        pdfOfferUrl = targetUrl
                                                                         return@navigation null
                                                                     }
                                                                     if (!targetUrl.startsWith("http://") && !targetUrl.startsWith("https://")) {
@@ -3486,12 +3585,34 @@ class MainActivity : FragmentActivity() {
                                                                     val scheme = runCatching {
                                                                         android.net.Uri.parse(blockedUrl).scheme?.lowercase()
                                                                     }.getOrNull()
-                                                                    val message = if (scheme == "http" && liveHttpsMode == "strict") {
-                                                                        "Blocked by the current HTTPS policy."
-                                                                    } else {
-                                                                        "This destination is not available in the Gecko tab."
+                                                                    val message = when {
+                                                                        scheme == "http" && liveHttpsMode == "strict" ->
+                                                                            "Blocked by the current HTTPS policy."
+                                                                        scheme == "http" && liveHttpsMode == "standard" ->
+                                                                            "This new window needs a URL adjustment. Open the link in the current tab to apply browser rules."
+                                                                        else -> "This destination is not available in the Gecko tab."
                                                                     }
                                                                     Toast.makeText(this@MainActivity, message, Toast.LENGTH_SHORT).show()
+                                                                },
+                                                                onNewSession = { uri, childSession ->
+                                                                    val scheme = runCatching {
+                                                                        android.net.Uri.parse(uri).scheme?.lowercase()
+                                                                    }.getOrNull()
+                                                                    if (scheme !in setOf("http", "https") && uri != "about:blank") {
+                                                                        childSession.close()
+                                                                        null
+                                                                    } else {
+                                                                        val childTab = TabItem(
+                                                                            url = uri,
+                                                                            title = "New Tab",
+                                                                            isIncognito = currentTab.isIncognito,
+                                                                            initialEngine = BrowserTabEngine.GECKOVIEW,
+                                                                            initialGeckoSession = childSession
+                                                                        )
+                                                                        tabs.add(childTab)
+                                                                        activeTabIndex = tabs.lastIndex
+                                                                        org.mozilla.geckoview.GeckoResult.fromValue(childSession)
+                                                                    }
                                                                 },
                                                                 onUrlChanged = { url ->
                                                                     tabs.firstOrNull { it.id == tabId }?.url = url
@@ -3512,6 +3633,14 @@ class MainActivity : FragmentActivity() {
                                                                         }
                                                                     }
                                                                 },
+                                                                onSessionStateChanged = { encodedState ->
+                                                                    val update = {
+                                                                        tabs.firstOrNull { it.id == tabId }
+                                                                            ?.geckoSessionState = encodedState
+                                                                    }
+                                                                    if (android.os.Looper.myLooper() == android.os.Looper.getMainLooper()) update()
+                                                                    else runOnUiThread { update() }
+                                                                },
                                                                 onProgressChanged = { progress, loading ->
                                                                     tabs.firstOrNull { it.id == tabId }?.let { tab ->
                                                                         tab.loadProgress = progress
@@ -3519,8 +3648,12 @@ class MainActivity : FragmentActivity() {
                                                                         if (!loading) tab.hasCommittedContent = true
                                                                     }
                                                                 },
-                                                                onCanGoBackChanged = {},
-                                                                onCanGoForwardChanged = {},
+                                                                onCanGoBackChanged = { canGoBack ->
+                                                                    tabs.firstOrNull { it.id == tabId }?.canGoBack = canGoBack
+                                                                },
+                                                                onCanGoForwardChanged = { canGoForward ->
+                                                                    tabs.firstOrNull { it.id == tabId }?.canGoForward = canGoForward
+                                                                },
                                                                 onFullscreenChanged = { active ->
                                                                     if (tabs.getOrNull(activeTabIndex)?.id == tabId) {
                                                                         videoFullscreenActive = active
@@ -4732,7 +4865,8 @@ class MainActivity : FragmentActivity() {
                                                 TabItem(
                                                     url = saved.url,
                                                     title = saved.title,
-                                                    initialEngine = saved.engine
+                                                    initialEngine = saved.engine,
+                                                    initialGeckoSessionState = saved.geckoSessionState
                                                 )
                                             })
                                             activeTabIndex = crashedActiveIndex.coerceIn(
@@ -5415,7 +5549,26 @@ class MainActivity : FragmentActivity() {
                                 val siteHost = try {
                                     android.net.Uri.parse(currentTab.url).host?.lowercase().orEmpty()
                                 } catch (_: Exception) { "" }
-                                if (siteHost.isNotEmpty()) {
+                                if (currentTab.engine == BrowserTabEngine.GECKOVIEW) {
+                                    AlertDialog(
+                                        onDismissRequest = { showSiteSettings = false },
+                                        title = { Text(siteHost.ifBlank { "Site information" }) },
+                                        text = {
+                                            Text(
+                                                "GeckoView tabs deny camera, microphone, and location requests by default. This screen cannot read individual cookies. Clear site data removes data owned by this exact host across Gecko profiles; data from third-party hosts may remain. Normal Gecko tabs are closed and reopened before clearing so they cannot repopulate data during the operation. Private WebView tabs are unaffected."
+                                            )
+                                        },
+                                        confirmButton = {
+                                            TextButton(
+                                                enabled = siteHost.isNotBlank() && !clearSiteDataInProgress,
+                                                onClick = { showClearSiteDataConfirm = true }
+                                            ) { Text("Clear site data") }
+                                        },
+                                        dismissButton = {
+                                            TextButton(onClick = { showSiteSettings = false }) { Text("Done") }
+                                        }
+                                    )
+                                } else if (siteHost.isNotEmpty()) {
                                     // Shields: live cookie count for this host.
                                     var siteCookieCount by remember(siteHost) { mutableStateOf(0) }
                                     LaunchedEffect(siteHost) {
@@ -5496,6 +5649,33 @@ class MainActivity : FragmentActivity() {
                                     showSiteSettings = false
                                 }
                             }
+                            if (showClearSiteDataConfirm) {
+                                AlertDialog(
+                                    onDismissRequest = { if (!clearSiteDataInProgress) showClearSiteDataConfirm = false },
+                                    title = { Text("Clear site data?") },
+                                    text = {
+                                        Text(
+                                            "This clears cookies, DOM storage, caches, and site permissions owned by the exact host across Gecko profiles. It closes and reopens normal Gecko tabs. It does not clear history, private WebView tab data, or data owned by third-party hosts."
+                                        )
+                                    },
+                                    confirmButton = {
+                                        TextButton(
+                                            enabled = !clearSiteDataInProgress,
+                                            onClick = {
+                                                val host = runCatching { android.net.Uri.parse(currentTab.url).host.orEmpty() }.getOrDefault("")
+                                                clearGeckoSiteData(host)
+                                            }
+                                        ) { Text(if (clearSiteDataInProgress) "Clearing…" else "Clear") }
+                                    },
+                                    dismissButton = {
+                                        TextButton(
+                                            enabled = !clearSiteDataInProgress,
+                                            onClick = { showClearSiteDataConfirm = false }
+                                        ) { Text("Cancel") }
+                                    }
+                                )
+                            }
+
                             // V9: Power Mode signature moment — full-screen 5s
                             // Markhor intro after a Power profile boot. Tap to skip.
                             if (showHackIntro) {
@@ -5993,7 +6173,17 @@ class MainActivity : FragmentActivity() {
                                             value = findQuery,
                                             onValueChange = { query ->
                                                 findQuery = query
-                                                currentTab.webView?.findAllAsync(query)
+                                                val geckoSession = currentTab.browserSession as? GeckoBrowserTabSession
+                                                if (geckoSession != null) {
+                                                    geckoSession.session.finder.setDisplayFlags(
+                                                        org.mozilla.geckoview.GeckoSession.FINDER_DISPLAY_HIGHLIGHT_ALL
+                                                    )
+                                                    if (query.isNotBlank()) {
+                                                        geckoSession.session.finder.find(
+                                                            query, org.mozilla.geckoview.GeckoSession.FINDER_FIND_FORWARD
+                                                        )
+                                                    } else geckoSession.session.finder.clear()
+                                                } else currentTab.webView?.findAllAsync(query)
                                             },
                                             modifier = Modifier.fillMaxWidth(),
                                             label = { Text("Find text...") }
@@ -6001,7 +6191,10 @@ class MainActivity : FragmentActivity() {
                                     },
                                     confirmButton = {
                                         TextButton(onClick = {
-                                            currentTab.webView?.findNext(false)
+                                            val geckoSession = currentTab.browserSession as? GeckoBrowserTabSession
+                                            if (geckoSession != null) geckoSession.session.finder.find(
+                                                null, org.mozilla.geckoview.GeckoSession.FINDER_FIND_BACKWARDS
+                                            ) else currentTab.webView?.findNext(false)
                                         }) {
                                             Text("Prev")
                                         }
@@ -6009,12 +6202,17 @@ class MainActivity : FragmentActivity() {
                                     dismissButton = {
                                         Row {
                                             TextButton(onClick = {
-                                                currentTab.webView?.findNext(true)
+                                                val geckoSession = currentTab.browserSession as? GeckoBrowserTabSession
+                                                if (geckoSession != null) geckoSession.session.finder.find(
+                                                    null, org.mozilla.geckoview.GeckoSession.FINDER_FIND_FORWARD
+                                                ) else currentTab.webView?.findNext(true)
                                             }) {
                                                 Text("Next")
                                             }
                                             TextButton(onClick = {
-                                                currentTab.webView?.clearMatches()
+                                                val geckoSession = currentTab.browserSession as? GeckoBrowserTabSession
+                                                if (geckoSession != null) geckoSession.session.finder.clear()
+                                                else currentTab.webView?.clearMatches()
                                                 showFindInPageDialog = false
                                             }) {
                                                 Text("Close")
@@ -6186,43 +6384,66 @@ class MainActivity : FragmentActivity() {
                                 )
                             }
 
-                            // Delete browsing data — confirmation first.
+                            // Delete browsing data — confirmation first, then close all sessions before clearing.
                             if (showDeleteBrowsingConfirm) {
-                                val hasOpenGeckoTabs = tabs.any { it.engine == BrowserTabEngine.GECKOVIEW }
                                 AlertDialog(
                                     onDismissRequest = { showDeleteBrowsingConfirm = false },
                                     title = { Text("Delete browsing data?") },
                                     text = {
                                         Text(
-                                            if (hasOpenGeckoTabs) {
-                                                "Nothing will be deleted while GeckoView tabs are open. GeckoView 153 requires every session in the profile to be closed first; this screen cannot safely close and reopen those sessions yet. Switch/close Gecko tabs before retrying."
-                                            } else {
-                                                "This clears Click history and WebView data, and requests a clear of the current GeckoView mode profile."
-                                            }
+                                            "This closes all open tabs (including private tabs), clears Click history and the current mode's session snapshot, waits for WebView cookie removal and requests WebView cache/DOM-storage deletion. GeckoView's mode-specific purge is requested after its sessions close; GeckoView 153 exposes no completion result for this context-scoped API, so Click cannot verify that backend purge finished. A fresh blank tab will open."
                                         )
                                     },
                                     confirmButton = {
                                         TextButton(onClick = {
                                             scope.launch {
-                                                destroyLiveGeckoSessions()
+                                                normalTabExtensionRouter?.closePopup()
+                                                tabs.forEach { tab ->
+                                                    val webView = tab.webView
+                                                    if (webView != null) {
+                                                        runCatching { webView.stopLoading() }
+                                                        runCatching { webView.clearHistory() }
+                                                        runCatching { webView.clearCache(true) }
+                                                        liveWebViews.remove(webView)
+                                                    }
+                                                    val session = tab.browserSession
+                                                    if (session != null) {
+                                                        runCatching { session.stopLoading() }
+                                                        runCatching { session.detachFromParent() }
+                                                        liveBrowserSessions.remove(session)
+                                                        runCatching { session.destroy() }
+                                                        tab.attachBrowserSession(null)
+                                                    } else {
+                                                        runCatching { webView?.destroy() }
+                                                    }
+                                                    tab.takePendingGeckoSession()?.let { pending -> runCatching { pending.close() } }
+                                                }
+                                                tabs.clear()
                                                 requestGeckoModeDataClear(activeMode)
                                                 repository.clearHistory()
-                                                tabs.forEach { tab ->
-                                                    tab.webView?.clearHistory()
-                                                    tab.webView?.clearCache(true)
+                                                com.click.browser.engine.SessionRestore.clearSession(this@MainActivity, activeMode)
+                                                kotlinx.coroutines.suspendCancellableCoroutine<Boolean> { continuation ->
+                                                    android.webkit.CookieManager.getInstance().removeAllCookies { removed ->
+                                                        if (continuation.isActive) {
+                                                            continuation.resumeWith(Result.success(removed))
+                                                        }
+                                                    }
                                                 }
-                                                android.webkit.CookieManager.getInstance().removeAllCookies(null)
                                                 android.webkit.CookieManager.getInstance().flush()
                                                 android.webkit.WebStorage.getInstance().deleteAllData()
+                                                geckoTabActionsState.value = emptyMap()
+                                                geckoTabPopupState.value = null
+                                                tabs.add(TabItem(url = "about:blank", title = "New Tab"))
+                                                activeTabIndex = 0
                                                 showDeleteBrowsingConfirm = false
                                                 Toast.makeText(
                                                     this@MainActivity,
-                                                    "Browsing-data clear requested for this profile.",
-                                                    Toast.LENGTH_SHORT
+                                                    "History and WebView cookies cleared; DOM storage/cache deletion requested. Gecko profile purge requested; GeckoView 153 exposes no completion result.",
+                                                    Toast.LENGTH_LONG
                                                 ).show()
                                             }
-                                        }, enabled = !hasOpenGeckoTabs) {
-                                            Text(if (hasOpenGeckoTabs) "Unavailable" else "Delete")
+                                        }) {
+                                            Text("Close tabs and clear")
                                         }
                                     },
                                     dismissButton = {

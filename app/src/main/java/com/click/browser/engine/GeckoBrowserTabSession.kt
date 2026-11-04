@@ -16,26 +16,52 @@ import com.click.browser.extensions.NormalTabExtensionRouter
 internal fun geckoContextIdFor(mode: BrowserMode): String =
     if (mode == BrowserMode.ADVANCED) "click-profile-advanced" else "click-profile-default"
 
-/**
- * GeckoView provider for a regular browser tab. Private tabs remain on WebView
- * until separate private storage isolation and cleanup are proven. The Activity
- * owns the shared runtime and app UI; this class owns one GeckoSession.
- */
+internal fun isAllowedGeckoNewWindowUri(uri: String): Boolean {
+    if (uri == "about:blank") return true
+    val scheme = runCatching { java.net.URI(uri).scheme?.lowercase() }.getOrNull()
+    return scheme == "http" || scheme == "https"
+}
+
+internal fun shouldAcceptGeckoNewWindowUri(uri: String, policyUri: String?): Boolean =
+    isAllowedGeckoNewWindowUri(uri) && policyUri == uri
+
+internal data class GeckoSessionStartupPlan(
+    val openLocally: Boolean,
+    val restoreSavedState: Boolean,
+    val loadInitialUrl: Boolean
+)
+
+internal fun geckoSessionStartupPlan(
+    adoptedChildSession: Boolean,
+    hasRestorableState: Boolean,
+    initialUrl: String
+): GeckoSessionStartupPlan = when {
+    adoptedChildSession -> GeckoSessionStartupPlan(false, false, false)
+    hasRestorableState -> GeckoSessionStartupPlan(true, true, false)
+    initialUrl.isNotBlank() && initialUrl != "about:blank" -> GeckoSessionStartupPlan(true, false, true)
+    else -> GeckoSessionStartupPlan(true, false, false)
+}
+
+/** GeckoView provider for one regular browser tab. */
 internal class GeckoBrowserTabSession(
     context: Context,
     private val runtime: GeckoRuntime,
     private val tabId: String,
     mode: BrowserMode,
     initialUrl: String,
-    private val extensionRouter: NormalTabExtensionRouter,
+    initialSessionState: String?,
+    private val extensionRouter: NormalTabExtensionRouter?,
+    initialGeckoSession: GeckoSession? = null,
     initiallySelected: Boolean,
     initiallyResumed: Boolean,
     private val navigationTarget: (String) -> String?,
     private val onNavigationBlocked: (String) -> Unit,
+    private val onNewSession: (String, GeckoSession) -> GeckoResult<GeckoSession>?,
     private val onUrlChanged: (String) -> Unit,
     private val onTitleChanged: (String) -> Unit,
     private val onProgressChanged: (Int, Boolean) -> Unit,
     private val onPageLoaded: (String) -> Unit,
+    private val onSessionStateChanged: (String) -> Unit,
     private val onCanGoBackChanged: (Boolean) -> Unit,
     private val onCanGoForwardChanged: (Boolean) -> Unit,
     private val onFullscreenChanged: (Boolean) -> Unit,
@@ -47,14 +73,16 @@ internal class GeckoBrowserTabSession(
         .useTrackingProtection(true)
         .contextId(contextId)
         .build()
-    val session = GeckoSession(settings)
+    val session = initialGeckoSession ?: GeckoSession(settings)
     private val geckoView = GeckoView(context)
     private var selected = initiallySelected
     private var hostResumed = initiallyResumed
     private var canBack = false
     private var canForward = false
     private var destroyed = false
+    private var extensionAttached = false
     private var historyCandidateUrl: String? = initialUrl
+    private val adoptedChildSession = initialGeckoSession != null
 
     override val view: View get() = geckoView
 
@@ -88,8 +116,7 @@ internal class GeckoBrowserTabSession(
                 request: GeckoSession.NavigationDelegate.LoadRequest
             ): GeckoResult<AllowOrDeny> {
                 if (request.target == GeckoSession.NavigationDelegate.TARGET_WINDOW_NEW) {
-                    onNavigationBlocked(request.uri)
-                    return GeckoResult.fromValue(AllowOrDeny.DENY)
+                    return GeckoResult.fromValue(AllowOrDeny.ALLOW)
                 }
                 val target = navigationTarget(request.uri)
                 if (target == null) {
@@ -102,9 +129,26 @@ internal class GeckoBrowserTabSession(
                 }
                 return GeckoResult.fromValue(AllowOrDeny.ALLOW)
             }
+
+            override fun onNewSession(session: GeckoSession, uri: String): GeckoResult<GeckoSession>? {
+                if (!shouldAcceptGeckoNewWindowUri(uri, navigationTarget(uri))) {
+                    onNavigationBlocked(uri)
+                    return null
+                }
+                return onNewSession(uri, GeckoSession(settings))
+            }
         })
         session.setProgressDelegate(object : GeckoSession.ProgressDelegate {
+            override fun onSessionStateChange(
+                session: GeckoSession,
+                state: GeckoSession.SessionState
+            ) {
+                state.toString()?.let(onSessionStateChanged)
+            }
+
             override fun onPageStart(session: GeckoSession, url: String) {
+                attachExtensionRouterIfOpen()
+                updateActiveState()
                 historyCandidateUrl = url
                 onProgressChanged(0, true)
                 onUrlChanged(url)
@@ -136,10 +180,20 @@ internal class GeckoBrowserTabSession(
                 onExternalResponse(response)
             }
         })
-        session.open(runtime)
+        val restoredState = if (adoptedChildSession) null else initialSessionState?.let { encoded ->
+            runCatching { GeckoSession.SessionState.fromString(encoded) }.getOrNull()
+        }
+        val startup = geckoSessionStartupPlan(
+            adoptedChildSession = adoptedChildSession,
+            hasRestorableState = restoredState != null,
+            initialUrl = initialUrl
+        )
+        if (startup.openLocally) session.open(runtime)
         geckoView.setSession(session)
-        extensionRouter.attach(tabId, session)
-        if (initialUrl.isNotBlank() && initialUrl != "about:blank") {
+        attachExtensionRouterIfOpen()
+        if (startup.restoreSavedState && restoredState != null) {
+            session.restoreState(restoredState)
+        } else if (startup.loadInitialUrl) {
             session.loadUri(initialUrl)
         }
         updateActiveState()
@@ -177,10 +231,18 @@ internal class GeckoBrowserTabSession(
     }
 
     private fun updateActiveState() {
-        if (destroyed) return
+        if (destroyed || !session.isOpen) return
+        attachExtensionRouterIfOpen()
         val active = selected && hostResumed
         session.setActive(active)
-        extensionRouter.setSelected(tabId, active)
+        extensionRouter?.setSelected(tabId, active)
+    }
+
+    private fun attachExtensionRouterIfOpen() {
+        if (!extensionAttached && session.isOpen && extensionRouter != null) {
+            extensionRouter.attach(tabId, session)
+            extensionAttached = true
+        }
     }
 
     override fun detachFromParent() {
@@ -190,7 +252,7 @@ internal class GeckoBrowserTabSession(
     override fun destroy() {
         if (destroyed) return
         destroyed = true
-        extensionRouter.detach(tabId, session)
+        extensionRouter?.detach(tabId, session)
         runCatching { geckoView.releaseSession() }
         runCatching { session.close() }
     }
