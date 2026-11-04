@@ -54,11 +54,4 @@ class BrowserUrlInputTest {
         assertTrue(formatBrowserInputUrl("https://example.com", "Google") { _, _ -> error("URL should not search") }.startsWith("https://"))
     }
 
-    @Test
-    fun narrowToolbarHidesSecondaryActionsButWideToolbarCanShowThem() {
-        assertFalse(shouldShowToolbarTranslate(360))
-        assertTrue(shouldShowToolbarTranslate(370))
-        assertFalse(shouldShowToolbarExtensions(419))
-        assertTrue(shouldShowToolbarExtensions(420))
-    }
 }

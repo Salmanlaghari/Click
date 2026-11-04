@@ -3,7 +3,8 @@ package com.click.browser.engine
 /** A tab the user closed; kept so "Recent tabs" can re-open it. */
 data class ClosedTab(
     val title: String,
-    val url: String
+    val url: String,
+    val engine: BrowserTabEngine = BrowserTabEngine.WEBVIEW
 )
 
 /**
@@ -15,11 +16,16 @@ object RecentlyClosedTabs {
     private val stack = ArrayDeque<ClosedTab>()
 
     @Synchronized
-    fun push(title: String, url: String, isIncognito: Boolean) {
+    fun push(
+        title: String,
+        url: String,
+        isIncognito: Boolean,
+        engine: BrowserTabEngine = BrowserTabEngine.WEBVIEW
+    ) {
         if (isIncognito) return
         if (url.isBlank() || url == "about:blank" || !url.startsWith("http")) return
         stack.removeAll { it.url == url }
-        stack.addFirst(ClosedTab(title.ifBlank { url }, url))
+        stack.addFirst(ClosedTab(title.ifBlank { url }, url, engine))
         while (stack.size > MAX) stack.removeLast()
     }
 

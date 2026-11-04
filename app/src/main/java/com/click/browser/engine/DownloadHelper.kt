@@ -2,12 +2,18 @@ package com.click.browser.engine
 
 import android.app.DownloadManager
 import android.content.Context
+import android.content.ContentValues
 import android.net.Uri
+import android.os.Build
 import android.os.Environment
+import android.provider.MediaStore
 import android.widget.Toast
 import androidx.documentfile.provider.DocumentFile
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import java.io.File
+import java.io.FileOutputStream
+import java.io.InputStream
 
 /**
  * Download entry point honoring the user's download-location setting
@@ -20,6 +26,8 @@ import kotlinx.coroutines.withContext
  *   OkHttp into the tree (DownloadManager can't write to SAF URIs).
  *   Falls back to public Downloads if the tree is gone.
  */
+data class SavedAuthenticatedDownload(val fileName: String, val location: String)
+
 object DownloadHelper {
 
     /** Shared OkHttpClient — reused across downloads (connection pooling). */
@@ -58,6 +66,136 @@ object DownloadHelper {
                 if (!ok) enqueueViaDownloadManager(context, url, safeName, appPrivate = false, userAgent = userAgent)
             }
             else -> enqueueViaDownloadManager(context, url, safeName, appPrivate = false, userAgent = userAgent)
+        }
+    }
+
+    /**
+     * Saves GeckoView's already-authenticated response body after Click's normal
+     * confirmation dialog. The stream is staged only after the user confirms,
+     * then copied to the selected destination without re-fetching the URL.
+     */
+    suspend fun enqueueResponse(
+        context: Context,
+        responseBody: InputStream,
+        fileName: String,
+        mimeType: String?,
+        locationOverride: String? = null
+    ): SavedAuthenticatedDownload? {
+        val safeName = fileName.replace(Regex("[\\\\/:*?\"<>|]"), "_")
+            .trim().take(180).ifBlank { "download" }
+        val location = locationOverride?.let(DownloadSettings::normalize) ?: try {
+            DownloadSettings.location(context)
+        } catch (_: Exception) {
+            DownloadSettings.LOCATION_PHONE
+        }
+        val savedLocation = withContext(Dispatchers.IO) {
+            val staged = File.createTempFile("click-gecko-download-", ".tmp", context.cacheDir)
+            try {
+                responseBody.use { input ->
+                    FileOutputStream(staged).use { output -> input.copyTo(output) }
+                }
+                when (location) {
+                    DownloadSettings.LOCATION_APP -> {
+                        val directory = context.getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS)
+                            ?: File(context.filesDir, Environment.DIRECTORY_DOWNLOADS)
+                        directory.mkdirs()
+                        val destination = File(directory, safeName)
+                        destination.outputStream().use { output ->
+                            staged.inputStream().use { input -> input.copyTo(output) }
+                        }
+                        destination.absolutePath
+                    }
+                    DownloadSettings.LOCATION_CUSTOM -> {
+                        copyToCustomFolder(context, staged, safeName, mimeType)
+                            ?: copyToPublicDownloads(context, staged, safeName, mimeType)
+                    }
+                    else -> copyToPublicDownloads(context, staged, safeName, mimeType)
+                }
+            } catch (_: Exception) {
+                runCatching { responseBody.close() }
+                null
+            } finally {
+                runCatching { staged.delete() }
+            }
+        }
+        withContext(Dispatchers.Main) {
+            Toast.makeText(
+                context,
+                if (savedLocation != null) "Saved $safeName" else "Could not save the authenticated download. Check the selected folder.",
+                Toast.LENGTH_LONG
+            ).show()
+        }
+        return savedLocation?.let { SavedAuthenticatedDownload(safeName, it) }
+    }
+
+    private suspend fun copyToCustomFolder(
+        context: Context,
+        source: File,
+        fileName: String,
+        mimeType: String?
+    ): String? {
+        val treeUri = DownloadSettings.customUri(context) ?: return null
+        val tree = DocumentFile.fromTreeUri(context, treeUri) ?: return null
+        if (!tree.canWrite()) return null
+        tree.findFile(fileName)?.delete()
+        val document = tree.createFile(mimeType?.takeIf { it.isNotBlank() } ?: guessMime(fileName), fileName)
+            ?: return null
+        return try {
+            context.contentResolver.openOutputStream(document.uri)?.use { output ->
+                source.inputStream().use { it.copyTo(output) }
+            } ?: return null
+            document.uri.toString()
+        } catch (_: Exception) {
+            runCatching { document.delete() }
+            null
+        }
+    }
+
+    private fun copyToPublicDownloads(
+        context: Context,
+        source: File,
+        fileName: String,
+        mimeType: String?
+    ): String? {
+        val type = mimeType?.takeIf { it.isNotBlank() } ?: guessMime(fileName)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            val values = ContentValues().apply {
+                put(MediaStore.MediaColumns.DISPLAY_NAME, fileName)
+                put(MediaStore.MediaColumns.MIME_TYPE, type)
+                put(MediaStore.MediaColumns.RELATIVE_PATH, "${Environment.DIRECTORY_DOWNLOADS}/ClickBrowser")
+                put(MediaStore.MediaColumns.IS_PENDING, 1)
+            }
+            val uri = context.contentResolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values)
+                ?: return null
+            return try {
+                context.contentResolver.openOutputStream(uri)?.use { output ->
+                    source.inputStream().use { it.copyTo(output) }
+                } ?: throw IllegalStateException("Download output stream unavailable")
+                val ready = ContentValues().apply { put(MediaStore.MediaColumns.IS_PENDING, 0) }
+                context.contentResolver.update(uri, ready, null, null)
+                uri.toString()
+            } catch (_: Exception) {
+                runCatching { context.contentResolver.delete(uri, null, null) }
+                null
+            }
+        }
+
+        if (context.checkSelfPermission(android.Manifest.permission.WRITE_EXTERNAL_STORAGE) !=
+            android.content.pm.PackageManager.PERMISSION_GRANTED
+        ) return null
+        return try {
+            val directory = File(
+                Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS),
+                "ClickBrowser"
+            )
+            if (!directory.exists() && !directory.mkdirs()) return null
+            val destination = File(directory, fileName)
+            destination.outputStream().use { output ->
+                source.inputStream().use { it.copyTo(output) }
+            }
+            destination.absolutePath
+        } catch (_: Exception) {
+            null
         }
     }
 

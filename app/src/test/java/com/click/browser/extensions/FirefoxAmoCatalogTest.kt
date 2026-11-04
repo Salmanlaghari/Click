@@ -8,115 +8,93 @@ import org.junit.Test
 
 class FirefoxAmoCatalogTest {
     @Test
-    fun catalogContainsOnlyTheCurrentAndroidRecommendedAllowlist() {
+    fun nativeQuickPicksRemainDistinctButTheStoreIsTheFullOfficialAndroidCatalog() {
         assertEquals(listOf("tomato-clock", "websites-notes"), FirefoxAmoCatalog.entries.map { it.slug })
-        assertEquals(
-            FirefoxAmoCatalog.entries.map { it.slug }.distinct().size,
-            FirefoxAmoCatalog.entries.size
-        )
+        assertEquals(FirefoxAmoCatalog.entries.map { it.slug }.distinct().size, FirefoxAmoCatalog.entries.size)
+        assertEquals("https://addons.mozilla.org/en-US/android/", FirefoxAmoCatalog.ANDROID_STORE_URL)
 
         FirefoxAmoCatalog.entries.forEach { entry ->
-            assertTrue("Only Firefox Android Recommended entries may be shown", entry.isRecommended)
-            assertTrue(
-                "Listing must be on official AMO: ${entry.listingUrl}",
-                ExtensionInstallPolicy.isOfficialAmoListing(entry.listingUrl)
-            )
-            assertTrue(
-                "Listing path must match its catalog slug",
-                entry.listingUrl.endsWith("/firefox/addon/${entry.slug}/")
-            )
+            assertTrue("Quick pick must be a real AMO recommendation", entry.isRecommended)
+            assertTrue("Listing must be on official AMO: ${entry.listingUrl}", ExtensionInstallPolicy.isOfficialAmoListing(entry.listingUrl))
+            assertEquals(entry.slug, FirefoxAmoCatalog.slugFromOfficialListing(entry.listingUrl))
             assertTrue(entry.iconUrl.startsWith("https://addons.mozilla.org/user-media/addon_icons/"))
             assertTrue(entry.iconResource != 0)
             assertTrue(entry.version.isNotBlank())
             assertTrue(entry.minimumAndroidVersion.isNotBlank())
         }
-
         assertEquals("websitesnotes@saveriomorelli.com", FirefoxAmoCatalog.entries.single { it.slug == "websites-notes" }.extensionId)
     }
 
     @Test
-    fun catalogPermissionsAndOriginsPassTheExistingSafeInstallPolicy() {
+    fun officialListingRecognizesBothAndroidAndFirefoxRoutesOnlyOnMozillaHost() {
+        assertEquals("some-addon", FirefoxAmoCatalog.slugFromOfficialListing("https://addons.mozilla.org/en-US/android/addon/some-addon/"))
+        assertEquals("some-addon", FirefoxAmoCatalog.slugFromOfficialListing("https://addons.mozilla.org/en-US/firefox/addon/some-addon/"))
+        assertEquals("some-addon", FirefoxAmoCatalog.slugFromOfficialListing("https://addons.mozilla.org/en-US/android/addon/some-addon/reviews/"))
+        assertNull(FirefoxAmoCatalog.slugFromOfficialListing("https://addons.mozilla.org.evil.example/en-US/android/addon/some-addon/"))
+        assertNull(FirefoxAmoCatalog.slugFromOfficialListing("http://addons.mozilla.org/en-US/android/addon/some-addon/"))
+        assertNull(FirefoxAmoCatalog.slugFromOfficialListing("https://addons.mozilla.org/en-US/android/addon/../"))
+    }
+
+    @Test
+    fun quickPickPermissionsAndOriginsPassExistingSafeInstallPolicy() {
         FirefoxAmoCatalog.entries.forEach { entry ->
-            assertTrue(
-                "Catalog entry ${entry.slug} requests a blocked API",
-                ExtensionInstallPolicy.blockedPermissionNames(entry.requiredPermissions).isEmpty()
-            )
-            assertTrue(
-                "Catalog entry ${entry.slug} requests a blocked origin",
-                ExtensionInstallPolicy.blockedOriginPatterns(entry.requiredOrigins).isEmpty()
-            )
-            assertTrue("Catalog entry ${entry.slug} must not request site access", entry.requiredOrigins.isEmpty())
+            assertTrue("Quick pick ${entry.slug} requests a blocked API", ExtensionInstallPolicy.blockedPermissionNames(entry.requiredPermissions).isEmpty())
+            assertTrue("Quick pick ${entry.slug} requests a blocked origin", ExtensionInstallPolicy.blockedOriginPatterns(entry.requiredOrigins).isEmpty())
+            assertTrue("Quick pick ${entry.slug} must not request site access", entry.requiredOrigins.isEmpty())
         }
-
-        val tomatoClock = FirefoxAmoCatalog.entries.single { it.slug == "tomato-clock" }
-        assertEquals(listOf("notifications", "storage", "alarms"), tomatoClock.requiredPermissions)
-        assertTrue(tomatoClock.iconResource != 0)
+        val tomato = FirefoxAmoCatalog.entries.single { it.slug == "tomato-clock" }
+        assertEquals(listOf("notifications", "storage", "alarms"), tomato.requiredPermissions)
     }
 
     @Test
-    fun signedAllowlistedButNonRecommendedExtensionIsRejected() {
-        val entry = FirefoxAmoCatalog.entries.single { it.slug == "tomato-clock" }
-
-        assertTrue(
-            isEligibleMozillaCatalogExtension(
-                isSigned = true,
-                isNotBlocked = true,
-                isRecommended = true,
-                amoListingUrl = entry.listingUrl,
-                extensionId = entry.extensionId
-            )
-        )
-        assertFalse(
-            isEligibleMozillaCatalogExtension(
-                isSigned = true,
-                isNotBlocked = true,
-                isRecommended = false,
-                amoListingUrl = entry.listingUrl,
-                extensionId = entry.extensionId
-            )
-        )
-        assertFalse(
-            isEligibleMozillaCatalogExtension(
-                isSigned = true,
-                isNotBlocked = false,
-                isRecommended = true,
-                amoListingUrl = entry.listingUrl,
-                extensionId = entry.extensionId
-            )
-        )
+    fun runtimeTrustGateRequiresSignatureAndOfficialAmoButNotRecommendation() {
+        val listing = "https://addons.mozilla.org/en-US/android/addon/another-addon/"
+        assertTrue(isEligibleMozillaCatalogExtension(true, true, listing, "another-addon@example.org"))
+        assertFalse(isEligibleMozillaCatalogExtension(false, true, listing, "another-addon@example.org"))
+        assertFalse(isEligibleMozillaCatalogExtension(true, false, listing, "another-addon@example.org"))
+        assertFalse(isEligibleMozillaCatalogExtension(true, true, "https://example.com/addon/another-addon/", "another-addon@example.org"))
     }
 
     @Test
-    fun currentAmORecordMustStillBePublicEnabledRecommendedForAndroidAndHaveAnOfficialXpi() {
-        val entry = FirefoxAmoCatalog.entries.single { it.slug == "tomato-clock" }
-        val currentRecord = """
-            {"slug":"tomato-clock","status":"public","is_disabled":false,
-             "guid":"jid1-Kt2kYYgi32zPuw@jetpack",
-             "promoted":[{"apps":["firefox","android"],"category":"recommended"}],
-             "current_version":{"version":"7.8.0","compatibility":{"android":{"min":"109.0","max":"*"}},
-             "file":{"url":"https://addons.mozilla.org/firefox/downloads/file/4810430/tomato_clock-7.8.0.xpi","size":2471994}}}
-        """.trimIndent()
-        val verified = FirefoxAmoCatalog.verifyCurrentAndroidRecommendedPackage(entry, currentRecord)
-        assertEquals("7.8.0", verified?.version)
-        assertEquals("109.0", verified?.minimumAndroidVersion)
+    fun anyLivePublicAndroidCompatibleAmoRecordCanBeConsideredRegardlessOfRecommendation() {
+        val json = validNonRecommendedRecord()
+        val verified = FirefoxAmoCatalog.verifyCurrentAndroidCompatiblePackage("sample-addon", json)
+        assertEquals("sample-addon@example.org", verified?.packageInfo?.extensionId)
+        assertEquals("1.2.3", verified?.packageInfo?.version)
+        assertEquals("120.0", verified?.packageInfo?.minimumAndroidVersion)
+        assertEquals("Sample Add-on", verified?.entry?.name)
+        assertEquals(listOf("storage"), verified?.entry?.requiredPermissions)
+        assertEquals(listOf("https://example.org/*"), verified?.entry?.requiredOrigins)
+        assertFalse(verified?.entry?.isRecommended ?: true)
 
-        assertNull(
-            FirefoxAmoCatalog.verifyCurrentAndroidRecommendedPackage(
-                entry,
-                currentRecord.replace("[\"firefox\",\"android\"]", "[\"firefox\"]")
-            )
+        val expected = FirefoxAmoCatalog.entries.single { it.slug == "tomato-clock" }.copy(
+            slug = "sample-addon",
+            extensionId = "different-id@example.org"
         )
-        assertNull(
-            FirefoxAmoCatalog.verifyCurrentAndroidRecommendedPackage(
-                entry,
-                currentRecord.replace("jid1-Kt2kYYgi32zPuw@jetpack", "another-id@example")
-            )
-        )
-        assertNull(
-            FirefoxAmoCatalog.verifyCurrentAndroidRecommendedPackage(
-                entry,
-                currentRecord.replace("addons.mozilla.org/firefox/downloads/file/4810430", "example.com/firefox/downloads/file/4810430")
-            )
-        )
+        assertNull(FirefoxAmoCatalog.verifyCurrentAndroidCompatiblePackage(expected, json))
     }
+
+    @Test
+    fun currentAmoRecordMustBePublicEnabledAndroidCompatibleAndUseOfficialBoundedXpi() {
+        val good = validNonRecommendedRecord()
+        assertTrue(FirefoxAmoCatalog.verifyCurrentAndroidCompatiblePackage("sample-addon", good) != null)
+        assertNull(FirefoxAmoCatalog.verifyCurrentAndroidCompatiblePackage("sample-addon", good.replace("\"status\":\"public\"", "\"status\":\"unreviewed\"")))
+        assertNull(FirefoxAmoCatalog.verifyCurrentAndroidCompatiblePackage("sample-addon", good.replace("\"is_disabled\":false", "\"is_disabled\":true")))
+        assertNull(FirefoxAmoCatalog.verifyCurrentAndroidCompatiblePackage("sample-addon", good.replace("\"android\":{\"min\":\"120.0\",\"max\":\"*\"}", "\"firefox\":{\"min\":\"120.0\",\"max\":\"*\"}")))
+        assertNull(FirefoxAmoCatalog.verifyCurrentAndroidCompatiblePackage("sample-addon", good.replace("\"min\":\"120.0\"", "\"min\":\"154.0\"")))
+        assertNull(FirefoxAmoCatalog.verifyCurrentAndroidCompatiblePackage("sample-addon", good.replace("addons.mozilla.org/firefox/downloads/file/55", "example.com/firefox/downloads/file/55")))
+        assertNull(FirefoxAmoCatalog.verifyCurrentAndroidCompatiblePackage("sample-addon", good.replace("\"size\":1200", "\"size\":40000000")))
+        assertNull(FirefoxAmoCatalog.verifyCurrentAndroidCompatiblePackage("other-addon", good))
+    }
+
+    private fun validNonRecommendedRecord(): String = """
+        {"slug":"sample-addon","status":"public","is_disabled":false,
+         "guid":"sample-addon@example.org","name":{"en-US":"Sample Add-on"},
+         "summary":{"en-US":"A safe sample."},"categories":["productivity"],
+         "icon_url":"https://addons.mozilla.org/user-media/addon_icons/1/sample.png",
+         "promoted":[],
+         "current_version":{"version":"1.2.3","compatibility":{"android":{"min":"120.0","max":"*"}},
+         "file":{"url":"https://addons.mozilla.org/firefox/downloads/file/55/sample_addon-1.2.3.xpi","size":1200,
+         "permissions":["storage","https://example.org/*"],"host_permissions":[]}}}
+    """.trimIndent()
 }

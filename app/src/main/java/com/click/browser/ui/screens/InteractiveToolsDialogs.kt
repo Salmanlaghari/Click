@@ -667,7 +667,7 @@ fun InteractiveImageGalleryDialog(onClose: () -> Unit) {
 }
 
 // ---------------------------------------------------------------------------
-// Built-in quick toggle plus the separately isolated Firefox/AMO add-on browser.
+// Built-in quick toggle plus the policy-gated Firefox/AMO add-on manager.
 // ---------------------------------------------------------------------------
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -680,7 +680,7 @@ fun InteractiveExtensionsDialog(
 ) {
     AlertDialog(
         onDismissRequest = onClose,
-        title = { Text("Firefox/AMO compatible add-ons & Quick Toggles", fontWeight = FontWeight.Bold) },
+        title = { Text("Quick Toggles", fontWeight = FontWeight.Bold) },
         text = {
             Column(
                 modifier = Modifier
@@ -697,15 +697,15 @@ fun InteractiveExtensionsDialog(
                     Switch(checked = adblock, onCheckedChange = onToggleAdblock)
                 }
                 Text(
-                    "The four regular browser profiles stay on Android System WebView. Extension browsing opens separately in GeckoView.",
+                    "Add-ons work only in GeckoView. Extensions in the sidebar can switch this normal tab and reload it; WebView sign-ins, cookies and page history do not transfer. Private tabs stay on WebView.",
                     fontSize = 12.sp
                 )
                 Button(onClick = onOpenExtensionBrowser, modifier = Modifier.fillMaxWidth()) {
                     Icon(Icons.Default.Extension, contentDescription = null, modifier = Modifier.padding(end = 6.dp))
-                    Text("Open Firefox/AMO compatible add-ons")
+                    Text("Manage compatible add-ons for this tab")
                 }
                 Text(
-                    "It uses a separate GeckoView profile. The limited catalog links to official AMO listings; choosing a listing never installs automatically. Every imported package is rechecked for Mozilla signature, Recommended status, and Click's existing permission and site-access limits.",
+                    "The catalog opens in the manager, not another browser tab. Packages remain subject to Mozilla signature, Android compatibility and Click's permission/site-access gates; add-ons do not run in WebView or private tabs.",
                     fontSize = 11.sp,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
@@ -738,13 +738,13 @@ fun PrivacyPolicyDialog(onClose: () -> Unit) {
                 Text(
                     text = "Click Browser Privacy Policy\n\n" +
                         "• Bookmarks, history, download records, settings and Click's on-device credential vault are kept in app-private storage. Credentials saved to Google Password Manager are handled by Google. Android may include some app data in device backups when backups are enabled; private tabs skip local history recording but are not anonymous.\n\n" +
-                        "• The four regular browser profiles use Android System WebView and your current network or VPN settings. Firefox/AMO compatible add-ons open in GeckoView in a separate profile; its cookies, history and saved passwords are not shared with regular Click tabs. Click denies website geolocation, camera, microphone and notification requests there.\n\n" +
-                        "• Firefox/AMO compatible add-ons are accepted only when Mozilla Recommended, fully signed, not blocklisted, and listed on addons.mozilla.org. GeckoView validates signatures. Click shows requested permissions and exact HTTPS site access; wildcard, HTTP, local-network, and over-10-site access plus sensitive APIs are blocked. Approved add-ons can still read or change the sites they access and may process or send data under their own code and privacy terms. Native messaging remains blocked.\n\n" +
+                        "• Regular tabs use Android System WebView by default. A user may opt a non-private tab into GeckoView for add-ons; Click reloads that same tab in a Gecko storage context, and WebView cookies, sign-ins, back history and page state are not transferred. Private tabs remain on WebView and do not run add-ons. Click denies website geolocation, camera, microphone and notification requests in GeckoView.\n\n" +
+                        "• Add-ons must be public on Mozilla AMO, compatible with Click's pinned GeckoView Android version, Mozilla-signed and not blocklisted. GeckoView validates signatures. Click shows requested permissions and exact HTTPS site access; wildcard, HTTP, local-network, and over-10-site access plus sensitive APIs are blocked. Add-ons can still read or change the sites they access and may process or send data under their own code and privacy terms. Native messaging remains blocked.\n\n" +
                         "• HTTPS mode upgrades or blocks navigation URLs according to your setting. HTTPS describes the connection scheme; it does not guarantee that a site is trustworthy. Optional DNT/GPC signals are voluntary and sites may ignore them.\n\n" +
                         "• If you use AI chat, the prompt and recent conversation sent with it go over HTTPS to the selected provider (Groq or OpenRouter). The provider's own privacy terms apply.\n\n" +
                         "• Google sign-in is handled by Google Play services. Click caches the selected profile name, email and photo in app storage and does not operate its own account backend.\n\n" +
                         "• Feedback and crash/bug reports open an email draft with app/device details. Nothing is emailed until you review and send it. Opt-in news alerts periodically fetch selected topics.\n\n" +
-                        "• Click does not run app analytics. The four regular profiles use Android System WebView; the optional extension profile uses GeckoView. Regular-profile data separation follows the selected profile settings. Click does not substitute device identity.",
+                        "• Click does not run app analytics. Regular tabs default to Android System WebView; opted-in non-private tabs use GeckoView, while private tabs stay on WebView. Gecko storage follows Click's profile-group separation. Click does not substitute device identity.",
                     fontSize = 12.sp,
                     lineHeight = 18.sp
                 )
@@ -773,7 +773,7 @@ fun AboutAppDialog(onClose: () -> Unit) {
                 Text("UI Design Built By: Prince Laghari", fontSize = 13.sp, fontWeight = FontWeight.ExtraBold)
                 Spacer(modifier = Modifier.height(12.dp))
                 Text(
-                    "Click Browser is an Android browser with four profiles: Simple, Developer, Power and Advance. Those profiles use Android System WebView; Firefox/AMO compatible add-ons open in GeckoView in a separate profile.",
+                    "Click Browser is an Android browser with four profiles: Simple, Developer, Power and Advance. Normal tabs use Android System WebView by default; add-ons use Click's GeckoView runtime, separate from WebView storage. A tab switches only after the user approves a same-tab reload.",
                     fontSize = 11.sp,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
@@ -787,7 +787,7 @@ fun AboutAppDialog(onClose: () -> Unit) {
                 )
                 Spacer(modifier = Modifier.height(4.dp))
                 Text(
-                    "The four main profiles use Android System WebView; the extension profile is separate. Click does not substitute device identity.",
+                    "The four main profiles use Android System WebView by default. GeckoView-backed tabs share Click's add-on runtime; private tabs remain on WebView. Click does not substitute device identity.",
                     fontSize = 11.sp,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
@@ -800,7 +800,7 @@ fun AboutAppDialog(onClose: () -> Unit) {
                 )
                 Spacer(modifier = Modifier.height(4.dp))
                 Text(
-                    "Click includes Safe Browsing when supported by the installed WebView, HTTPS controls, optional ad/tracker blocking and V9 Shield DNS-layer protection. These tools can reduce some risks, but they cannot guarantee every site is safe. The isolated Firefox/AMO compatible add-ons profile accepts only Mozilla Recommended, fully reviewed, non-blocklisted packages from addons.mozilla.org and limits them to approved exact HTTPS site access. Native messaging and sensitive browser APIs are blocked; add-ons can still affect sites they are allowed to access. Website geolocation, camera and microphone requests are denied.",
+                    "Click includes Safe Browsing when supported by the installed WebView, HTTPS controls, optional ad/tracker blocking and V9 Shield DNS-layer protection. These tools can reduce some risks, but they cannot guarantee every site is safe. Only public AMO add-ons compatible with the pinned GeckoView Android version, Mozilla-signed and non-blocklisted can install. Click limits site access and blocks sensitive APIs and native messaging; add-ons can still affect sites they are allowed to access. Website geolocation, camera and microphone requests are denied.",
                     fontSize = 11.sp,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )

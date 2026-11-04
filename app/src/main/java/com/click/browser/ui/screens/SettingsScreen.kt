@@ -589,7 +589,11 @@ fun SettingsScreen(
                     HorizontalDivider(color = theme.onSurface.copy(alpha = 0.1f))
                     ToggleRow("JavaScript", "Enable core scripting execution", jsEnabled, onToggleJs, theme)
                     HorizontalDivider(color = theme.onSurface.copy(alpha = 0.1f))
-                    ToggleRow("Data Saver", "Reduce web resource overhead", dataSaver, onToggleDataSaver, theme)
+                    ToggleRow(
+                        "Data Saver",
+                        "Reduce resource use in WebView tabs; not currently applied to regular GeckoView tabs",
+                        dataSaver, onToggleDataSaver, theme
+                    )
                     HorizontalDivider(color = theme.onSurface.copy(alpha = 0.1f))
                     ToggleRow("Lock Private Tabs", biometricStatusText, biometricLockEnabled, onToggleBiometricLock, theme)
                     HorizontalDivider(color = theme.onSurface.copy(alpha = 0.1f))

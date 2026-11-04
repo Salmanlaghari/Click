@@ -9,11 +9,45 @@ import kotlinx.coroutines.flow.firstOrNull
 import org.json.JSONArray
 import org.json.JSONObject
 
-/** One restorable tab — URL + title. The active-tab index is stored separately. */
+/** One restorable tab. Gecko state is optional; legacy snapshots remain URL/title-only. */
 data class SavedTab(
     val url: String,
-    val title: String
+    val title: String,
+    val engine: BrowserTabEngine = BrowserTabEngine.GECKOVIEW,
+    val geckoSessionState: String? = null
 )
+
+/** Legacy persisted WebView tabs are restored into the regular GeckoView provider. */
+internal fun migrateRestoredRegularTabEngine(storedEngine: BrowserTabEngine): BrowserTabEngine =
+    if (storedEngine == BrowserTabEngine.WEBVIEW) BrowserTabEngine.GECKOVIEW else storedEngine
+
+internal data class RestorableTabState(
+    val url: String,
+    val title: String,
+    val isIncognito: Boolean,
+    val engine: BrowserTabEngine,
+    val geckoSessionState: String? = null
+)
+
+/** Pure snapshot policy: keep eligible normal tabs and preserve their selected engine. */
+internal fun buildRestorableSnapshot(
+    tabStates: List<RestorableTabState>,
+    activeIdx: Int
+): Pair<List<SavedTab>, Int> {
+    val kept = tabStates.mapIndexed { index, tab -> index to tab }
+        .filter { (_, tab) -> !tab.isIncognito && SessionRestore.isRestorableUrl(tab.url) }
+        .take(SessionRestore.MAX_TABS)
+    val active = kept.indexOfFirst { (index, _) -> index == activeIdx }.takeIf { it >= 0 } ?: 0
+    val tabs = kept.map { (_, tab) ->
+        SavedTab(
+            tab.url,
+            tab.title.ifBlank { tab.url },
+            tab.engine,
+            tab.geckoSessionState?.takeIf { it.length <= SessionRestore.MAX_GECKO_STATE_CHARS }
+        )
+    }
+    return tabs to active
+}
 
 /**
  * Crash / force-close session restore.
@@ -44,6 +78,8 @@ object SessionRestore {
 
     /** Hard cap so a 200-tab session can't bloat the preferences store. */
     const val MAX_TABS = 25
+    /** Bound optional Gecko history/form-state data stored per tab. */
+    internal const val MAX_GECKO_STATE_CHARS = 32_768
 
     private fun cleanExitKey(mode: BrowserMode) =
         booleanPreferencesKey("session_clean_exit_${mode.name.lowercase()}")
@@ -69,7 +105,7 @@ object SessionRestore {
      * @param activeIndex index of the active tab within [tabs] (the already
      *   filtered list). It is clamped defensively, but callers that filter
      *   must translate the original index themselves — see
-     *   MainActivity.buildRestorableSnapshot.
+     *   [buildRestorableSnapshot].
      */
     suspend fun saveSession(
         context: Context,
@@ -101,6 +137,10 @@ object SessionRestore {
             array.put(JSONObject().apply {
                 put("url", t.url)
                 put("title", t.title)
+                put("engine", t.engine.name)
+                t.geckoSessionState
+                    ?.takeIf { it.length <= MAX_GECKO_STATE_CHARS }
+                    ?.let { put("geckoState", it) }
             })
         }
         context.profileDataStoreFor(mode).edit { prefs ->
@@ -131,7 +171,20 @@ object SessionRestore {
                 val obj = array.getJSONObject(i)
                 val url = obj.optString("url", "")
                 if (isRestorableUrl(url)) {
-                    list.add(SavedTab(url, obj.optString("title", url)))
+                    val engine = runCatching {
+                        BrowserTabEngine.valueOf(
+                            obj.optString("engine", BrowserTabEngine.GECKOVIEW.name)
+                        )
+                    }.getOrDefault(BrowserTabEngine.GECKOVIEW)
+                    list.add(
+                        SavedTab(
+                            url,
+                            obj.optString("title", url),
+                            migrateRestoredRegularTabEngine(engine),
+                            obj.optString("geckoState")
+                                .takeIf { it.isNotBlank() && it.length <= MAX_GECKO_STATE_CHARS }
+                        )
+                    )
                 }
             }
         } catch (_: Exception) {
