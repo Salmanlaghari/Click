@@ -120,8 +120,21 @@ class TabItem(
     url: String = "about:blank",
     title: String = "New Tab",
     isIncognito: Boolean = false,
-    var webView: WebView? = null
+    initialWebView: WebView? = null
 ) {
+    /** Per-tab engine seam. WebView remains the only provider in this phase. */
+    internal var browserSession: BrowserTabSession? by mutableStateOf(
+        initialWebView?.let(::WebViewBrowserTabSession)
+    )
+        private set
+
+    /** Compatibility access for existing WebView-specific UI/features. */
+    var webView: WebView?
+        get() = (browserSession as? WebViewBrowserTabSession)?.webView
+        set(value) {
+            browserSession = value?.let(::WebViewBrowserTabSession)
+        }
+
     var url by mutableStateOf(url)
     var title by mutableStateOf(title)
     var isIncognito by mutableStateOf(isIncognito)
@@ -390,6 +403,9 @@ class MainActivity : FragmentActivity() {
     }
     // Registry of live WebViews for flag-driven cleanup (clear-on-exit).
     private val liveWebViews = mutableListOf<android.webkit.WebView>()
+    // Engine-neutral lifecycle registry. WebView remains the only provider;
+    // clear-on-exit still uses the existing WebView data APIs.
+    private val liveBrowserSessions = mutableListOf<BrowserTabSession>()
 
     private var ttsEngine: TextToSpeech? = null
 
@@ -403,14 +419,14 @@ class MainActivity : FragmentActivity() {
 
     override fun onPause() {
         super.onPause()
-        // Standard browser behavior: pause WebViews when the app is
+        // Standard browser behavior: pause live tab sessions when the app is
         // backgrounded, so page audio/video stops — UNLESS the user
         // explicitly enabled "Background audio" in Settings (a generic
         // media setting, never tied to any specific site or service).
         if (!backgroundAudioEnabledCached) {
-            liveWebViews.forEach { wv ->
-                try { wv.onPause() } catch (_: Exception) { }
-                try { wv.pauseTimers() } catch (_: Exception) { }
+            liveBrowserSessions.forEach { session ->
+                try { session.onPause() } catch (_: Exception) { }
+                try { session.pauseTimers() } catch (_: Exception) { }
             }
         }
         // Biometric private-tab lock: whenever the app goes to background
@@ -437,9 +453,9 @@ class MainActivity : FragmentActivity() {
         // The fallback default-apps page (pre-Android 10) does not return an
         // ActivityResult, so always refresh the role state when we come back.
         isDefaultBrowserState.value = DefaultBrowserHelper.isDefaultBrowser(this)
-        liveWebViews.forEach { wv ->
-            try { wv.onResume() } catch (_: Exception) { }
-            try { wv.resumeTimers() } catch (_: Exception) { }
+        liveBrowserSessions.forEach { session ->
+            try { session.onResume() } catch (_: Exception) { }
+            try { session.resumeTimers() } catch (_: Exception) { }
         }
     }
 
@@ -1173,8 +1189,13 @@ class MainActivity : FragmentActivity() {
                 val closed = tabs[idx]
                 RecentlyClosedTabs.push(closed.title, closed.url, closed.isIncognito)
                 TabThumbnailStore.remove(closed.id)
-                // Drop the closed tab's WebView from the flags registry so
-                // clear-on-exit doesn't iterate stale, detached WebViews.
+                // Drop the closed tab from live registries so cleanup doesn't
+                // iterate stale, detached views or sessions.
+                closed.browserSession?.let { session ->
+                    liveBrowserSessions.remove(session)
+                    try { session.detachFromParent() } catch (_: Exception) { }
+                    try { session.destroy() } catch (_: Exception) { }
+                }
                 closed.webView?.let { liveWebViews.remove(it) }
                 // Remember for UNDO (not for private tabs — privacy first).
                 val undoInfo: Triple<String, String, Int>? =
@@ -1250,11 +1271,13 @@ class MainActivity : FragmentActivity() {
                         .take(excess)
                         .forEach { idx ->
                             val tab = tabs.getOrNull(idx) ?: return@forEach
+                            val session = tab.browserSession ?: return@forEach
                             val wv = tab.webView ?: return@forEach
                             try {
-                                (wv.parent as? android.view.ViewGroup)?.removeView(wv)
+                                session.detachFromParent()
                                 liveWebViews.remove(wv)
-                                wv.destroy()
+                                liveBrowserSessions.remove(session)
+                                session.destroy()
                             } catch (_: Exception) { }
                             tab.webView = null
                         }
@@ -1807,7 +1830,7 @@ class MainActivity : FragmentActivity() {
                                 prefs[AppSettings.READER_MODE] = readerModeEnabled
                             }
                         }
-                        currentTab.webView?.reload()
+                        currentTab.browserSession?.reload()
                         Toast.makeText(
                             this@MainActivity,
                             if (readerModeEnabled) "Reader mode ON" else "Reader mode OFF",
@@ -2076,10 +2099,7 @@ class MainActivity : FragmentActivity() {
                 exitFullscreenVideo?.invoke()
             }
             BackHandler(enabled = currentTab.url != "about:blank" && exitFullscreenVideo == null) {
-                val wv = currentTab.webView
-                if (wv != null && wv.canGoBack()) {
-                    wv.goBack()
-                } else {
+                if (!currentTab.browserSession.goBackIfPossible()) {
                     currentTab.url = "about:blank"
                 }
             }
@@ -2200,7 +2220,7 @@ class MainActivity : FragmentActivity() {
                     if (activeMode != BrowserMode.DEVELOPER) {
                         // V9: DevTools runs in the Developer engine.
                         val restarting = v9SwitchMode(BrowserMode.DEVELOPER, currentTab.webView, forceDesktopMode)
-                        if (!restarting) currentTab.webView?.reload()
+                        if (!restarting) currentTab.browserSession?.reload()
                     }
                     devToolsTab = tab
                     if (activeMode == BrowserMode.DEVELOPER && (tab == 0 || tab == 3)) {
@@ -2497,7 +2517,7 @@ class MainActivity : FragmentActivity() {
                                     DrawerItem(label = "Force Reload Page", icon = Icons.Default.Refresh, color = Color(0xFF60A5FA)) {
                                         scope.launch {
                                             drawerState.close()
-                                            currentTab.webView?.reload()
+                                            currentTab.browserSession?.reload()
                                             Toast.makeText(this@MainActivity, "Forcing page reload...", Toast.LENGTH_SHORT).show()
                                         }
                                     }
@@ -2930,17 +2950,17 @@ class MainActivity : FragmentActivity() {
                                                     activeMode = activeMode,
                                                     currentUrl = if (showOverlays) "" else currentTab.url,
                                                     searchEngine = currentSearchEngineSetting,
-                                                    canGoBack = !showOverlays && currentTab.webView?.canGoBack() == true,
-                                                    onBack = { currentTab.webView?.takeIf { it.canGoBack() }?.goBack() },
-                                                    canGoForward = !showOverlays && currentTab.webView?.canGoForward() == true,
-                                                    onForward = { currentTab.webView?.takeIf { it.canGoForward() }?.goForward() },
+                                                    canGoBack = !showOverlays && currentTab.browserSession?.canGoBack() == true,
+                                                    onBack = { currentTab.browserSession.goBackIfPossible() },
+                                                    canGoForward = !showOverlays && currentTab.browserSession?.canGoForward() == true,
+                                                    onForward = { currentTab.browserSession.goForwardIfPossible() },
                                                     onNavigate = { input ->
                                                         pendingKeyboardDismissTabId = currentTab.id
                                                         val destination = cleanTrackingUrl(formatUrl(input, currentSearchEngineSetting))
                                                         currentTab.url = destination
-                                                        currentTab.webView?.loadUrl(destination)
+                                                        currentTab.browserSession?.loadUrl(destination)
                                                     },
-                                                    onReload = { currentTab.webView?.reload() },
+                                                    onReload = { currentTab.browserSession?.reload() },
                                                     onNewTab = {
                                                         tabs.add(TabItem(url = homeUrl(), title = "New Tab"))
                                                         activeTabIndex = tabs.lastIndex
@@ -3032,7 +3052,7 @@ class MainActivity : FragmentActivity() {
                                                 pendingKeyboardDismissTabId = currentTab.id
                                                 val destination = cleanTrackingUrl(formatUrl(input, currentSearchEngineSetting))
                                                 currentTab.url = destination
-                                                currentTab.webView?.loadUrl(destination)
+                                                currentTab.browserSession?.loadUrl(destination)
                                             },
                                             onOpenAiChat = {
                                                 if (tamperBlocked) showTamperDialog = true else showAiChat = true
@@ -3053,7 +3073,7 @@ class MainActivity : FragmentActivity() {
                                                     isRefreshing = isRefreshing,
                                                     onRefresh = {
                                                         isRefreshing = true
-                                                        currentTab.webView?.reload()
+                                                        currentTab.browserSession?.reload()
                                                     },
                                                     modifier = Modifier.fillMaxSize()
                                                 ) {
@@ -3087,9 +3107,11 @@ class MainActivity : FragmentActivity() {
                                                 AndroidView(
                                                     modifier = emulatorWidthModifier,
                                                     factory = { ctx ->
-                                                        val existingWebView = currentTab.webView
-                                                        if (existingWebView != null) {
-                                                            (existingWebView.parent as? android.view.ViewGroup)?.removeView(existingWebView)
+                                                        val existingSession = currentTab.browserSession
+                                                        if (existingSession != null) {
+                                                            val existingWebView = existingSession.view as? WebView
+                                                                ?: error("A non-WebView tab provider is not enabled in this phase")
+                                                            existingSession.detachFromParent()
                                                             existingWebView
                                                         } else {
                                                             WebView(ctx).apply {
@@ -3671,6 +3693,11 @@ class MainActivity : FragmentActivity() {
                                                                 this@MainActivity.applyPerSiteDesktop(this, currentTab.url)
                                                                 this@MainActivity.applyPerSiteSettings(this, currentTab.url)
                                                                 currentTab.webView = this
+                                                                currentTab.browserSession?.let { session ->
+                                                                    if (!this@MainActivity.liveBrowserSessions.contains(session)) {
+                                                                        this@MainActivity.liveBrowserSessions.add(session)
+                                                                    }
+                                                                }
                                                                 if (!this@MainActivity.liveWebViews.contains(this)) {
                                                                     this@MainActivity.liveWebViews.add(this)
                                                                 }
@@ -3780,7 +3807,7 @@ class MainActivity : FragmentActivity() {
                                                         progress = currentTab.loadProgress,
                                                         animationsEnabled = flagsUi.tabAnimations && !liveReducedMotion,
                                                         onCancel = {
-                                                            currentTab.webView?.stopLoading()
+                                                            currentTab.browserSession?.stopLoading()
                                                             currentTab.isPageLoading = false
                                                             currentTab.hasCommittedContent = true
                                                             currentTab.loadProgress = 0
@@ -4027,7 +4054,7 @@ class MainActivity : FragmentActivity() {
                                     onNavigate = { url ->
                                         val clean = cleanTrackingUrl(url)
                                         currentTab.url = clean
-                                        currentTab.webView?.loadUrl(clean)
+                                        currentTab.browserSession?.loadUrl(clean)
                                     },
                                     onClose = { showBookmarks = false }
                                 )
@@ -4040,7 +4067,7 @@ class MainActivity : FragmentActivity() {
                                     onNavigate = { url ->
                                         val clean = cleanTrackingUrl(url)
                                         currentTab.url = clean
-                                        currentTab.webView?.loadUrl(clean)
+                                        currentTab.browserSession?.loadUrl(clean)
                                     },
                                     onClose = { showHistory = false }
                                 )
@@ -4534,7 +4561,7 @@ class MainActivity : FragmentActivity() {
                                         scope.launch { dataStore.edit { prefs -> prefs[AppSettings.SHARP_VIEW_ENABLED] = v } }
                                         // Applies on next page load; reload now so the
                                         // user sees the change immediately.
-                                        currentTab.webView?.reload()
+                                        currentTab.browserSession?.reload()
                                     },
                                     onClearHistoryForMode = { mode ->
                                         scope.launch {
@@ -4873,7 +4900,7 @@ class MainActivity : FragmentActivity() {
                                                 applyPerSiteSettings(wv, currentTab.url, next)
                                             }
                                         },
-                                        onReload = { currentTab.webView?.reload() },
+                                        onReload = { currentTab.browserSession?.reload() },
                                         onDismiss = { showSiteSettings = false },
                                         // Brave-style Shields panel data.
                                         trackersBlocked = blockedCount,
@@ -5317,7 +5344,7 @@ class MainActivity : FragmentActivity() {
                                         showAiChat = false
                                         val destination = cleanTrackingUrl(formatUrl(targetUri, currentSearchEngineSetting))
                                         currentTab.url = destination
-                                        currentTab.webView?.loadUrl(destination)
+                                        currentTab.browserSession?.loadUrl(destination)
                                     },
                                     onReportMessage = { text ->
                                         // In-app reporting (Play AI-Generated Content policy):
