@@ -23,6 +23,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
@@ -33,12 +34,22 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 
+internal data class InstalledAddonPanelAction(
+    val label: String,
+    val pageAction: Boolean
+)
+
 internal data class InstalledAddonPanelItem(
     val id: String,
     val name: String,
     val version: String,
     val enabled: Boolean,
-    val policyBlockers: List<String>
+    val policyBlockers: List<String>,
+    val description: String? = null,
+    val optionsPageUrl: String? = null,
+    val optionsPageBaseUrl: String? = null,
+    val hasDeclaredOptionsPage: Boolean = optionsPageUrl != null,
+    val toolbarAction: InstalledAddonPanelAction? = null
 ) {
     val statusLabel: String
         get() = when {
@@ -46,6 +57,15 @@ internal data class InstalledAddonPanelItem(
             enabled -> "Enabled"
             else -> "Disabled"
         }
+
+    val canOpenAction: Boolean
+        get() = enabled && policyBlockers.isEmpty() && toolbarAction != null
+
+    val canOpenOptions: Boolean
+        get() = enabled && policyBlockers.isEmpty() && optionsPageUrl != null && optionsPageBaseUrl != null
+
+    val hasNoSeparateWindow: Boolean
+        get() = enabled && policyBlockers.isEmpty() && toolbarAction == null && optionsPageUrl == null
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -55,6 +75,8 @@ internal fun InstalledAddonsPanel(
     isLoading: Boolean,
     errorMessage: String?,
     onRefresh: () -> Unit,
+    onOpenAction: (String) -> Unit,
+    onOpenOptions: (String) -> Unit,
     onOpenStore: () -> Unit,
     onDismiss: () -> Unit
 ) {
@@ -90,7 +112,7 @@ internal fun InstalledAddonsPanel(
             }
 
             Text(
-                "Approved extension actions appear in the browser toolbar. Private tabs remain on WebView and do not run Gecko add-ons.",
+                "Use Open action for an add-on toolbar button, or Options for its declared settings page. Private tabs remain on WebView and do not run Gecko add-ons.",
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 fontSize = 12.sp
             )
@@ -121,7 +143,7 @@ internal fun InstalledAddonsPanel(
                         Card(modifier = Modifier.fillMaxWidth()) {
                             Column(
                                 modifier = Modifier.fillMaxWidth().padding(14.dp),
-                                verticalArrangement = Arrangement.spacedBy(4.dp)
+                                verticalArrangement = Arrangement.spacedBy(6.dp)
                             ) {
                                 Text(
                                     addOn.name,
@@ -135,12 +157,81 @@ internal fun InstalledAddonsPanel(
                                     else MaterialTheme.colorScheme.onSurfaceVariant,
                                     fontSize = 12.sp
                                 )
+                                addOn.description?.takeIf(String::isNotBlank)?.let { description ->
+                                    Text(
+                                        description,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        fontSize = 12.sp,
+                                        maxLines = 3,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
+                                }
                                 if (addOn.policyBlockers.isNotEmpty()) {
                                     Text(
                                         addOn.policyBlockers.joinToString(),
                                         color = MaterialTheme.colorScheme.error,
                                         fontSize = 11.sp
                                     )
+                                } else if (!addOn.enabled) {
+                                    Text(
+                                        "Enable this add-on before opening its action or settings.",
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        fontSize = 12.sp
+                                    )
+                                } else {
+                                    if (addOn.toolbarAction != null) {
+                                        Text(
+                                            if (addOn.toolbarAction.pageAction) {
+                                                "A page action is available on this tab."
+                                            } else {
+                                                "A toolbar action is available. If it declares a popup, it opens here; otherwise it may run in the background."
+                                            },
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                            fontSize = 11.sp
+                                        )
+                                    } else if (addOn.optionsPageUrl != null) {
+                                        Text(
+                                            "No toolbar action is available on this tab; you can still open the add-on's options.",
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                            fontSize = 11.sp
+                                        )
+                                    } else if (addOn.hasDeclaredOptionsPage) {
+                                        Text(
+                                            "Options were not opened because the page could not be verified as belonging to this add-on.",
+                                            color = MaterialTheme.colorScheme.error,
+                                            fontSize = 11.sp
+                                        )
+                                    } else if (addOn.hasNoSeparateWindow) {
+                                        Text(
+                                            "No toolbar action is available on this tab, and no options page is available here. This add-on may work automatically only on pages it supports; no separate window is expected here.",
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                            fontSize = 11.sp
+                                        )
+                                    }
+
+                                    if (addOn.canOpenAction || addOn.canOpenOptions) {
+                                        Row(
+                                            modifier = Modifier.fillMaxWidth(),
+                                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                        ) {
+                                            if (addOn.canOpenAction) {
+                                                OutlinedButton(
+                                                    onClick = { onOpenAction(addOn.id) },
+                                                    modifier = Modifier.weight(1f)
+                                                ) {
+                                                    Text("Open action", maxLines = 1)
+                                                }
+                                            }
+                                            if (addOn.canOpenOptions) {
+                                                OutlinedButton(
+                                                    onClick = { onOpenOptions(addOn.id) },
+                                                    modifier = Modifier.weight(1f)
+                                                ) {
+                                                    Text("Options", maxLines = 1)
+                                                }
+                                            }
+                                        }
+                                    }
                                 }
                             }
                         }

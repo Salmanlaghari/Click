@@ -121,6 +121,12 @@ class ExtensionInstallPolicyTest {
         assertNull(
             ExtensionInstallPolicy.safeExtensionOptionsPageUrl(
                 baseUrl,
+                "moz-extension://click-addon-id/addon-root/%2e%2e/escape.html"
+            )
+        )
+        assertNull(
+            ExtensionInstallPolicy.safeExtensionOptionsPageUrl(
+                baseUrl,
                 "moz-extension://another-addon-id/addon-root/options.html"
             )
         )
@@ -133,6 +139,59 @@ class ExtensionInstallPolicyTest {
             )
         )
         assertNull(ExtensionInstallPolicy.safeExtensionOptionsPageUrl(baseUrl, null))
+    }
+
+    @Test
+    fun optionsNavigationStaysWithinTheOpenedAddonRoot() {
+        val baseUrl = "moz-extension://click-addon-id/addon-root/"
+        assertTrue(
+            ExtensionInstallPolicy.isSafeExtensionOptionsNavigation(
+                baseUrl,
+                "moz-extension://click-addon-id/addon-root/options.html"
+            )
+        )
+        assertTrue(
+            ExtensionInstallPolicy.isSafeExtensionOptionsNavigation(
+                baseUrl,
+                "moz-extension://click-addon-id/addon-root/subpage.html"
+            )
+        )
+        assertFalse(
+            ExtensionInstallPolicy.isSafeExtensionOptionsNavigation(
+                baseUrl,
+                "moz-extension://click-addon-id/addon-root-elsewhere/options.html"
+            )
+        )
+        assertFalse(
+            ExtensionInstallPolicy.isSafeExtensionOptionsNavigation(
+                baseUrl,
+                "moz-extension://click-addon-id/addon-root/%2e%2e/escape.html"
+            )
+        )
+        assertFalse(
+            ExtensionInstallPolicy.isSafeExtensionOptionsNavigation(
+                baseUrl,
+                "moz-extension://click-addon-id/addon-root/%252e%252e/escape.html"
+            )
+        )
+        assertFalse(
+            ExtensionInstallPolicy.isSafeExtensionOptionsNavigation(
+                baseUrl,
+                "moz-extension://another-addon-id/addon-root/options.html"
+            )
+        )
+        assertFalse(
+            ExtensionInstallPolicy.isSafeExtensionOptionsNavigation(
+                baseUrl,
+                "https://example.com/options.html"
+            )
+        )
+        assertFalse(
+            ExtensionInstallPolicy.isSafeExtensionOptionsNavigation(
+                baseUrl,
+                "moz-extension://user@click-addon-id/addon-root/options.html"
+            )
+        )
     }
 
     @Test

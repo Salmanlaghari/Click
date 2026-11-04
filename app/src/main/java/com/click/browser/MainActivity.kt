@@ -101,6 +101,8 @@ import com.click.browser.data.DownloadItem
 import com.click.browser.engine.*
 import com.click.browser.extensions.ExtensionBrowserActivity
 import com.click.browser.extensions.ExtensionBrowserRuntime
+import com.click.browser.extensions.ExtensionInstallPolicy
+import com.click.browser.extensions.InstalledAddonPanelAction
 import com.click.browser.extensions.InstalledAddonPanelItem
 import com.click.browser.extensions.InstalledAddonsPanel
 import com.click.browser.extensions.NormalTabExtensionAction
@@ -1639,6 +1641,9 @@ class MainActivity : FragmentActivity() {
             var installedAddonPanelLoading by remember { mutableStateOf(false) }
             var installedAddonPanelError by remember { mutableStateOf<String?>(null) }
             var installedAddonPanelRequestId by remember { mutableIntStateOf(0) }
+            val approvedExtensionOptionsBasesByTab = remember {
+                androidx.compose.runtime.mutableStateMapOf<String, String>()
+            }
             fun refreshInstalledAddonPanel() {
                 val requestId = ++installedAddonPanelRequestId
                 installedAddonPanelLoading = true
@@ -1649,12 +1654,21 @@ class MainActivity : FragmentActivity() {
                             val items = extensions.orEmpty()
                                 .filterNot { it.isBuiltIn }
                                 .map { extension ->
+                                    val metadata = extension.metaData
+                                    val safeOptionsUrl = ExtensionInstallPolicy.safeExtensionOptionsPageUrl(
+                                        metadata.baseUrl,
+                                        metadata.optionsPageUrl
+                                    )
                                     InstalledAddonPanelItem(
                                         id = extension.id,
-                                        name = extension.metaData.name?.takeIf(String::isNotBlank) ?: "Unnamed add-on",
-                                        version = extension.metaData.version.takeIf(String::isNotBlank) ?: "Unknown",
-                                        enabled = extension.metaData.enabled,
-                                        policyBlockers = extensionPolicyBlockers(extension)
+                                        name = metadata.name?.takeIf(String::isNotBlank) ?: "Unnamed add-on",
+                                        version = metadata.version.takeIf(String::isNotBlank) ?: "Unknown",
+                                        enabled = metadata.enabled,
+                                        policyBlockers = extensionPolicyBlockers(extension),
+                                        description = metadata.description?.takeIf(String::isNotBlank),
+                                        optionsPageUrl = safeOptionsUrl,
+                                        optionsPageBaseUrl = metadata.baseUrl.takeIf { safeOptionsUrl != null },
+                                        hasDeclaredOptionsPage = !metadata.optionsPageUrl.isNullOrBlank()
                                     )
                                 }
                                 .sortedBy { it.name.lowercase(Locale.ROOT) }
@@ -3551,6 +3565,13 @@ class MainActivity : FragmentActivity() {
                                                                 navigationTarget = navigation@{ requestedUrl ->
                                                                     var targetUrl = cleanTrackingUrl(requestedUrl)
                                                                     if (targetUrl == "about:blank") return@navigation targetUrl
+                                                                    val approvedOptionsBase = approvedExtensionOptionsBasesByTab[tabId]
+                                                                    if (approvedOptionsBase != null &&
+                                                                        ExtensionInstallPolicy.isSafeExtensionOptionsNavigation(
+                                                                            approvedOptionsBase,
+                                                                            targetUrl
+                                                                        )
+                                                                    ) return@navigation targetUrl
                                                                     ClickInternalPages.interceptNavigation(targetUrl)?.let { pageKey ->
                                                                         showClickPage = pageKey
                                                                         return@navigation null
@@ -4708,11 +4729,97 @@ class MainActivity : FragmentActivity() {
                             }
 
                             if (showInstalledAddonsPanel) {
+                                val currentTabActions = if (
+                                    currentTab.engine == BrowserTabEngine.GECKOVIEW && !currentTab.isIncognito
+                                ) geckoTabActionsState.value[currentTab.id].orEmpty().associateBy { it.extensionId }
+                                else emptyMap()
+                                val panelItems = installedAddonPanelItems.map { addOn ->
+                                    val action = currentTabActions[addOn.id]
+                                    addOn.copy(
+                                        toolbarAction = action?.let {
+                                            InstalledAddonPanelAction(it.label, it.pageAction)
+                                        }
+                                    )
+                                }
                                 InstalledAddonsPanel(
-                                    addOns = installedAddonPanelItems,
+                                    addOns = panelItems,
                                     isLoading = installedAddonPanelLoading,
                                     errorMessage = installedAddonPanelError,
                                     onRefresh = { refreshInstalledAddonPanel() },
+                                    onOpenAction = { extensionId ->
+                                        val tab = currentTab
+                                        val action = geckoTabActionsState.value[tab.id]
+                                            .orEmpty()
+                                            .firstOrNull { it.extensionId == extensionId }
+                                        if (tab.engine != BrowserTabEngine.GECKOVIEW || tab.isIncognito ||
+                                            action == null || normalTabExtensionRouter?.clickAction(tab.id, action) != true
+                                        ) {
+                                            Toast.makeText(
+                                                this@MainActivity,
+                                                "This add-on action is unavailable on the active regular tab.",
+                                                Toast.LENGTH_SHORT
+                                            ).show()
+                                        } else {
+                                            showInstalledAddonsPanel = false
+                                        }
+                                    },
+                                    onOpenOptions = { extensionId ->
+                                        val tab = currentTab
+                                        ExtensionBrowserRuntime.get(applicationContext).webExtensionController.list().accept(
+                                            { extensions ->
+                                                runOnUiThread {
+                                                    val extension = extensions.orEmpty().firstOrNull {
+                                                        it.id == extensionId && !it.isBuiltIn
+                                                    }
+                                                    val metadata = extension?.metaData
+                                                    val optionsUrl = metadata?.let {
+                                                        ExtensionInstallPolicy.safeExtensionOptionsPageUrl(
+                                                            it.baseUrl,
+                                                            it.optionsPageUrl
+                                                        )
+                                                    }
+                                                    val baseUrl = metadata?.baseUrl?.takeIf { optionsUrl != null }
+                                                    val policyBlocked = extension?.let {
+                                                        extensionPolicyBlockers(it).isNotEmpty()
+                                                    } ?: true
+                                                    if (tabs.getOrNull(activeTabIndex)?.id != tab.id ||
+                                                        tab.engine != BrowserTabEngine.GECKOVIEW || tab.isIncognito ||
+                                                        extension == null || metadata?.enabled != true || policyBlocked ||
+                                                        baseUrl == null || optionsUrl == null
+                                                    ) {
+                                                        Toast.makeText(
+                                                            this@MainActivity,
+                                                            "This options page is unavailable or blocked by Click's safety policy.",
+                                                            Toast.LENGTH_SHORT
+                                                        ).show()
+                                                    } else {
+                                                        val session = tab.browserSession
+                                                        if (session == null) {
+                                                            Toast.makeText(
+                                                                this@MainActivity,
+                                                                "Open options from an active regular Gecko tab.",
+                                                                Toast.LENGTH_SHORT
+                                                            ).show()
+                                                        } else {
+                                                            approvedExtensionOptionsBasesByTab[tab.id] = baseUrl
+                                                            showInstalledAddonsPanel = false
+                                                            tab.url = optionsUrl
+                                                            session.loadUrl(optionsUrl)
+                                                        }
+                                                    }
+                                                }
+                                            },
+                                            {
+                                                runOnUiThread {
+                                                    Toast.makeText(
+                                                        this@MainActivity,
+                                                        "Couldn't verify this add-on's current options page.",
+                                                        Toast.LENGTH_SHORT
+                                                    ).show()
+                                                }
+                                            }
+                                        )
+                                    },
                                     onOpenStore = {
                                         val tab = currentTab
                                         showInstalledAddonsPanel = false

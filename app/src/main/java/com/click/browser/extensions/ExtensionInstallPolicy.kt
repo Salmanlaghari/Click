@@ -118,8 +118,8 @@ internal object ExtensionInstallPolicy {
         val resolved = runCatching { base.resolve(candidate).normalize() }.getOrNull() ?: return null
         val baseHost = base.host ?: return null
         val optionsHost = resolved.host ?: return null
-        val basePath = base.path.orEmpty().ifBlank { "/" }
-        val optionsPath = resolved.path.orEmpty()
+        val basePath = canonicalExtensionPath(base) ?: return null
+        val optionsPath = canonicalExtensionPath(resolved) ?: return null
         if (!basePath.startsWith("/") || !optionsPath.startsWith("/")) return null
         val baseRoot = if (basePath.endsWith("/")) basePath else "$basePath/"
         val belongsToBasePath = optionsPath == basePath || optionsPath.startsWith(baseRoot)
@@ -128,6 +128,46 @@ internal object ExtensionInstallPolicy {
             resolved.userInfo == null &&
             resolved.port == -1
         return resolved.toASCIIString().takeIf { staysOnExtensionOrigin && belongsToBasePath }
+    }
+
+    private fun canonicalExtensionPath(uri: java.net.URI): String? {
+        var decodedPath = uri.rawPath?.ifBlank { "/" } ?: "/"
+        repeat(3) {
+            val next = runCatching {
+                java.net.URLDecoder.decode(
+                    decodedPath.replace("+", "%2B"),
+                    Charsets.UTF_8.name()
+                )
+            }.getOrNull() ?: return null
+            if (next == decodedPath) {
+                return runCatching {
+                    java.net.URI(null, null, next.replace('\\', '/'), null).normalize().path
+                }.getOrNull()
+            }
+            decodedPath = next
+        }
+        if (Regex("%[0-9a-fA-F]{2}").containsMatchIn(decodedPath)) return null
+        return runCatching {
+            java.net.URI(null, null, decodedPath.replace('\\', '/'), null).normalize().path
+        }.getOrNull()
+    }
+
+    /** Allow regular-tab navigation only within the root of an add-on whose options were opened. */
+    fun isSafeExtensionOptionsNavigation(baseUrl: String?, navigationUrl: String?): Boolean {
+        val base = runCatching { baseUrl?.let { java.net.URI(it).normalize() } }.getOrNull() ?: return false
+        val candidate = runCatching { navigationUrl?.let { java.net.URI(it).normalize() } }.getOrNull() ?: return false
+        val baseHost = base.host ?: return false
+        val candidateHost = candidate.host ?: return false
+        val basePath = canonicalExtensionPath(base) ?: return false
+        val candidatePath = canonicalExtensionPath(candidate) ?: return false
+        if (!basePath.startsWith("/") || !candidatePath.startsWith("/")) return false
+        val baseRoot = if (basePath.endsWith("/")) basePath else "$basePath/"
+        val belongsToBasePath = candidatePath == basePath || candidatePath.startsWith(baseRoot)
+        return base.scheme.equals("moz-extension", ignoreCase = true) &&
+            base.userInfo == null && base.port == -1 &&
+            candidate.scheme.equals("moz-extension", ignoreCase = true) &&
+            baseHost.equals(candidateHost, ignoreCase = true) &&
+            candidate.userInfo == null && candidate.port == -1 && belongsToBasePath
     }
 }
 
