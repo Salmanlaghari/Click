@@ -148,7 +148,7 @@ class SingBoxVpnService : VpnService(), PlatformInterface, CommandServerHandler 
     }
 
     override fun onDestroy() {
-        stopTunnel()
+        stopTunnel(preserveFailure = shouldPreserveVpnFailureOnCleanup(_state.value))
         scope.cancel()
         super.onDestroy()
     }
@@ -199,7 +199,7 @@ class SingBoxVpnService : VpnService(), PlatformInterface, CommandServerHandler 
         }
     }
 
-    private fun stopTunnel() {
+    private fun stopTunnel(preserveFailure: Boolean = false) {
         try { commandServer?.closeService() } catch (t: Throwable) {
             Log.w(TAG, "commandServer.closeService failed", t)
         }
@@ -209,7 +209,10 @@ class SingBoxVpnService : VpnService(), PlatformInterface, CommandServerHandler 
         commandServer = null
         try { tunFd?.close() } catch (_: Throwable) {}
         tunFd = null
-        _state.value = VpnState.DISCONNECTED
+        if (!(preserveFailure && shouldPreserveVpnFailureOnCleanup(_state.value))) {
+            _state.value = VpnState.DISCONNECTED
+            _error.value = ""
+        }
         _serverName.value = ""
         try { stopForeground(STOP_FOREGROUND_REMOVE) } catch (_: Throwable) {}
         Log.i(TAG, "Tunnel stopped")

@@ -68,6 +68,9 @@ object VpnController {
             VpnServer.ServerKind.CUSTOM -> {
                 VpnConfigBuilder.buildCustomConfig(server.config) ?: run {
                     Log.e(TAG, "Custom config parse failed")
+                    SingBoxVpnService.reportStartError(
+                        "Couldn't read this server link. Check that it is a supported VLESS, VMess, Trojan or Shadowsocks link."
+                    )
                     return false
                 }
             }

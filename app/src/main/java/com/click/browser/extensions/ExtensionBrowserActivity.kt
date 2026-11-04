@@ -443,7 +443,7 @@ private fun ExtensionBrowserScreen(
                 val blockedOrigins = ExtensionInstallPolicy.blockedOriginPatterns(verifiedEntry.requiredOrigins)
                 if (blockedPermissions.isNotEmpty() || blockedOrigins.isNotEmpty()) {
                     installingCatalogSlug = null
-                    statusMessage = "Blocked by Click's safety policy: ${(blockedPermissions + blockedOrigins).joinToString()}"
+                    statusMessage = ExtensionUiGuidance.blockedCatalogInstallStatus(blockedPermissions, blockedOrigins)
                     return@launch
                 }
                 if (packageInfo.extensionId in installedExtensionIds) {
@@ -804,7 +804,11 @@ private fun ExtensionBrowserScreen(
                 Text(
                     message,
                     modifier = Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 4.dp),
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    color = if (message.startsWith("Install stopped by Click's safety policy")) {
+                        MaterialTheme.colorScheme.error
+                    } else {
+                        MaterialTheme.colorScheme.onSurfaceVariant
+                    },
                     fontSize = 12.sp
                 )
             }
@@ -982,7 +986,13 @@ private fun ExtensionBrowserScreen(
         var grantDataCollection by remember(prompt.extensionId, prompt.kind) { mutableStateOf(false) }
         AlertDialog(
             onDismissRequest = { prompt.decide(false, false) },
-            title = { Text(prompt.kind, fontWeight = FontWeight.Bold) },
+            title = {
+                Text(
+                    if (prompt.kind == "Install extension") "Review permissions before installing"
+                    else prompt.kind,
+                    fontWeight = FontWeight.Bold
+                )
+            },
             text = {
                 Column(
                     modifier = Modifier.heightIn(max = 440.dp).verticalScroll(rememberScrollState()),
@@ -1018,7 +1028,9 @@ private fun ExtensionBrowserScreen(
             },
             confirmButton = {
                 if (prompt.blockedReasons.isEmpty()) {
-                    Button(onClick = { prompt.decide(true, grantDataCollection) }) { Text("Allow and continue") }
+                    Button(onClick = { prompt.decide(true, grantDataCollection) }) {
+                        Text(if (prompt.kind == "Install extension") "Install add-on" else "Allow and continue")
+                    }
                 }
             },
             dismissButton = { TextButton(onClick = { prompt.decide(false, false) }) { Text("Cancel") } }
@@ -1092,6 +1104,11 @@ private fun ExtensionManagerDialog(
                             fontSize = 11.sp,
                             color = MaterialTheme.colorScheme.primary
                         )
+                        Text(
+                            "An enabled add-on may not have a popup or settings page. Some work only on supported websites; page actions appear only where available. In a regular GeckoView tab, tap the browser's Extensions button to open an available action.",
+                            fontSize = 11.sp,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
                         OutlinedTextField(
                             value = searchQuery,
                             onValueChange = { searchQuery = it },
@@ -1121,6 +1138,13 @@ private fun ExtensionManagerDialog(
                 if (extensions.isNotEmpty()) {
                     item(key = "installed-title") {
                         Text("Installed in Click's GeckoView runtime (${extensions.size})", fontWeight = FontWeight.SemiBold, fontSize = 13.sp)
+                    }
+                    item(key = "installed-guidance") {
+                        Text(
+                            ExtensionUiGuidance.enabledDoesNotMeanPopup,
+                            fontSize = 11.sp,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
                     }
                     items(extensions, key = { "inst-${it.id}" }) { extension ->
                         val metadata = extension.metaData
@@ -1154,7 +1178,7 @@ private fun ExtensionManagerDialog(
                                     ) { Text("Options") }
                                 } else {
                                     val optionsMessage = when {
-                                        metadata.optionsPageUrl.isNullOrBlank() -> "This add-on does not provide an options page."
+                                        metadata.optionsPageUrl.isNullOrBlank() -> ExtensionUiGuidance.noOptionsPage
                                         policyBlockers.isNotEmpty() -> "Options unavailable because this add-on is blocked by Click."
                                         !metadata.enabled -> "Enable this approved add-on to open its options page."
                                         else -> "Options blocked: page is not on this add-on's own GeckoView origin."

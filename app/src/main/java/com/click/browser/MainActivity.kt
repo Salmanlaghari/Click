@@ -1745,6 +1745,7 @@ class MainActivity : FragmentActivity() {
                 }
             }
             var pendingWebViewSwitchTabId by remember { mutableStateOf<String?>(null) }
+            var pendingWebViewSwitchForDevTools by remember { mutableStateOf(false) }
             var showPrivacyPolicy by remember { mutableStateOf(false) }
             var showAboutApp by remember { mutableStateOf(false) }
             var showLicenses by remember { mutableStateOf(false) }
@@ -1894,9 +1895,15 @@ class MainActivity : FragmentActivity() {
             // Live viewport/device facts for the DevTools Device tab.
             var devToolsDeviceInfo by remember { mutableStateOf<DeviceInfo?>(null) }
 
-            LaunchedEffect(showDevToolsSheet, activeMode, activeTabIndex) {
-                val capture = showDevToolsSheet && activeMode == BrowserMode.DEVELOPER &&
-                    currentTab.engine == BrowserTabEngine.WEBVIEW
+            LaunchedEffect(
+                showDevToolsSheet,
+                activeMode,
+                activeTabIndex,
+                currentTab.engine,
+                currentTab.browserSession
+            ) {
+                val capture = showDevToolsSheet &&
+                    DevToolsAvailabilityPolicy.canCapture(activeMode, currentTab.engine)
                 if (capture) {
                     if (devToolsTargetWebView !== currentTab.webView) {
                         devToolsLogs.clear()
@@ -1928,9 +1935,21 @@ class MainActivity : FragmentActivity() {
                 showCookieManager,
                 showQuickTogglesDialog,
                 showTextScaleSheet,
-                showDevToolsSheet
+                showDevToolsSheet,
+                activeMode,
+                currentTab.url
             ) {
                 if (currentTab.engine == BrowserTabEngine.GECKOVIEW) {
+                    if (showDevToolsSheet && DevToolsAvailabilityPolicy.shouldOfferWebViewFallback(
+                            activeMode, currentTab.engine, currentTab.url
+                        )
+                    ) {
+                        showDevToolsSheet = false
+                        pendingWebViewSwitchTabId = currentTab.id
+                        pendingWebViewSwitchForDevTools = true
+                        showWebViewSwitchConfirmation = true
+                        return@LaunchedEffect
+                    }
                     val unavailable = when {
                         showCookieManager -> { showCookieManager = false; "Cookie manager" }
                         showQuickTogglesDialog -> { showQuickTogglesDialog = false; "Page quick toggles" }
@@ -1963,6 +1982,15 @@ class MainActivity : FragmentActivity() {
             fun handleFeature(id: FeatureId) {
                 showFeatureMenu = false
                 if (currentTab.engine == BrowserTabEngine.GECKOVIEW) {
+                    if (id == FeatureId.DEVTOOLS && activeMode == BrowserMode.DEVELOPER &&
+                        currentTab.url.isNotBlank() && currentTab.url != "about:blank"
+                    ) {
+                        devToolsTab = 1
+                        pendingWebViewSwitchTabId = currentTab.id
+                        pendingWebViewSwitchForDevTools = true
+                        showWebViewSwitchConfirmation = true
+                        return
+                    }
                     val unavailable = when (id) {
                         FeatureId.COOKIES -> "Cookie manager"
                         FeatureId.DEVTOOLS -> "DevTools"
@@ -2627,7 +2655,13 @@ class MainActivity : FragmentActivity() {
                     }
                     // Refresh device facts when the Device tab is requested.
                     if (tab == 4) refreshDevToolsDeviceInfo()
-                    showDevToolsSheet = true
+                    if (currentTab.engine == BrowserTabEngine.GECKOVIEW) {
+                        pendingWebViewSwitchTabId = currentTab.id
+                        pendingWebViewSwitchForDevTools = true
+                        showWebViewSwitchConfirmation = true
+                    } else {
+                        showDevToolsSheet = true
+                    }
                 }
             }
 
@@ -3418,7 +3452,10 @@ class MainActivity : FragmentActivity() {
                                                     } else currentTab.browserSession?.canGoForward() == true,
                                                     onForward = { currentTab.browserSession.goForwardIfPossible() },
                                                     onNavigate = { input ->
-                                                        pendingKeyboardDismissTabId = currentTab.id
+                                                        pendingKeyboardDismissTabId = currentTab.id.takeIf {
+                                                            currentTab.engine == BrowserTabEngine.WEBVIEW
+                                                        }
+                                                        dismissBrowserKeyboard()
                                                         val destination = cleanTrackingUrl(formatUrl(input, currentSearchEngineSetting))
                                                         currentTab.url = destination
                                                         currentTab.browserSession?.loadUrl(destination)
@@ -3504,7 +3541,10 @@ class MainActivity : FragmentActivity() {
                                             onShieldToggle = { toggleDnsShield() },
                                             onGamesClick = { showClickPage = "games" },
                                             onNavigate = { input ->
-                                                pendingKeyboardDismissTabId = currentTab.id
+                                                pendingKeyboardDismissTabId = currentTab.id.takeIf {
+                                                    currentTab.engine == BrowserTabEngine.WEBVIEW
+                                                }
+                                                dismissBrowserKeyboard()
                                                 val destination = cleanTrackingUrl(formatUrl(input, currentSearchEngineSetting))
                                                 currentTab.url = destination
                                                 currentTab.browserSession?.loadUrl(destination)
@@ -4846,6 +4886,7 @@ class MainActivity : FragmentActivity() {
                                         showInstalledAddonsPanel = false
                                         openExtensionStore(tab)
                                     },
+                                    currentTabUsesGecko = currentTab.engine == BrowserTabEngine.GECKOVIEW,
                                     onDismiss = { showInstalledAddonsPanel = false }
                                 )
                             }
@@ -5547,28 +5588,49 @@ class MainActivity : FragmentActivity() {
                                     onDismissRequest = {
                                         showWebViewSwitchConfirmation = false
                                         pendingWebViewSwitchTabId = null
+                                        pendingWebViewSwitchForDevTools = false
                                     },
-                                    title = { Text("Switch this tab to WebView?") },
+                                    title = {
+                                        Text(
+                                            if (pendingWebViewSwitchForDevTools) "Switch to WebView for DevTools?"
+                                            else "Switch this tab to WebView?"
+                                        )
+                                    },
                                     text = {
                                         Text(
-                                            "The same tab will reload in WebView. Gecko cookies, extension data and back history are not copied, and add-ons will not run in this tab. Private mode is not enabled automatically."
+                                            if (pendingWebViewSwitchForDevTools) {
+                                                "Click's Console, page inspection, network and source tools currently work on WebView tabs, not GeckoView. The page will reload; Gecko cookies, extension data and back history are not copied, and add-ons will not run in this tab. Cancel keeps this tab in GeckoView."
+                                            } else {
+                                                "The same tab will reload in WebView. Gecko cookies, extension data and back history are not copied, and add-ons will not run in this tab. Private mode is not enabled automatically."
+                                            }
                                         )
                                     },
                                     confirmButton = {
                                         TextButton(onClick = {
                                             val tabId = pendingWebViewSwitchTabId
+                                            val openDevToolsAfterSwitch = pendingWebViewSwitchForDevTools
                                             pendingWebViewSwitchTabId = null
+                                            pendingWebViewSwitchForDevTools = false
                                             showWebViewSwitchConfirmation = false
                                             val tab = tabs.firstOrNull { it.id == tabId }
                                             if (tab != null && !tab.isIncognito && tab.engine == BrowserTabEngine.GECKOVIEW) {
-                                                replaceTabEngine(tab, BrowserTabEngine.WEBVIEW)
+                                                val switched = replaceTabEngine(tab, BrowserTabEngine.WEBVIEW)
+                                                if (switched && openDevToolsAfterSwitch) {
+                                                    showDevToolsSheet = true
+                                                }
                                             }
-                                        }) { Text("Switch to WebView") }
+                                        }) {
+                                            Text(
+                                                if (pendingWebViewSwitchForDevTools) "Switch and open DevTools"
+                                                else "Switch to WebView"
+                                            )
+                                        }
                                     },
                                     dismissButton = {
                                         TextButton(onClick = {
                                             showWebViewSwitchConfirmation = false
                                             pendingWebViewSwitchTabId = null
+                                            pendingWebViewSwitchForDevTools = false
                                         }) { Text("Cancel") }
                                     }
                                 )
@@ -6782,6 +6844,11 @@ class MainActivity : FragmentActivity() {
             ModePersonalization.searchUrl(engine, query)
         }
 
+    private fun dismissBrowserKeyboard() {
+        WindowInsetsControllerCompat(window, window.decorView).hide(WindowInsetsCompat.Type.ime())
+        currentFocus?.clearFocus()
+    }
+
     /**
      * Switching modes selects browser-data profiles. Each profile (Simple /
      * Developer / Power / Advance) owns an isolated WebView data directory, so when the
@@ -6798,6 +6865,10 @@ class MainActivity : FragmentActivity() {
         forceDesktop: Boolean,
     ): Boolean {
         if (!V9Engine.needsRestart(mode)) {
+            val savedMode = modeManager.modeFlow.first()
+            if (shouldPersistNoRestartModeSelection(savedMode, mode)) {
+                modeManager.setMode(mode)
+            }
             webView?.let { modeManager.applySettings(it, mode, forceDesktop) }
             return false
         }

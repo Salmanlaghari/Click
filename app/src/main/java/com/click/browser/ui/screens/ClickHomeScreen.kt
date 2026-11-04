@@ -1404,6 +1404,27 @@ fun CompactBrowseBar(
                         modifier = Modifier.size(21.dp)
                     )
                 }
+                Surface(
+                    shape = CircleShape,
+                    color = theme.modeAccent.copy(alpha = 0.12f),
+                    contentColor = theme.modeAccent,
+                    border = androidx.compose.foundation.BorderStroke(
+                        1.dp, theme.modeAccent.copy(alpha = 0.28f)
+                    )
+                ) {
+                    Text(
+                        when (activeMode) {
+                            BrowserMode.SIMPLE -> "SIMPLE"
+                            BrowserMode.DEVELOPER -> "DEV"
+                            BrowserMode.HACK -> "POWER"
+                            BrowserMode.ADVANCED -> "ADVANCE"
+                        },
+                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 5.dp),
+                        fontSize = 9.sp,
+                        fontWeight = FontWeight.Bold,
+                        maxLines = 1
+                    )
+                }
                 Spacer(modifier = Modifier.weight(1f))
                 // Simple mode consistently offers New tab; reload remains in the browser drawer.
                 if (activeMode == BrowserMode.SIMPLE) {
@@ -1468,7 +1489,14 @@ fun CompactBrowseBar(
                         ) {
                             if (extensionActionLabels.isEmpty()) {
                                 DropdownMenuItem(
-                                    text = { Text("No approved add-on actions") },
+                                    text = {
+                                        Text(
+                                            com.click.browser.extensions.ExtensionUiGuidance.noActionOnCurrentPage,
+                                            fontSize = 11.sp,
+                                            maxLines = 3,
+                                            overflow = TextOverflow.Ellipsis
+                                        )
+                                    },
                                     onClick = {},
                                     enabled = false
                                 )
