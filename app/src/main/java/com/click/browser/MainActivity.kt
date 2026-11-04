@@ -101,9 +101,12 @@ import com.click.browser.data.DownloadItem
 import com.click.browser.engine.*
 import com.click.browser.extensions.ExtensionBrowserActivity
 import com.click.browser.extensions.ExtensionBrowserRuntime
+import com.click.browser.extensions.InstalledAddonPanelItem
+import com.click.browser.extensions.InstalledAddonsPanel
 import com.click.browser.extensions.NormalTabExtensionAction
 import com.click.browser.extensions.NormalTabExtensionPopup
 import com.click.browser.extensions.NormalTabExtensionRouter
+import com.click.browser.extensions.extensionPolicyBlockers
 import com.click.browser.ui.screens.*
 import androidx.datastore.preferences.core.edit
 import kotlinx.coroutines.Dispatchers
@@ -1631,6 +1634,52 @@ class MainActivity : FragmentActivity() {
             var showPostInstallGeckoSwitchConfirmation by remember { mutableStateOf(false) }
             var pendingGeckoSwitchTabId by remember { mutableStateOf<String?>(null) }
             var pendingInstalledExtensionName by remember { mutableStateOf<String?>(null) }
+            var showInstalledAddonsPanel by remember { mutableStateOf(false) }
+            var installedAddonPanelItems by remember { mutableStateOf<List<InstalledAddonPanelItem>>(emptyList()) }
+            var installedAddonPanelLoading by remember { mutableStateOf(false) }
+            var installedAddonPanelError by remember { mutableStateOf<String?>(null) }
+            var installedAddonPanelRequestId by remember { mutableIntStateOf(0) }
+            fun refreshInstalledAddonPanel() {
+                val requestId = ++installedAddonPanelRequestId
+                installedAddonPanelLoading = true
+                installedAddonPanelError = null
+                try {
+                    ExtensionBrowserRuntime.get(applicationContext).webExtensionController.list().accept(
+                        { extensions ->
+                            val items = extensions.orEmpty()
+                                .filterNot { it.isBuiltIn }
+                                .map { extension ->
+                                    InstalledAddonPanelItem(
+                                        id = extension.id,
+                                        name = extension.metaData.name?.takeIf(String::isNotBlank) ?: "Unnamed add-on",
+                                        version = extension.metaData.version.takeIf(String::isNotBlank) ?: "Unknown",
+                                        enabled = extension.metaData.enabled,
+                                        policyBlockers = extensionPolicyBlockers(extension)
+                                    )
+                                }
+                                .sortedBy { it.name.lowercase(Locale.ROOT) }
+                            runOnUiThread {
+                                if (requestId == installedAddonPanelRequestId) {
+                                    installedAddonPanelItems = items
+                                    installedAddonPanelLoading = false
+                                    installedAddonPanelError = null
+                                }
+                            }
+                        },
+                        { error ->
+                            runOnUiThread {
+                                if (requestId == installedAddonPanelRequestId) {
+                                    installedAddonPanelLoading = false
+                                    installedAddonPanelError = "Couldn't load installed add-ons: ${error?.message ?: "GeckoView error"}"
+                                }
+                            }
+                        }
+                    )
+                } catch (error: Exception) {
+                    installedAddonPanelLoading = false
+                    installedAddonPanelError = "Couldn't load installed add-ons: ${error.message ?: "GeckoView error"}"
+                }
+            }
             var showWebViewSwitchConfirmation by remember { mutableStateOf(false) }
             val extensionStoreLauncher = rememberLauncherForActivityResult(
                 ActivityResultContracts.StartActivityForResult()
@@ -1644,19 +1693,22 @@ class MainActivity : FragmentActivity() {
                     val selectedTab = tabs.getOrNull(activeTabIndex) ?: return@rememberLauncherForActivityResult
                     val currentUrl = (selectedTab.browserSession as? WebViewBrowserTabSession)?.webView?.url
                         ?.takeIf { it.isNotBlank() } ?: selectedTab.url
-                    if (shouldOfferPostInstallGeckoSwitch(
+                    val shouldOfferSwitch = shouldOfferPostInstallGeckoSwitch(
                             originTabIsStillSelected = originTabId != null && selectedTab.id == originTabId,
                             hasEnabledInstalledExtension = installedIds.isNotEmpty(),
                             engine = selectedTab.engine,
                             isPrivate = selectedTab.isIncognito,
                             url = currentUrl
                         )
-                    ) {
+                    if (shouldOfferSwitch) {
                         pendingGeckoSwitchTabId = selectedTab.id
                         pendingInstalledExtensionName = data.getStringExtra(
                             ExtensionBrowserActivity.EXTRA_INSTALLED_EXTENSION_NAME
                         )
                         showPostInstallGeckoSwitchConfirmation = true
+                    } else if (installedIds.isNotEmpty() && originTabId == selectedTab.id && !selectedTab.isIncognito) {
+                        refreshInstalledAddonPanel()
+                        showInstalledAddonsPanel = true
                     }
                 }
             }
@@ -2431,7 +2483,10 @@ class MainActivity : FragmentActivity() {
                             Toast.LENGTH_LONG
                         ).show()
                     }
-                    ExtensionTabEntryAction.OPEN_AMO_STORE -> openExtensionStore(tab)
+                    ExtensionTabEntryAction.OPEN_AMO_STORE -> {
+                        refreshInstalledAddonPanel()
+                        showInstalledAddonsPanel = true
+                    }
                 }
             }
             /**
@@ -2715,7 +2770,7 @@ class MainActivity : FragmentActivity() {
                                 item {
                                     DrawerItem(
                                         label = "Extensions",
-                                        subtitle = if (currentTab.isIncognito) "Unavailable in Private tabs" else "Browse AMO; enable in this tab after install",
+                                        subtitle = if (currentTab.isIncognito) "Unavailable in Private tabs" else "Installed add-ons and Mozilla Store",
                                         icon = Icons.Default.Extension,
                                         color = theme.primary
                                     ) {
@@ -3377,7 +3432,7 @@ class MainActivity : FragmentActivity() {
                                                         }
                                                         TextButton(onClick = {
                                                             requestExtensionsForTab(currentTab)
-                                                        }) { Text("Add-ons store") }
+                                                        }) { Text("Add-ons") }
                                                     }
                                                     val popup = geckoTabPopupState.value
                                                     if (popup != null && popup.ownerTabId == currentTab.id) {
@@ -4707,6 +4762,21 @@ class MainActivity : FragmentActivity() {
                             if (showStreamPlayer) {
                                 StreamPlayerScreen(
                                     onClose = { showStreamPlayer = false }
+                                )
+                            }
+
+                            if (showInstalledAddonsPanel) {
+                                InstalledAddonsPanel(
+                                    addOns = installedAddonPanelItems,
+                                    isLoading = installedAddonPanelLoading,
+                                    errorMessage = installedAddonPanelError,
+                                    onRefresh = { refreshInstalledAddonPanel() },
+                                    onOpenStore = {
+                                        val tab = currentTab
+                                        showInstalledAddonsPanel = false
+                                        openExtensionStore(tab)
+                                    },
+                                    onDismiss = { showInstalledAddonsPanel = false }
                                 )
                             }
 
