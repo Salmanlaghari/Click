@@ -56,6 +56,7 @@ import androidx.compose.material.icons.filled.Bookmark
 import androidx.compose.material.icons.filled.Description
 import androidx.compose.material.icons.filled.ExpandLess
 import androidx.compose.material.icons.filled.ExpandMore
+import androidx.compose.material.icons.filled.Extension
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.filled.Mic
@@ -71,6 +72,8 @@ import androidx.compose.material3.BadgedBox
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -1308,15 +1311,15 @@ fun homeGreeting(): String {
 /**
  * 2026-style premium address bar for the browsing surface.
  *
- * Layout: [☰ Sidebar · extensions · reload/new tab · tabs · menu]
- *          [full-width address/search box]
- * - Hamburger opens the navigation drawer (sidebar) — restores sidebar access
- *   directly from the top bar, 2026 browser style.
- * - A separate, taller address box gives long URLs room and a clear tap target.
+ * Layout: [back · forward · reload/new tab · tabs · add-on icon · three-dot menu]
+ *          [compact address/search box]
+ * - The hamburger is kept on the home/new-tab surface; loaded pages use the
+ *   three-dot menu and edge-swipe for navigation-drawer access.
+ * - Add-on action labels stay in one dropdown anchored to the extension icon.
  * - Search-provider branding appears on the new-tab search field; loaded pages
  *   show their site security affordance instead.
  * - Tab counter button for quick tab switching.
- * - Mode-aware accent colors, refined touch targets.
+ * - The address field is 46dp high; mode-aware accent colors keep touch targets clear.
  *
  * The URL field is directly editable (tap, type, Go).
  */
@@ -1348,9 +1351,14 @@ fun CompactBrowseBar(
     modifier: Modifier = Modifier,
     // Location indicator: null = no indicator; otherwise the effective mode.
     locationMode: LocationGuard.LocationMode? = null,
-    onLocationClick: () -> Unit = {}
+    onLocationClick: () -> Unit = {},
+    showExtensionButton: Boolean = false,
+    extensionActionLabels: List<String> = emptyList(),
+    onExtensionActionClick: (Int) -> Unit = {},
+    onAddonsClick: () -> Unit = {}
 ) {
     var textInput by remember(currentUrl) { mutableStateOf(currentUrl) }
+    var extensionMenuExpanded by remember(currentUrl) { mutableStateOf(false) }
     val isHttps = currentUrl.startsWith("https://")
     // Keep toolbar actions on their own row so the address field can use the
     // full available width and a generous touch target.
@@ -1362,21 +1370,23 @@ fun CompactBrowseBar(
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 10.dp, vertical = 8.dp),
-            verticalArrangement = Arrangement.spacedBy(6.dp)
+                .padding(horizontal = 10.dp, vertical = 4.dp),
+            verticalArrangement = Arrangement.spacedBy(4.dp)
         ) {
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(2.dp)
             ) {
-                IconButton(onClick = onDrawerClick, modifier = Modifier.size(40.dp)) {
-                    Icon(
-                        Icons.Default.Menu,
-                        contentDescription = "Open sidebar menu",
-                        tint = theme.onTopBar,
-                        modifier = Modifier.size(22.dp)
-                    )
+                if (currentUrl.isBlank()) {
+                    IconButton(onClick = onDrawerClick, modifier = Modifier.size(40.dp)) {
+                        Icon(
+                            Icons.Default.Menu,
+                            contentDescription = "Open sidebar menu",
+                            tint = theme.onTopBar,
+                            modifier = Modifier.size(22.dp)
+                        )
+                    }
                 }
                 IconButton(onClick = onBack, enabled = canGoBack, modifier = Modifier.size(40.dp)) {
                     Icon(
@@ -1439,6 +1449,56 @@ fun CompactBrowseBar(
                         )
                     }
                 }
+                if (showExtensionButton) {
+                    Box {
+                        IconButton(
+                            onClick = { extensionMenuExpanded = true },
+                            modifier = Modifier.size(40.dp)
+                        ) {
+                            Icon(
+                                Icons.Default.Extension,
+                                contentDescription = "Add-on actions",
+                                tint = theme.onTopBar,
+                                modifier = Modifier.size(22.dp)
+                            )
+                        }
+                        DropdownMenu(
+                            expanded = extensionMenuExpanded,
+                            onDismissRequest = { extensionMenuExpanded = false }
+                        ) {
+                            if (extensionActionLabels.isEmpty()) {
+                                DropdownMenuItem(
+                                    text = { Text("No approved add-on actions") },
+                                    onClick = {},
+                                    enabled = false
+                                )
+                            } else {
+                                extensionActionLabels.forEachIndexed { index, label ->
+                                    DropdownMenuItem(
+                                        text = {
+                                            Text(
+                                                label,
+                                                maxLines = 1,
+                                                overflow = TextOverflow.Ellipsis
+                                            )
+                                        },
+                                        onClick = {
+                                            extensionMenuExpanded = false
+                                            onExtensionActionClick(index)
+                                        }
+                                    )
+                                }
+                            }
+                            DropdownMenuItem(
+                                text = { Text("Manage add-ons") },
+                                onClick = {
+                                    extensionMenuExpanded = false
+                                    onAddonsClick()
+                                }
+                            )
+                        }
+                    }
+                }
                 IconButton(onClick = onMenuClick, modifier = Modifier.size(40.dp)) {
                     Icon(
                         Icons.Default.MoreVert,
@@ -1450,7 +1510,7 @@ fun CompactBrowseBar(
             }
 
             Surface(
-                shape = RoundedCornerShape(18.dp),
+                shape = RoundedCornerShape(14.dp),
                 color = theme.surfaceVariant,
                 shadowElevation = 2.dp,
                 border = androidx.compose.foundation.BorderStroke(
@@ -1458,7 +1518,7 @@ fun CompactBrowseBar(
                 ),
                 modifier = Modifier
                     .fillMaxWidth()
-                    .height(58.dp)
+                    .height(46.dp)
                     .animateContentSize()
             ) {
                 Row(

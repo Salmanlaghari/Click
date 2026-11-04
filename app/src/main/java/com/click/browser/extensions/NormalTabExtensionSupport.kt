@@ -21,6 +21,20 @@ internal data class NormalTabExtensionPopup(
     val session: GeckoSession
 )
 
+internal fun dispatchNormalTabActionClick(
+    tabId: String,
+    attachedTabIds: Set<String>,
+    isEnabled: Boolean,
+    isPolicyApproved: Boolean,
+    activateTab: (String) -> Unit,
+    clickAction: () -> Unit
+): Boolean {
+    if (tabId !in attachedTabIds || !isEnabled || !isPolicyApproved) return false
+    activateTab(tabId)
+    clickAction()
+    return true
+}
+
 /**
  * Routes GeckoView's runtime-wide ActionDelegate callbacks to the currently active
  * normal tab. Action.click() does not carry a session ID, so the active-tab state
@@ -51,6 +65,7 @@ internal class NormalTabExtensionRouter(
 
     /** Keep Action.click() pointed away from this Activity while it is backgrounded. */
     fun deactivateActiveSession() {
+        closePopup()
         val previousId = activeTabId ?: return
         sessions[previousId]?.let { runtime.webExtensionController.setTabActive(it, false) }
         activeTabId = null
@@ -98,6 +113,16 @@ internal class NormalTabExtensionRouter(
         }
     }
 
+    fun clickAction(tabId: String, item: NormalTabExtensionAction): Boolean =
+        dispatchNormalTabActionClick(
+            tabId = tabId,
+            attachedTabIds = sessions.keys,
+            isEnabled = !item.extension.isBuiltIn && item.extension.metaData.enabled,
+            isPolicyApproved = extensionPolicyBlockers(item.extension).isEmpty(),
+            activateTab = { setSelected(it, true) },
+            clickAction = { item.action.click() }
+        )
+
     fun detach(tabId: String, session: GeckoSession) {
         setSelected(tabId, false)
         sessions.remove(tabId, session)
@@ -111,6 +136,7 @@ internal class NormalTabExtensionRouter(
         if (expected != null && current.session !== expected) return
         popup = null
         onPopupChanged(null)
+        runCatching { current.session.setActive(false) }
         runCatching { current.session.close() }
     }
 
@@ -123,10 +149,10 @@ internal class NormalTabExtensionRouter(
         val settings = GeckoSessionSettings.Builder()
             .contextId(ownerSession.settings.contextId)
             .build()
-        val popupSession = GeckoSession(settings).apply {
-            setPermissionDelegate(DenyNormalTabExtensionDevicePermissions)
-            open(runtime)
-        }
+        val popupSession = GeckoSession(settings)
+        popupSession.setPermissionDelegate(DenyNormalTabExtensionDevicePermissions)
+        popupSession.open(runtime)
+        popupSession.setActive(true)
         popup = NormalTabExtensionPopup(
             ownerTabId = owner,
             title = extension.metaData.name?.takeIf(String::isNotBlank) ?: "Add-on",

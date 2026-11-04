@@ -3307,7 +3307,7 @@ class MainActivity : FragmentActivity() {
                                     }
                                 }
                             }
-                            // New page → toolbar back.
+                            // New page → reveal the compact top bar; page scrolling can still hide it.
                             LaunchedEffect(currentTab.url) { toolbarVisible = true }
 
                             // Periodic privacy-status popup (replaces the persistent
@@ -3347,6 +3347,9 @@ class MainActivity : FragmentActivity() {
 
                             @Composable
                             fun BrowseTopBarBlock() {
+                                val actions = geckoTabActionsState.value[currentTab.id].orEmpty()
+                                val showExtensionButton = currentTab.engine == BrowserTabEngine.GECKOVIEW &&
+                                    !currentTab.isIncognito && !showOverlays
                                 Column {
                                     if (!immersiveMode && showOverlays) {
                                         TabStrip(
@@ -3401,84 +3404,21 @@ class MainActivity : FragmentActivity() {
                                                     onTabsClick = { showTabsManager = true },
                                                     // Location requests are always blocked by Click.
                                                     locationMode = LocationGuard.LocationMode.BLOCK,
-                                                    onLocationClick = { showLocationSettings = true }
+                                                    onLocationClick = { showLocationSettings = true },
+                                                    showExtensionButton = showExtensionButton,
+                                                    extensionActionLabels = if (showExtensionButton) actions.map { it.label } else emptyList(),
+                                                    onExtensionActionClick = { index ->
+                                                        val item = actions.getOrNull(index)
+                                                        if (item != null && normalTabExtensionRouter?.clickAction(currentTab.id, item) != true) {
+                                                            Toast.makeText(
+                                                                this@MainActivity,
+                                                                "Couldn't route this add-on action to the active tab.",
+                                                                Toast.LENGTH_SHORT
+                                                            ).show()
+                                                        }
+                                                    },
+                                                    onAddonsClick = { requestExtensionsForTab(currentTab) }
                                                 )
-                                                if (currentTab.engine == BrowserTabEngine.GECKOVIEW &&
-                                                    !currentTab.isIncognito && !showOverlays
-                                                ) {
-                                                    val actions = geckoTabActionsState.value[currentTab.id].orEmpty()
-                                                    Row(
-                                                        modifier = Modifier.fillMaxWidth()
-                                                            .horizontalScroll(rememberScrollState())
-                                                            .padding(horizontal = 8.dp),
-                                                        horizontalArrangement = Arrangement.spacedBy(8.dp),
-                                                        verticalAlignment = Alignment.CenterVertically
-                                                    ) {
-                                                        actions.forEach { item ->
-                                                            OutlinedButton(onClick = {
-                                                                if (item.extension.metaData.enabled &&
-                                                                    com.click.browser.extensions.extensionPolicyBlockers(item.extension).isEmpty()
-                                                                ) item.action.click()
-                                                            }) {
-                                                                Text(item.label, maxLines = 1)
-                                                            }
-                                                        }
-                                                        if (actions.isEmpty()) {
-                                                            Text(
-                                                                "Approved add-on actions appear here",
-                                                                color = themed.onSurface.copy(alpha = 0.55f),
-                                                                fontSize = 12.sp
-                                                            )
-                                                        }
-                                                        TextButton(onClick = {
-                                                            requestExtensionsForTab(currentTab)
-                                                        }) { Text("Add-ons") }
-                                                    }
-                                                    val popup = geckoTabPopupState.value
-                                                    if (popup != null && popup.ownerTabId == currentTab.id) {
-                                                        androidx.compose.ui.window.Dialog(
-                                                            onDismissRequest = {
-                                                                normalTabExtensionRouter?.closePopup(popup.session)
-                                                            }
-                                                        ) {
-                                                            Surface(
-                                                                modifier = Modifier.fillMaxWidth().heightIn(max = 520.dp),
-                                                                shape = RoundedCornerShape(20.dp),
-                                                                color = themed.surface,
-                                                                tonalElevation = 8.dp
-                                                            ) {
-                                                                Column {
-                                                                    Row(
-                                                                        modifier = Modifier.fillMaxWidth().padding(start = 16.dp, end = 6.dp),
-                                                                        verticalAlignment = Alignment.CenterVertically
-                                                                    ) {
-                                                                        Text(
-                                                                            popup.title,
-                                                                            modifier = Modifier.weight(1f),
-                                                                            color = themed.onSurface,
-                                                                            fontWeight = FontWeight.SemiBold,
-                                                                            maxLines = 1,
-                                                                            overflow = TextOverflow.Ellipsis
-                                                                        )
-                                                                        IconButton(onClick = {
-                                                                            normalTabExtensionRouter?.closePopup(popup.session)
-                                                                        }) {
-                                                                            Icon(Icons.Default.Close, contentDescription = "Close add-on popup")
-                                                                        }
-                                                                    }
-                                                                    AndroidView(
-                                                                        modifier = Modifier.fillMaxWidth().height(420.dp),
-                                                                        factory = { popupContext ->
-                                                                            org.mozilla.geckoview.GeckoView(popupContext).apply {
-                                                                                setSession(popup.session)
-                                                                            }
-                                                                        }
-                                                                    )
-                                                                }
-                                                            }
-                                                        }
-                                                    }
-                                                }
                                                 // Thin page-load progress indicator.
                                                 val progress = currentTab.loadProgress
                                                 androidx.compose.animation.AnimatedVisibility(
@@ -4629,7 +4569,9 @@ class MainActivity : FragmentActivity() {
                                     BrowseTopBarBlock()
                                 }
                             }
-                            if (!showOverlays && !immersiveMode && !videoFullscreenActive) {
+                            if (!showOverlays && !immersiveMode && !videoFullscreenActive &&
+                                (currentTab.url == "about:blank" || currentTab.isPageLoading)
+                            ) {
                                 Crossfade(
                                     targetState = theme,
                                     label = "browseNavTheme",
@@ -4657,11 +4599,11 @@ class MainActivity : FragmentActivity() {
                                 featureMenuPageHost, desktopOverrides, activeMode,
                                 forceDesktopMode, liveFlags.desktopDefault
                             )
-                            // Premium UI v2: always-visible bottom-left feature menu FAB
-                            // (replaces the old floating home button; the 32-feature
-                            // panel covers navigation, and Home stays in the bottom
-                            // nav). Hidden in immersive fullscreen for chrome-free view.
-                            if (!immersiveMode && !videoFullscreenActive) {
+                            // Keep the feature FAB on the home surface; hide it on loaded sites
+                            // so it does not cover page content. Home remains in the 3-dot menu.
+                            if (!immersiveMode && !videoFullscreenActive &&
+                                (showOverlays || currentTab.url == "about:blank" || currentTab.isPageLoading)
+                            ) {
                                 FeatureMenuFabOverlay(
                                     theme = theme,
                                     expanded = showFeatureMenu,
@@ -4778,6 +4720,55 @@ class MainActivity : FragmentActivity() {
                                     },
                                     onDismiss = { showInstalledAddonsPanel = false }
                                 )
+                            }
+
+                            val extensionPopup = geckoTabPopupState.value
+                            if (currentTab.engine == BrowserTabEngine.GECKOVIEW &&
+                                !currentTab.isIncognito && extensionPopup?.ownerTabId == currentTab.id
+                            ) {
+                                androidx.compose.ui.window.Dialog(
+                                    onDismissRequest = {
+                                        normalTabExtensionRouter?.closePopup(extensionPopup.session)
+                                    }
+                                ) {
+                                    Surface(
+                                        modifier = Modifier.fillMaxWidth().heightIn(max = 520.dp),
+                                        shape = RoundedCornerShape(20.dp),
+                                        color = theme.surface,
+                                        tonalElevation = 8.dp
+                                    ) {
+                                        Column {
+                                            Row(
+                                                modifier = Modifier.fillMaxWidth().padding(start = 16.dp, end = 6.dp),
+                                                verticalAlignment = Alignment.CenterVertically
+                                            ) {
+                                                Text(
+                                                    extensionPopup.title,
+                                                    modifier = Modifier.weight(1f),
+                                                    color = theme.onSurface,
+                                                    fontWeight = FontWeight.SemiBold,
+                                                    maxLines = 1,
+                                                    overflow = TextOverflow.Ellipsis
+                                                )
+                                                IconButton(onClick = {
+                                                    normalTabExtensionRouter?.closePopup(extensionPopup.session)
+                                                }) {
+                                                    Icon(Icons.Default.Close, contentDescription = "Close add-on popup")
+                                                }
+                                            }
+                                            key(extensionPopup.session) {
+                                                AndroidView(
+                                                    modifier = Modifier.fillMaxWidth().height(420.dp),
+                                                    factory = { popupContext ->
+                                                        org.mozilla.geckoview.GeckoView(popupContext).apply {
+                                                            setSession(extensionPopup.session)
+                                                        }
+                                                    }
+                                                )
+                                            }
+                                        }
+                                    }
+                                }
                             }
 
                             // DevTools bottom sheet (Developer mode): dismissible,
@@ -6308,6 +6299,11 @@ class MainActivity : FragmentActivity() {
                                 BrowserMenuSheet(
                                     theme = theme,
                                     isDesktopForSite = menuDesktopForSite,
+                                    onHome = {
+                                        showBrowserMenu = false
+                                        currentTab.url = "about:blank"
+                                        currentTab.browserSession?.loadUrl("about:blank")
+                                    },
                                     onNewTab = {
                                         showBrowserMenu = false
                                         tabs.add(TabItem(url = homeUrl(), title = "New Tab"))

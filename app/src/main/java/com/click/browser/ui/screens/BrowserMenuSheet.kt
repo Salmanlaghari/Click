@@ -56,6 +56,7 @@ fun BrowserMenuSheet(
             MenuCustomization.DEFAULT_ORDER,
             emptySet()
         ),
+    onHome: () -> Unit,
     onNewTab: () -> Unit,
     onNewPrivateTab: () -> Unit,
     onOpenTabSwitcher: () -> Unit,
@@ -86,8 +87,16 @@ fun BrowserMenuSheet(
         LazyColumn(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(bottom = 24.dp)
+            .padding(bottom = 24.dp)
         ) {
+            item(key = "home") {
+                MenuRow(
+                    theme = theme,
+                    icon = Icons.Default.Home,
+                    label = "Home",
+                    onClick = onHome
+                )
+            }
             val items = visibleItems.ifEmpty { MenuCustomization.DEFAULT_ORDER }
             items.forEach { id ->
                 item(key = id.name) {
