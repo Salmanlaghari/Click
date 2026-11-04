@@ -1541,14 +1541,22 @@ class MainActivity : FragmentActivity() {
                 ActivityResultContracts.StartActivityForResult()
             ) { result ->
                 if (result.resultCode == android.app.Activity.RESULT_OK) {
-                    com.click.browser.engine.V9VpnController.start(this@MainActivity)
-                    scope.launch {
-                        kotlinx.coroutines.delay(800)
-                        if (com.click.browser.engine.V9VpnService.running.value) {
-                            dataStore.edit { it[com.click.browser.engine.AppSettings.V9_VPN_ENABLED] = true }
-                            Toast.makeText(this@MainActivity, "V9 Shield on · DNS-only protection", Toast.LENGTH_SHORT).show()
-                        } else {
-                            Toast.makeText(this@MainActivity, "DNS protection failed to start — try again", Toast.LENGTH_SHORT).show()
+                    val started = com.click.browser.engine.V9VpnController.start(this@MainActivity)
+                    if (!started) {
+                        Toast.makeText(
+                            this@MainActivity,
+                            "Click VPN is active. Disconnect it before enabling V9 Shield.",
+                            Toast.LENGTH_LONG
+                        ).show()
+                    } else {
+                        scope.launch {
+                            kotlinx.coroutines.delay(800)
+                            if (com.click.browser.engine.V9VpnService.running.value) {
+                                dataStore.edit { it[com.click.browser.engine.AppSettings.V9_VPN_ENABLED] = true }
+                                Toast.makeText(this@MainActivity, "V9 Shield on · DNS-only protection", Toast.LENGTH_SHORT).show()
+                            } else {
+                                Toast.makeText(this@MainActivity, "DNS protection failed to start — try again", Toast.LENGTH_SHORT).show()
+                            }
                         }
                     }
                 } else {
@@ -1571,9 +1579,24 @@ class MainActivity : FragmentActivity() {
                         }
                     }
                 } else {
+                    if (com.click.browser.engine.V9VpnController.isBlockedByClickVpn()) {
+                        Toast.makeText(
+                            this@MainActivity,
+                            "Click VPN is active. Disconnect it before enabling V9 Shield.",
+                            Toast.LENGTH_LONG
+                        ).show()
+                        return
+                    }
                     val intent = com.click.browser.engine.V9VpnController.prepareIntent(this@MainActivity)
                     if (intent == null) {
-                        com.click.browser.engine.V9VpnController.start(this@MainActivity)
+                        if (!com.click.browser.engine.V9VpnController.start(this@MainActivity)) {
+                            Toast.makeText(
+                                this@MainActivity,
+                                "Click VPN is active. Disconnect it before enabling V9 Shield.",
+                                Toast.LENGTH_LONG
+                            ).show()
+                            return
+                        }
                         scope.launch {
                             kotlinx.coroutines.delay(800)
                             if (com.click.browser.engine.V9VpnService.running.value) {
@@ -2647,7 +2670,9 @@ class MainActivity : FragmentActivity() {
                     if (activeMode != BrowserMode.DEVELOPER) {
                         // V9: DevTools runs in the Developer engine.
                         val restarting = v9SwitchMode(BrowserMode.DEVELOPER, currentTab.webView, forceDesktopMode)
-                        if (!restarting) currentTab.browserSession?.reload()
+                        if (restarting) return@launch
+                        if (V9Engine.bootMode != BrowserMode.DEVELOPER) return@launch
+                        currentTab.browserSession?.reload()
                     }
                     devToolsTab = tab
                     if (activeMode == BrowserMode.DEVELOPER && (tab == 0 || tab == 3)) {
@@ -3413,7 +3438,6 @@ class MainActivity : FragmentActivity() {
 
                             @Composable
                             fun BrowseTopBarBlock() {
-                                val actions = geckoTabActionsState.value[currentTab.id].orEmpty()
                                 val showExtensionButton = currentTab.engine == BrowserTabEngine.GECKOVIEW &&
                                     !currentTab.isIncognito && !showOverlays
                                 Column {
@@ -3474,18 +3498,9 @@ class MainActivity : FragmentActivity() {
                                                     // Location requests are always blocked by Click.
                                                     locationMode = LocationGuard.LocationMode.BLOCK,
                                                     onLocationClick = { showLocationSettings = true },
+                                                    showDeveloperTools = activeMode == BrowserMode.DEVELOPER,
+                                                    onDeveloperToolsClick = { openDevToolsTab(1) },
                                                     showExtensionButton = showExtensionButton,
-                                                    extensionActionLabels = if (showExtensionButton) actions.map { it.label } else emptyList(),
-                                                    onExtensionActionClick = { index ->
-                                                        val item = actions.getOrNull(index)
-                                                        if (item != null && normalTabExtensionRouter?.clickAction(currentTab.id, item) != true) {
-                                                            Toast.makeText(
-                                                                this@MainActivity,
-                                                                "Couldn't route this add-on action to the active tab.",
-                                                                Toast.LENGTH_SHORT
-                                                            ).show()
-                                                        }
-                                                    },
                                                     onAddonsClick = { requestExtensionsForTab(currentTab) }
                                                 )
                                                 // Thin page-load progress indicator.
@@ -5776,14 +5791,7 @@ class MainActivity : FragmentActivity() {
                                             val mode = targetMode
                                             pendingModeSwitch = null
                                             scope.launch {
-                                                val restarting = v9SwitchMode(mode, currentTab.webView, forceDesktopMode)
-                                                if (!restarting) {
-                                                    Toast.makeText(
-                                                        this@MainActivity,
-                                                        "${mode.display().title} Activated",
-                                                        Toast.LENGTH_SHORT
-                                                    ).show()
-                                                }
+                                                v9SwitchMode(mode, currentTab.webView, forceDesktopMode)
                                             }
                                         }) {
                                             androidx.compose.material3.Text("Restart")
@@ -6870,6 +6878,9 @@ class MainActivity : FragmentActivity() {
                 modeManager.setMode(mode)
             }
             webView?.let { modeManager.applySettings(it, mode, forceDesktop) }
+            android.widget.Toast.makeText(
+                this, "${mode.display().title} activated", android.widget.Toast.LENGTH_SHORT
+            ).show()
             return false
         }
         val toastMsg = if (mode == BrowserMode.ADVANCED) {
@@ -6902,12 +6913,22 @@ class MainActivity : FragmentActivity() {
             advanceIntro = (mode == BrowserMode.ADVANCED) && liveAdvanceIntroEnabled
         )
         if (!restarted) {
-            SessionRestore.clearModeSwitchRestore(this, sourceMode)
+            val selectionRestored = runCatching { modeManager.setMode(sourceMode) }.isSuccess
+            runCatching { SessionRestore.clearModeSwitchRestore(this, sourceMode) }
+            runCatching { SessionRestore.markCleanExit(this, sourceMode, false) }
             modeSwitchInProgress = false
-            // Restart wasn't possible (alarm unavailable etc.) — apply the
-            // mode in-place WITHOUT engine isolation rather than killing
-            // the app. Cookies stay shared, but the app stays alive.
-            webView?.let { modeManager.applySettings(it, mode, forceDesktop) }
+            if (!selectionRestored) {
+                android.util.Log.e("V9Engine", "Could not restore the saved browser mode after a failed profile restart")
+            }
+            android.widget.Toast.makeText(
+                this,
+                if (selectionRestored) {
+                    "Couldn't restart. Staying in ${sourceMode.display().title}. Try switching again."
+                } else {
+                    "Couldn't restart the browser profile. Close and reopen Click before switching modes."
+                },
+                android.widget.Toast.LENGTH_LONG
+            ).show()
             return false
         }
         return true // unreachable — the process is killed above

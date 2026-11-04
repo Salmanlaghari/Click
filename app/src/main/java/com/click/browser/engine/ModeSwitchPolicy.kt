@@ -5,3 +5,9 @@ internal fun shouldPersistNoRestartModeSelection(
     savedMode: BrowserMode,
     requestedMode: BrowserMode
 ): Boolean = savedMode != requestedMode
+
+/** At least one relaunch route must have started before the old process is killed. */
+internal fun hasEngineRestartPath(
+    alarmScheduled: Boolean,
+    directRelaunchStarted: Boolean
+): Boolean = alarmScheduled || directRelaunchStarted

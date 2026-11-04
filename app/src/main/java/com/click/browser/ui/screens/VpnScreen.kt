@@ -27,6 +27,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
+import com.click.browser.engine.vpn.VpnConfigBuilder
 import com.click.browser.engine.vpn.VpnController
 import com.click.browser.engine.vpn.VpnServer
 import com.click.browser.engine.vpn.VpnState
@@ -95,6 +96,10 @@ fun VpnScreen(onClose: () -> Unit) {
     fun setVpn(on: Boolean) {
         if (on) {
             if (acked != true) return // disclosure dialog blocks
+            if (VpnController.isBlockedByV9Shield()) {
+                VpnController.reportV9ShieldConflict()
+                return
+            }
             starting = true
             scope.launch {
                 try {
@@ -177,7 +182,7 @@ fun VpnScreen(onClose: () -> Unit) {
                     Column(Modifier.weight(1f)) {
                         Text(
                             when (vpnState) {
-                                VpnState.CONNECTED -> "Connected"
+                                VpnState.CONNECTED -> "Tunnel active"
                                 VpnState.CONNECTING -> "Connecting…"
                                 VpnState.ERROR -> "Connection failed"
                                 VpnState.DISCONNECTED -> "Disconnected"
@@ -287,15 +292,17 @@ fun VpnScreen(onClose: () -> Unit) {
     if (showAddDialog) {
         AddServerDialog(
             onDismiss = { showAddDialog = false },
-            onAdd = { name, url ->
+            onAdd = { name, url, onResult ->
                 scope.launch {
-                    val ok = VpnController.addCustomServer(context, name, url)
-                    showAddDialog = false
-                    refresh()
-                    if (!ok) {
-                        // Invalid URL — surface via snackbar would need a
-                        // scaffold host; the dialog simply stays honest by
-                        // not adding. (Keep simple; no dead UI.)
+                    val saved = runCatching {
+                        VpnController.addCustomServer(context, name, url)
+                    }.getOrDefault(false)
+                    if (saved) {
+                        showAddDialog = false
+                        refresh()
+                        onResult(null)
+                    } else {
+                        onResult("Couldn't save this server. Check the link and try again.")
                     }
                 }
             }
@@ -349,11 +356,12 @@ private fun ServerRow(
 @Composable
 private fun AddServerDialog(
     onDismiss: () -> Unit,
-    onAdd: (name: String, url: String) -> Unit,
+    onAdd: (name: String, url: String, onResult: (String?) -> Unit) -> Unit,
 ) {
     var name by remember { mutableStateOf("") }
     var url by remember { mutableStateOf("") }
     var error by remember { mutableStateOf("") }
+    var saving by remember { mutableStateOf(false) }
 
     Dialog(onDismissRequest = onDismiss) {
         Card(shape = RoundedCornerShape(16.dp)) {
@@ -380,13 +388,25 @@ private fun AddServerDialog(
                 Spacer(Modifier.height(12.dp))
                 Row(Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.End) {
-                    TextButton(onClick = onDismiss) { Text("Cancel") }
+                    TextButton(onClick = onDismiss, enabled = !saving) { Text("Cancel") }
                     Spacer(Modifier.width(8.dp))
-                    Button(onClick = {
+                    Button(enabled = !saving, onClick = {
                         if (url.isBlank()) {
                             error = "Paste a proxy URL first."
-                        } else onAdd(name.trim(), url.trim())
-                    }) { Text("Add") }
+                        } else if (runCatching {
+                                VpnConfigBuilder.buildCustomConfig(url.trim())
+                            }.getOrNull() == null
+                        ) {
+                            error = "This link isn't valid or supported. Use vless://, vmess://, trojan://, or ss://."
+                        } else {
+                            saving = true
+                            error = ""
+                            onAdd(name.trim(), url.trim()) { failure ->
+                                saving = false
+                                error = failure.orEmpty()
+                            }
+                        }
+                    }) { Text(if (saving) "Adding…" else "Add") }
                 }
             }
         }

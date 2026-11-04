@@ -187,8 +187,8 @@ class SingBoxVpnService : VpnService(), PlatformInterface, CommandServerHandler 
                 commandServer = server
 
                 _state.value = VpnState.CONNECTED
-                startForegroundCompat(buildNotification("Connected — $serverName"))
-                Log.i(TAG, "Tunnel CONNECTED ($serverName)")
+                startForegroundCompat(buildNotification("Tunnel active · $serverName"))
+                Log.i(TAG, "Tunnel service active ($serverName)")
             } catch (t: Throwable) {
                 Log.e(TAG, "Tunnel start failed", t)
                 _error.value = t.message ?: "Connection failed"
@@ -269,7 +269,7 @@ class SingBoxVpnService : VpnService(), PlatformInterface, CommandServerHandler 
      * tunnel. Returns the raw fd number for Go.
      */
     override fun openTun(options: TunOptions?): Int {
-        val mtu = options?.mtu ?: 9000
+        val mtu = VpnConfigBuilder.clampTunnelMtu(options?.mtu)
         val builder = Builder()
             .setSession("Click VPN")
             .setMtu(mtu)

@@ -21,6 +21,7 @@ import java.io.FileInputStream
 import java.io.FileOutputStream
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
+import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicLong
 import kotlin.concurrent.thread
@@ -57,6 +58,8 @@ class V9VpnService : VpnService() {
 
         private val _running = MutableStateFlow(false)
         val running: StateFlow<Boolean> = _running.asStateFlow()
+        private val _starting = AtomicBoolean(false)
+        val activeOrStarting: Boolean get() = _running.value || _starting.get()
         private val _queries = MutableStateFlow(0L)
         val queries: StateFlow<Long> = _queries.asStateFlow()
         private val _blocked = MutableStateFlow(0L)
@@ -97,7 +100,7 @@ class V9VpnService : VpnService() {
     }
 
     private fun startShield() {
-        if (loopOn) return
+        if (loopOn || !_starting.compareAndSet(false, true)) return
         val builder = Builder()
             .setSession("Click V9 Shield")
             .addAddress(VPN_ADDRESS, 24)
@@ -108,11 +111,17 @@ class V9VpnService : VpnService() {
         } catch (t: Throwable) {
             Log.e(TAG, "TUN establish failed", t)
             null
-        } ?: return
+        } ?: run {
+            _starting.set(false)
+            Log.e(TAG, "VpnService.Builder.establish() returned null")
+            stopSelf()
+            return
+        }
         tun = fd
         startForegroundCompat(buildNotification())
         loopOn = true
         _running.value = true
+        _starting.set(false)
         // Protect our own DoH sockets from the TUN (else TLS loops back in).
         V9DohResolver.socketProtector = { sock -> protect(sock) }
         thread(name = "v9-dns-loop", isDaemon = true) { packetLoop(fd) }
@@ -121,6 +130,7 @@ class V9VpnService : VpnService() {
 
     private fun stopShield() {
         loopOn = false
+        _starting.set(false)
         _running.value = false
         V9DohResolver.socketProtector = null
         try { tun?.close() } catch (_: Throwable) {}

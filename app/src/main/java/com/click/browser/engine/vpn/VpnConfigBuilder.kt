@@ -22,6 +22,12 @@ import java.net.URI
 object VpnConfigBuilder {
 
     private const val TAG = "VpnConfig"
+    const val DEFAULT_TUN_MTU = 1400
+    private const val MIN_TUN_MTU = 1280
+
+    /** Keep tunnel packets within a conservative mobile-network path MTU. */
+    internal fun clampTunnelMtu(requested: Int?): Int =
+        requested?.takeIf { it > 0 }?.coerceIn(MIN_TUN_MTU, DEFAULT_TUN_MTU) ?: DEFAULT_TUN_MTU
 
     /**
      * Builds a tunnel config from a user-pasted proxy URL.
@@ -87,7 +93,7 @@ object VpnConfigBuilder {
                 .put("address", JSONArray()
                     .put("172.19.0.1/30")
                     .put("fdfe:dcba:9876::1/126"))
-                .put("mtu", 9000)
+                .put("mtu", DEFAULT_TUN_MTU)
                 .put("auto_route", true)
                 .put("strict_route", true)
                 .put("stack", "gvisor")

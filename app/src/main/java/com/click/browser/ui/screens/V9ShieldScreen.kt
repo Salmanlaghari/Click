@@ -1,6 +1,7 @@
 package com.click.browser.ui.screens
 
 import android.app.Activity
+import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
@@ -59,33 +60,65 @@ fun V9ShieldScreen(onClose: () -> Unit) {
         .collectAsState(initial = false)
     var customDraft by remember(customUrl) { mutableStateOf(customUrl) }
 
+    fun syncVpnEnabledFlag(expectedOn: Boolean) {
+        scope.launch {
+            kotlinx.coroutines.delay(800)
+            val running = V9VpnController.isRunning.value
+            context.dataStore.edit { it[AppSettings.V9_VPN_ENABLED] = running }
+            if (running != expectedOn) {
+                Toast.makeText(
+                    context,
+                    if (expectedOn) "DNS protection failed to start — try again"
+                    else "DNS protection failed to stop — try again",
+                    Toast.LENGTH_LONG
+                ).show()
+            }
+        }
+    }
+
     val vpnPermissionLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.StartActivityForResult()
     ) { result ->
         if (result.resultCode == Activity.RESULT_OK) {
-            V9VpnController.start(context)
-            scope.launch {
-                context.dataStore.edit { it[AppSettings.V9_VPN_ENABLED] = true }
+            if (V9VpnController.start(context)) {
+                syncVpnEnabledFlag(expectedOn = true)
+            } else {
+                Toast.makeText(
+                    context,
+                    "Click VPN is active. Disconnect it before enabling V9 Shield.",
+                    Toast.LENGTH_LONG
+                ).show()
             }
         }
     }
 
     fun setVpn(on: Boolean) {
         if (on) {
+            if (V9VpnController.isBlockedByClickVpn()) {
+                Toast.makeText(
+                    context,
+                    "Click VPN is active. Disconnect it before enabling V9 Shield.",
+                    Toast.LENGTH_LONG
+                ).show()
+                return
+            }
             val intent = V9VpnController.prepareIntent(context)
             if (intent == null) {
-                V9VpnController.start(context)
-                scope.launch {
-                    context.dataStore.edit { it[AppSettings.V9_VPN_ENABLED] = true }
+                if (V9VpnController.start(context)) {
+                    syncVpnEnabledFlag(expectedOn = true)
+                } else {
+                    Toast.makeText(
+                        context,
+                        "Click VPN is active. Disconnect it before enabling V9 Shield.",
+                        Toast.LENGTH_LONG
+                    ).show()
                 }
             } else {
                 vpnPermissionLauncher.launch(intent)
             }
         } else {
             V9VpnController.stop(context)
-            scope.launch {
-                context.dataStore.edit { it[AppSettings.V9_VPN_ENABLED] = false }
-            }
+            syncVpnEnabledFlag(expectedOn = false)
         }
     }
 
