@@ -631,6 +631,24 @@ private fun ExtensionBrowserScreen(
 
     DisposableEffect(session) {
         session.setNavigationDelegate(object : GeckoSession.NavigationDelegate {
+            override fun onLoadRequest(
+                session: GeckoSession,
+                request: GeckoSession.NavigationDelegate.LoadRequest
+            ): GeckoResult<AllowOrDeny> {
+                val allowed = isAllowedExtensionBrowserNavigation(request.uri)
+                if (!allowed) {
+                    statusMessage = "Only HTTP and HTTPS pages can be opened in the add-on store."
+                }
+                return GeckoResult.fromValue(if (allowed) AllowOrDeny.ALLOW else AllowOrDeny.DENY)
+            }
+
+            override fun onSubframeLoadRequest(
+                session: GeckoSession,
+                request: GeckoSession.NavigationDelegate.LoadRequest
+            ): GeckoResult<AllowOrDeny> = GeckoResult.fromValue(
+                if (isAllowedExtensionBrowserNavigation(request.uri)) AllowOrDeny.ALLOW else AllowOrDeny.DENY
+            )
+
             override fun onLocationChange(
                 session: GeckoSession,
                 url: String?,

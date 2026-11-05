@@ -213,4 +213,15 @@ class ExtensionInstallPolicyTest {
         assertNull(ExtensionBrowserInput.resolve("file:///etc/passwd"))
         assertNull(ExtensionBrowserInput.resolve("data:text/html,hi"))
     }
+
+    @Test
+    fun storePageNavigationRejectsNonWebSchemes() {
+        assertTrue(isAllowedExtensionBrowserNavigation("https://addons.mozilla.org/android/"))
+        assertTrue(isAllowedExtensionBrowserNavigation("http://example.com/"))
+        assertFalse(isAllowedExtensionBrowserNavigation("javascript:alert(1)"))
+        assertFalse(isAllowedExtensionBrowserNavigation("file:///etc/passwd"))
+        assertFalse(isAllowedExtensionBrowserNavigation("data:text/html,hi"))
+        assertFalse(isAllowedExtensionBrowserNavigation("intent://open"))
+        assertFalse(isAllowedExtensionBrowserNavigation("about:blank"))
+    }
 }

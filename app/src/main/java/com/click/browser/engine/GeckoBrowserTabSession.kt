@@ -60,6 +60,7 @@ internal class GeckoBrowserTabSession(
     initiallySelected: Boolean,
     initiallyResumed: Boolean,
     private val navigationTarget: (String) -> String?,
+    private val wideLayoutForUrl: (String) -> Boolean,
     private val onNavigationBlocked: (String) -> Unit,
     private val onNewSession: (String, GeckoSession) -> GeckoResult<GeckoSession>?,
     private val onUrlChanged: (String) -> Unit,
@@ -70,6 +71,8 @@ internal class GeckoBrowserTabSession(
     private val onCanGoBackChanged: (Boolean) -> Unit,
     private val onCanGoForwardChanged: (Boolean) -> Unit,
     private val onFullscreenChanged: (Boolean) -> Unit,
+    private val onRendererFailure: () -> Unit,
+    private val onRendererRecovery: (GeckoRenderEvent) -> Unit,
     private val onExternalResponse: (WebResponse) -> Unit
 ) : BrowserTabSession {
     private val contextId = geckoContextIdFor(mode)
@@ -77,6 +80,7 @@ internal class GeckoBrowserTabSession(
         .usePrivateMode(false)
         .useTrackingProtection(true)
         .contextId(contextId)
+        .viewportMode(DesktopLayoutPolicy.geckoViewportMode(wideLayoutForUrl(initialUrl)))
         .build()
     val session = initialGeckoSession ?: GeckoSession(settings)
     private val geckoView = GeckoView(context)
@@ -92,6 +96,11 @@ internal class GeckoBrowserTabSession(
     override val view: View get() = geckoView
 
     init {
+        // Adopted child sessions keep their storage and UA identity, but receive
+        // the same viewport preference as a newly-created regular tab.
+        session.settings.setViewportMode(
+            DesktopLayoutPolicy.geckoViewportMode(wideLayoutForUrl(initialUrl))
+        )
         session.setPermissionDelegate(DenyNormalTabDevicePermissions)
         session.setNavigationDelegate(object : GeckoSession.NavigationDelegate {
             override fun onLocationChange(
@@ -128,6 +137,7 @@ internal class GeckoBrowserTabSession(
                     onNavigationBlocked(request.uri)
                     return GeckoResult.fromValue(AllowOrDeny.DENY)
                 }
+                setWideLayout(wideLayoutForUrl(target))
                 if (target != request.uri) {
                     session.loadUri(target)
                     return GeckoResult.fromValue(AllowOrDeny.DENY)
@@ -152,6 +162,7 @@ internal class GeckoBrowserTabSession(
             }
 
             override fun onPageStart(session: GeckoSession, url: String) {
+                onRendererRecovery(GeckoRenderEvent.LOAD_STARTED)
                 attachExtensionRouterIfOpen()
                 updateActiveState()
                 historyCandidateUrl = url
@@ -184,6 +195,18 @@ internal class GeckoBrowserTabSession(
             override fun onExternalResponse(session: GeckoSession, response: WebResponse) {
                 onExternalResponse(response)
             }
+
+            override fun onCrash(session: GeckoSession) {
+                onRendererFailure()
+            }
+
+            override fun onKill(session: GeckoSession) {
+                onRendererFailure()
+            }
+
+            override fun onFirstComposite(session: GeckoSession) {
+                onRendererRecovery(GeckoRenderEvent.FIRST_COMPOSITE)
+            }
         })
         val restoredState = if (adoptedChildSession) null else initialSessionState?.let { encoded ->
             runCatching { GeckoSession.SessionState.fromString(encoded) }.getOrNull()
@@ -208,7 +231,17 @@ internal class GeckoBrowserTabSession(
     override fun goBack() { if (canBack) session.goBack() }
     override fun canGoForward(): Boolean = canForward
     override fun goForward() { if (canForward) session.goForward() }
-    override fun loadUrl(url: String) { if (!destroyed) session.loadUri(url) }
+    override fun loadUrl(url: String) {
+        if (!destroyed) {
+            setWideLayout(wideLayoutForUrl(url))
+            session.loadUri(url)
+        }
+    }
+    override fun setWideLayout(enabled: Boolean) {
+        if (!destroyed) {
+            session.settings.setViewportMode(DesktopLayoutPolicy.geckoViewportMode(enabled))
+        }
+    }
     override fun reload() { if (!destroyed) session.reload() }
     override fun stopLoading() { if (!destroyed) session.stop() }
 

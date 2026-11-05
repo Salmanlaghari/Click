@@ -26,10 +26,9 @@ class ModeSwitchPolicyTest {
     }
 
     @Test
-    fun keepsTheProcessAliveOnlyWhenNeitherRestartPathStarted() {
-        assertTrue(hasEngineRestartPath(alarmScheduled = true, directRelaunchStarted = false))
-        assertTrue(hasEngineRestartPath(alarmScheduled = false, directRelaunchStarted = true))
-        assertTrue(hasEngineRestartPath(alarmScheduled = true, directRelaunchStarted = true))
-        assertFalse(hasEngineRestartPath(alarmScheduled = false, directRelaunchStarted = false))
+    fun processDeathRequiresAScheduledColdRestart() {
+        assertTrue(hasEngineRestartPath(alarmScheduled = true))
+        // A relaunch into the current singleTask Activity can reuse this process.
+        assertFalse(hasEngineRestartPath(alarmScheduled = false))
     }
 }

@@ -192,3 +192,9 @@ internal object ExtensionBrowserInput {
         return "https://duckduckgo.com/?q=$query"
     }
 }
+
+/** Page and redirect navigations in the embedded add-on store stay on HTTP(S). */
+internal fun isAllowedExtensionBrowserNavigation(url: String): Boolean {
+    val scheme = runCatching { java.net.URI(url).scheme?.lowercase() }.getOrNull()
+    return scheme == "http" || scheme == "https"
+}
