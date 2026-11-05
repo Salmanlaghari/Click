@@ -36,10 +36,10 @@ class FirefoxAmoCatalogTest {
     }
 
     @Test
-    fun quickPickPermissionsAndOriginsPassExistingSafeInstallPolicy() {
+    fun quickPickPermissionsAndOriginsPassClickReviewPolicy() {
         FirefoxAmoCatalog.entries.forEach { entry ->
-            assertTrue("Quick pick ${entry.slug} requests a blocked API", ExtensionInstallPolicy.blockedPermissionNames(entry.requiredPermissions).isEmpty())
-            assertTrue("Quick pick ${entry.slug} requests a blocked origin", ExtensionInstallPolicy.blockedOriginPatterns(entry.requiredOrigins).isEmpty())
+            assertTrue("Quick pick ${entry.slug} requests an unsupported capability", ExtensionInstallPolicy.unsupportedPermissionNames(entry.requiredPermissions).isEmpty())
+            assertTrue("Quick pick ${entry.slug} requests an unreviewable origin", ExtensionInstallPolicy.blockedOriginPatterns(entry.requiredOrigins).isEmpty())
             assertTrue("Quick pick ${entry.slug} must not request site access", entry.requiredOrigins.isEmpty())
         }
         val tomato = FirefoxAmoCatalog.entries.single { it.slug == "tomato-clock" }

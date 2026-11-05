@@ -705,7 +705,7 @@ fun InteractiveExtensionsDialog(
                     Text("Manage compatible add-ons for this tab")
                 }
                 Text(
-                    "The catalog opens in the manager, not another browser tab. Packages remain subject to Mozilla signature, Android compatibility and Click's permission/site-access gates; add-ons do not run in WebView or private tabs.",
+                    "The catalog opens in the manager, not another browser tab. Before adding, Click shows requested browser permissions and site access for your review. Add-ons run only in regular GeckoView tabs—not WebView or private tabs.",
                     fontSize = 11.sp,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
@@ -739,7 +739,7 @@ fun PrivacyPolicyDialog(onClose: () -> Unit) {
                     text = "Click Browser Privacy Policy\n\n" +
                         "• Bookmarks, history, download records, settings and Click's on-device credential vault are kept in app-private storage. Credentials saved to Google Password Manager are handled by Google. Android may include some app data in device backups when backups are enabled; private tabs skip local history recording but are not anonymous.\n\n" +
                         "• Regular tabs use Android System WebView by default. A user may opt a non-private tab into GeckoView for add-ons; Click reloads that same tab in a Gecko storage context, and WebView cookies, sign-ins, back history and page state are not transferred. Private tabs remain on WebView and do not run add-ons. Click denies website geolocation, camera, microphone and notification requests in GeckoView.\n\n" +
-                        "• Add-ons must be public on Mozilla AMO, compatible with Click's pinned GeckoView Android version, Mozilla-signed and not blocklisted. GeckoView validates signatures. Click shows requested permissions and exact HTTPS site access; wildcard, HTTP, local-network, and over-10-site access plus sensitive APIs are blocked. Add-ons can still read or change the sites they access and may process or send data under their own code and privacy terms. Native messaging remains blocked.\n\n" +
+                        "• Add-ons must be public on Mozilla AMO, compatible with Click's pinned GeckoView Android version, Mozilla-signed and not blocklisted. GeckoView validates signatures and Click shows requested permission names and exact site patterns before Add; optional requests appear separately when the add-on asks. Add-ons can read or change the sites shown and may process or send data under their own code and privacy terms. Native messaging, GeckoView add-on-install privileges and extension geolocation remain blocked. Mozilla signing is not blanket Google Play or AdSense approval; review each publisher's disclosures.\n\n" +
                         "• HTTPS mode upgrades or blocks navigation URLs according to your setting. HTTPS describes the connection scheme; it does not guarantee that a site is trustworthy. Optional DNT/GPC signals are voluntary and sites may ignore them.\n\n" +
                         "• If you use AI chat, the prompt and recent conversation sent with it go over HTTPS to the selected provider (Groq or OpenRouter). The provider's own privacy terms apply.\n\n" +
                         "• Google sign-in is handled by Google Play services. Click caches the selected profile name, email and photo in app storage and does not operate its own account backend.\n\n" +
@@ -800,7 +800,7 @@ fun AboutAppDialog(onClose: () -> Unit) {
                 )
                 Spacer(modifier = Modifier.height(4.dp))
                 Text(
-                    "Click includes Safe Browsing when supported by the installed WebView, HTTPS controls, optional ad/tracker blocking and V9 Shield DNS-layer protection. These tools can reduce some risks, but they cannot guarantee every site is safe. Only public AMO add-ons compatible with the pinned GeckoView Android version, Mozilla-signed and non-blocklisted can install. Click limits site access and blocks sensitive APIs and native messaging; add-ons can still affect sites they are allowed to access. Website geolocation, camera and microphone requests are denied.",
+                    "Click includes Safe Browsing when supported by the installed WebView, HTTPS controls, optional ad/tracker blocking and V9 Shield DNS-layer protection. These tools reduce some risks but cannot guarantee every site is safe. Only public AMO add-ons compatible with the pinned GeckoView Android version, Mozilla-signed and non-blocklisted can install after explicit permission review. Required browser permissions and exact site patterns are shown; optional requests prompt separately. Native messaging, GeckoView add-on-install privileges and extension geolocation remain blocked. Add-ons may read or change listed pages and process or send data under their own code and privacy terms. Mozilla signing is not Google Play or AdSense approval. Website geolocation, camera and microphone requests remain denied.",
                     fontSize = 11.sp,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )

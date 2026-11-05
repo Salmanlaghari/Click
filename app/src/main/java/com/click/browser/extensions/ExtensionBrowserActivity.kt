@@ -269,8 +269,8 @@ internal fun extensionPolicyBlockers(extension: WebExtension): List<String> {
         if (!isTrustedMozillaExtension(extension)) {
             add("Not a Mozilla-signed, non-blocklisted official AMO add-on")
         }
-        addAll(ExtensionInstallPolicy.blockedPermissionNames(currentPermissions).map { "Sensitive API: $it" })
-        addAll(ExtensionInstallPolicy.blockedOriginPatterns(currentOrigins).map { "Broad or insecure site access: $it" })
+        addAll(ExtensionInstallPolicy.unsupportedPermissionNames(currentPermissions).map { "Unsupported capability: $it" })
+        addAll(ExtensionInstallPolicy.blockedOriginPatterns(currentOrigins).map { "Unreviewable site access pattern: $it" })
     }.distinct()
 }
 
@@ -439,11 +439,11 @@ private fun ExtensionBrowserScreen(
                 }
                 val verifiedEntry = record.entry
                 val packageInfo = record.packageInfo
-                val blockedPermissions = ExtensionInstallPolicy.blockedPermissionNames(verifiedEntry.requiredPermissions)
-                val blockedOrigins = ExtensionInstallPolicy.blockedOriginPatterns(verifiedEntry.requiredOrigins)
-                if (blockedPermissions.isNotEmpty() || blockedOrigins.isNotEmpty()) {
+                val unsupportedPermissions = ExtensionInstallPolicy.unsupportedPermissionNames(verifiedEntry.requiredPermissions)
+                val unreviewableOrigins = ExtensionInstallPolicy.blockedOriginPatterns(verifiedEntry.requiredOrigins)
+                if (unsupportedPermissions.isNotEmpty() || unreviewableOrigins.isNotEmpty()) {
                     installingCatalogSlug = null
-                    statusMessage = ExtensionUiGuidance.blockedCatalogInstallStatus(blockedPermissions, blockedOrigins)
+                    statusMessage = ExtensionUiGuidance.blockedCatalogInstallStatus(unsupportedPermissions, unreviewableOrigins)
                     return@launch
                 }
                 if (packageInfo.extensionId in installedExtensionIds) {
@@ -554,8 +554,8 @@ private fun ExtensionBrowserScreen(
                     add("This add-on ID is already installed; remove it before importing a replacement")
                 }
                 addAll(extensionPolicyBlockers(extension))
-                addAll(ExtensionInstallPolicy.blockedPermissionNames(permissions).map { "Sensitive API: $it" })
-                addAll(ExtensionInstallPolicy.blockedOriginPatterns(origins).map { "Broad or insecure site access: $it" })
+                addAll(ExtensionInstallPolicy.unsupportedPermissionNames(permissions).map { "Unsupported capability: $it" })
+                addAll(ExtensionInstallPolicy.blockedOriginPatterns(origins).map { "Unreviewable site access pattern: $it" })
             }.distinct(),
             decide = decide
         )
@@ -597,7 +597,7 @@ private fun ExtensionBrowserScreen(
                 }
                 val result = GeckoResult<AllowOrDeny>()
                 pendingPrompt = buildPrompt(
-                    kind = "Additional permission request",
+                    kind = "Optional permission request",
                     extension = extension,
                     permissions = permissions.toList(),
                     origins = origins.toList(),
@@ -1003,17 +1003,45 @@ private fun ExtensionBrowserScreen(
                     Text("Extension ID: ${prompt.extensionId}", fontSize = 11.sp)
                     Text("Source information:\n${prompt.source}", fontSize = 12.sp)
                     Text(
-                        "Only public AMO add-ons whose current version supports Android can proceed. GeckoView verifies Mozilla signatures and blocklist status; Click rejects sensitive browser APIs and broad or insecure site access. The add-on is not installed unless you approve the permission review.",
-                        fontSize = 11.sp,
+                        if (prompt.kind == "Install extension") {
+                            ExtensionUiGuidance.installPermissionConsent
+                        } else {
+                            ExtensionUiGuidance.optionalPermissionConsent
+                        },
+                        fontSize = 12.sp,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
-                    PermissionSection("Browser permissions", prompt.permissions)
-                    PermissionSection("Website access", prompt.origins)
+                    ExtensionUiGuidance.permissionRiskWarning(prompt.permissions)?.let { warning ->
+                        Text(
+                            warning,
+                            color = MaterialTheme.colorScheme.error,
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.SemiBold
+                        )
+                    }
+                    ExtensionUiGuidance.siteAccessRiskWarning(prompt.origins)?.let { warning ->
+                        Text(
+                            warning,
+                            color = MaterialTheme.colorScheme.error,
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.SemiBold
+                        )
+                    }
+                    PermissionSection("Browser permissions requested", prompt.permissions.map(ExtensionUiGuidance::permissionDisclosure))
+                    PermissionSection("Website access requested", prompt.origins.map(ExtensionUiGuidance::originDisclosure))
                     PermissionSection("Declared data collection", prompt.dataCollectionPermissions)
                     if (prompt.dataCollectionPermissions.isNotEmpty()) {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Switch(checked = grantDataCollection, onCheckedChange = { grantDataCollection = it })
-                            Text("Allow technical and interaction data collection", fontSize = 12.sp)
+                        if (prompt.kind == "Install extension") {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Switch(checked = grantDataCollection, onCheckedChange = { grantDataCollection = it })
+                                Text("Allow technical and interaction data collection", fontSize = 12.sp)
+                            }
+                        } else {
+                            Text(
+                                "GeckoView handles this optional data-collection request with the same Allow or Cancel choice shown above.",
+                                fontSize = 12.sp,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
                         }
                     }
                     if (prompt.blockedReasons.isNotEmpty()) {
@@ -1029,7 +1057,7 @@ private fun ExtensionBrowserScreen(
             confirmButton = {
                 if (prompt.blockedReasons.isEmpty()) {
                     Button(onClick = { prompt.decide(true, grantDataCollection) }) {
-                        Text(if (prompt.kind == "Install extension") "Install add-on" else "Allow and continue")
+                        Text(if (prompt.kind == "Install extension") "Add" else "Allow this request")
                     }
                 }
             },
