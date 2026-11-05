@@ -8,6 +8,7 @@ import android.util.Log
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.stringPreferencesKey
 import com.click.browser.engine.dataStore
+import com.click.browser.engine.V9VpnService
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.withContext
@@ -26,6 +27,8 @@ import org.json.JSONObject
 object VpnController {
 
     private const val TAG = "VpnCtrl"
+    private const val V9_CONFLICT_MESSAGE =
+        "V9 Shield is active. Turn off DNS Shield before starting the full Click VPN."
 
     private val KEY_SELECTED_SERVER = stringPreferencesKey("vpn_selected_server_id")
     private val KEY_CUSTOM_SERVERS = stringPreferencesKey("vpn_custom_servers_json")
@@ -56,7 +59,23 @@ object VpnController {
         }
     }
 
+    /** Check before opening Android's VPN authorization UI; the start path rechecks atomically. */
+    fun isBlockedByV9Shield(): Boolean = hasVpnServiceConflict(
+        requested = ClickVpnServiceKind.FULL_TUNNEL,
+        dnsShieldActiveOrStarting = V9VpnService.activeOrStarting,
+        fullTunnelActiveOrStarting = SingBoxVpnService.state.value == VpnState.CONNECTING ||
+            SingBoxVpnService.state.value == VpnState.CONNECTED
+    )
+
+    fun reportV9ShieldConflict() {
+        SingBoxVpnService.reportStartError(V9_CONFLICT_MESSAGE)
+    }
+
     private suspend fun startInternal(context: Context): Boolean {
+        if (isBlockedByV9Shield()) {
+            reportV9ShieldConflict()
+            return false
+        }
         val server = getSelectedServer(context) ?: run {
             Log.w(TAG, "No server selected")
             SingBoxVpnService.reportStartError("No server selected.")
@@ -68,6 +87,9 @@ object VpnController {
             VpnServer.ServerKind.CUSTOM -> {
                 VpnConfigBuilder.buildCustomConfig(server.config) ?: run {
                     Log.e(TAG, "Custom config parse failed")
+                    SingBoxVpnService.reportStartError(
+                        "Couldn't read this server link. Check that it is a supported VLESS, VMess, Trojan or Shadowsocks link."
+                    )
                     return false
                 }
             }

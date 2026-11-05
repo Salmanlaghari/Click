@@ -72,8 +72,6 @@ import androidx.compose.material3.BadgedBox
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.DropdownMenu
-import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -101,6 +99,8 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
@@ -223,9 +223,41 @@ fun ClickHomeScreen(
 
         SmartSearchBar(
             theme = theme,
+            activeMode = activeMode,
             searchEngine = searchEngine,
             onNavigate = onNavigate
         )
+
+        if (activeMode == BrowserMode.DEVELOPER) {
+            ModeFocusCard(
+                theme = theme,
+                marker = "</>",
+                eyebrow = "DEVELOPER WORKSPACE",
+                headline = "Build, debug, and learn",
+                detail = "Shortcuts for GitHub, MDN, and Stack Overflow.",
+                actionLabel = "Open MDN",
+                onClick = { onNavigate("https://developer.mozilla.org/") }
+            )
+        }
+        if (activeMode == BrowserMode.ADVANCED) {
+            ModeFocusCard(
+                theme = theme,
+                marker = "R",
+                eyebrow = "RESEARCH DESK",
+                headline = "Latest AI/ML papers",
+                detail = "Recent arXiv research updates are featured below.",
+                actionLabel = "Browse recent papers",
+                onClick = { onNavigate("https://arxiv.org/list/cs.AI/recent") }
+            )
+            NewsSection(
+                theme = theme,
+                activeMode = activeMode,
+                cardBg = cardBg,
+                cardBorder = cardBorder,
+                neon = false,
+                onNavigate = onNavigate
+            )
+        }
 
         // V9 Shield is DNS-only; the card retains the existing detail and toggle actions.
         V9ShieldCard(
@@ -253,14 +285,16 @@ fun ClickHomeScreen(
             onGamesClick = onGamesClick
         )
 
-        NewsSection(
-            theme = theme,
-            activeMode = activeMode,
-            cardBg = cardBg,
-            cardBorder = cardBorder,
-            neon = false,
-            onNavigate = onNavigate
-        )
+        if (activeMode != BrowserMode.ADVANCED) {
+            NewsSection(
+                theme = theme,
+                activeMode = activeMode,
+                cardBg = cardBg,
+                cardBorder = cardBorder,
+                neon = false,
+                onNavigate = onNavigate
+            )
+        }
 
         QuickActionsGrid(
             cardBg = cardBg,
@@ -490,6 +524,49 @@ private fun PowerModeHomeHeader(theme: ModeTheme) {
     }
 }
 
+@Composable
+private fun ModeFocusCard(
+    theme: ModeTheme,
+    marker: String,
+    eyebrow: String,
+    headline: String,
+    detail: String,
+    actionLabel: String,
+    onClick: () -> Unit
+) {
+    Card(
+        modifier = Modifier.fillMaxWidth().clickable(onClick = onClick),
+        shape = RoundedCornerShape(18.dp),
+        colors = CardDefaults.cardColors(containerColor = theme.surface),
+        border = androidx.compose.foundation.BorderStroke(1.dp, theme.modeAccent.copy(alpha = 0.32f))
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(14.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Box(
+                modifier = Modifier
+                    .size(42.dp)
+                    .clip(RoundedCornerShape(13.dp))
+                    .background(Brush.linearGradient(listOf(theme.modeAccent, theme.primary))),
+                contentAlignment = Alignment.Center
+            ) {
+                Text(marker, color = Color.White, fontWeight = FontWeight.Black, fontSize = 16.sp)
+            }
+            Spacer(Modifier.width(12.dp))
+            Column(
+                modifier = Modifier.weight(1f),
+                verticalArrangement = Arrangement.spacedBy(2.dp)
+            ) {
+                Text(eyebrow, color = theme.modeAccent, fontWeight = FontWeight.Bold, fontSize = 9.sp)
+                Text(headline, color = theme.onSurface, fontWeight = FontWeight.SemiBold, fontSize = 14.sp)
+                Text(detail, color = theme.onSurface.copy(alpha = 0.68f), fontSize = 11.sp)
+                Text(actionLabel, color = theme.modeAccent, fontWeight = FontWeight.SemiBold, fontSize = 11.sp)
+            }
+        }
+    }
+}
+
 /** Pill search bar: selected search-provider mark · hint · mic. (QR scanner removed: no CameraX /
  * MLKit-barcode stack in the app — the button only showed a "coming soon"
  * toast, so the dead control is gone instead of fake.) */
@@ -497,14 +574,20 @@ private fun PowerModeHomeHeader(theme: ModeTheme) {
 @Composable
 private fun SmartSearchBar(
     theme: ModeTheme,
+    activeMode: BrowserMode,
     searchEngine: String,
     onNavigate: (String) -> Unit
 ) {
     var query by remember { mutableStateOf("") }
+    val keyboardController = LocalSoftwareKeyboardController.current
+    val focusManager = LocalFocusManager.current
     val submit = {
         if (query.isNotBlank()) {
-            onNavigate(query.trim())
+            val submittedQuery = query.trim()
             query = ""
+            keyboardController?.hide()
+            focusManager.clearFocus(force = true)
+            onNavigate(submittedQuery)
         }
     }
     Surface(
@@ -1352,13 +1435,22 @@ fun CompactBrowseBar(
     // Location indicator: null = no indicator; otherwise the effective mode.
     locationMode: LocationGuard.LocationMode? = null,
     onLocationClick: () -> Unit = {},
+    showDeveloperTools: Boolean = false,
+    onDeveloperToolsClick: () -> Unit = {},
     showExtensionButton: Boolean = false,
-    extensionActionLabels: List<String> = emptyList(),
-    onExtensionActionClick: (Int) -> Unit = {},
     onAddonsClick: () -> Unit = {}
 ) {
     var textInput by remember(currentUrl) { mutableStateOf(currentUrl) }
-    var extensionMenuExpanded by remember(currentUrl) { mutableStateOf(false) }
+    val keyboardController = LocalSoftwareKeyboardController.current
+    val focusManager = LocalFocusManager.current
+    val submit = {
+        val submittedText = textInput.trim()
+        if (submittedText.isNotEmpty()) {
+            keyboardController?.hide()
+            focusManager.clearFocus(force = true)
+            onNavigate(submittedText)
+        }
+    }
     val isHttps = currentUrl.startsWith("https://")
     // Keep toolbar actions on their own row so the address field can use the
     // full available width and a generous touch target.
@@ -1402,6 +1494,27 @@ fun CompactBrowseBar(
                         contentDescription = "Forward",
                         tint = if (canGoForward) theme.onTopBar else theme.onTopBar.copy(alpha = 0.34f),
                         modifier = Modifier.size(21.dp)
+                    )
+                }
+                Surface(
+                    shape = CircleShape,
+                    color = theme.modeAccent.copy(alpha = 0.12f),
+                    contentColor = theme.modeAccent,
+                    border = androidx.compose.foundation.BorderStroke(
+                        1.dp, theme.modeAccent.copy(alpha = 0.28f)
+                    )
+                ) {
+                    Text(
+                        when (activeMode) {
+                            BrowserMode.SIMPLE -> "SIMPLE"
+                            BrowserMode.DEVELOPER -> "DEV"
+                            BrowserMode.HACK -> "POWER"
+                            BrowserMode.ADVANCED -> "ADVANCE"
+                        },
+                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 5.dp),
+                        fontSize = 9.sp,
+                        fontWeight = FontWeight.Bold,
+                        maxLines = 1
                     )
                 }
                 Spacer(modifier = Modifier.weight(1f))
@@ -1449,52 +1562,30 @@ fun CompactBrowseBar(
                         )
                     }
                 }
-                if (showExtensionButton) {
+                    if (showDeveloperTools) {
+                        IconButton(
+                            onClick = onDeveloperToolsClick,
+                            modifier = Modifier.size(40.dp)
+                        ) {
+                            Icon(
+                                Icons.Default.Description,
+                                contentDescription = "Open Developer Console",
+                                tint = theme.onTopBar,
+                                modifier = Modifier.size(21.dp)
+                            )
+                        }
+                    }
+                    if (showExtensionButton) {
                     Box {
                         IconButton(
-                            onClick = { extensionMenuExpanded = true },
+                            onClick = onAddonsClick,
                             modifier = Modifier.size(40.dp)
                         ) {
                             Icon(
                                 Icons.Default.Extension,
-                                contentDescription = "Add-on actions",
+                                contentDescription = "Installed add-ons",
                                 tint = theme.onTopBar,
                                 modifier = Modifier.size(22.dp)
-                            )
-                        }
-                        DropdownMenu(
-                            expanded = extensionMenuExpanded,
-                            onDismissRequest = { extensionMenuExpanded = false }
-                        ) {
-                            if (extensionActionLabels.isEmpty()) {
-                                DropdownMenuItem(
-                                    text = { Text("No approved add-on actions") },
-                                    onClick = {},
-                                    enabled = false
-                                )
-                            } else {
-                                extensionActionLabels.forEachIndexed { index, label ->
-                                    DropdownMenuItem(
-                                        text = {
-                                            Text(
-                                                label,
-                                                maxLines = 1,
-                                                overflow = TextOverflow.Ellipsis
-                                            )
-                                        },
-                                        onClick = {
-                                            extensionMenuExpanded = false
-                                            onExtensionActionClick(index)
-                                        }
-                                    )
-                                }
-                            }
-                            DropdownMenuItem(
-                                text = { Text("Manage add-ons") },
-                                onClick = {
-                                    extensionMenuExpanded = false
-                                    onAddonsClick()
-                                }
                             )
                         }
                     }
@@ -1587,9 +1678,9 @@ fun CompactBrowseBar(
                         },
                         keyboardOptions = KeyboardOptions(imeAction = ImeAction.Go),
                         keyboardActions = KeyboardActions(
-                            onGo = { onNavigate(textInput) },
-                            onSearch = { onNavigate(textInput) },
-                            onDone = { onNavigate(textInput) }
+                            onGo = { submit() },
+                            onSearch = { submit() },
+                            onDone = { submit() }
                         ),
                         cursorBrush = androidx.compose.ui.graphics.SolidColor(theme.primary),
                         modifier = Modifier

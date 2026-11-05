@@ -140,8 +140,8 @@ object V9Engine {
      * exception) — the app died and never came back. It also used an inexact
      * 400ms alarm that MIUI/OEM battery optimizers routinely swallow after a
      * kill. This version:
-     *  1. NEVER kills the process unless a restart is actually scheduled
-     *     (returns false so the caller can apply the mode in-place instead).
+     *  1. NEVER kills the process unless a restart alarm is scheduled or the
+     *     relaunch Activity was started successfully.
      *  2. Uses AlarmManager.setAlarmClock (alarm-clock alarms are delivered
      *     at the highest priority and are NOT swallowed by MIUI/Oppo/Vivo
      *     battery optimizers after a kill — the classic OEM-proof restart
@@ -152,8 +152,9 @@ object V9Engine {
      *   the Power Mode Markhor intro animation once (see HackIntroOverlay).
      * @param advanceIntro when true, the relaunched process shows the Advance
      *   Mode teal intro animation once (see AdvanceIntroOverlay).
-     * @return true if a restart was triggered; false if we stayed alive
-     *   (caller should apply the mode in-place without engine isolation).
+     * @return true if a restart path was started; false if neither the alarm
+     *   nor direct relaunch could be started. The caller must keep the current
+     *   profile selected when false is returned.
      */
     suspend fun restartForEngineSwitch(
         context: Context,
@@ -179,7 +180,7 @@ object V9Engine {
             null
         }
         if (launch == null) {
-            Log.e(TAG, "V9: no launch intent — staying alive, mode applied in-place")
+            Log.e(TAG, "V9: no launch intent — staying in the current profile")
             return false
         }
 
@@ -215,16 +216,18 @@ object V9Engine {
         // CLEAR_TASK|NEW_TASK the old stack is torn down. If an OEM skin
         // swallows the alarm after killProcess, the system still has a live
         // activity record to keep the app visible.
+        var directRelaunchStarted = false
         try {
             context.startActivity(launch)
+            directRelaunchStarted = true
         } catch (t: Throwable) {
             Log.e(TAG, "V9: direct relaunch failed, relying on alarm", t)
         }
 
-        if (!scheduled) {
-            // Last resort: do NOT kill — a live app on the old engine beats
-            // a dead app. Caller applies the mode in-place.
-            Log.e(TAG, "V9: restart not scheduled — staying alive")
+        if (!hasEngineRestartPath(scheduled, directRelaunchStarted)) {
+            // Last resort: do NOT kill or pretend the process-pinned profile
+            // changed. The caller restores the saved selection to bootMode.
+            Log.e(TAG, "V9: no restart path available — staying in the current profile")
             return false
         }
 

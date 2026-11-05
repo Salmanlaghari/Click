@@ -86,6 +86,7 @@ internal fun InstalledAddonsPanel(
     onOpenAction: (String) -> Unit,
     onOpenOptions: (String) -> Unit,
     onOpenStore: () -> Unit,
+    currentTabUsesGecko: Boolean,
     onDismiss: () -> Unit
 ) {
     ModalBottomSheet(
@@ -120,10 +121,17 @@ internal fun InstalledAddonsPanel(
             }
 
             Text(
-                "Use Open action for an add-on toolbar button, or Options for its declared settings page. Private tabs remain on WebView and do not run Gecko add-ons.",
+                ExtensionUiGuidance.enabledDoesNotMeanPopup,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 fontSize = 12.sp
             )
+            if (!currentTabUsesGecko) {
+                Text(
+                    ExtensionUiGuidance.webViewTabNotice,
+                    color = MaterialTheme.colorScheme.error,
+                    fontSize = 12.sp
+                )
+            }
 
             when {
                 isLoading -> Row(
@@ -211,7 +219,7 @@ internal fun InstalledAddonsPanel(
                                         )
                                     } else if (addOn.hasNoSeparateWindow) {
                                         Text(
-                                            "No toolbar action is available on this tab, and no options page is available here. This add-on may work automatically only on pages it supports; no separate window is expected here.",
+                                            ExtensionUiGuidance.noActionOrOptions,
                                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                                             fontSize = 11.sp
                                         )

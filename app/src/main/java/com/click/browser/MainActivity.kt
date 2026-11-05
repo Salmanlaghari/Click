@@ -1532,6 +1532,29 @@ class MainActivity : FragmentActivity() {
                     ).show()
                 }
             }
+            fun syncV9ShieldFlag(expectedOn: Boolean) {
+                scope.launch {
+                    val confirmedRunning =
+                        com.click.browser.engine.V9VpnController.awaitRunningState(expectedOn)
+                    if (confirmedRunning == null) {
+                        Toast.makeText(
+                            this@MainActivity,
+                            "DNS protection status not confirmed yet. Check V9 Shield again shortly.",
+                            Toast.LENGTH_LONG
+                        ).show()
+                        return@launch
+                    }
+                    dataStore.edit {
+                        it[com.click.browser.engine.AppSettings.V9_VPN_ENABLED] = confirmedRunning
+                    }
+                    Toast.makeText(
+                        this@MainActivity,
+                        if (expectedOn) "V9 Shield on · DNS-only protection"
+                        else "V9 Shield off · DNS-only protection",
+                        Toast.LENGTH_SHORT
+                    ).show()
+                }
+            }
             // VPN permission launcher: VpnService.prepare() returns an intent
             // when permission is not yet granted. On RESULT_OK, start VPN.
             // Kilo fix: verify the service actually started before setting the
@@ -1541,15 +1564,15 @@ class MainActivity : FragmentActivity() {
                 ActivityResultContracts.StartActivityForResult()
             ) { result ->
                 if (result.resultCode == android.app.Activity.RESULT_OK) {
-                    com.click.browser.engine.V9VpnController.start(this@MainActivity)
-                    scope.launch {
-                        kotlinx.coroutines.delay(800)
-                        if (com.click.browser.engine.V9VpnService.running.value) {
-                            dataStore.edit { it[com.click.browser.engine.AppSettings.V9_VPN_ENABLED] = true }
-                            Toast.makeText(this@MainActivity, "V9 Shield on · DNS-only protection", Toast.LENGTH_SHORT).show()
-                        } else {
-                            Toast.makeText(this@MainActivity, "DNS protection failed to start — try again", Toast.LENGTH_SHORT).show()
-                        }
+                    val started = com.click.browser.engine.V9VpnController.start(this@MainActivity)
+                    if (!started) {
+                        Toast.makeText(
+                            this@MainActivity,
+                            "Click VPN is active. Disconnect it before enabling V9 Shield.",
+                            Toast.LENGTH_LONG
+                        ).show()
+                    } else {
+                        syncV9ShieldFlag(expectedOn = true)
                     }
                 } else {
                     Toast.makeText(this@MainActivity, "DNS protection permission denied", Toast.LENGTH_SHORT).show()
@@ -1561,28 +1584,27 @@ class MainActivity : FragmentActivity() {
                 val isOn = com.click.browser.engine.V9VpnController.isRunning.value
                 if (isOn) {
                     com.click.browser.engine.V9VpnController.stop(this@MainActivity)
-                    scope.launch {
-                        kotlinx.coroutines.delay(800)
-                        if (!com.click.browser.engine.V9VpnService.running.value) {
-                            dataStore.edit { it[com.click.browser.engine.AppSettings.V9_VPN_ENABLED] = false }
-                            Toast.makeText(this@MainActivity, "V9 Shield off · DNS-only protection", Toast.LENGTH_SHORT).show()
-                        } else {
-                            Toast.makeText(this@MainActivity, "DNS protection failed to stop — try again", Toast.LENGTH_SHORT).show()
-                        }
-                    }
+                    syncV9ShieldFlag(expectedOn = false)
                 } else {
+                    if (com.click.browser.engine.V9VpnController.isBlockedByClickVpn()) {
+                        Toast.makeText(
+                            this@MainActivity,
+                            "Click VPN is active. Disconnect it before enabling V9 Shield.",
+                            Toast.LENGTH_LONG
+                        ).show()
+                        return
+                    }
                     val intent = com.click.browser.engine.V9VpnController.prepareIntent(this@MainActivity)
                     if (intent == null) {
-                        com.click.browser.engine.V9VpnController.start(this@MainActivity)
-                        scope.launch {
-                            kotlinx.coroutines.delay(800)
-                            if (com.click.browser.engine.V9VpnService.running.value) {
-                                dataStore.edit { it[com.click.browser.engine.AppSettings.V9_VPN_ENABLED] = true }
-                                Toast.makeText(this@MainActivity, "V9 Shield on · DNS-only protection", Toast.LENGTH_SHORT).show()
-                            } else {
-                                Toast.makeText(this@MainActivity, "DNS protection failed to start — try again", Toast.LENGTH_SHORT).show()
-                            }
+                        if (!com.click.browser.engine.V9VpnController.start(this@MainActivity)) {
+                            Toast.makeText(
+                                this@MainActivity,
+                                "Click VPN is active. Disconnect it before enabling V9 Shield.",
+                                Toast.LENGTH_LONG
+                            ).show()
+                            return
                         }
+                        syncV9ShieldFlag(expectedOn = true)
                     } else {
                         vpnPermissionLauncher.launch(intent)
                     }
@@ -1745,6 +1767,7 @@ class MainActivity : FragmentActivity() {
                 }
             }
             var pendingWebViewSwitchTabId by remember { mutableStateOf<String?>(null) }
+            var pendingWebViewSwitchForDevTools by remember { mutableStateOf(false) }
             var showPrivacyPolicy by remember { mutableStateOf(false) }
             var showAboutApp by remember { mutableStateOf(false) }
             var showLicenses by remember { mutableStateOf(false) }
@@ -1894,9 +1917,15 @@ class MainActivity : FragmentActivity() {
             // Live viewport/device facts for the DevTools Device tab.
             var devToolsDeviceInfo by remember { mutableStateOf<DeviceInfo?>(null) }
 
-            LaunchedEffect(showDevToolsSheet, activeMode, activeTabIndex) {
-                val capture = showDevToolsSheet && activeMode == BrowserMode.DEVELOPER &&
-                    currentTab.engine == BrowserTabEngine.WEBVIEW
+            LaunchedEffect(
+                showDevToolsSheet,
+                activeMode,
+                activeTabIndex,
+                currentTab.engine,
+                currentTab.browserSession
+            ) {
+                val capture = showDevToolsSheet &&
+                    DevToolsAvailabilityPolicy.canCapture(activeMode, currentTab.engine)
                 if (capture) {
                     if (devToolsTargetWebView !== currentTab.webView) {
                         devToolsLogs.clear()
@@ -1928,9 +1957,21 @@ class MainActivity : FragmentActivity() {
                 showCookieManager,
                 showQuickTogglesDialog,
                 showTextScaleSheet,
-                showDevToolsSheet
+                showDevToolsSheet,
+                activeMode,
+                currentTab.url
             ) {
                 if (currentTab.engine == BrowserTabEngine.GECKOVIEW) {
+                    if (showDevToolsSheet && DevToolsAvailabilityPolicy.shouldOfferWebViewFallback(
+                            activeMode, currentTab.engine, currentTab.url
+                        )
+                    ) {
+                        showDevToolsSheet = false
+                        pendingWebViewSwitchTabId = currentTab.id
+                        pendingWebViewSwitchForDevTools = true
+                        showWebViewSwitchConfirmation = true
+                        return@LaunchedEffect
+                    }
                     val unavailable = when {
                         showCookieManager -> { showCookieManager = false; "Cookie manager" }
                         showQuickTogglesDialog -> { showQuickTogglesDialog = false; "Page quick toggles" }
@@ -1963,6 +2004,15 @@ class MainActivity : FragmentActivity() {
             fun handleFeature(id: FeatureId) {
                 showFeatureMenu = false
                 if (currentTab.engine == BrowserTabEngine.GECKOVIEW) {
+                    if (id == FeatureId.DEVTOOLS && activeMode == BrowserMode.DEVELOPER &&
+                        currentTab.url.isNotBlank() && currentTab.url != "about:blank"
+                    ) {
+                        devToolsTab = 1
+                        pendingWebViewSwitchTabId = currentTab.id
+                        pendingWebViewSwitchForDevTools = true
+                        showWebViewSwitchConfirmation = true
+                        return
+                    }
                     val unavailable = when (id) {
                         FeatureId.COOKIES -> "Cookie manager"
                         FeatureId.DEVTOOLS -> "DevTools"
@@ -2619,7 +2669,9 @@ class MainActivity : FragmentActivity() {
                     if (activeMode != BrowserMode.DEVELOPER) {
                         // V9: DevTools runs in the Developer engine.
                         val restarting = v9SwitchMode(BrowserMode.DEVELOPER, currentTab.webView, forceDesktopMode)
-                        if (!restarting) currentTab.browserSession?.reload()
+                        if (restarting) return@launch
+                        if (V9Engine.bootMode != BrowserMode.DEVELOPER) return@launch
+                        currentTab.browserSession?.reload()
                     }
                     devToolsTab = tab
                     if (activeMode == BrowserMode.DEVELOPER && (tab == 0 || tab == 3)) {
@@ -2627,7 +2679,13 @@ class MainActivity : FragmentActivity() {
                     }
                     // Refresh device facts when the Device tab is requested.
                     if (tab == 4) refreshDevToolsDeviceInfo()
-                    showDevToolsSheet = true
+                    if (currentTab.engine == BrowserTabEngine.GECKOVIEW) {
+                        pendingWebViewSwitchTabId = currentTab.id
+                        pendingWebViewSwitchForDevTools = true
+                        showWebViewSwitchConfirmation = true
+                    } else {
+                        showDevToolsSheet = true
+                    }
                 }
             }
 
@@ -3379,7 +3437,6 @@ class MainActivity : FragmentActivity() {
 
                             @Composable
                             fun BrowseTopBarBlock() {
-                                val actions = geckoTabActionsState.value[currentTab.id].orEmpty()
                                 val showExtensionButton = currentTab.engine == BrowserTabEngine.GECKOVIEW &&
                                     !currentTab.isIncognito && !showOverlays
                                 Column {
@@ -3418,7 +3475,10 @@ class MainActivity : FragmentActivity() {
                                                     } else currentTab.browserSession?.canGoForward() == true,
                                                     onForward = { currentTab.browserSession.goForwardIfPossible() },
                                                     onNavigate = { input ->
-                                                        pendingKeyboardDismissTabId = currentTab.id
+                                                        pendingKeyboardDismissTabId = currentTab.id.takeIf {
+                                                            currentTab.engine == BrowserTabEngine.WEBVIEW
+                                                        }
+                                                        dismissBrowserKeyboard()
                                                         val destination = cleanTrackingUrl(formatUrl(input, currentSearchEngineSetting))
                                                         currentTab.url = destination
                                                         currentTab.browserSession?.loadUrl(destination)
@@ -3437,18 +3497,9 @@ class MainActivity : FragmentActivity() {
                                                     // Location requests are always blocked by Click.
                                                     locationMode = LocationGuard.LocationMode.BLOCK,
                                                     onLocationClick = { showLocationSettings = true },
+                                                    showDeveloperTools = activeMode == BrowserMode.DEVELOPER,
+                                                    onDeveloperToolsClick = { openDevToolsTab(1) },
                                                     showExtensionButton = showExtensionButton,
-                                                    extensionActionLabels = if (showExtensionButton) actions.map { it.label } else emptyList(),
-                                                    onExtensionActionClick = { index ->
-                                                        val item = actions.getOrNull(index)
-                                                        if (item != null && normalTabExtensionRouter?.clickAction(currentTab.id, item) != true) {
-                                                            Toast.makeText(
-                                                                this@MainActivity,
-                                                                "Couldn't route this add-on action to the active tab.",
-                                                                Toast.LENGTH_SHORT
-                                                            ).show()
-                                                        }
-                                                    },
                                                     onAddonsClick = { requestExtensionsForTab(currentTab) }
                                                 )
                                                 // Thin page-load progress indicator.
@@ -3504,7 +3555,10 @@ class MainActivity : FragmentActivity() {
                                             onShieldToggle = { toggleDnsShield() },
                                             onGamesClick = { showClickPage = "games" },
                                             onNavigate = { input ->
-                                                pendingKeyboardDismissTabId = currentTab.id
+                                                pendingKeyboardDismissTabId = currentTab.id.takeIf {
+                                                    currentTab.engine == BrowserTabEngine.WEBVIEW
+                                                }
+                                                dismissBrowserKeyboard()
                                                 val destination = cleanTrackingUrl(formatUrl(input, currentSearchEngineSetting))
                                                 currentTab.url = destination
                                                 currentTab.browserSession?.loadUrl(destination)
@@ -4846,6 +4900,7 @@ class MainActivity : FragmentActivity() {
                                         showInstalledAddonsPanel = false
                                         openExtensionStore(tab)
                                     },
+                                    currentTabUsesGecko = currentTab.engine == BrowserTabEngine.GECKOVIEW,
                                     onDismiss = { showInstalledAddonsPanel = false }
                                 )
                             }
@@ -5547,28 +5602,49 @@ class MainActivity : FragmentActivity() {
                                     onDismissRequest = {
                                         showWebViewSwitchConfirmation = false
                                         pendingWebViewSwitchTabId = null
+                                        pendingWebViewSwitchForDevTools = false
                                     },
-                                    title = { Text("Switch this tab to WebView?") },
+                                    title = {
+                                        Text(
+                                            if (pendingWebViewSwitchForDevTools) "Switch to WebView for DevTools?"
+                                            else "Switch this tab to WebView?"
+                                        )
+                                    },
                                     text = {
                                         Text(
-                                            "The same tab will reload in WebView. Gecko cookies, extension data and back history are not copied, and add-ons will not run in this tab. Private mode is not enabled automatically."
+                                            if (pendingWebViewSwitchForDevTools) {
+                                                "Click's Console, page inspection, network and source tools currently work on WebView tabs, not GeckoView. The page will reload; Gecko cookies, extension data and back history are not copied, and add-ons will not run in this tab. Cancel keeps this tab in GeckoView."
+                                            } else {
+                                                "The same tab will reload in WebView. Gecko cookies, extension data and back history are not copied, and add-ons will not run in this tab. Private mode is not enabled automatically."
+                                            }
                                         )
                                     },
                                     confirmButton = {
                                         TextButton(onClick = {
                                             val tabId = pendingWebViewSwitchTabId
+                                            val openDevToolsAfterSwitch = pendingWebViewSwitchForDevTools
                                             pendingWebViewSwitchTabId = null
+                                            pendingWebViewSwitchForDevTools = false
                                             showWebViewSwitchConfirmation = false
                                             val tab = tabs.firstOrNull { it.id == tabId }
                                             if (tab != null && !tab.isIncognito && tab.engine == BrowserTabEngine.GECKOVIEW) {
-                                                replaceTabEngine(tab, BrowserTabEngine.WEBVIEW)
+                                                val switched = replaceTabEngine(tab, BrowserTabEngine.WEBVIEW)
+                                                if (switched && openDevToolsAfterSwitch) {
+                                                    showDevToolsSheet = true
+                                                }
                                             }
-                                        }) { Text("Switch to WebView") }
+                                        }) {
+                                            Text(
+                                                if (pendingWebViewSwitchForDevTools) "Switch and open DevTools"
+                                                else "Switch to WebView"
+                                            )
+                                        }
                                     },
                                     dismissButton = {
                                         TextButton(onClick = {
                                             showWebViewSwitchConfirmation = false
                                             pendingWebViewSwitchTabId = null
+                                            pendingWebViewSwitchForDevTools = false
                                         }) { Text("Cancel") }
                                     }
                                 )
@@ -5714,14 +5790,7 @@ class MainActivity : FragmentActivity() {
                                             val mode = targetMode
                                             pendingModeSwitch = null
                                             scope.launch {
-                                                val restarting = v9SwitchMode(mode, currentTab.webView, forceDesktopMode)
-                                                if (!restarting) {
-                                                    Toast.makeText(
-                                                        this@MainActivity,
-                                                        "${mode.display().title} Activated",
-                                                        Toast.LENGTH_SHORT
-                                                    ).show()
-                                                }
+                                                v9SwitchMode(mode, currentTab.webView, forceDesktopMode)
                                             }
                                         }) {
                                             androidx.compose.material3.Text("Restart")
@@ -6782,6 +6851,11 @@ class MainActivity : FragmentActivity() {
             ModePersonalization.searchUrl(engine, query)
         }
 
+    private fun dismissBrowserKeyboard() {
+        WindowInsetsControllerCompat(window, window.decorView).hide(WindowInsetsCompat.Type.ime())
+        currentFocus?.clearFocus()
+    }
+
     /**
      * Switching modes selects browser-data profiles. Each profile (Simple /
      * Developer / Power / Advance) owns an isolated WebView data directory, so when the
@@ -6798,7 +6872,14 @@ class MainActivity : FragmentActivity() {
         forceDesktop: Boolean,
     ): Boolean {
         if (!V9Engine.needsRestart(mode)) {
+            val savedMode = modeManager.modeFlow.first()
+            if (shouldPersistNoRestartModeSelection(savedMode, mode)) {
+                modeManager.setMode(mode)
+            }
             webView?.let { modeManager.applySettings(it, mode, forceDesktop) }
+            android.widget.Toast.makeText(
+                this, "${mode.display().title} activated", android.widget.Toast.LENGTH_SHORT
+            ).show()
             return false
         }
         val toastMsg = if (mode == BrowserMode.ADVANCED) {
@@ -6831,12 +6912,22 @@ class MainActivity : FragmentActivity() {
             advanceIntro = (mode == BrowserMode.ADVANCED) && liveAdvanceIntroEnabled
         )
         if (!restarted) {
-            SessionRestore.clearModeSwitchRestore(this, sourceMode)
+            val selectionRestored = runCatching { modeManager.setMode(sourceMode) }.isSuccess
+            runCatching { SessionRestore.clearModeSwitchRestore(this, sourceMode) }
+            runCatching { SessionRestore.markCleanExit(this, sourceMode, false) }
             modeSwitchInProgress = false
-            // Restart wasn't possible (alarm unavailable etc.) — apply the
-            // mode in-place WITHOUT engine isolation rather than killing
-            // the app. Cookies stay shared, but the app stays alive.
-            webView?.let { modeManager.applySettings(it, mode, forceDesktop) }
+            if (!selectionRestored) {
+                android.util.Log.e("V9Engine", "Could not restore the saved browser mode after a failed profile restart")
+            }
+            android.widget.Toast.makeText(
+                this,
+                if (selectionRestored) {
+                    "Couldn't restart. Staying in ${sourceMode.display().title}. Try switching again."
+                } else {
+                    "Couldn't restart the browser profile. Close and reopen Click before switching modes."
+                },
+                android.widget.Toast.LENGTH_LONG
+            ).show()
             return false
         }
         return true // unreachable — the process is killed above

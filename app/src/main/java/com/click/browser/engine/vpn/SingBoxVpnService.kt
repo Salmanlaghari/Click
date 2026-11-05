@@ -148,7 +148,7 @@ class SingBoxVpnService : VpnService(), PlatformInterface, CommandServerHandler 
     }
 
     override fun onDestroy() {
-        stopTunnel()
+        stopTunnel(preserveFailure = shouldPreserveVpnFailureOnCleanup(_state.value))
         scope.cancel()
         super.onDestroy()
     }
@@ -187,8 +187,8 @@ class SingBoxVpnService : VpnService(), PlatformInterface, CommandServerHandler 
                 commandServer = server
 
                 _state.value = VpnState.CONNECTED
-                startForegroundCompat(buildNotification("Connected — $serverName"))
-                Log.i(TAG, "Tunnel CONNECTED ($serverName)")
+                startForegroundCompat(buildNotification("Tunnel active · $serverName"))
+                Log.i(TAG, "Tunnel service active ($serverName)")
             } catch (t: Throwable) {
                 Log.e(TAG, "Tunnel start failed", t)
                 _error.value = t.message ?: "Connection failed"
@@ -199,7 +199,7 @@ class SingBoxVpnService : VpnService(), PlatformInterface, CommandServerHandler 
         }
     }
 
-    private fun stopTunnel() {
+    private fun stopTunnel(preserveFailure: Boolean = false) {
         try { commandServer?.closeService() } catch (t: Throwable) {
             Log.w(TAG, "commandServer.closeService failed", t)
         }
@@ -209,7 +209,10 @@ class SingBoxVpnService : VpnService(), PlatformInterface, CommandServerHandler 
         commandServer = null
         try { tunFd?.close() } catch (_: Throwable) {}
         tunFd = null
-        _state.value = VpnState.DISCONNECTED
+        if (!(preserveFailure && shouldPreserveVpnFailureOnCleanup(_state.value))) {
+            _state.value = VpnState.DISCONNECTED
+            _error.value = ""
+        }
         _serverName.value = ""
         try { stopForeground(STOP_FOREGROUND_REMOVE) } catch (_: Throwable) {}
         Log.i(TAG, "Tunnel stopped")
@@ -266,7 +269,7 @@ class SingBoxVpnService : VpnService(), PlatformInterface, CommandServerHandler 
      * tunnel. Returns the raw fd number for Go.
      */
     override fun openTun(options: TunOptions?): Int {
-        val mtu = options?.mtu ?: 9000
+        val mtu = VpnConfigBuilder.clampTunnelMtu(options?.mtu)
         val builder = Builder()
             .setSession("Click VPN")
             .setMtu(mtu)
