@@ -4570,7 +4570,7 @@ class MainActivity : FragmentActivity() {
                                                             )
                                                             Text(
                                                                 "The page address and browser history are still available. Reload the page or return to the previous page.",
-                                                                color = theme.onSurfaceVariant
+                                                                color = theme.onSurface.copy(alpha = 0.8f)
                                                             )
                                                             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                                                                 if (currentTab.canGoBack) {
