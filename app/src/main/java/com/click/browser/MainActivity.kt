@@ -901,29 +901,13 @@ class MainActivity : FragmentActivity() {
         ""
     }
 
-    /**
-     * Returns true if [url] is a Google OAuth / sign-in URL.
-     * Google blocks OAuth in embedded WebViews ("disallowed_useragent").
-     * These URLs must open in a Chrome Custom Tab instead, which shares
-     * cookies with Chrome and is allowed by Google.
-     */
-    private fun isGoogleAuthUrl(url: String): Boolean {
-        // Accept BOTH http:// and https:// — an http:// Google OAuth URL must
-        // still route to Custom Tab, not WebView (Google blocks OAuth there).
-        // Reject non-HTTP(S) schemes (e.g. intent://, about:) outright.
-        if (!url.startsWith("https://") && !url.startsWith("http://")) return false
-        val host = hostOfUrl(url)
-        if (host == "accounts.google.com" || host.endsWith(".accounts.google.com")) return true
-        // OAuth authorize endpoints on Google domains.
-        if (host.endsWith(".google.com") && url.contains("/o/oauth2/")) return true
-        if (host == "accounts.youtube.com") return true
-        return false
-    }
+    /** Recognizes Google auth endpoints that use the supported browser sign-in context. */
+    private fun isGoogleAuthUrl(url: String): Boolean =
+        GoogleAuthPolicy.shouldOpenInCustomTab(url)
 
     /**
-     * Opens [url] in a Chrome Custom Tab. Used for Google Sign-in / OAuth
-     * (WebView is blocked by Google) and any other auth flow that needs a
-     * real browser context.
+     * Opens [url] in the system-provided Custom Tab for recognized Google
+     * sign-in / OAuth requests, as required by Google's secure-browser policy.
      */
     private fun openInCustomTab(url: String) {
         try {
@@ -2451,10 +2435,9 @@ class MainActivity : FragmentActivity() {
                 exitFullscreenVideo?.invoke()
             }
             BackHandler(enabled = currentTab.url != "about:blank" && exitFullscreenVideo == null) {
-                if (!currentTab.browserSession.goBackIfPossible()) {
-                    currentTab.url = "about:blank"
-                    currentTab.browserSession?.loadUrl("about:blank")
-                }
+                // If there is no page history (including after returning from
+                // Google sign-in), keep the rendered page instead of blanking it.
+                currentTab.browserSession.handleBrowserBackPress()
             }
 
             // click:// page open: back closes the native page first.
@@ -3877,13 +3860,13 @@ class MainActivity : FragmentActivity() {
                                                                             pdfOfferUrl = urlStr
                                                                             return true
                                                                         }
-                                                                        if (request != null && request.isRedirect) return false
-                                                                        // Google OAuth / sign-in: Google blocks embedded
-                                                                        // WebViews. Open in a Chrome Custom Tab instead.
+                                                                        // Google OAuth / sign-in must use the supported
+                                                                        // browser context, including when reached by redirect.
                                                                         if (isGoogleAuthUrl(urlStr)) {
                                                                             openInCustomTab(urlStr)
                                                                             return true
                                                                         }
+                                                                        if (request != null && request.isRedirect) return false
                                                                         // HTTPS mode handling FIRST (so http://click://
                                                                         // can't bypass it). Standard upgrades http->https;
                                                                         // Strict BLOCKS plain-http unless the host is

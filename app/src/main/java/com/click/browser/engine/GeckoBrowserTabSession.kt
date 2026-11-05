@@ -134,7 +134,9 @@ internal class GeckoBrowserTabSession(
                 }
                 val target = navigationTarget(request.uri)
                 if (target == null) {
-                    onNavigationBlocked(request.uri)
+                    if (GoogleAuthPolicy.shouldShowBlockedNavigationNotice(request.uri)) {
+                        onNavigationBlocked(request.uri)
+                    }
                     return GeckoResult.fromValue(AllowOrDeny.DENY)
                 }
                 setWideLayout(wideLayoutForUrl(target))
@@ -147,7 +149,9 @@ internal class GeckoBrowserTabSession(
 
             override fun onNewSession(session: GeckoSession, uri: String): GeckoResult<GeckoSession>? {
                 if (!shouldAcceptGeckoNewWindowUri(uri, navigationTarget(uri))) {
-                    onNavigationBlocked(uri)
+                    if (GoogleAuthPolicy.shouldShowBlockedNavigationNotice(uri)) {
+                        onNavigationBlocked(uri)
+                    }
                     return null
                 }
                 return onNewSession(uri, GeckoSession(settings))

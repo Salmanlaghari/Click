@@ -90,12 +90,21 @@ internal class WebViewBrowserTabSession(
 
 /**
  * Shared, testable browser-chrome behavior. A missing session or unavailable
- * history entry is a no-op; the caller decides what to show instead.
+ * history entry is a no-op; callers should preserve the currently rendered page.
  */
 internal fun BrowserTabNavigation?.goBackIfPossible(): Boolean {
     if (this?.canGoBack() != true) return false
     goBack()
     return true
+}
+
+internal enum class BrowserBackResult { NAVIGATED_BACK, KEEP_CURRENT_PAGE }
+
+/** Back without a history entry preserves the current page instead of navigating to about:blank. */
+internal fun BrowserTabNavigation?.handleBrowserBackPress(): BrowserBackResult {
+    if (this?.canGoBack() != true) return BrowserBackResult.KEEP_CURRENT_PAGE
+    goBack()
+    return BrowserBackResult.NAVIGATED_BACK
 }
 
 internal fun BrowserTabNavigation?.goForwardIfPossible(): Boolean {
