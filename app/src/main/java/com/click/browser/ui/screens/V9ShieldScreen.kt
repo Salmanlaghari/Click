@@ -62,17 +62,16 @@ fun V9ShieldScreen(onClose: () -> Unit) {
 
     fun syncVpnEnabledFlag(expectedOn: Boolean) {
         scope.launch {
-            kotlinx.coroutines.delay(800)
-            val running = V9VpnController.isRunning.value
-            context.dataStore.edit { it[AppSettings.V9_VPN_ENABLED] = running }
-            if (running != expectedOn) {
+            val confirmedRunning = V9VpnController.awaitRunningState(expectedOn)
+            if (confirmedRunning == null) {
                 Toast.makeText(
                     context,
-                    if (expectedOn) "DNS protection failed to start — try again"
-                    else "DNS protection failed to stop — try again",
+                    "DNS protection status not confirmed yet. Check V9 Shield again shortly.",
                     Toast.LENGTH_LONG
                 ).show()
+                return@launch
             }
+            context.dataStore.edit { it[AppSettings.V9_VPN_ENABLED] = confirmedRunning }
         }
     }
 

@@ -578,7 +578,7 @@ private fun SmartSearchBar(
     searchEngine: String,
     onNavigate: (String) -> Unit
 ) {
-    var query by remember(activeMode) { mutableStateOf("") }
+    var query by remember { mutableStateOf("") }
     val keyboardController = LocalSoftwareKeyboardController.current
     val focusManager = LocalFocusManager.current
     val submit = {

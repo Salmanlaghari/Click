@@ -1532,6 +1532,29 @@ class MainActivity : FragmentActivity() {
                     ).show()
                 }
             }
+            fun syncV9ShieldFlag(expectedOn: Boolean) {
+                scope.launch {
+                    val confirmedRunning =
+                        com.click.browser.engine.V9VpnController.awaitRunningState(expectedOn)
+                    if (confirmedRunning == null) {
+                        Toast.makeText(
+                            this@MainActivity,
+                            "DNS protection status not confirmed yet. Check V9 Shield again shortly.",
+                            Toast.LENGTH_LONG
+                        ).show()
+                        return@launch
+                    }
+                    dataStore.edit {
+                        it[com.click.browser.engine.AppSettings.V9_VPN_ENABLED] = confirmedRunning
+                    }
+                    Toast.makeText(
+                        this@MainActivity,
+                        if (expectedOn) "V9 Shield on · DNS-only protection"
+                        else "V9 Shield off · DNS-only protection",
+                        Toast.LENGTH_SHORT
+                    ).show()
+                }
+            }
             // VPN permission launcher: VpnService.prepare() returns an intent
             // when permission is not yet granted. On RESULT_OK, start VPN.
             // Kilo fix: verify the service actually started before setting the
@@ -1549,15 +1572,7 @@ class MainActivity : FragmentActivity() {
                             Toast.LENGTH_LONG
                         ).show()
                     } else {
-                        scope.launch {
-                            kotlinx.coroutines.delay(800)
-                            if (com.click.browser.engine.V9VpnService.running.value) {
-                                dataStore.edit { it[com.click.browser.engine.AppSettings.V9_VPN_ENABLED] = true }
-                                Toast.makeText(this@MainActivity, "V9 Shield on · DNS-only protection", Toast.LENGTH_SHORT).show()
-                            } else {
-                                Toast.makeText(this@MainActivity, "DNS protection failed to start — try again", Toast.LENGTH_SHORT).show()
-                            }
-                        }
+                        syncV9ShieldFlag(expectedOn = true)
                     }
                 } else {
                     Toast.makeText(this@MainActivity, "DNS protection permission denied", Toast.LENGTH_SHORT).show()
@@ -1569,15 +1584,7 @@ class MainActivity : FragmentActivity() {
                 val isOn = com.click.browser.engine.V9VpnController.isRunning.value
                 if (isOn) {
                     com.click.browser.engine.V9VpnController.stop(this@MainActivity)
-                    scope.launch {
-                        kotlinx.coroutines.delay(800)
-                        if (!com.click.browser.engine.V9VpnService.running.value) {
-                            dataStore.edit { it[com.click.browser.engine.AppSettings.V9_VPN_ENABLED] = false }
-                            Toast.makeText(this@MainActivity, "V9 Shield off · DNS-only protection", Toast.LENGTH_SHORT).show()
-                        } else {
-                            Toast.makeText(this@MainActivity, "DNS protection failed to stop — try again", Toast.LENGTH_SHORT).show()
-                        }
-                    }
+                    syncV9ShieldFlag(expectedOn = false)
                 } else {
                     if (com.click.browser.engine.V9VpnController.isBlockedByClickVpn()) {
                         Toast.makeText(
@@ -1597,15 +1604,7 @@ class MainActivity : FragmentActivity() {
                             ).show()
                             return
                         }
-                        scope.launch {
-                            kotlinx.coroutines.delay(800)
-                            if (com.click.browser.engine.V9VpnService.running.value) {
-                                dataStore.edit { it[com.click.browser.engine.AppSettings.V9_VPN_ENABLED] = true }
-                                Toast.makeText(this@MainActivity, "V9 Shield on · DNS-only protection", Toast.LENGTH_SHORT).show()
-                            } else {
-                                Toast.makeText(this@MainActivity, "DNS protection failed to start — try again", Toast.LENGTH_SHORT).show()
-                            }
-                        }
+                        syncV9ShieldFlag(expectedOn = true)
                     } else {
                         vpnPermissionLauncher.launch(intent)
                     }

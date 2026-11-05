@@ -29,6 +29,7 @@ class ModeSwitchPolicyTest {
     fun keepsTheProcessAliveOnlyWhenNeitherRestartPathStarted() {
         assertTrue(hasEngineRestartPath(alarmScheduled = true, directRelaunchStarted = false))
         assertTrue(hasEngineRestartPath(alarmScheduled = false, directRelaunchStarted = true))
+        assertTrue(hasEngineRestartPath(alarmScheduled = true, directRelaunchStarted = true))
         assertFalse(hasEngineRestartPath(alarmScheduled = false, directRelaunchStarted = false))
     }
 }

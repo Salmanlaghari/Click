@@ -7,6 +7,7 @@ import android.os.Build
 import com.click.browser.engine.vpn.ClickVpnServiceKind
 import com.click.browser.engine.vpn.SingBoxVpnService
 import com.click.browser.engine.vpn.VpnState
+import com.click.browser.engine.vpn.awaitVpnRunningState
 import com.click.browser.engine.vpn.hasVpnServiceConflict
 
 /**
@@ -50,4 +51,8 @@ object V9VpnController {
     val isRunning get() = V9VpnService.running
     val queries get() = V9VpnService.queries
     val blocked get() = V9VpnService.blocked
+
+    /** Observe actual service state instead of sampling it after a fixed delay. */
+    internal suspend fun awaitRunningState(expectedOn: Boolean): Boolean? =
+        awaitVpnRunningState(isRunning, expectedOn)
 }

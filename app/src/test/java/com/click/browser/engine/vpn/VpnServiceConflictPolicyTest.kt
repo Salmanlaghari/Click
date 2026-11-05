@@ -40,4 +40,36 @@ class VpnServiceConflictPolicyTest {
             )
         )
     }
+
+    @Test
+    fun sameServiceMayAlreadyBeActiveButBothServicesConflict() {
+        assertFalse(
+            hasVpnServiceConflict(
+                ClickVpnServiceKind.DNS_SHIELD,
+                dnsShieldActiveOrStarting = true,
+                fullTunnelActiveOrStarting = false
+            )
+        )
+        assertFalse(
+            hasVpnServiceConflict(
+                ClickVpnServiceKind.FULL_TUNNEL,
+                dnsShieldActiveOrStarting = false,
+                fullTunnelActiveOrStarting = true
+            )
+        )
+        assertTrue(
+            hasVpnServiceConflict(
+                ClickVpnServiceKind.DNS_SHIELD,
+                dnsShieldActiveOrStarting = true,
+                fullTunnelActiveOrStarting = true
+            )
+        )
+        assertTrue(
+            hasVpnServiceConflict(
+                ClickVpnServiceKind.FULL_TUNNEL,
+                dnsShieldActiveOrStarting = true,
+                fullTunnelActiveOrStarting = true
+            )
+        )
+    }
 }
