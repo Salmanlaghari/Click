@@ -8,62 +8,70 @@ import org.junit.Test
 
 class ExtensionInstallPolicyTest {
     @Test
-    fun blocksNativeMessagingAndSensitiveBrowserApis() {
+    fun blocksNativeMessagingAndUnexposedGeckoViewCapabilities() {
         assertEquals(
-            listOf("cookies", "nativeMessaging", "proxy"),
-            ExtensionInstallPolicy.blockedPermissionNames(
-                listOf("storage", "proxy", "nativeMessaging", "cookies")
+            listOf("geckoViewAddons", "geolocation", "nativeMessaging", "nativeMessagingFromContent"),
+            ExtensionInstallPolicy.unsupportedPermissionNames(
+                listOf("geolocation", "nativeMessagingFromContent", "storage", "geckoViewAddons", "nativeMessaging")
             )
         )
     }
 
     @Test
-    fun blocksBrowsingHistoryIdentityAndClipboardApis() {
-        assertEquals(
-            listOf("bookmarks", "clipboardWrite", "identity", "webNavigation"),
-            ExtensionInstallPolicy.blockedPermissionNames(
-                listOf("webNavigation", "identity", "bookmarks", "clipboardWrite")
-            )
+    fun sensitiveBrowserPermissionsReachTheExplicitReviewPrompt() {
+        assertTrue(
+            ExtensionInstallPolicy.unsupportedPermissionNames(
+                listOf("proxy", "webRequest", "webRequestBlocking", "cookies", "history", "clipboardRead", "clipboardWrite", "browsingData", "management", "downloads")
+            ).isEmpty()
         )
     }
 
     @Test
     fun keepsCommonContentPermissionsAvailableForExplicitUserReview() {
         assertTrue(
-            ExtensionInstallPolicy.blockedPermissionNames(
+            ExtensionInstallPolicy.unsupportedPermissionNames(
                 listOf("activeTab", "storage", "tabs", "scripting", "contextMenus")
             ).isEmpty()
         )
     }
 
     @Test
-    fun acceptsOnlyNarrowHttpsOrigins() {
+    fun broadAndInsecureOriginsReachTheExplicitReviewPrompt() {
         assertTrue(
             ExtensionInstallPolicy.blockedOriginPatterns(
-                listOf("https://example.com/*", "https://login.example.org/*")
+                listOf(
+                    "https://example.com/*",
+                    "https://login.example.org/*",
+                    "<all_urls>",
+                    "https://*.example.net/*",
+                    "https://*/*",
+                    "*://*/*",
+                    "http://example.com/*",
+                    "https://router.local/*",
+                    "https://192.168.1.1/*"
+                )
             ).isEmpty()
         )
-        assertEquals(1, ExtensionInstallPolicy.blockedOriginPatterns(listOf("<all_urls>")).size)
-        assertEquals(1, ExtensionInstallPolicy.blockedOriginPatterns(listOf("https://*.example.com/*")).size)
-        assertEquals(1, ExtensionInstallPolicy.blockedOriginPatterns(listOf("http://example.com/*")).size)
-        assertEquals(1, ExtensionInstallPolicy.blockedOriginPatterns(listOf("https://router.local/*")).size)
-        assertEquals(1, ExtensionInstallPolicy.blockedOriginPatterns(listOf("https://192.168.1.1/*")).size)
+        assertEquals(
+            listOf("*://*/*", "<all_urls>", "https://*.example.net/*", "https://*/*"),
+            ExtensionInstallPolicy.broadOriginPatterns(
+                listOf("https://example.com/*", "<all_urls>", "https://*.example.net/*", "https://*/*", "*://*/*")
+            )
+        )
+    }
+
+    @Test
+    fun rejectsMalformedOrUnreviewablyLargeOriginRequests() {
+        assertEquals(1, ExtensionInstallPolicy.blockedOriginPatterns(listOf("not-a-match-pattern")).size)
         listOf(
-            "https://127.1/*",
-            "https://10.0/*",
-            "https://0x7f000001/*",
-            "https://0177.0.0.1/*",
-            "https://router.home.arpa/*",
-            "https://home.arpa/*",
-            "https://router.local./*",
-            "https://[::1]/*"
-        ).forEach { pattern ->
-            assertEquals("Should reject $pattern", 1, ExtensionInstallPolicy.blockedOriginPatterns(listOf(pattern)).size)
-        }
-        assertEquals(1, ExtensionInstallPolicy.blockedOriginPatterns(listOf("https://example.com:8443/*")).size)
+            "https://example.com:8443/*",
+            "https://user@example.com/*",
+            "https://*.example.*/*",
+            "javascript://example.com/*"
+        ).forEach { pattern -> assertEquals("Should reject $pattern", 1, ExtensionInstallPolicy.blockedOriginPatterns(listOf(pattern)).size) }
         assertEquals(
             1,
-            ExtensionInstallPolicy.blockedOriginPatterns((1..11).map { "https://site$it.example.com/*" }).size
+            ExtensionInstallPolicy.blockedOriginPatterns((1..101).map { "https://site$it.example.com/*" }).size
         )
     }
 

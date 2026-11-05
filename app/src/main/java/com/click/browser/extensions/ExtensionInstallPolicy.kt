@@ -4,75 +4,72 @@ package com.click.browser.extensions
 internal object ExtensionInstallPolicy {
     const val MAX_XPI_BYTES: Long = 30L * 1024L * 1024L
 
-    private val blockedPermissions = setOf(
+    // These capabilities are not exposed by Click: they could bridge an add-on
+    // into native app code, let it install more add-ons, or request device location.
+    // Other WebExtension permissions are disclosed and require GeckoView consent.
+    private val unsupportedPermissions = setOf(
         "nativemessaging",
         "nativemessagingfromcontent",
         "geckoviewaddons",
-        "proxy",
-        "webrequest",
-        "webrequestblocking",
-        "webrequestfilterresponse",
-        "declarativenetrequest",
-        "declarativenetrequestfeedback",
-        "declarativenetrequestwithhostaccess",
-        "management",
-        "privacy",
-        "browsingdata",
-        "cookies",
-        "downloads",
-        "history",
-        "sessions",
-        "debugger",
-        "pkcs11",
-        "clipboardread",
-        "clipboardwrite",
-        "geolocation",
-        "webnavigation",
-        "bookmarks",
-        "identity",
-        "topsites",
-        "browsersettings",
-        "contentsettings",
-        "webrequestauthprovider",
-        "devtools"
+        "geolocation"
     )
 
-    // Browsers accept several non-dotted-decimal IPv4 forms (for example 127.1 or 0x7f000001).
-    // Treat any 1-4-part numeric/hex host as an IP literal; a false positive is safer than local access.
-    private val browserIpv4Part = Regex("(?i)^(?:0x[0-9a-f]+|[0-9]+)$")
+    // Keep the visible review bounded; all listed patterns within this limit are
+    // shown verbatim and granted only after the user's explicit Add/Allow action.
+    private const val MAX_REVIEWED_ORIGIN_PATTERNS = 100
+    private val webExtensionOriginPattern = Regex(
+        """^(\*|https?|ftp|file|ws|wss)://([^/]*)(/.*)$""",
+        RegexOption.IGNORE_CASE
+    )
+    private val dnsLabel = Regex("(?i)^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$")
 
-    private fun isNumericIpv4Literal(host: String): Boolean {
-        val parts = host.split('.')
-        return parts.size in 1..4 && parts.all { browserIpv4Part.matches(it) }
-    }
-
-
-    fun blockedPermissionNames(requested: Iterable<String>): List<String> =
+    fun unsupportedPermissionNames(requested: Iterable<String>): List<String> =
         requested
             .map(String::trim)
             .filter { it.isNotEmpty() }
             .filter { permission ->
-                permission.substringAfterLast('.').lowercase() in blockedPermissions
+                permission.substringAfterLast('.').lowercase() in unsupportedPermissions
             }
             .distinct()
             .sorted()
 
     fun blockedOriginPatterns(requested: Iterable<String>): List<String> {
         val origins = requested.map(String::trim).filter(String::isNotEmpty).distinct()
-        if (origins.size > 10) return listOf("More than 10 website origins requested")
+        if (origins.size > MAX_REVIEWED_ORIGIN_PATTERNS) {
+            return listOf("More than $MAX_REVIEWED_ORIGIN_PATTERNS site access patterns requested")
+        }
+        return origins.filterNot(::isReviewableOriginPattern).distinct().sorted()
+    }
 
+    /** True for valid WebExtension match patterns that grant wide host coverage. */
+    fun broadOriginPatterns(requested: Iterable<String>): List<String> {
+        val origins = requested.map(String::trim).filter(String::isNotEmpty).distinct()
         return origins.filter { pattern ->
-            val uri = runCatching { java.net.URI(pattern) }.getOrNull()
-            val host = uri?.host?.trimEnd('.')?.lowercase().orEmpty()
-            val localOrIpHost = host == "localhost" ||
-                host.endsWith(".localhost") || host.endsWith(".local") ||
-                host.endsWith(".lan") || host.endsWith(".internal") || host.endsWith(".home") ||
-                host == "home.arpa" || host.endsWith(".home.arpa") || host.endsWith(".arpa") ||
-                host.endsWith(".localdomain") || isNumericIpv4Literal(host) || host.contains(':')
-            uri == null || uri.scheme != "https" || host.isBlank() || host.contains('*') ||
-                !host.contains('.') || localOrIpHost || uri.userInfo != null ||
-                (uri.port != -1 && uri.port != 443)
-        }.distinct().sorted()
+            if (pattern.equals("<all_urls>", ignoreCase = true)) return@filter true
+            val match = webExtensionOriginPattern.matchEntire(pattern) ?: return@filter false
+            val scheme = match.groupValues[1]
+            val host = match.groupValues[2]
+            scheme == "*" || host == "*" || host.startsWith("*.")
+        }.sorted()
+    }
+
+    private fun isReviewableOriginPattern(pattern: String): Boolean {
+        if (pattern.equals("<all_urls>", ignoreCase = true)) return true
+        val match = webExtensionOriginPattern.matchEntire(pattern) ?: return false
+        val scheme = match.groupValues[1].lowercase()
+        val host = match.groupValues[2].lowercase()
+        if (scheme == "file") return host.isEmpty()
+        if (host == "*") return true
+        if (host.isBlank() || host.contains('@') || host.contains(':')) return false
+        val suffix = when {
+            host.startsWith("*.") -> host.removePrefix("*.")
+            host.contains('*') -> return false
+            else -> host
+        }
+        if (suffix.isBlank() || suffix.contains("..")) return false
+        if (host.startsWith("*.") && suffix.split('.').any { !dnsLabel.matches(it) }) return false
+        if (host.matches(Regex("\\[[0-9a-f:.]+\\]", RegexOption.IGNORE_CASE))) return true
+        return suffix.split('.').all(dnsLabel::matches)
     }
 
     fun isOfficialAmoListing(url: String?): Boolean {
