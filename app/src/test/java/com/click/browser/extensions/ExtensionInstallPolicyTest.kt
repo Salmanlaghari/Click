@@ -53,7 +53,7 @@ class ExtensionInstallPolicyTest {
             ).isEmpty()
         )
         assertEquals(
-            listOf("<all_urls>", "*://*/*", "https://*.example.net/*", "https://*/*"),
+            listOf("*://*/*", "<all_urls>", "https://*.example.net/*", "https://*/*"),
             ExtensionInstallPolicy.broadOriginPatterns(
                 listOf("https://example.com/*", "<all_urls>", "https://*.example.net/*", "https://*/*", "*://*/*")
             )

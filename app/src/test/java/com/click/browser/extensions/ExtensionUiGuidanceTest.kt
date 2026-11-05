@@ -33,7 +33,7 @@ class ExtensionUiGuidanceTest {
 
         val warning = ExtensionUiGuidance.siteAccessRiskWarning(listOf("<all_urls>"))
         assertTrue(warning.orEmpty().contains("Elevated site access requested"))
-        assertTrue(warning.orEmpty().contains("read or change pages"))
+        assertTrue(warning.orEmpty().contains("read or change those pages"))
         assertTrue(warning.orEmpty().contains("wildcard patterns may cover many sites"))
 
         val permissionWarning = ExtensionUiGuidance.permissionRiskWarning(listOf("cookies", "storage"))
