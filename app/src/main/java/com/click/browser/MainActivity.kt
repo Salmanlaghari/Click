@@ -901,13 +901,13 @@ class MainActivity : FragmentActivity() {
         ""
     }
 
-    /** Recognizes Google auth endpoints that use the supported browser sign-in context. */
+    /** Recognizes valid Google OAuth authorization requests; account pages stay in the current tab. */
     private fun isGoogleAuthUrl(url: String): Boolean =
         GoogleAuthPolicy.shouldOpenInCustomTab(url)
 
     /**
-     * Opens [url] in the system-provided Custom Tab for recognized Google
-     * sign-in / OAuth requests, as required by Google's secure-browser policy.
+     * Opens [url] in the system-provided Custom Tab for a recognized Google
+     * OAuth authorization request, as required by Google's secure-browser policy.
      */
     private fun openInCustomTab(url: String) {
         try {
@@ -3860,8 +3860,8 @@ class MainActivity : FragmentActivity() {
                                                                             pdfOfferUrl = urlStr
                                                                             return true
                                                                         }
-                                                                        // Google OAuth / sign-in must use the supported
-                                                                        // browser context, including when reached by redirect.
+                                                                        // Only actual Google OAuth authorization requests use
+                                                                        // the supported browser context, even after redirects.
                                                                         if (isGoogleAuthUrl(urlStr)) {
                                                                             openInCustomTab(urlStr)
                                                                             return true
@@ -3927,7 +3927,7 @@ class MainActivity : FragmentActivity() {
                                                                         var urlStr = url ?: ""
                                                                         // Query-param stripping (Brave-style).
                                                                         urlStr = cleanTrackingUrl(urlStr)
-                                                                        // Google OAuth / sign-in: open in Custom Tab (see above).
+                                                                        // Only valid Google OAuth authorization requests hand off.
                                                                         if (isGoogleAuthUrl(urlStr)) {
                                                                             openInCustomTab(urlStr)
                                                                             return true
