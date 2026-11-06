@@ -248,9 +248,17 @@ object V9Engine {
         val options = when (relaunchPendingIntentCreatorBackgroundStartMode(Build.VERSION.SDK_INT)) {
             RelaunchBackgroundActivityStartMode.PLATFORM_DEFAULT -> null
             RelaunchBackgroundActivityStartMode.ALLOW_BACKGROUND ->
-                backgroundActivityStartAllowedOptions()
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+                    backgroundActivityStartAllowedOptions()
+                } else {
+                    null
+                }
             RelaunchBackgroundActivityStartMode.ALLOW_ALWAYS ->
-                backgroundActivityStartAllowAlwaysOptions()
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.BAKLAVA) {
+                    backgroundActivityStartAllowAlwaysOptions()
+                } else {
+                    null
+                }
         }
         return if (options == null) {
             PendingIntent.getActivity(context, RESTART_REQUEST_CODE, launch, flags)
