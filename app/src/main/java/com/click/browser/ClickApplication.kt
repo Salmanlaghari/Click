@@ -3,6 +3,7 @@ package com.click.browser
 import android.app.Application
 import android.util.Log
 import com.click.browser.engine.AppSettings
+import com.click.browser.engine.ClickDiagnosticsLog
 import com.click.browser.engine.NewsNotificationScheduler
 import com.click.browser.engine.V9Engine
 import com.click.browser.engine.dataStore
@@ -23,6 +24,7 @@ class ClickApplication : Application() {
     override fun onCreate() {
         V9Engine.applyDataDirectorySuffix(this)
         super.onCreate()
+        ClickDiagnosticsLog.resolveStartup(this, V9Engine.bootMode, V9Engine.isBootBlocked)
         if (V9Engine.isBootBlocked) {
             Log.e("ClickApplication", "Skipping browsing startup tasks because the selected profile could not be initialized safely")
             return

@@ -76,6 +76,7 @@ fun SettingsScreen(
     onOpenDownloadSettings: () -> Unit,
     // --- Reports ---
     onOpenReports: () -> Unit,
+    onOpenCatLog: () -> Unit,
     // --- Address bar position ---
     addressBarPosition: String, // "top" | "bottom"
     onAddressBarPositionChange: (String) -> Unit,
@@ -810,6 +811,8 @@ fun SettingsScreen(
                     ActionRow("Help & Feedback", "FAQs + email the developer", Icons.Default.Help, theme, onOpenHelpFeedback)
                     HorizontalDivider(color = theme.onSurface.copy(alpha = 0.1f))
                     ActionRow("Reports", "Crash & OOM reports, feedback, bug reports", Icons.Default.BugReport, theme, onOpenReports)
+                    HorizontalDivider(color = theme.onSurface.copy(alpha = 0.1f))
+                    ActionRow("CatLog — local diagnostics", "Profile-switch and renderer events from Click only", Icons.Default.BugReport, theme, onOpenCatLog)
                     HorizontalDivider(color = theme.onSurface.copy(alpha = 0.1f))
                     ActionRow("Rate Click", "Rate us on Google Play", Icons.Default.Star, theme) {
                         try {

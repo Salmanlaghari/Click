@@ -7,19 +7,19 @@ import org.json.JSONObject
 
 /**
  * Receives password-save candidates only through WebView's origin-aware
- * WebMessageListener. The page never supplies the host used for storage; that
- * host is derived from the browser-provided source origin.
+ * WebMessageListener. The page never supplies the credential origin used for
+ * storage; that origin is derived from the browser-provided source origin.
  */
 class PasswordBridge(
     private val onPasswordDetected: (
         sourceOrigin: String,
-        host: String,
+        credentialOrigin: String,
         username: String,
         password: String
     ) -> Unit
 ) {
     fun onMessage(sourceOrigin: String, isMainFrame: Boolean, message: WebMessageCompat) {
-        val host = PasswordOriginPolicy.secureHost(sourceOrigin, isMainFrame) ?: return
+        val credentialOrigin = PasswordOriginPolicy.secureOrigin(sourceOrigin, isMainFrame) ?: return
         if (message.type != WebMessageCompat.TYPE_STRING) return
         val data = message.data ?: return
         if (data.length > MAX_MESSAGE_LENGTH) return
@@ -32,7 +32,7 @@ class PasswordBridge(
             if (passwordValue !is String || passwordValue.isBlank() || passwordValue.length > MAX_PASSWORD_LENGTH) return
             val username = (usernameValue as? String).orEmpty()
             if (username.length > MAX_USERNAME_LENGTH) return
-            onPasswordDetected(sourceOrigin, host, username, passwordValue)
+            onPasswordDetected(sourceOrigin, credentialOrigin, username, passwordValue)
         } catch (_: Exception) {
             // A page may send arbitrary messages; malformed input is ignored.
         }
@@ -47,7 +47,12 @@ class PasswordBridge(
 
 /** Strict HTTPS origin checks shared by the bridge, save UI, and autofill. */
 internal object PasswordOriginPolicy {
-    private data class SecureOrigin(val host: String, val port: Int?)
+    private data class SecureOrigin(val host: String, val port: Int?) {
+        fun canonicalValue(): String {
+            val printableHost = if (host.contains(':') && !host.startsWith("[")) "[$host]" else host
+            return "https://$printableHost${port?.let { ":$it" }.orEmpty()}"
+        }
+    }
 
     /** Returns a canonical HTTPS host only for a top-level frame origin. */
     fun secureHost(sourceOrigin: String, isMainFrame: Boolean): String? {
@@ -57,6 +62,20 @@ internal object PasswordOriginPolicy {
 
     /** Returns a host from a current top-level HTTPS page URL, including its path. */
     fun securePageHost(pageUrl: String): String? = parse(pageUrl, originOnly = false)?.host
+
+    /** Canonical HTTPS origin key; non-default ports remain part of the key. */
+    fun secureOrigin(sourceOrigin: String, isMainFrame: Boolean): String? {
+        if (!isMainFrame) return null
+        return parse(sourceOrigin, originOnly = true)?.canonicalValue()
+    }
+
+    /** Canonical origin for a current HTTPS page URL, including its path. */
+    fun securePageOrigin(pageUrl: String): String? =
+        parse(pageUrl, originOnly = false)?.canonicalValue()
+
+    /** Returns the canonical host portion of a previously validated HTTPS origin. */
+    fun hostFromSecureOrigin(origin: String): String? =
+        parse(origin, originOnly = true)?.host
 
     /** True only when a secure source origin still matches the current page URL. */
     fun isSameSecureOrigin(sourceOrigin: String, pageUrl: String): Boolean {

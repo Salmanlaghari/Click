@@ -4,6 +4,7 @@ import android.content.Context
 import android.view.View
 import android.view.ViewGroup
 import org.mozilla.geckoview.AllowOrDeny
+import org.mozilla.geckoview.Autocomplete
 import org.mozilla.geckoview.GeckoResult
 import org.mozilla.geckoview.GeckoRuntime
 import org.mozilla.geckoview.GeckoSession
@@ -71,9 +72,14 @@ internal class GeckoBrowserTabSession(
     private val onCanGoBackChanged: (Boolean) -> Unit,
     private val onCanGoForwardChanged: (Boolean) -> Unit,
     private val onFullscreenChanged: (Boolean) -> Unit,
-    private val onRendererFailure: () -> Unit,
+    private val onRendererFailure: (GeckoRenderEvent) -> Unit,
     private val onRendererRecovery: (GeckoRenderEvent) -> Unit,
-    private val onExternalResponse: (WebResponse) -> Unit
+    private val onExternalResponse: (WebResponse) -> Unit,
+    private val onLoginSavePrompt: (
+        String,
+        GeckoSession,
+        GeckoSession.PromptDelegate.AutocompleteRequest<Autocomplete.LoginSaveOption>
+    ) -> GeckoResult<GeckoSession.PromptDelegate.PromptResponse>
 ) : BrowserTabSession {
     private val contextId = geckoContextIdFor(mode)
     private val settings = GeckoSessionSettings.Builder()
@@ -102,6 +108,13 @@ internal class GeckoBrowserTabSession(
             DesktopLayoutPolicy.geckoViewportMode(wideLayoutForUrl(initialUrl))
         )
         session.setPermissionDelegate(DenyNormalTabDevicePermissions)
+        session.setPromptDelegate(object : GeckoSession.PromptDelegate {
+            override fun onLoginSave(
+                session: GeckoSession,
+                request: GeckoSession.PromptDelegate.AutocompleteRequest<Autocomplete.LoginSaveOption>
+            ): GeckoResult<GeckoSession.PromptDelegate.PromptResponse> =
+                onLoginSavePrompt(tabId, session, request)
+        })
         session.setNavigationDelegate(object : GeckoSession.NavigationDelegate {
             override fun onLocationChange(
                 session: GeckoSession,
@@ -201,11 +214,11 @@ internal class GeckoBrowserTabSession(
             }
 
             override fun onCrash(session: GeckoSession) {
-                onRendererFailure()
+                onRendererFailure(GeckoRenderEvent.PROCESS_CRASHED)
             }
 
             override fun onKill(session: GeckoSession) {
-                onRendererFailure()
+                onRendererFailure(GeckoRenderEvent.PROCESS_KILLED)
             }
 
             override fun onFirstComposite(session: GeckoSession) {

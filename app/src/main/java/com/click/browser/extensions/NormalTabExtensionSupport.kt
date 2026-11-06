@@ -1,5 +1,7 @@
 package com.click.browser.extensions
 
+import android.os.Handler
+import android.os.Looper
 import org.mozilla.geckoview.GeckoResult
 import org.mozilla.geckoview.GeckoRuntime
 import org.mozilla.geckoview.GeckoSession
@@ -17,9 +19,13 @@ internal data class NormalTabExtensionAction(
 
 internal data class NormalTabExtensionPopup(
     val ownerTabId: String,
+    val extensionId: String,
     val title: String,
-    val session: GeckoSession
+    val session: GeckoSession,
+    val renderState: NormalTabExtensionPopupRenderState = NormalTabExtensionPopupRenderState.LOADING
 )
+
+internal enum class NormalTabExtensionPopupRenderState { LOADING, READY, FAILED }
 
 internal enum class NormalTabActionDispatchResult {
     REJECTED,
@@ -31,10 +37,11 @@ internal fun dispatchNormalTabActionClick(
     attachedTabIds: Set<String>,
     isEnabled: Boolean,
     isPolicyApproved: Boolean,
+    isSupportedPage: Boolean = true,
     activateTab: (String) -> Unit,
     clickAction: () -> Unit
 ): NormalTabActionDispatchResult {
-    if (tabId !in attachedTabIds || !isEnabled || !isPolicyApproved) {
+    if (tabId !in attachedTabIds || !isEnabled || !isPolicyApproved || !isSupportedPage) {
         return NormalTabActionDispatchResult.REJECTED
     }
     activateTab(tabId)
@@ -48,6 +55,9 @@ internal fun dispatchNormalTabActionClick(
     }
 }
 
+internal fun supportsNormalTabExtensionActions(url: String): Boolean =
+    runCatching { java.net.URI(url).scheme?.lowercase() in setOf("http", "https") }.getOrDefault(false)
+
 /**
  * Routes GeckoView's runtime-wide ActionDelegate callbacks to the currently active
  * normal tab. Action.click() does not carry a session ID, so the active-tab state
@@ -58,12 +68,14 @@ internal class NormalTabExtensionRouter(
     private val onActionsChanged: (String, List<NormalTabExtensionAction>) -> Unit,
     private val onPopupChanged: (NormalTabExtensionPopup?) -> Unit
 ) : WebExtension.ActionDelegate {
+    private val mainHandler = Handler(Looper.getMainLooper())
     private val sessions = linkedMapOf<String, GeckoSession>()
     private val sessionIds = linkedMapOf<GeckoSession, String>()
     private val defaultActions = linkedMapOf<String, NormalTabExtensionAction>()
     private val sessionOverrides = linkedMapOf<GeckoSession, MutableMap<String, NormalTabExtensionAction?>>()
     private var activeTabId: String? = null
     private var popup: NormalTabExtensionPopup? = null
+    private var popupTimeout: Runnable? = null
 
     fun attach(tabId: String, session: GeckoSession) {
         sessions[tabId] = session
@@ -126,15 +138,19 @@ internal class NormalTabExtensionRouter(
         }
     }
 
-    fun clickAction(tabId: String, item: NormalTabExtensionAction): NormalTabActionDispatchResult =
-        dispatchNormalTabActionClick(
-            tabId = tabId,
-            attachedTabIds = sessions.keys,
-            isEnabled = !item.extension.isBuiltIn && item.extension.metaData.enabled,
-            isPolicyApproved = extensionPolicyBlockers(item.extension).isEmpty(),
-            activateTab = { setSelected(it, true) },
-            clickAction = { item.action.click() }
-        )
+    fun clickAction(
+        tabId: String,
+        item: NormalTabExtensionAction,
+        currentUrl: String
+    ): NormalTabActionDispatchResult = dispatchNormalTabActionClick(
+        tabId = tabId,
+        attachedTabIds = sessions.keys,
+        isEnabled = !item.extension.isBuiltIn && item.extension.metaData.enabled,
+        isPolicyApproved = extensionPolicyBlockers(item.extension).isEmpty(),
+        isSupportedPage = supportsNormalTabExtensionActions(currentUrl),
+        activateTab = { setSelected(it, true) },
+        clickAction = { item.action.click() }
+    )
 
     fun detach(tabId: String, session: GeckoSession) {
         setSelected(tabId, false)
@@ -145,8 +161,15 @@ internal class NormalTabExtensionRouter(
     }
 
     fun closePopup(expected: GeckoSession? = null) {
-        val current = popup ?: return
+        val current = popup
+        if (current == null) {
+            popupTimeout?.let(mainHandler::removeCallbacks)
+            popupTimeout = null
+            return
+        }
         if (expected != null && current.session !== expected) return
+        popupTimeout?.let(mainHandler::removeCallbacks)
+        popupTimeout = null
         popup = null
         onPopupChanged(null)
         runCatching { current.session.setActive(false) }
@@ -164,15 +187,53 @@ internal class NormalTabExtensionRouter(
             .build()
         val popupSession = GeckoSession(settings)
         popupSession.setPermissionDelegate(DenyNormalTabExtensionDevicePermissions)
+        popupSession.setProgressDelegate(object : GeckoSession.ProgressDelegate {
+            override fun onPageStart(session: GeckoSession, url: String) {
+                updatePopupState(session, NormalTabExtensionPopupRenderState.LOADING)
+            }
+
+            override fun onPageStop(session: GeckoSession, success: Boolean) {
+                if (!success) updatePopupState(session, NormalTabExtensionPopupRenderState.FAILED)
+            }
+        })
+        popupSession.setContentDelegate(object : GeckoSession.ContentDelegate {
+            override fun onFirstComposite(session: GeckoSession) {
+                updatePopupState(session, NormalTabExtensionPopupRenderState.READY)
+            }
+
+            override fun onCrash(session: GeckoSession) {
+                updatePopupState(session, NormalTabExtensionPopupRenderState.FAILED)
+            }
+
+            override fun onKill(session: GeckoSession) {
+                updatePopupState(session, NormalTabExtensionPopupRenderState.FAILED)
+            }
+        })
         popupSession.open(runtime)
         popupSession.setActive(true)
         popup = NormalTabExtensionPopup(
             ownerTabId = owner,
+            extensionId = extension.id,
             title = extension.metaData.name?.takeIf(String::isNotBlank) ?: "Add-on",
             session = popupSession
         )
         onPopupChanged(popup)
+        popupTimeout?.let(mainHandler::removeCallbacks)
+        popupTimeout = Runnable {
+            updatePopupState(popupSession, NormalTabExtensionPopupRenderState.FAILED)
+        }.also { mainHandler.postDelayed(it, POPUP_RENDER_TIMEOUT_MS) }
         return GeckoResult.fromValue(popupSession)
+    }
+
+    private fun updatePopupState(session: GeckoSession, state: NormalTabExtensionPopupRenderState) {
+        val current = popup ?: return
+        if (current.session !== session || current.renderState == state) return
+        popup = current.copy(renderState = state)
+        onPopupChanged(popup)
+        if (state != NormalTabExtensionPopupRenderState.LOADING) {
+            popupTimeout?.let(mainHandler::removeCallbacks)
+            popupTimeout = null
+        }
     }
 
     private fun actionFor(
@@ -239,6 +300,10 @@ internal class NormalTabExtensionRouter(
         extension: WebExtension,
         action: WebExtension.Action
     ): GeckoResult<GeckoSession>? = createPopup(extension)
+
+    private companion object {
+        const val POPUP_RENDER_TIMEOUT_MS = 12_000L
+    }
 }
 
 /** Deny website/add-on requests for Android device permissions in normal Gecko tabs. */

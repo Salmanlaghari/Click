@@ -297,6 +297,7 @@ private fun ExtensionBrowserScreen(
                 ?: "https://duckduckgo.com/"
         )
     }
+    var approvedOptionsBaseUrl by remember { mutableStateOf<String?>(null) }
     var currentAmoEntry by remember { mutableStateOf<FirefoxAmoCatalogEntry?>(null) }
     var title by remember { mutableStateOf("Firefox for Android Add-ons") }
     var statusMessage by remember { mutableStateOf<String?>(null) }
@@ -317,7 +318,8 @@ private fun ExtensionBrowserScreen(
     val latestPopupSession = rememberUpdatedState(popupSession)
 
     fun canExposeAction(extension: WebExtension): Boolean =
-        extension.metaData.enabled && extensionPolicyBlockers(extension).isEmpty()
+        supportsNormalTabExtensionActions(address) &&
+            extension.metaData.enabled && extensionPolicyBlockers(extension).isEmpty()
 
     fun openActionPopup(extension: WebExtension): GeckoResult<GeckoSession>? {
         if (!canExposeAction(extension)) return null
@@ -338,7 +340,7 @@ private fun ExtensionBrowserScreen(
         isPageAction: Boolean
     ) {
         if (actionSession != null && actionSession !== session) return
-        val visible = canExposeAction(extension) && action.enabled != false &&
+        val visible = supportsNormalTabExtensionActions(address) && canExposeAction(extension) && action.enabled != false &&
             (!isPageAction || action.enabled == true)
         extensionActions = if (visible) {
             extensionActions + (extension.id to ExtensionActionItem(extension, action))
@@ -635,9 +637,9 @@ private fun ExtensionBrowserScreen(
                 session: GeckoSession,
                 request: GeckoSession.NavigationDelegate.LoadRequest
             ): GeckoResult<AllowOrDeny> {
-                val allowed = isAllowedExtensionBrowserNavigation(request.uri)
+                val allowed = isAllowedExtensionBrowserNavigation(request.uri, approvedOptionsBaseUrl)
                 if (!allowed) {
-                    statusMessage = "Only HTTP and HTTPS pages can be opened in the add-on store."
+                    statusMessage = "Only HTTP(S) pages and the verified options page of the selected add-on can be opened here."
                 }
                 return GeckoResult.fromValue(if (allowed) AllowOrDeny.ALLOW else AllowOrDeny.DENY)
             }
@@ -646,7 +648,7 @@ private fun ExtensionBrowserScreen(
                 session: GeckoSession,
                 request: GeckoSession.NavigationDelegate.LoadRequest
             ): GeckoResult<AllowOrDeny> = GeckoResult.fromValue(
-                if (isAllowedExtensionBrowserNavigation(request.uri)) AllowOrDeny.ALLOW else AllowOrDeny.DENY
+                if (isAllowedExtensionBrowserNavigation(request.uri, approvedOptionsBaseUrl)) AllowOrDeny.ALLOW else AllowOrDeny.DENY
             )
 
             override fun onLocationChange(
@@ -655,7 +657,11 @@ private fun ExtensionBrowserScreen(
                 permissions: List<GeckoSession.PermissionDelegate.ContentPermission>,
                 hasUserGesture: Boolean
             ) {
-                if (url != null) address = url
+                if (url != null) {
+                    address = url
+                    if (!supportsNormalTabExtensionActions(url)) extensionActions = emptyMap()
+                    else refreshExtensions()
+                }
             }
         })
         session.setContentDelegate(object : GeckoSession.ContentDelegate {
@@ -913,6 +919,7 @@ private fun ExtensionBrowserScreen(
                     optionsPageUrl == null ->
                         statusMessage = "Blocked: the options page is not on this add-on's own GeckoView origin."
                     else -> {
+                        approvedOptionsBaseUrl = metadata.baseUrl
                         showManager = false
                         address = optionsPageUrl
                         session.loadUri(optionsPageUrl)
