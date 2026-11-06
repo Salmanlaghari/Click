@@ -193,8 +193,13 @@ internal object ExtensionBrowserInput {
     }
 }
 
-/** Page and redirect navigations in the embedded add-on store stay on HTTP(S). */
-internal fun isAllowedExtensionBrowserNavigation(url: String): Boolean {
+/** Store pages stay on HTTP(S); only the currently selected add-on's verified options root is exempted. */
+internal fun isAllowedExtensionBrowserNavigation(
+    url: String,
+    approvedOptionsBaseUrl: String? = null
+): Boolean {
     val scheme = runCatching { java.net.URI(url).scheme?.lowercase() }.getOrNull()
-    return scheme == "http" || scheme == "https"
+    return scheme == "http" || scheme == "https" ||
+        (approvedOptionsBaseUrl != null &&
+            ExtensionInstallPolicy.isSafeExtensionOptionsNavigation(approvedOptionsBaseUrl, url))
 }

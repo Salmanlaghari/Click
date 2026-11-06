@@ -205,6 +205,15 @@ private data class PendingPasswordSaveOffer(
     val credential: SavedPassword
 )
 
+private data class PendingGeckoPasswordSaveOffer(
+    val tabId: String,
+    val session: org.mozilla.geckoview.GeckoSession,
+    val request: org.mozilla.geckoview.GeckoSession.PromptDelegate.AutocompleteRequest<org.mozilla.geckoview.Autocomplete.LoginSaveOption>,
+    val option: org.mozilla.geckoview.Autocomplete.LoginSaveOption,
+    val completion: org.mozilla.geckoview.GeckoResult<org.mozilla.geckoview.GeckoSession.PromptDelegate.PromptResponse>,
+    val credential: SavedPassword
+)
+
 /**
  * Page transition wrapper — subtle fade + slide on every navigation start.
  * Extracted to a top-level composable because [androidx.compose.animation.AnimatedVisibility]
@@ -1256,6 +1265,9 @@ class MainActivity : FragmentActivity() {
             // Bumps every time a tab thumbnail is captured → recomposes the
             // visual tab switcher if it happens to be open.
             var thumbnailVersion by remember { mutableStateOf(0) }
+            val approvedExtensionOptionsBasesByTab = remember {
+                androidx.compose.runtime.mutableStateMapOf<String, String>()
+            }
 
             /**
              * Single close-tab path used by the top tab strip AND the visual
@@ -1266,6 +1278,7 @@ class MainActivity : FragmentActivity() {
             fun closeTabAt(idx: Int) {
                 if (idx !in tabs.indices) return
                 val closed = tabs[idx]
+                approvedExtensionOptionsBasesByTab.remove(closed.id)
                 RecentlyClosedTabs.push(
                     closed.title, closed.url, closed.isIncognito, closed.engine
                 )
@@ -1657,6 +1670,7 @@ class MainActivity : FragmentActivity() {
                 }
             }
             var showSettings by remember { mutableStateOf(false) }
+            var showClickDiagnostics by remember { mutableStateOf(false) }
             var showFindInPageDialog by remember { mutableStateOf(false) }
             var findQuery by remember { mutableStateOf("") }
 
@@ -1676,9 +1690,6 @@ class MainActivity : FragmentActivity() {
             var installedAddonPanelRequestId by remember { mutableIntStateOf(0) }
             LaunchedEffect(geckoTabPopupState.value) {
                 if (geckoTabPopupState.value != null) showInstalledAddonsPanel = false
-            }
-            val approvedExtensionOptionsBasesByTab = remember {
-                androidx.compose.runtime.mutableStateMapOf<String, String>()
             }
             fun refreshInstalledAddonPanel() {
                 val requestId = ++installedAddonPanelRequestId
@@ -1832,6 +1843,9 @@ class MainActivity : FragmentActivity() {
             var showPasswordSaveDialog by remember { mutableStateOf(false) }
             var pendingPasswordSave by remember {
                 mutableStateOf<PendingPasswordSaveOffer?>(null)
+            }
+            var pendingGeckoPasswordSave by remember {
+                mutableStateOf<PendingGeckoPasswordSaveOffer?>(null)
             }
             // Password manager: saved-logins management screen.
             var showPasswordManager by remember { mutableStateOf(false) }
@@ -3761,10 +3775,22 @@ class MainActivity : FragmentActivity() {
                                                                         } else null
                                                                     }
                                                                 },
-                                                                onRendererFailure = {
+                                                                onRendererFailure = { event ->
                                                                     runOnUiThread {
                                                                         tabs.firstOrNull { it.id == tabId }?.rendererRecoveryRequired =
-                                                                            geckoRendererRecoveryRequired(GeckoRenderEvent.PROCESS_CRASHED)
+                                                                            geckoRendererRecoveryRequired(event)
+                                                                        val code = when (event) {
+                                                                            GeckoRenderEvent.PROCESS_CRASHED ->
+                                                                                com.click.browser.engine.ClickCatLogCode.GECKO_RENDERER_CRASHED
+                                                                            GeckoRenderEvent.PROCESS_KILLED ->
+                                                                                com.click.browser.engine.ClickCatLogCode.GECKO_RENDERER_KILLED
+                                                                            else -> null
+                                                                        }
+                                                                        if (code != null) {
+                                                                            com.click.browser.engine.ClickDiagnosticsLog.record(
+                                                                                this@MainActivity, code, toMode = activeMode
+                                                                            )
+                                                                        }
                                                                     }
                                                                 },
                                                                 onRendererRecovery = { event ->
@@ -3817,6 +3843,57 @@ class MainActivity : FragmentActivity() {
                                                                                 responseBody = body
                                                                             )
                                                                         }
+                                                                    }
+                                                                },
+                                                                onLoginSavePrompt = { promptTabId, promptSession, request ->
+                                                                    val completion = org.mozilla.geckoview.GeckoResult<org.mozilla.geckoview.GeckoSession.PromptDelegate.PromptResponse>()
+                                                                    val option = request.options.firstOrNull()
+                                                                    val login = option?.value
+                                                                    val candidate = login?.let {
+                                                                        com.click.browser.engine.geckoLoginSaveCandidate(
+                                                                            it.origin, it.username, it.password
+                                                                        )
+                                                                    }
+                                                                    if (option == null || candidate == null) {
+                                                                        org.mozilla.geckoview.GeckoResult.fromValue(request.dismiss())
+                                                                    } else {
+                                                                        scope.launch {
+                                                                            val managerEnabled = try {
+                                                                                com.click.browser.engine.PasswordManager.isEnabled(this@MainActivity)
+                                                                            } catch (_: Exception) { false }
+                                                                            val offerTab = tabs.firstOrNull { it.id == promptTabId }
+                                                                            val liveSession = offerTab?.browserSession as? GeckoBrowserTabSession
+                                                                            val activeRegularTab = offerTab != null &&
+                                                                                offerTab.engine == BrowserTabEngine.GECKOVIEW &&
+                                                                                !offerTab.isIncognito &&
+                                                                                currentTab.id == promptTabId &&
+                                                                                tabs.indexOf(offerTab) == activeTabIndex &&
+                                                                                liveSession?.session === promptSession
+                                                                            val canOffer = com.click.browser.engine.shouldOfferGeckoLoginSave(
+                                                                                managerEnabled, activeRegularTab, candidate
+                                                                            ) && !showPasswordSaveDialog &&
+                                                                                pendingPasswordSave == null &&
+                                                                                pendingGeckoPasswordSave == null
+                                                                            if (canOffer) {
+                                                                                pendingGeckoPasswordSave = PendingGeckoPasswordSaveOffer(
+                                                                                    tabId = promptTabId,
+                                                                                    session = promptSession,
+                                                                                    request = request,
+                                                                                    option = option,
+                                                                                    completion = completion,
+                                                                                    credential = com.click.browser.engine.SavedPassword(
+                                                                                        host = candidate.host,
+                                                                                        username = candidate.username,
+                                                                                        password = candidate.password,
+                                                                                        origin = candidate.origin
+                                                                                    )
+                                                                                )
+                                                                                showPasswordSaveDialog = true
+                                                                            } else {
+                                                                                completion.complete(request.dismiss())
+                                                                            }
+                                                                        }
+                                                                        completion
                                                                     }
                                                                 }
                                                             )
@@ -4032,12 +4109,12 @@ class MainActivity : FragmentActivity() {
                                                                 // autofill are both disabled on HTTP and in private tabs.
                                                                 view?.let { wv ->
                                                                     val pageUrl = wv.url.orEmpty()
-                                                                    val host = com.click.browser.engine.PasswordOriginPolicy.securePageHost(pageUrl)
+                                                                    val pageOrigin = com.click.browser.engine.PasswordOriginPolicy.securePageOrigin(pageUrl)
                                                                     val callbackMatchesPage =
                                                                         com.click.browser.engine.PasswordOriginPolicy.isSameSecureOrigin(
                                                                             url.orEmpty(), pageUrl
                                                                         )
-                                                                    if (host != null && callbackMatchesPage && !finishedTab.isIncognito) {
+                                                                    if (pageOrigin != null && callbackMatchesPage && !finishedTab.isIncognito) {
                                                                         wv.evaluateJavascript(
                                                                             com.click.browser.engine.PasswordDetector.PASSWORD_DETECT_JS,
                                                                             null
@@ -4047,8 +4124,8 @@ class MainActivity : FragmentActivity() {
                                                                                 com.click.browser.engine.PasswordManager.isEnabled(this@MainActivity)
                                                                             } catch (_: Exception) { false }
                                                                             if (!managerEnabled) return@launch
-                                                                            val saved = com.click.browser.engine.PasswordManager.getForHost(
-                                                                                this@MainActivity, host
+                                                                            val saved = com.click.browser.engine.PasswordManager.getForOrigin(
+                                                                                this@MainActivity, pageOrigin
                                                                             )
                                                                             if (saved != null) {
                                                                                 val js = "window.__clickFillLogin(" +
@@ -4326,7 +4403,7 @@ class MainActivity : FragmentActivity() {
                                                         try {
                                                             if (WebViewFeature.isFeatureSupported(WebViewFeature.WEB_MESSAGE_LISTENER)) {
                                                                 val passwordWebView = this
-                                                                val passwordBridge = com.click.browser.engine.PasswordBridge { sourceOrigin, host, username, password ->
+                                                                val passwordBridge = com.click.browser.engine.PasswordBridge { sourceOrigin, credentialOrigin, username, password ->
                                                                     runOnUiThread {
                                                                         val offerTab = tabs.firstOrNull { it.webView === passwordWebView }
                                                                             ?: return@runOnUiThread
@@ -4335,7 +4412,10 @@ class MainActivity : FragmentActivity() {
                                                                                 sourceOrigin, passwordWebView.url.orEmpty()
                                                                             )
                                                                         ) return@runOnUiThread
-                                                                        if (showPasswordSaveDialog || pendingPasswordSave != null) return@runOnUiThread
+                                                                        if (showPasswordSaveDialog || pendingPasswordSave != null || pendingGeckoPasswordSave != null) return@runOnUiThread
+                                                                        val credentialHost = com.click.browser.engine.PasswordOriginPolicy.hostFromSecureOrigin(
+                                                                            credentialOrigin
+                                                                        ) ?: return@runOnUiThread
                                                                         scope.launch {
                                                                             val managerEnabled = try {
                                                                                 com.click.browser.engine.PasswordManager.isEnabled(this@MainActivity)
@@ -4347,15 +4427,16 @@ class MainActivity : FragmentActivity() {
                                                                                 tabs.indexOf(currentOfferTab) != activeTabIndex ||
                                                                                 !com.click.browser.engine.PasswordOriginPolicy.isSameSecureOrigin(
                                                                                     sourceOrigin, passwordWebView.url.orEmpty()
-                                                                                ) || showPasswordSaveDialog || pendingPasswordSave != null
+                                                                                ) || showPasswordSaveDialog || pendingPasswordSave != null || pendingGeckoPasswordSave != null
                                                                             ) return@launch
                                                                             pendingPasswordSave = PendingPasswordSaveOffer(
                                                                                 tabId = currentOfferTab.id,
                                                                                 sourceOrigin = sourceOrigin,
                                                                                 credential = com.click.browser.engine.SavedPassword(
-                                                                                    host = host,
+                                                                                    host = credentialHost,
                                                                                     username = username,
-                                                                                    password = password
+                                                                                    password = password,
+                                                                                    origin = credentialOrigin
                                                                                 )
                                                                             )
                                                                             showPasswordSaveDialog = true
@@ -4551,8 +4632,13 @@ class MainActivity : FragmentActivity() {
                                                                 color = theme.onSurface,
                                                                 fontWeight = FontWeight.SemiBold
                                                             )
+                                                            val isExtensionOptionsPage = currentTab.url.startsWith("moz-extension://", ignoreCase = true)
                                                             Text(
-                                                                "The page address and browser history are still available. Reload the page or return to the previous page.",
+                                                                if (isExtensionOptionsPage) {
+                                                                    "This add-on settings page stopped rendering. Your previous webpage stays open in its own tab; close this tab or reload the settings page."
+                                                                } else {
+                                                                    "The page address and browser history are still available. Reload the page or return to the previous page."
+                                                                },
                                                                 color = theme.onSurface.copy(alpha = 0.8f)
                                                             )
                                                             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -4563,6 +4649,11 @@ class MainActivity : FragmentActivity() {
                                                                         }
                                                                     }) {
                                                                         Text("Back")
+                                                                    }
+                                                                }
+                                                                if (isExtensionOptionsPage && tabs.size > 1) {
+                                                                    TextButton(onClick = { closeTabAt(activeTabIndex) }) {
+                                                                        Text("Close tab")
                                                                     }
                                                                 }
                                                                 Button(onClick = {
@@ -4887,7 +4978,7 @@ class MainActivity : FragmentActivity() {
                                             .orEmpty()
                                             .firstOrNull { it.extensionId == extensionId }
                                         if (tab.engine != BrowserTabEngine.GECKOVIEW || tab.isIncognito ||
-                                            action == null || normalTabExtensionRouter?.clickAction(tab.id, action) !=
+                                            action == null || normalTabExtensionRouter?.clickAction(tab.id, action, tab.url) !=
                                             NormalTabActionDispatchResult.REQUESTED
                                         ) {
                                             Toast.makeText(
@@ -4935,10 +5026,15 @@ class MainActivity : FragmentActivity() {
                                                                 Toast.LENGTH_SHORT
                                                             ).show()
                                                         } else {
-                                                            approvedExtensionOptionsBasesByTab[tab.id] = baseUrl
                                                             showInstalledAddonsPanel = false
-                                                            tab.url = optionsUrl
-                                                            session.loadUrl(optionsUrl)
+                                                            val optionsTab = TabItem(
+                                                                url = optionsUrl,
+                                                                title = "${metadata?.name.orEmpty().ifBlank { "Add-on" }} Options",
+                                                                initialEngine = BrowserTabEngine.GECKOVIEW
+                                                            )
+                                                            approvedExtensionOptionsBasesByTab[optionsTab.id] = baseUrl
+                                                            tabs.add(optionsTab)
+                                                            activeTabIndex = tabs.lastIndex
                                                         }
                                                     }
                                                 }
@@ -4960,6 +5056,7 @@ class MainActivity : FragmentActivity() {
                                         openExtensionStore(tab)
                                     },
                                     currentTabUsesGecko = currentTab.engine == BrowserTabEngine.GECKOVIEW,
+                                    currentPageSupportsActions = com.click.browser.extensions.supportsNormalTabExtensionActions(currentTab.url),
                                     onDismiss = { showInstalledAddonsPanel = false }
                                 )
                             }
@@ -4998,15 +5095,45 @@ class MainActivity : FragmentActivity() {
                                                     Icon(Icons.Default.Close, contentDescription = "Close add-on popup")
                                                 }
                                             }
-                                            key(extensionPopup.session) {
-                                                AndroidView(
-                                                    modifier = Modifier.fillMaxWidth().height(420.dp),
-                                                    factory = { popupContext ->
-                                                        org.mozilla.geckoview.GeckoView(popupContext).apply {
-                                                            setSession(extensionPopup.session)
-                                                        }
+                                            when (extensionPopup.renderState) {
+                                                com.click.browser.extensions.NormalTabExtensionPopupRenderState.LOADING -> {
+                                                    Row(
+                                                        modifier = Modifier.fillMaxWidth().height(220.dp),
+                                                        verticalAlignment = Alignment.CenterVertically,
+                                                        horizontalArrangement = Arrangement.Center
+                                                    ) {
+                                                        CircularProgressIndicator()
+                                                        Text("Loading add-on action…", modifier = Modifier.padding(start = 12.dp), color = theme.onSurface)
                                                     }
-                                                )
+                                                }
+                                                com.click.browser.extensions.NormalTabExtensionPopupRenderState.READY -> key(extensionPopup.session) {
+                                                    AndroidView(
+                                                        modifier = Modifier.fillMaxWidth().height(420.dp),
+                                                        factory = { popupContext ->
+                                                            org.mozilla.geckoview.GeckoView(popupContext).apply {
+                                                                setSession(extensionPopup.session)
+                                                            }
+                                                        }
+                                                    )
+                                                }
+                                                com.click.browser.extensions.NormalTabExtensionPopupRenderState.FAILED -> Column(
+                                                    modifier = Modifier.fillMaxWidth().heightIn(min = 220.dp).padding(20.dp),
+                                                    horizontalAlignment = Alignment.CenterHorizontally,
+                                                    verticalArrangement = Arrangement.Center
+                                                ) {
+                                                    Text("This add-on popup stopped loading or did not render. Your webpage is still open.", color = theme.onSurface)
+                                                    androidx.compose.material3.TextButton(
+                                                        enabled = com.click.browser.extensions.supportsNormalTabExtensionActions(currentTab.url),
+                                                        onClick = {
+                                                            val action = geckoTabActionsState.value[currentTab.id].orEmpty()
+                                                                .firstOrNull { it.extensionId == extensionPopup.extensionId }
+                                                            normalTabExtensionRouter?.closePopup(extensionPopup.session)
+                                                            if (action != null) {
+                                                                normalTabExtensionRouter?.clickAction(currentTab.id, action, currentTab.url)
+                                                            }
+                                                        }
+                                                    ) { Text("Try again") }
+                                                }
                                             }
                                         }
                                     }
@@ -5565,6 +5692,7 @@ class MainActivity : FragmentActivity() {
                                     onOpenLanguage = { showSettings = false; showLanguage = true },
                                     onOpenDownloadSettings = { showSettings = false; showDownloadSettings = true },
                                     onOpenReports = { showSettings = false; showReports = true },
+                                    onOpenCatLog = { showSettings = false; showClickDiagnostics = true },
                                     onOpenPrivacySecurity = { showSettings = false; showPrivacySecurity = true },
                                     locationSummary = LocationGuard.websitesWillSee(),
                                     onOpenLocationSettings = { showLocationSettings = true },
@@ -5837,13 +5965,27 @@ class MainActivity : FragmentActivity() {
                                     onClose = { showReports = false }
                                 )
                             }
+                            if (showClickDiagnostics) {
+                                com.click.browser.ui.screens.ClickDiagnosticsScreen(
+                                    theme = theme,
+                                    onClose = { showClickDiagnostics = false }
+                                )
+                            }
                             // Per-site settings sheet (lock icon in the address bar).
                             // Mode-switch confirmation: mode changes need a process
                             // restart (WebView data dir pinned at boot). The user
                             // confirms, then we save + restart. Cancel = stay.
                             pendingModeSwitch?.let { targetMode ->
                                 androidx.compose.material3.AlertDialog(
-                                    onDismissRequest = { pendingModeSwitch = null },
+                                    onDismissRequest = {
+                                        com.click.browser.engine.ClickDiagnosticsLog.record(
+                                            this@MainActivity,
+                                            com.click.browser.engine.ClickCatLogCode.MODE_SWITCH_CANCELLED,
+                                            V9Engine.bootMode,
+                                            targetMode
+                                        )
+                                        pendingModeSwitch = null
+                                    },
                                     title = {
                                         androidx.compose.material3.Text("Switch to ${targetMode.display().title}?")
                                     },
@@ -5864,7 +6006,15 @@ class MainActivity : FragmentActivity() {
                                         }
                                     },
                                     dismissButton = {
-                                        androidx.compose.material3.TextButton(onClick = { pendingModeSwitch = null }) {
+                                        androidx.compose.material3.TextButton(onClick = {
+                                            com.click.browser.engine.ClickDiagnosticsLog.record(
+                                                this@MainActivity,
+                                                com.click.browser.engine.ClickCatLogCode.MODE_SWITCH_CANCELLED,
+                                                V9Engine.bootMode,
+                                                targetMode
+                                            )
+                                            pendingModeSwitch = null
+                                        }) {
                                             androidx.compose.material3.Text("Cancel")
                                         }
                                     }
@@ -6290,17 +6440,25 @@ class MainActivity : FragmentActivity() {
                             }
                             // Password manager: "Save password?" offer dialog.
                             val pwOffer = pendingPasswordSave
-                            if (showPasswordSaveDialog && pwOffer != null) {
-                                val pwSave = pwOffer.credential
+                            val geckoPwOffer = pendingGeckoPasswordSave
+                            val pwSave = pwOffer?.credential ?: geckoPwOffer?.credential
+                            if (showPasswordSaveDialog && pwSave != null) {
+                                fun dismissGeckoOffer() {
+                                    geckoPwOffer?.let { offer ->
+                                        runCatching { offer.completion.complete(offer.request.dismiss()) }
+                                    }
+                                }
                                 AlertDialog(
                                     onDismissRequest = {
                                         showPasswordSaveDialog = false
                                         pendingPasswordSave = null
+                                        pendingGeckoPasswordSave = null
+                                        dismissGeckoOffer()
                                     },
                                     title = { Text("Save password?") },
                                     text = {
                                         Text(
-                                            "Save the login for ${pwSave.host} " +
+                                            "Save the login for ${pwSave.origin.removePrefix("https://")} " +
                                                 (if (pwSave.username.isNotBlank()) "(${pwSave.username}) " else "") +
                                                 "in Click's encrypted password manager?"
                                         )
@@ -6309,36 +6467,75 @@ class MainActivity : FragmentActivity() {
                                         TextButton(onClick = {
                                             showPasswordSaveDialog = false
                                             pendingPasswordSave = null
+                                            pendingGeckoPasswordSave = null
                                             scope.launch {
                                                 val managerEnabled = try {
                                                     com.click.browser.engine.PasswordManager.isEnabled(this@MainActivity)
                                                 } catch (_: Exception) { false }
-                                                val saveTab = tabs.firstOrNull { it.id == pwOffer.tabId }
-                                                val offerStillValid = managerEnabled &&
-                                                    saveTab != null &&
-                                                    currentTab.id == pwOffer.tabId &&
-                                                    tabs.indexOf(saveTab) == activeTabIndex &&
-                                                    !saveTab.isIncognito &&
-                                                    com.click.browser.engine.PasswordOriginPolicy.isSameSecureOrigin(
-                                                        pwOffer.sourceOrigin,
-                                                        saveTab.webView?.url.orEmpty()
-                                                    )
-                                                val saved = if (offerStillValid) {
-                                                    try {
-                                                        com.click.browser.engine.PasswordManager.save(
-                                                            this@MainActivity,
-                                                            pwSave.host, pwSave.username, pwSave.password
-                                                        )
-                                                        true
-                                                    } catch (_: Exception) { false }
-                                                } else false
-                                                val notice = when {
-                                                    !managerEnabled -> "Password manager is off; password not saved."
-                                                    !offerStillValid -> "Page changed; password not saved."
-                                                    saved -> "Password saved (encrypted)."
-                                                    else -> "Could not save password."
+                                                if (!managerEnabled) {
+                                                    dismissGeckoOffer()
+                                                    Toast.makeText(this@MainActivity, "Password manager is off; password not saved.", Toast.LENGTH_SHORT).show()
+                                                    return@launch
                                                 }
-                                                Toast.makeText(this@MainActivity, notice, Toast.LENGTH_SHORT).show()
+                                                if (pwOffer != null) {
+                                                    val saveTab = tabs.firstOrNull { it.id == pwOffer.tabId }
+                                                    val offerStillValid = saveTab != null &&
+                                                        currentTab.id == pwOffer.tabId &&
+                                                        tabs.indexOf(saveTab) == activeTabIndex &&
+                                                        !saveTab.isIncognito &&
+                                                        com.click.browser.engine.PasswordOriginPolicy.isSameSecureOrigin(
+                                                            pwOffer.sourceOrigin,
+                                                            saveTab.webView?.url.orEmpty()
+                                                        )
+                                                    val saved = if (offerStillValid) {
+                                                        try {
+                                                            com.click.browser.engine.PasswordManager.saveForOrigin(
+                                                                this@MainActivity,
+                                                                pwSave.origin,
+                                                                pwSave.username,
+                                                                pwSave.password
+                                                            )
+                                                            true
+                                                        } catch (_: Exception) { false }
+                                                    } else false
+                                                    val notice = when {
+                                                        !offerStillValid -> "Page changed; password not saved."
+                                                        saved -> "Password saved (encrypted)."
+                                                        else -> "Could not save password."
+                                                    }
+                                                    Toast.makeText(this@MainActivity, notice, Toast.LENGTH_SHORT).show()
+                                                } else if (geckoPwOffer != null) {
+                                                    val saveTab = tabs.firstOrNull { it.id == geckoPwOffer.tabId }
+                                                    val liveSession = saveTab?.browserSession as? GeckoBrowserTabSession
+                                                    val originValid = com.click.browser.engine.PasswordOriginPolicy.secureOrigin(
+                                                        pwSave.origin, isMainFrame = true
+                                                    ) == pwSave.origin
+                                                    val offerStillValid = saveTab != null && originValid &&
+                                                        currentTab.id == geckoPwOffer.tabId &&
+                                                        tabs.indexOf(saveTab) == activeTabIndex &&
+                                                        saveTab.engine == BrowserTabEngine.GECKOVIEW &&
+                                                        !saveTab.isIncognito && liveSession?.session === geckoPwOffer.session
+                                                    if (!offerStillValid) {
+                                                        dismissGeckoOffer()
+                                                        Toast.makeText(this@MainActivity, "Page changed; password not saved.", Toast.LENGTH_SHORT).show()
+                                                    } else {
+                                                        try {
+                                                            com.click.browser.engine.PasswordManager.saveForOrigin(
+                                                                this@MainActivity,
+                                                                pwSave.origin,
+                                                                pwSave.username,
+                                                                pwSave.password
+                                                            )
+                                                            geckoPwOffer.completion.complete(
+                                                                geckoPwOffer.request.confirm(geckoPwOffer.option)
+                                                            )
+                                                            Toast.makeText(this@MainActivity, "Password saved (encrypted).", Toast.LENGTH_SHORT).show()
+                                                        } catch (_: Exception) {
+                                                            dismissGeckoOffer()
+                                                            Toast.makeText(this@MainActivity, "Could not save password.", Toast.LENGTH_SHORT).show()
+                                                        }
+                                                    }
+                                                }
                                             }
                                         }) {
                                             Text("Save")
@@ -6348,6 +6545,8 @@ class MainActivity : FragmentActivity() {
                                         TextButton(onClick = {
                                             showPasswordSaveDialog = false
                                             pendingPasswordSave = null
+                                            pendingGeckoPasswordSave = null
+                                            dismissGeckoOffer()
                                         }) {
                                             Text("Not now")
                                         }
@@ -6935,6 +7134,10 @@ class MainActivity : FragmentActivity() {
             if (shouldPersistNoRestartModeSelection(savedMode, mode)) {
                 modeManager.setMode(mode)
             }
+            com.click.browser.engine.ClickDiagnosticsLog.record(
+                this, com.click.browser.engine.ClickCatLogCode.MODE_CHANGED_WITHOUT_RESTART,
+                savedMode, mode
+            )
             webView?.let { modeManager.applySettings(it, mode, forceDesktop) }
             android.widget.Toast.makeText(
                 this, "${mode.display().title} activated", android.widget.Toast.LENGTH_SHORT
@@ -6956,6 +7159,7 @@ class MainActivity : FragmentActivity() {
         // mirror is refreshed after composition; only its DataStore write is
         // debounced. Clear-on-exit still removes the snapshot and marker.
         val sourceMode = V9Engine.bootMode
+        com.click.browser.engine.ClickDiagnosticsLog.beginModeSwitch(this, sourceMode, mode)
         modeSwitchInProgress = true
         if (liveFlags.clearOnExit) {
             SessionRestore.clearSession(this, sourceMode)
@@ -6964,6 +7168,10 @@ class MainActivity : FragmentActivity() {
                 this, sourceMode, liveRestoreTabs, liveRestoreActiveIndex
             )
         }
+        com.click.browser.engine.ClickDiagnosticsLog.record(
+            this, com.click.browser.engine.ClickCatLogCode.MODE_SWITCH_SESSION_SAVED,
+            sourceMode, mode
+        )
         SessionRestore.markCleanExit(this, sourceMode, true)
         val restarted = V9Engine.restartForEngineSwitch(
             this, modeManager, mode,
@@ -6975,6 +7183,10 @@ class MainActivity : FragmentActivity() {
             runCatching { SessionRestore.clearModeSwitchRestore(this, sourceMode) }
             runCatching { SessionRestore.markCleanExit(this, sourceMode, false) }
             modeSwitchInProgress = false
+            com.click.browser.engine.ClickDiagnosticsLog.record(
+                this, com.click.browser.engine.ClickCatLogCode.MODE_SWITCH_ROLLED_BACK,
+                sourceMode, mode
+            )
             if (!selectionRestored) {
                 android.util.Log.e("V9Engine", "Could not restore the saved browser mode after a failed profile restart")
             }

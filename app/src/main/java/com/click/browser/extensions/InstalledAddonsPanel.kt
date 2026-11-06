@@ -87,6 +87,7 @@ internal fun InstalledAddonsPanel(
     onOpenOptions: (String) -> Unit,
     onOpenStore: () -> Unit,
     currentTabUsesGecko: Boolean,
+    currentPageSupportsActions: Boolean,
     onDismiss: () -> Unit
 ) {
     ModalBottomSheet(
@@ -197,7 +198,9 @@ internal fun InstalledAddonsPanel(
                                 } else {
                                     if (addOn.toolbarAction != null) {
                                         Text(
-                                            if (addOn.toolbarAction.pageAction) {
+                                            if (!currentPageSupportsActions) {
+                                                "Add-on actions are available on ordinary HTTP(S) website tabs, not on add-on settings pages."
+                                            } else if (addOn.toolbarAction.pageAction) {
                                                 "A page action is available on this tab."
                                             } else {
                                                 "A toolbar action is available. If it declares a popup, it opens here; otherwise it may run in the background."
@@ -225,12 +228,12 @@ internal fun InstalledAddonsPanel(
                                         )
                                     }
 
-                                    if (addOn.canOpenAction || addOn.canOpenOptions) {
+                                    if ((addOn.canOpenAction && currentPageSupportsActions) || addOn.canOpenOptions) {
                                         Row(
                                             modifier = Modifier.fillMaxWidth(),
                                             horizontalArrangement = Arrangement.spacedBy(8.dp)
                                         ) {
-                                            if (addOn.canOpenAction) {
+                                            if (addOn.canOpenAction && currentPageSupportsActions) {
                                                 OutlinedButton(
                                                     onClick = { onOpenAction(addOn.id) },
                                                     modifier = Modifier.weight(1f)

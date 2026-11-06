@@ -218,6 +218,25 @@ class ExtensionInstallPolicyTest {
     fun storePageNavigationRejectsNonWebSchemes() {
         assertTrue(isAllowedExtensionBrowserNavigation("https://addons.mozilla.org/android/"))
         assertTrue(isAllowedExtensionBrowserNavigation("http://example.com/"))
+        val approvedOptionsRoot = "moz-extension://verified-addon-id/"
+        assertTrue(
+            isAllowedExtensionBrowserNavigation(
+                "moz-extension://verified-addon-id/options.html",
+                approvedOptionsRoot
+            )
+        )
+        assertFalse(
+            isAllowedExtensionBrowserNavigation(
+                "moz-extension://other-addon-id/options.html",
+                approvedOptionsRoot
+            )
+        )
+        assertFalse(
+            isAllowedExtensionBrowserNavigation(
+                "moz-extension://verified-addon-id-evil/options.html",
+                approvedOptionsRoot
+            )
+        )
         assertFalse(isAllowedExtensionBrowserNavigation("javascript:alert(1)"))
         assertFalse(isAllowedExtensionBrowserNavigation("file:///etc/passwd"))
         assertFalse(isAllowedExtensionBrowserNavigation("data:text/html,hi"))

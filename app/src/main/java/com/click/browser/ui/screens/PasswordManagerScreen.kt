@@ -104,8 +104,8 @@ fun PasswordManagerScreen(
                         modifier = Modifier.padding(bottom = 4.dp)
                     )
                 }
-                items(passwords, key = { it.host + it.username }) { pw ->
-                    val key = pw.host + pw.username
+                items(passwords, key = { it.origin + it.username }) { pw ->
+                    val key = pw.origin + pw.username
                     val isRevealed = key in revealed
                     Card(
                         shape = RoundedCornerShape(14.dp),
@@ -118,7 +118,7 @@ fun PasswordManagerScreen(
                         ) {
                             Column(modifier = Modifier.weight(1f)) {
                                 Text(
-                                    pw.host,
+                                    pw.origin.removePrefix("https://"),
                                     color = theme.onSurface,
                                     fontWeight = FontWeight.SemiBold,
                                     fontSize = 15.sp
@@ -145,7 +145,7 @@ fun PasswordManagerScreen(
                             }
                             IconButton(onClick = {
                                 scope.launch {
-                                    PasswordManager.delete(context, pw.host, pw.username)
+                                    PasswordManager.deleteForOrigin(context, pw.origin, pw.username)
                                     refresh()
                                 }
                             }) {

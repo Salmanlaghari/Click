@@ -84,4 +84,28 @@ class NormalTabExtensionSupportTest {
         )
         assertTrue(events.isEmpty())
     }
+
+    @Test
+    fun actionsAreAvailableOnlyOnOrdinaryHttpAndHttpsPages() {
+        assertTrue(supportsNormalTabExtensionActions("https://example.com/article"))
+        assertTrue(supportsNormalTabExtensionActions("http://example.com/"))
+        assertFalse(supportsNormalTabExtensionActions("moz-extension://addon-id/options.html"))
+        assertFalse(supportsNormalTabExtensionActions("about:blank"))
+        assertFalse(supportsNormalTabExtensionActions("data:text/html,hello"))
+
+        val events = mutableListOf<String>()
+        assertEquals(
+            NormalTabActionDispatchResult.REJECTED,
+            dispatchNormalTabActionClick(
+                tabId = "visible-tab",
+                attachedTabIds = setOf("visible-tab"),
+                isEnabled = true,
+                isPolicyApproved = true,
+                isSupportedPage = false,
+                activateTab = { events += "activate:$it" },
+                clickAction = { events += "click" }
+            )
+        )
+        assertTrue(events.isEmpty())
+    }
 }

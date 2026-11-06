@@ -12,6 +12,9 @@ class PasswordOriginPolicyTest {
         assertEquals("accounts.example.com", PasswordOriginPolicy.secureHost("https://Accounts.Example.com", true))
         assertEquals("accounts.example.com", PasswordOriginPolicy.secureHost("https://accounts.example.com:443/", true))
         assertEquals("accounts.example.com", PasswordOriginPolicy.securePageHost("https://accounts.example.com/login?next=%2Fhome"))
+        assertEquals("https://accounts.example.com", PasswordOriginPolicy.secureOrigin("https://Accounts.Example.com:443", true))
+        assertEquals("https://accounts.example.com:8443", PasswordOriginPolicy.secureOrigin("https://accounts.example.com:8443", true))
+        assertEquals("https://accounts.example.com:8443", PasswordOriginPolicy.securePageOrigin("https://accounts.example.com:8443/login"))
     }
 
     @Test
@@ -22,6 +25,9 @@ class PasswordOriginPolicyTest {
         assertNull(PasswordOriginPolicy.secureHost("https://accounts.example.com/login", true))
         assertNull(PasswordOriginPolicy.secureHost("https://accounts.example.com?next=/", true))
         assertNull(PasswordOriginPolicy.securePageHost("http://accounts.example.com/login"))
+        assertNull(PasswordOriginPolicy.secureOrigin("http://accounts.example.com", true))
+        assertNull(PasswordOriginPolicy.secureOrigin("https://accounts.example.com/login", true))
+        assertNull(PasswordOriginPolicy.secureOrigin("https://accounts.example.com", false))
     }
 
     @Test

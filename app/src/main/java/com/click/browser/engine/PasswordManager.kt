@@ -29,7 +29,8 @@ data class SavedPassword(
     val host: String,
     val username: String,
     val password: String, // decrypted only in memory
-    val savedAt: Long = System.currentTimeMillis()
+    val savedAt: Long = System.currentTimeMillis(),
+    val origin: String = "https://$host"
 )
 
 object PasswordManager {
@@ -102,11 +103,18 @@ object PasswordManager {
             (0 until arr.length()).mapNotNull { i ->
                 try {
                     val o = arr.getJSONObject(i)
+                    val legacyHost = o.getString("host")
+                    val origin = PasswordOriginPolicy.secureOrigin(
+                        o.optString("origin").ifBlank { "https://$legacyHost" },
+                        isMainFrame = true
+                    ) ?: return@mapNotNull null
+                    val host = PasswordOriginPolicy.hostFromSecureOrigin(origin) ?: return@mapNotNull null
                     SavedPassword(
-                        host = o.getString("host"),
+                        host = host,
                         username = decrypt(o.getString("u")),
                         password = decrypt(o.getString("p")),
-                        savedAt = o.optLong("t", 0L)
+                        savedAt = o.optLong("t", 0L),
+                        origin = origin
                     )
                 } catch (_: Exception) { null }
             }
@@ -117,16 +125,30 @@ object PasswordManager {
         return getAll(context).firstOrNull { it.host.equals(host, ignoreCase = true) }
     }
 
+    suspend fun getForOrigin(context: Context, origin: String): SavedPassword? {
+        val normalized = PasswordOriginPolicy.secureOrigin(origin, isMainFrame = true) ?: return null
+        return getAll(context).firstOrNull { it.origin == normalized }
+    }
+
     suspend fun save(context: Context, host: String, username: String, password: String) {
+        saveForOrigin(context, "https://$host", username, password)
+    }
+
+    suspend fun saveForOrigin(context: Context, origin: String, username: String, password: String) {
+        val normalizedOrigin = PasswordOriginPolicy.secureOrigin(origin, isMainFrame = true)
+            ?: throw IllegalArgumentException("Only a valid HTTPS origin can store a login")
+        val host = PasswordOriginPolicy.hostFromSecureOrigin(normalizedOrigin)
+            ?: throw IllegalArgumentException("The HTTPS origin has no valid host")
         val existing = getAll(context).toMutableList()
-        existing.removeAll { it.host.equals(host, ignoreCase = true) && it.username == username }
-        existing.add(0, SavedPassword(host, username, password))
+        existing.removeAll { it.origin == normalizedOrigin && it.username == username }
+        existing.add(0, SavedPassword(host, username, password, origin = normalizedOrigin))
         // Cap at 200 entries.
         val trimmed = existing.take(200)
         val arr = JSONArray()
         for (s in trimmed) {
             arr.put(JSONObject().apply {
                 put("host", s.host)
+                put("origin", s.origin)
                 put("u", encrypt(s.username))
                 put("p", encrypt(s.password))
                 put("t", s.savedAt)
@@ -139,10 +161,23 @@ object PasswordManager {
         val remaining = getAll(context).filterNot {
             it.host.equals(host, ignoreCase = true) && it.username == username
         }
+        writeAll(context, remaining)
+    }
+
+    suspend fun deleteForOrigin(context: Context, origin: String, username: String) {
+        val normalized = PasswordOriginPolicy.secureOrigin(origin, isMainFrame = true) ?: return
+        val remaining = getAll(context).filterNot {
+            it.origin == normalized && it.username == username
+        }
+        writeAll(context, remaining)
+    }
+
+    private suspend fun writeAll(context: Context, entries: List<SavedPassword>) {
         val arr = JSONArray()
-        for (s in remaining) {
+        for (s in entries) {
             arr.put(JSONObject().apply {
                 put("host", s.host)
+                put("origin", s.origin)
                 put("u", encrypt(s.username))
                 put("p", encrypt(s.password))
                 put("t", s.savedAt)

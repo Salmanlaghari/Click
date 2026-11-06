@@ -156,7 +156,18 @@ object V9Engine {
         hackIntro: Boolean = false,
         advanceIntro: Boolean = false,
     ): Boolean {
-        modeManager.setMode(mode)
+        val sourceMode = bootMode
+        try {
+            modeManager.setMode(mode)
+        } catch (t: Throwable) {
+            ClickDiagnosticsLog.failModeSwitch(context, sourceMode, mode)
+            Log.e(TAG, "V9: target profile could not be saved", t)
+            if (t is kotlinx.coroutines.CancellationException) throw t
+            return false
+        }
+        ClickDiagnosticsLog.record(
+            context, ClickCatLogCode.MODE_SWITCH_TARGET_PERSISTED, sourceMode, mode
+        )
 
         // 1. Build the relaunch intent. If this fails we MUST NOT kill the
         // process — better to stay alive on the old engine than to die.
@@ -174,6 +185,7 @@ object V9Engine {
         }
         if (launch == null) {
             Log.e(TAG, "V9: no launch intent — staying in the current profile")
+            ClickDiagnosticsLog.failModeSwitch(context, sourceMode, mode)
             return false
         }
 
@@ -202,8 +214,12 @@ object V9Engine {
             // Last resort: do NOT kill or pretend the process-pinned profile
             // changed. The caller restores the saved selection to bootMode.
             Log.e(TAG, "V9: no restart path available — staying in the current profile")
+            ClickDiagnosticsLog.failModeSwitch(context, sourceMode, mode)
             return false
         }
+        ClickDiagnosticsLog.record(
+            context, ClickCatLogCode.MODE_SWITCH_RELAUNCH_SCHEDULED, sourceMode, mode
+        )
 
         // 3. Let the Activity finish its current UI work, then exit so the
         // scheduled PendingIntent can create a fresh process using the target
@@ -211,6 +227,9 @@ object V9Engine {
         // Activity's coroutine scope.
         withContext(NonCancellable) {
             delay(PROCESS_EXIT_DELAY_MS)
+            ClickDiagnosticsLog.record(
+                context, ClickCatLogCode.MODE_SWITCH_EXIT_REQUESTED, sourceMode, mode
+            )
             Process.killProcess(Process.myPid())
         }
         return true // unreachable
