@@ -82,3 +82,17 @@ export interface SavedPassword {
   passwordMasked: string;
   lastUsed: string;
 }
+
+export interface BrowserExtension {
+  id: string;
+  name: string;
+  description: string;
+  version: string;
+  author: string;
+  icon: string;
+  category: 'security' | 'appearance' | 'productivity' | 'developer';
+  enabled: boolean;
+  permissions: string[];
+  stats?: string;
+}
+

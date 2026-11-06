@@ -3,7 +3,8 @@ import {
   BrowserProfile, 
   Tab, 
   Bookmark, 
-  HistoryItem 
+  HistoryItem,
+  BrowserExtension
 } from './types/browser';
 import { MOCK_PAGES } from './data/mockWebsites';
 import { PhoneFrame } from './components/PhoneFrame';
@@ -11,6 +12,8 @@ import { AndroidNotificationShade } from './components/AndroidNotificationShade'
 import { BrowserAddressBar } from './components/BrowserAddressBar';
 import { BrowserToolbar } from './components/BrowserToolbar';
 import { BrowserMenuSheet } from './components/BrowserMenuSheet';
+import { BrowserSidebarDrawer } from './components/BrowserSidebarDrawer';
+import { ClickExtensionsModal } from './components/ClickExtensionsModal';
 import { TabSwitcherModal } from './components/TabSwitcherModal';
 import { EmulatorControls } from './components/EmulatorControls';
 
@@ -26,8 +29,8 @@ import { ClickDownloadsPage } from './components/pages/ClickDownloadsPage';
 import { ClickBookmarksPage } from './components/pages/ClickBookmarksPage';
 
 export const App: React.FC = () => {
-  // Profiles
-  const [currentProfile, setCurrentProfile] = useState<BrowserProfile>('developer');
+  // Profiles: Defaults to 'power' mode (matches user screenshot with warm sand theme and 16-tool card)
+  const [currentProfile, setCurrentProfile] = useState<BrowserProfile>('power');
 
   // Tabs state
   const [tabs, setTabs] = useState<Tab[]>([
@@ -38,7 +41,7 @@ export const App: React.FC = () => {
       isIncognito: false,
       history: ['click://home'],
       historyIndex: 0,
-      profile: 'developer',
+      profile: 'power',
       lastActive: Date.now(),
     },
     {
@@ -48,7 +51,7 @@ export const App: React.FC = () => {
       isIncognito: false,
       history: ['https://en.wikipedia.org/wiki/Web_browser'],
       historyIndex: 0,
-      profile: 'developer',
+      profile: 'power',
       lastActive: Date.now() - 1000,
     },
     {
@@ -58,7 +61,7 @@ export const App: React.FC = () => {
       isIncognito: false,
       history: ['click://vpn'],
       historyIndex: 0,
-      profile: 'developer',
+      profile: 'power',
       lastActive: Date.now() - 2000,
     }
   ]);
@@ -68,11 +71,93 @@ export const App: React.FC = () => {
   // VPN State
   const [vpnConnected, setVpnConnected] = useState<boolean>(true);
 
+  // Web Surfer & Immersive Modes
+  const [isFullView, setIsFullView] = useState<boolean>(false);
+  const [loadingProgress, setLoadingProgress] = useState<number>(0);
+
   // Modals & Drawers
   const [isNotificationShadeOpen, setIsNotificationShadeOpen] = useState(false);
+  const [isSidebarOpen, setIsSidebarOpen] = useState(false);
   const [isMenuOpen, setIsMenuOpen] = useState(false);
   const [isTabSwitcherOpen, setIsTabSwitcherOpen] = useState(false);
   const [isProfileModalOpen, setIsProfileModalOpen] = useState(false);
+  const [isExtensionsModalOpen, setIsExtensionsModalOpen] = useState(false);
+
+  // Play Store Compliant Declarative WebExtensions State
+  const [extensions, setExtensions] = useState<BrowserExtension[]>([
+    {
+      id: 'ext-adblock',
+      name: 'Brave Shields & EasyList',
+      description: 'Blocks intrusive video ads, trackers, and analytics telemetry before load.',
+      version: '3.4.1',
+      author: 'Click Privacy Lab',
+      icon: 'ShieldCheck',
+      category: 'security',
+      enabled: true,
+      permissions: ['declarativeNetRequest'],
+      stats: '48,219 rules active · 14 blocked on current domain'
+    },
+    {
+      id: 'ext-darkreader',
+      name: 'Dark Reader Pro',
+      description: 'Injects dynamic high-contrast dark theme CSS into websites to protect eyes.',
+      version: '4.9.68',
+      author: 'Alexander Shutov (Ported)',
+      icon: 'Moon',
+      category: 'appearance',
+      enabled: false,
+      permissions: ['activeTabCSS'],
+      stats: 'Smart invert filter ready'
+    },
+    {
+      id: 'ext-translate',
+      name: 'Webpage Translator',
+      description: 'Inline real-time neural translation ribbon powered by Google & DeepL.',
+      version: '2.1.0',
+      author: 'Click Tools',
+      icon: 'Languages',
+      category: 'productivity',
+      enabled: false,
+      permissions: ['activeTabScript'],
+      stats: 'Auto-detect foreign language'
+    },
+    {
+      id: 'ext-tampermonkey',
+      name: 'ScriptRunner Userscripts',
+      description: 'Client-side userscript engine: auto skip video ads, bypass anti-adblockers.',
+      version: '5.1.0',
+      author: 'Jan Biniok (Safe Sandbox)',
+      icon: 'Code',
+      category: 'developer',
+      enabled: true,
+      permissions: ['userScripts'],
+      stats: '3 active scripts running'
+    },
+    {
+      id: 'ext-privacybadger',
+      name: 'Privacy Badger & Anti-Fingerprint',
+      description: 'Spoofs Canvas, WebRTC, and AudioContext fingerprinting signatures.',
+      version: '2.8.4',
+      author: 'EFF (Safe Sandbox)',
+      icon: 'EyeOff',
+      category: 'security',
+      enabled: true,
+      permissions: ['privacyProtection'],
+      stats: 'Canvas noise spoof active'
+    },
+    {
+      id: 'ext-https',
+      name: 'HTTPS Everywhere',
+      description: 'Automatically encrypts all cleartext HTTP connections with TLS 1.3.',
+      version: '2024.1.0',
+      author: 'Tor Project & EFF',
+      icon: 'Lock',
+      category: 'security',
+      enabled: true,
+      permissions: ['webRequestUpgrade'],
+      stats: 'Forcing HTTPS on all routes'
+    }
+  ]);
 
   // Emulator Shell Config
   const [isLandscape, setIsLandscape] = useState(false);
@@ -87,41 +172,61 @@ export const App: React.FC = () => {
   ]);
 
   const [history, setHistory] = useState<HistoryItem[]>([
-    { id: 'h1', title: 'Click Home', url: 'click://home', visitedAt: Date.now() - 120000, profile: 'developer', isIncognito: false },
-    { id: 'h2', title: 'V9 Shield VPN', url: 'click://vpn', visitedAt: Date.now() - 60000, profile: 'developer', isIncognito: false },
-    { id: 'h3', title: 'Web browser - Wikipedia', url: 'https://en.wikipedia.org/wiki/Web_browser', visitedAt: Date.now() - 30000, profile: 'developer', isIncognito: false },
+    { id: 'h1', title: 'Click Home', url: 'click://home', visitedAt: Date.now() - 120000, profile: 'power', isIncognito: false },
+    { id: 'h2', title: 'V9 Shield VPN', url: 'click://vpn', visitedAt: Date.now() - 60000, profile: 'power', isIncognito: false },
+    { id: 'h3', title: 'Web browser - Wikipedia', url: 'https://en.wikipedia.org/wiki/Web_browser', visitedAt: Date.now() - 30000, profile: 'power', isIncognito: false },
   ]);
 
   // Current Active Tab
   const activeTab = tabs.find((t) => t.id === activeTabId) || tabs[0];
 
-  // Navigate URL on active tab
-  const handleNavigate = (newUrl: string) => {
-    setTabs((prev) =>
-      prev.map((tab) => {
-        if (tab.id !== activeTabId) return tab;
-        const newHist = tab.history.slice(0, tab.historyIndex + 1);
-        newHist.push(newUrl);
-
-        let pageTitle = newUrl;
-        if (newUrl.startsWith('click://')) {
-          const name = newUrl.replace('click://', '');
-          pageTitle = `Click ${name.charAt(0).toUpperCase() + name.slice(1)}`;
-        } else if (MOCK_PAGES[newUrl]) {
-          pageTitle = MOCK_PAGES[newUrl].title;
-        }
-
-        return {
-          ...tab,
-          url: newUrl,
-          title: pageTitle,
-          history: newHist,
-          historyIndex: newHist.length - 1,
-          isLoading: false,
-          lastActive: Date.now(),
-        };
-      })
+  // Extension toggle handler
+  const handleToggleExtension = (id: string) => {
+    setExtensions((prev) =>
+      prev.map((ext) => (ext.id === id ? { ...ext, enabled: !ext.enabled } : ext))
     );
+  };
+
+  // Navigate URL on active tab with smooth loading progress
+  const handleNavigate = (newUrl: string) => {
+    // Start smooth loading bar animation
+    setLoadingProgress(20);
+    setTabs((prev) =>
+      prev.map((tab) => (tab.id === activeTabId ? { ...tab, isLoading: true } : tab))
+    );
+
+    setTimeout(() => setLoadingProgress(65), 120);
+    setTimeout(() => setLoadingProgress(90), 250);
+
+    setTimeout(() => {
+      setLoadingProgress(100);
+      setTabs((prev) =>
+        prev.map((tab) => {
+          if (tab.id !== activeTabId) return tab;
+          const newHist = tab.history.slice(0, tab.historyIndex + 1);
+          newHist.push(newUrl);
+
+          let pageTitle = newUrl;
+          if (newUrl.startsWith('click://')) {
+            const name = newUrl.replace('click://', '');
+            pageTitle = `Click ${name.charAt(0).toUpperCase() + name.slice(1)}`;
+          } else if (MOCK_PAGES[newUrl]) {
+            pageTitle = MOCK_PAGES[newUrl].title;
+          }
+
+          return {
+            ...tab,
+            url: newUrl,
+            title: pageTitle,
+            history: newHist,
+            historyIndex: newHist.length - 1,
+            isLoading: false,
+            lastActive: Date.now(),
+          };
+        })
+      );
+      setTimeout(() => setLoadingProgress(0), 200);
+    }, 400);
 
     // Record history if not incognito
     if (!activeTab.isIncognito) {
@@ -165,14 +270,18 @@ export const App: React.FC = () => {
   };
 
   const handleReload = () => {
+    setLoadingProgress(25);
     setTabs((prev) =>
       prev.map((t) => (t.id === activeTab.id ? { ...t, isLoading: true } : t))
     );
+    setTimeout(() => setLoadingProgress(75), 150);
     setTimeout(() => {
+      setLoadingProgress(100);
       setTabs((prev) =>
         prev.map((t) => (t.id === activeTab.id ? { ...t, isLoading: false } : t))
       );
-    }, 400);
+      setTimeout(() => setLoadingProgress(0), 150);
+    }, 350);
   };
 
   const handleNewTab = (incognito: boolean = false) => {
@@ -193,7 +302,6 @@ export const App: React.FC = () => {
 
   const handleCloseTab = (id: string) => {
     if (tabs.length === 1) {
-      // Keep at least one tab
       const fallbackId = `tab-${Date.now()}`;
       setTabs([
         {
@@ -234,6 +342,13 @@ export const App: React.FC = () => {
     setIsProfileModalOpen(false);
   };
 
+  const handleClearData = () => {
+    setHistory([]);
+  };
+
+  const isDarkReaderActive = extensions.find((e) => e.id === 'ext-darkreader')?.enabled ?? false;
+  const isTranslatorActive = extensions.find((e) => e.id === 'ext-translate')?.enabled ?? false;
+
   // Render Web View Content
   const renderWebView = () => {
     const url = activeTab?.url || 'click://home';
@@ -252,6 +367,9 @@ export const App: React.FC = () => {
           onToggleDesktop={handleToggleDesktop}
           isDesktop={!!activeTab.isDesktop}
           bookmarks={bookmarks}
+          onOpenDevTools={() => handleNavigate('click://devtools')}
+          onOpenVpn={() => handleNavigate('click://vpn')}
+          onOpenAi={() => handleNavigate('click://ai')}
         />
       );
     }
@@ -266,15 +384,25 @@ export const App: React.FC = () => {
     }
 
     if (url === 'click://devtools') {
-      return <ClickDevToolsPage currentUrl={activeTab.url} />;
+      return (
+        <ClickDevToolsPage
+          currentUrl={url}
+        />
+      );
     }
 
     if (url === 'click://ai') {
-      return <ClickAiPage currentUrl={activeTab.url} />;
+      return (
+        <ClickAiPage
+          currentUrl={activeTab.url}
+        />
+      );
     }
 
     if (url === 'click://games') {
-      return <ClickGamesPage />;
+      return (
+        <ClickGamesPage />
+      );
     }
 
     if (url === 'click://settings') {
@@ -282,19 +410,21 @@ export const App: React.FC = () => {
         <ClickSettingsPage
           currentProfile={currentProfile}
           onSelectProfile={handleSelectProfile}
-          onClearData={() => {
-            setHistory([]);
-          }}
+          onClearData={handleClearData}
         />
       );
     }
 
     if (url === 'click://passwords') {
-      return <ClickPasswordsPage />;
+      return (
+        <ClickPasswordsPage />
+      );
     }
 
     if (url === 'click://downloads') {
-      return <ClickDownloadsPage />;
+      return (
+        <ClickDownloadsPage />
+      );
     }
 
     if (url === 'click://bookmarks') {
@@ -346,31 +476,48 @@ export const App: React.FC = () => {
       );
     }
 
-    // 3. Mock site renderer (avoid X-Frame-Options blocking)
-    if (MOCK_PAGES[url]) {
-      return (
-        <div 
-          className="h-full overflow-y-auto bg-neutral-950 text-neutral-100"
-          dangerouslySetInnerHTML={{ __html: MOCK_PAGES[url].content }}
-        />
-      );
-    }
+    // 3. External Webpage Surfing (with Dark Reader & Translator extension overlays)
+    const mock = MOCK_PAGES[url];
 
-    // 4. Fallback live iframe / embed preview
     return (
-      <div className="h-full w-full relative bg-neutral-950 flex flex-col">
-        <iframe
-          src={url}
-          title={activeTab.title}
-          className="w-full flex-1 border-0"
-          sandbox="allow-scripts allow-forms allow-popups"
-        />
+      <div className={`h-full w-full relative flex flex-col ${isDarkReaderActive ? 'filter invert hue-rotate-180 bg-neutral-950 text-neutral-100' : 'bg-white text-black'}`}>
+        {/* Play Store Safe Extension: Google/DeepL Translator Ribbon */}
+        {isTranslatorActive && (
+          <div className="bg-neutral-900 text-neutral-200 px-3 py-1.5 border-b border-neutral-700 flex items-center justify-between text-[11px] z-10 flex-shrink-0">
+            <div className="flex items-center gap-1.5">
+              <span className="w-2 h-2 rounded-full bg-blue-400" />
+              <span>Translated to English</span>
+              <span className="text-neutral-400 text-[10px]">(Google Neural Translate)</span>
+            </div>
+            <button 
+              onClick={() => handleToggleExtension('ext-translate')}
+              className="text-[10px] text-amber-400 hover:underline"
+            >
+              Show original
+            </button>
+          </div>
+        )}
+
+        {/* Content area: Mock Site or Live Iframe */}
+        {mock ? (
+          <div 
+            className="flex-1 overflow-y-auto p-4"
+            dangerouslySetInnerHTML={{ __html: mock.content }}
+          />
+        ) : (
+          <iframe
+            src={url}
+            title={activeTab.title}
+            className="w-full flex-1 border-0"
+            sandbox="allow-scripts allow-forms allow-popups"
+          />
+        )}
       </div>
     );
   };
 
   return (
-    <div className="min-h-screen w-full bg-neutral-950 flex flex-col text-neutral-100">
+    <div className="min-h-screen w-full bg-neutral-950 flex flex-col text-neutral-100 font-sans">
       {/* Emulator Hardware & Action Controls Header */}
       <EmulatorControls
         isLandscape={isLandscape}
@@ -396,6 +543,7 @@ export const App: React.FC = () => {
           ]);
           setActiveTabId('tab-1');
           setVpnConnected(true);
+          setIsFullView(false);
         }}
         vpnConnected={vpnConnected}
       />
@@ -411,16 +559,19 @@ export const App: React.FC = () => {
           isLandscape={isLandscape}
           showFrame={showFrame}
         >
-          {/* Top Address Bar (Omnibox) */}
+          {/* Top Address Bar (Omnibox with smooth loader and mode colors) */}
           <BrowserAddressBar
             currentUrl={activeTab.url}
             isLoading={!!activeTab.isLoading}
+            loadingProgress={loadingProgress}
             onNavigate={handleNavigate}
             onReload={handleReload}
             readerMode={activeTab.readerMode}
             onToggleReaderMode={handleToggleReaderMode}
             isDesktop={activeTab.isDesktop}
             onToggleDesktop={handleToggleDesktop}
+            isFullView={isFullView}
+            onToggleFullView={() => setIsFullView(!isFullView)}
             currentProfile={currentProfile}
             onOpenProfilePicker={() => setIsProfileModalOpen(true)}
             vpnConnected={vpnConnected}
@@ -433,8 +584,10 @@ export const App: React.FC = () => {
             canGoForward={activeTab.historyIndex < activeTab.history.length - 1}
             onGoBack={handleGoBack}
             onGoForward={handleGoForward}
-            onOpenMenu={() => setIsMenuOpen(true)}
+            onOpenMenu={() => setIsSidebarOpen(true)}
+            onOpenSidebar={() => setIsSidebarOpen(true)}
             onOpenTabs={() => setIsTabSwitcherOpen(true)}
+            onOpenExtensions={() => setIsExtensionsModalOpen(true)}
           />
 
           {/* Web Content Render Area */}
@@ -446,14 +599,42 @@ export const App: React.FC = () => {
           <BrowserToolbar
             tabCount={tabs.length}
             onOpenTabs={() => setIsTabSwitcherOpen(true)}
-            onOpenMenu={() => setIsMenuOpen(true)}
+            onOpenMenu={() => setIsSidebarOpen(true)}
             onOpenBookmarks={() => handleNavigate('click://bookmarks')}
             onOpenAi={() => handleNavigate('click://ai')}
-            onQuickAction={() => setIsMenuOpen(true)}
+            onQuickAction={() => setIsSidebarOpen(true)}
             currentProfile={currentProfile}
+            isFullView={isFullView}
           />
 
           {/* Overlays inside Phone viewport */}
+          <BrowserSidebarDrawer
+            isOpen={isSidebarOpen}
+            onClose={() => setIsSidebarOpen(false)}
+            currentProfile={currentProfile}
+            onSelectProfile={handleSelectProfile}
+            vpnConnected={vpnConnected}
+            onToggleVpn={() => setVpnConnected(!vpnConnected)}
+            isFullView={isFullView}
+            onToggleFullView={() => setIsFullView(!isFullView)}
+            isDesktop={!!activeTab.isDesktop}
+            onToggleDesktop={handleToggleDesktop}
+            isReaderMode={!!activeTab.readerMode}
+            onToggleReaderMode={handleToggleReaderMode}
+            onNavigate={handleNavigate}
+            onOpenExtensions={() => setIsExtensionsModalOpen(true)}
+            onClearData={handleClearData}
+            activeExtensionsCount={extensions.filter((e) => e.enabled).length}
+          />
+
+          <ClickExtensionsModal
+            isOpen={isExtensionsModalOpen}
+            onClose={() => setIsExtensionsModalOpen(false)}
+            extensions={extensions}
+            onToggleExtension={handleToggleExtension}
+            currentUrl={activeTab.url}
+          />
+
           <AndroidNotificationShade
             isOpen={isNotificationShadeOpen}
             onClose={() => setIsNotificationShadeOpen(false)}
@@ -506,9 +687,9 @@ export const App: React.FC = () => {
                 </p>
                 <div className="space-y-2">
                   {[
-                    { id: 'simple' as const, name: 'Simple', desc: 'Minimal & clean reading mode', color: 'text-blue-400' },
+                    { id: 'power' as const, name: 'Power', desc: 'Desktop-style browsing · Wide-page layout', color: 'text-amber-400' },
                     { id: 'developer' as const, name: 'Developer', desc: 'DevTools, DOM inspector & console', color: 'text-emerald-400' },
-                    { id: 'power' as const, name: 'Power', desc: 'High performance & aggressive adblock', color: 'text-amber-400' },
+                    { id: 'simple' as const, name: 'Simple', desc: 'Minimal & clean reading mode', color: 'text-sky-400' },
                     { id: 'advance' as const, name: 'Advance', desc: 'Separate app-data store & matrix HUD', color: 'text-lime-400' },
                   ].map((p) => (
                     <button
@@ -524,7 +705,7 @@ export const App: React.FC = () => {
                         <div className={`text-xs font-bold ${p.color}`}>{p.name}</div>
                         <div className="text-[10px] text-neutral-400">{p.desc}</div>
                       </div>
-                      {currentProfile === p.id && <span className="text-emerald-400 text-xs">✓ Active</span>}
+                      {currentProfile === p.id && <span className="text-emerald-400 text-xs font-bold">✓ Active</span>}
                     </button>
                   ))}
                 </div>
