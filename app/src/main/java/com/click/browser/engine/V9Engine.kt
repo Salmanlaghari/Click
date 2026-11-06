@@ -1,12 +1,15 @@
 package com.click.browser.engine
 
 import android.app.AlarmManager
+import android.app.ActivityOptions
 import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
+import android.os.Build
 import android.os.Process
 import android.util.Log
 import android.webkit.WebView
+import androidx.annotation.RequiresApi
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
@@ -195,10 +198,7 @@ object V9Engine {
         // the current process and is not a safe substitute.
         var scheduled = false
         try {
-            val pi = PendingIntent.getActivity(
-                context, RESTART_REQUEST_CODE, launch,
-                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
-            )
+            val pi = createModeSwitchRelaunchPendingIntent(context, launch)
             val am = context.getSystemService(Context.ALARM_SERVICE) as AlarmManager
             am.set(
                 AlarmManager.RTC_WAKEUP,
@@ -234,6 +234,55 @@ object V9Engine {
         }
         return true // unreachable
     }
+
+    /**
+     * Grant only this one-shot, explicit launcher PendingIntent the creator
+     * background-start mode needed to reopen after this user-requested process exit.
+     */
+    private fun createModeSwitchRelaunchPendingIntent(
+        context: Context,
+        launch: Intent,
+    ): PendingIntent {
+        val flags = PendingIntent.FLAG_UPDATE_CURRENT or
+            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_ONE_SHOT
+        val options = when (relaunchPendingIntentCreatorBackgroundStartMode(Build.VERSION.SDK_INT)) {
+            RelaunchBackgroundActivityStartMode.PLATFORM_DEFAULT -> null
+            RelaunchBackgroundActivityStartMode.ALLOW_BACKGROUND ->
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+                    backgroundActivityStartAllowedOptions()
+                } else {
+                    null
+                }
+            RelaunchBackgroundActivityStartMode.ALLOW_ALWAYS ->
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.BAKLAVA) {
+                    backgroundActivityStartAllowAlwaysOptions()
+                } else {
+                    null
+                }
+        }
+        return if (options == null) {
+            PendingIntent.getActivity(context, RESTART_REQUEST_CODE, launch, flags)
+        } else {
+            PendingIntent.getActivity(
+                context, RESTART_REQUEST_CODE, launch, flags, options.toBundle()
+            )
+        }
+    }
+
+    @RequiresApi(Build.VERSION_CODES.UPSIDE_DOWN_CAKE)
+    @Suppress("DEPRECATION") // ALLOWED is the correct mode on API 34-35.
+    private fun backgroundActivityStartAllowedOptions(): ActivityOptions =
+        ActivityOptions.makeBasic()
+            .setPendingIntentCreatorBackgroundActivityStartMode(
+                ActivityOptions.MODE_BACKGROUND_ACTIVITY_START_ALLOWED
+            )
+
+    @RequiresApi(Build.VERSION_CODES.BAKLAVA)
+    private fun backgroundActivityStartAllowAlwaysOptions(): ActivityOptions =
+        ActivityOptions.makeBasic()
+            .setPendingIntentCreatorBackgroundActivityStartMode(
+                ActivityOptions.MODE_BACKGROUND_ACTIVITY_START_ALLOW_ALWAYS
+            )
 
     /** Legacy intent extra: show the Power Mode intro animation on launch. */
     const val EXTRA_HACK_INTRO = "v9_hack_intro"
