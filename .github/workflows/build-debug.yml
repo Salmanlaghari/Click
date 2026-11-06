@@ -1,0 +1,287 @@
+name: Build and Package APKs
+
+# THE single Click build workflow. On every main push it produces the
+# properly-signed release APK (Prince's real keystore — never a
+# debug-signed "release" APK; the build fails loudly if the keystore
+# secrets are missing or invalid, per Prince's rule: no improperly
+# signed APKs, ever).
+#
+# Job 1 builds libbox.aar (sing-box VPN core) from official SagerNet
+# source with a version-pinned cache — a fast no-op when the pin in
+# app/libs/libbox.version hasn't changed. Built arm64-only (~28MB vs
+# 112MB universal) since 99%+ of phones are arm64.
+# Job 2 runs unsigned, secret-free debug checks on pull requests and builds
+# signed APK/AAB releases only from main. Tags never trigger this workflow.
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
+
+# CI uses read-only repository access. Pull-request builds receive no signing/API
+# secrets; signing and release artifacts are restricted to the protected main ref.
+permissions:
+  contents: read
+
+jobs:
+  build-libbox:
+    name: Build libbox.aar
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Read libbox version pin
+        id: libbox-version
+        run: echo "version=$(tr -d '[:space:]' < app/libs/libbox.version)" >> "$GITHUB_OUTPUT"
+
+      - name: Check cache
+        id: cache-libbox
+        uses: actions/cache@v4
+        with:
+          path: libbox.aar
+          # arm64-only build (Phase 1 slimming): 4-ABI universal was 112MB,
+          # arm64-only is ~28MB. Cache key includes ABI to avoid stale hits.
+          key: libbox-${{ steps.libbox-version.outputs.version }}-arm64-aar
+
+      - name: Set up Go
+        if: steps.cache-libbox.outputs.cache-hit != 'true'
+        uses: actions/setup-go@v5
+        with:
+          # Latest gomobile requires Go >= 1.26 (sing-box's exact CI version;
+          # 1.26.9 has a c-shared linker regression).
+          go-version: "1.26.8"
+
+      - name: Set up JDK 17
+        if: steps.cache-libbox.outputs.cache-hit != 'true'
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - name: Set up Android NDK
+        if: steps.cache-libbox.outputs.cache-hit != 'true'
+        uses: nttld/setup-ndk@v1
+        id: setup-ndk
+        with:
+          # sing-box's own CI uses r28 (their cronet prebuilt libs need it).
+          ndk-version: r28
+
+      - name: Clone sing-box (pinned)
+        if: steps.cache-libbox.outputs.cache-hit != 'true'
+        run: |
+          git clone --depth 1 --branch ${{ steps.libbox-version.outputs.version }} \
+            https://github.com/SagerNet/sing-box.git sing-box-src
+
+      - name: Build libbox.aar
+        if: steps.cache-libbox.outputs.cache-hit != 'true'
+        run: |
+          export PATH=$PATH:$(go env GOPATH)/bin
+          export ANDROID_NDK_HOME=${{ steps.setup-ndk.outputs.ndk-path }}
+          # sing-box's own supported build path (same as their release CI):
+          # their build_libbox tool drives their gomobile fork with the
+          # exact flags/tags the libbox Java API expects.
+          #
+          # PHASE 1 SLIMMING: -platform android/arm64 builds for arm64 only.
+          # The default ("android") builds all 4 ABIs (arm64, armv7, x86,
+          # x86_64) = ~112MB. arm64-only = ~28MB. 99%+ of modern phones are
+          # arm64; Play App Bundle handles the rest if needed later.
+          make -C sing-box-src lib_install
+          cd sing-box-src
+          go run ./cmd/internal/build_libbox -target android -platform android/arm64
+          ls -lh libbox.aar
+          cp libbox.aar ../libbox.aar
+
+      - name: Verify libbox.aar present
+        run: |
+          if [ ! -f libbox.aar ]; then
+            echo "::error::libbox.aar missing after build/cache step."
+            exit 1
+          fi
+          ls -lh libbox.aar
+
+      - name: Upload libbox.aar (for app build job)
+        uses: actions/upload-artifact@v4
+        with:
+          name: libbox-aar
+          path: libbox.aar
+          retention-days: 7
+
+  build:
+    name: Build Debug and Release APKs
+    needs: build-libbox
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      # libbox.aar comes from the build-libbox job in THIS run — no
+      # cross-workflow artifact race possible.
+      - name: Download libbox.aar from build job
+        uses: actions/download-artifact@v4
+        with:
+          name: libbox-aar
+          path: app/libs
+
+      - name: Verify libbox.aar present
+        run: |
+          if [ ! -f app/libs/libbox.aar ]; then
+            echo "::error::app/libs/libbox.aar missing."
+            exit 1
+          fi
+          ls -lh app/libs/libbox.aar
+
+      - name: Setup JDK 21
+        uses: actions/setup-java@v4
+        with:
+          java-version: '21'
+          distribution: 'temurin'
+
+      - name: Run focused browser error-page tests
+        run: ./gradlew testDebugUnitTest --tests 'com.click.browser.ui.screens.BrowserErrorPageTest'
+
+      - name: Build main-branch merged manifest baseline
+        if: github.event_name == 'pull_request'
+        env:
+          GROQ_API_KEY: ci-placeholder-no-secret
+        run: |
+          git fetch --no-tags origin main:refs/remotes/origin/main
+          git worktree add --detach "$RUNNER_TEMP/click-main" origin/main
+          mkdir -p "$RUNNER_TEMP/click-main/app/libs"
+          cp app/libs/libbox.aar "$RUNNER_TEMP/click-main/app/libs/libbox.aar"
+          (cd "$RUNNER_TEMP/click-main" && ./gradlew :app:processDebugMainManifest)
+          BASE_MANIFEST=$(find "$RUNNER_TEMP/click-main/app/build/intermediates/merged_manifest" -type f -name AndroidManifest.xml -print -quit)
+          test -n "$BASE_MANIFEST"
+          cp "$BASE_MANIFEST" "$RUNNER_TEMP/main-merged-manifest.xml"
+
+      # NOTE: AGP generates the debug keystore automatically — no manual step needed.
+      # Release APKs MUST be signed with Prince's real keystore. A debug-signed
+      # "release" APK trips the in-app tamper warning on install — so we fail
+      # loudly instead of silently shipping a wrongly-signed artifact
+      # (Prince's rule: no improperly-signed APKs, ever).
+      - name: Setup release signing (real keystore)
+        if: github.ref == 'refs/heads/main'
+        env:
+          KEYSTORE_B64: ${{ secrets.CLICK_KEYSTORE_BASE64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.CLICK_KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.CLICK_KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.CLICK_KEY_PASSWORD }}
+        run: |
+          if [ -n "$KEYSTORE_B64" ]; then
+            echo "$KEYSTORE_B64" | base64 -d > app/click-release.p12
+            # Validate the FULL signing chain with a real trial signature.
+            APKSIGNER_BIN=$(echo "$ANDROID_HOME"/build-tools/*/apksigner | tr ' ' '\n' | sort -V | tail -1)
+            echo "trial" > /tmp/dummy.txt && (cd /tmp && zip -q dummy.zip dummy.txt)
+            if "$APKSIGNER_BIN" sign \
+                --ks app/click-release.p12 \
+                --ks-pass "pass:$KEYSTORE_PASSWORD" \
+                --ks-key-alias "$KEY_ALIAS" \
+                --key-pass "pass:$KEY_PASSWORD" \
+                --min-sdk-version 26 \
+                --out /tmp/dummy-signed.apk /tmp/dummy.zip 2>/tmp/sign-err.log; then
+              {
+                echo "CLICK_KEYSTORE_FILE=$GITHUB_WORKSPACE/app/click-release.p12"
+                echo "CLICK_KEYSTORE_PASSWORD=$KEYSTORE_PASSWORD"
+                echo "CLICK_KEY_ALIAS=$KEY_ALIAS"
+                echo "CLICK_KEY_PASSWORD=$KEY_PASSWORD"
+              } >> "$GITHUB_ENV"
+              echo "Release signing configured from secrets (trial signature OK)."
+            else
+              echo "ERROR: release keystore secrets failed validation — refusing to build a wrongly-signed release APK."
+              head -5 /tmp/sign-err.log
+              exit 1
+            fi
+          else
+            echo "ERROR: CLICK_KEYSTORE_BASE64 secret is missing — refusing to build a wrongly-signed release APK."
+            exit 1
+          fi
+
+      - name: Grant Gradle Permission
+        run: chmod +x gradlew
+
+      - name: Run unit tests
+        env:
+          GROQ_API_KEY: ci-placeholder-no-secret
+        run: ./gradlew :app:testDebugUnitTest
+
+      - name: Build Debug APK
+        env:
+          GROQ_API_KEY: ${{ github.ref == 'refs/heads/main' && secrets.GROQ_API_KEY || 'ci-placeholder-no-secret' }}
+        run: ./gradlew assembleDebug
+
+      - name: Run focused browser URL input tests
+        run: ./gradlew testDebugUnitTest --tests 'com.click.browser.ui.screens.BrowserUrlInputTest'
+
+      - name: Verify merged Android permissions unchanged
+        if: github.event_name == 'pull_request'
+        run: |
+          CURRENT_MANIFEST=$(find app/build/intermediates/merged_manifest/debug -type f -name AndroidManifest.xml -print -quit)
+          test -n "$CURRENT_MANIFEST"
+          python3 scripts/compare-manifest-permissions.py "$RUNNER_TEMP/main-merged-manifest.xml" "$CURRENT_MANIFEST"
+
+      - name: Build Debug AAB
+        env:
+          GROQ_API_KEY: ${{ github.ref == 'refs/heads/main' && secrets.GROQ_API_KEY || 'ci-placeholder-no-secret' }}
+        run: ./gradlew bundleDebug
+
+      - name: Run focused legacy cleanup tests
+        run: ./gradlew testDebugUnitTest --tests 'com.click.browser.engine.LegacyCleanupOnceTest'
+
+      - name: Build Release APK
+        if: github.ref == 'refs/heads/main'
+        env:
+          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+          CLICK_KEYSTORE_FILE: ${{ env.CLICK_KEYSTORE_FILE }}
+          CLICK_KEYSTORE_PASSWORD: ${{ env.CLICK_KEYSTORE_PASSWORD }}
+          CLICK_KEY_ALIAS: ${{ env.CLICK_KEY_ALIAS }}
+          CLICK_KEY_PASSWORD: ${{ env.CLICK_KEY_PASSWORD }}
+        run: ./gradlew assembleRelease --stacktrace
+
+      - name: Build Release AAB
+        if: github.ref == 'refs/heads/main'
+        env:
+          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+          CLICK_KEYSTORE_FILE: ${{ env.CLICK_KEYSTORE_FILE }}
+          CLICK_KEYSTORE_PASSWORD: ${{ env.CLICK_KEYSTORE_PASSWORD }}
+          CLICK_KEY_ALIAS: ${{ env.CLICK_KEY_ALIAS }}
+          CLICK_KEY_PASSWORD: ${{ env.CLICK_KEY_PASSWORD }}
+        run: ./gradlew bundleRelease
+
+      - name: Verify release signature (must be Prince's key)
+        if: github.ref == 'refs/heads/main'
+        run: |
+          APKSIGNER=$(echo "$ANDROID_HOME"/build-tools/*/apksigner | tr ' ' '\n' | sort -V | tail -1)
+          "$APKSIGNER" verify --print-certs app/build/outputs/apk/release/app-release.apk | grep -E "Signer #1|SHA-256"
+
+      - name: Upload Debug APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: Click-Browser-Debug
+          path: app/build/outputs/apk/debug/app-debug.apk
+          retention-days: 30
+
+      - name: Upload Debug AAB
+        uses: actions/upload-artifact@v4
+        with:
+          name: Click-Browser-Debug-AAB
+          path: app/build/outputs/bundle/debug/app-debug.aab
+          retention-days: 30
+
+      - name: Upload Release APK
+        if: github.ref == 'refs/heads/main'
+        uses: actions/upload-artifact@v4
+        with:
+          name: Click-Browser-Release
+          path: app/build/outputs/apk/release/app-release.apk
+          retention-days: 90
+
+      - name: Upload Release AAB
+        if: github.ref == 'refs/heads/main'
+        uses: actions/upload-artifact@v4
+        with:
+          name: Click-Browser-Release-AAB
+          path: app/build/outputs/bundle/release/app-release.aab
+          retention-days: 90

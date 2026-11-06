@@ -1,0 +1,223 @@
+package com.click.browser.engine.vpn
+
+import android.content.Context
+import android.content.Intent
+import android.net.VpnService
+import android.os.Build
+import android.util.Log
+import androidx.datastore.preferences.core.edit
+import androidx.datastore.preferences.core.stringPreferencesKey
+import com.click.browser.engine.dataStore
+import com.click.browser.engine.V9VpnService
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.withContext
+import org.json.JSONArray
+import org.json.JSONObject
+
+/**
+ * UI-facing control for the Click VPN tunnel.
+ *
+ * - [prepareIntent]: null = VPN permission already granted → [start] directly.
+ *   Otherwise launch the returned intent and call [start] on RESULT_OK.
+ * - [start]: resolves the selected server → builds sing-box JSON → starts
+ *   [SingBoxVpnService].
+ * - Server list persists in DataStore.
+ */
+object VpnController {
+
+    private const val TAG = "VpnCtrl"
+    private const val V9_CONFLICT_MESSAGE =
+        "V9 Shield is active. Turn off DNS Shield before starting the full Click VPN."
+
+    private val KEY_SELECTED_SERVER = stringPreferencesKey("vpn_selected_server_id")
+    private val KEY_CUSTOM_SERVERS = stringPreferencesKey("vpn_custom_servers_json")
+    private val KEY_VPN_DISCLOSURE_ACK = stringPreferencesKey("vpn_disclosure_ack")
+
+    /** Null = permission already granted, safe to [start]. */
+    fun prepareIntent(context: Context): Intent? = VpnService.prepare(context)
+
+    /**
+     * Starts the tunnel for the currently selected server.
+     * Returns false (with [SingBoxVpnService.error] set) when the server
+     * can't be resolved — the UI must surface the error honestly.
+     *
+     * NEVER throws: any unexpected exception is caught, reported to the
+     * service error flow, and converted to `false`. (An uncaught throw
+     * here used to leave the VPN screen stuck on "Disconnected" with an
+     * endless spinner.)
+     */
+    suspend fun start(context: Context): Boolean = withContext(Dispatchers.IO) {
+        try {
+            startInternal(context)
+        } catch (t: Throwable) {
+            Log.e(TAG, "VPN start failed", t)
+            SingBoxVpnService.reportStartError(
+                t.message?.takeIf { it.isNotBlank() } ?: "Connection failed"
+            )
+            false
+        }
+    }
+
+    /** Check before opening Android's VPN authorization UI; the start path rechecks atomically. */
+    fun isBlockedByV9Shield(): Boolean = hasVpnServiceConflict(
+        requested = ClickVpnServiceKind.FULL_TUNNEL,
+        dnsShieldActiveOrStarting = V9VpnService.activeOrStarting,
+        fullTunnelActiveOrStarting = SingBoxVpnService.state.value == VpnState.CONNECTING ||
+            SingBoxVpnService.state.value == VpnState.CONNECTED
+    )
+
+    fun reportV9ShieldConflict() {
+        SingBoxVpnService.reportStartError(V9_CONFLICT_MESSAGE)
+    }
+
+    private suspend fun startInternal(context: Context): Boolean {
+        if (isBlockedByV9Shield()) {
+            reportV9ShieldConflict()
+            return false
+        }
+        val server = getSelectedServer(context) ?: run {
+            Log.w(TAG, "No server selected")
+            SingBoxVpnService.reportStartError("No server selected.")
+            return false
+        }
+        val configJson: String = when (server.kind) {
+            // Built-in VLESS preset and user-added servers share the proxy-URL path.
+            VpnServer.ServerKind.BUILT_IN_VLESS,
+            VpnServer.ServerKind.CUSTOM -> {
+                VpnConfigBuilder.buildCustomConfig(server.config) ?: run {
+                    Log.e(TAG, "Custom config parse failed")
+                    SingBoxVpnService.reportStartError(
+                        "Couldn't read this server link. Check that it is a supported VLESS, VMess, Trojan or Shadowsocks link."
+                    )
+                    return false
+                }
+            }
+        }
+        val i = Intent(context, SingBoxVpnService::class.java)
+            .setAction(SingBoxVpnService.ACTION_START)
+            .putExtra(SingBoxVpnService.EXTRA_CONFIG_JSON, configJson)
+            .putExtra(SingBoxVpnService.EXTRA_SERVER_NAME, server.name)
+        if (Build.VERSION.SDK_INT >= 26) context.startForegroundService(i)
+        else context.startService(i)
+        return true
+    }
+
+    fun stop(context: Context) {
+        context.startService(
+            Intent(context, SingBoxVpnService::class.java)
+                .setAction(SingBoxVpnService.ACTION_STOP)
+        )
+    }
+
+    val state get() = SingBoxVpnService.state
+    val serverName get() = SingBoxVpnService.serverName
+    val error get() = SingBoxVpnService.error
+
+    // ---------- server list ----------
+
+    /** All servers: built-in Canada VPS + user's custom entries. */
+    suspend fun getServers(context: Context): List<VpnServer> =
+        withContext(Dispatchers.IO) {
+            val list = mutableListOf(
+                VpnServer.builtInVless(),
+            )
+            list.addAll(getCustomServers(context))
+            list
+        }
+
+    suspend fun getSelectedServer(context: Context): VpnServer? =
+        withContext(Dispatchers.IO) {
+            val prefs = context.dataStore.data.first()
+            val id = prefs[KEY_SELECTED_SERVER] ?: VpnServer.CANADA_VPS_ID
+            val servers = getServers(context)
+            // Fall back to the first server if the stored id no longer exists
+            // (e.g. a built-in server removed in an app update).
+            servers.find { it.id == id } ?: servers.firstOrNull()
+        }
+
+    suspend fun selectServer(context: Context, id: String) {
+        withContext(Dispatchers.IO) {
+            context.dataStore.edit { it[KEY_SELECTED_SERVER] = id }
+        }
+    }
+
+    suspend fun addCustomServer(
+        context: Context, name: String, proxyUrl: String,
+    ): Boolean = withContext(Dispatchers.IO) {
+        // Validate by building the config first — reject garbage early.
+        if (VpnConfigBuilder.buildCustomConfig(proxyUrl) == null) return@withContext false
+        val server = VpnServer(
+            id = "custom-${System.currentTimeMillis()}",
+            name = name.ifBlank { "Custom server" },
+            countryCode = "",
+            flagEmoji = "\uD83C\uDF10",
+            kind = VpnServer.ServerKind.CUSTOM,
+            config = proxyUrl,
+        )
+        val updated = getCustomServers(context) + server
+        saveCustomServers(context, updated)
+        true
+    }
+
+    suspend fun removeCustomServer(context: Context, id: String) {
+        withContext(Dispatchers.IO) {
+            val updated = getCustomServers(context).filter { it.id != id }
+            saveCustomServers(context, updated)
+            // Fall back to the built-in Canada VPS if the selected server was removed.
+            val prefs = context.dataStore.data.first()
+            if (prefs[KEY_SELECTED_SERVER] == id) {
+                context.dataStore.edit { it[KEY_SELECTED_SERVER] = VpnServer.CANADA_VPS_ID }
+            }
+        }
+    }
+
+    private suspend fun getCustomServers(context: Context): List<VpnServer> {
+        return try {
+            val prefs = context.dataStore.data.first()
+            val raw = prefs[KEY_CUSTOM_SERVERS].orEmpty()
+            if (raw.isBlank()) return emptyList()
+            val arr = JSONArray(raw)
+            List(arr.length()) { VpnServer.fromJson(arr.getJSONObject(it)) }
+        } catch (t: Throwable) {
+            Log.w(TAG, "Custom servers parse failed", t)
+            emptyList()
+        }
+    }
+
+    private suspend fun saveCustomServers(context: Context, servers: List<VpnServer>) {
+        val arr = JSONArray()
+        servers.forEach { arr.put(it.toJson()) }
+        context.dataStore.edit { prefs ->
+            prefs[KEY_CUSTOM_SERVERS] = arr.toString()
+        }
+    }
+
+    // ---------- Play-policy disclosure ----------
+
+    /**
+     * The VPN screen shows a prominent disclosure on first open; the user
+     * must acknowledge before the toggle works. Required by Play policy for
+     * VpnService apps.
+     */
+    suspend fun isDisclosureAcked(context: Context): Boolean =
+        withContext(Dispatchers.IO) {
+            context.dataStore.data.first()[KEY_VPN_DISCLOSURE_ACK] == "1"
+        }
+
+    suspend fun ackDisclosure(context: Context) {
+        withContext(Dispatchers.IO) {
+            context.dataStore.edit { prefs ->
+                prefs[KEY_VPN_DISCLOSURE_ACK] = "1"
+            }
+        }
+    }
+
+    /** Play-policy disclosure text (also shown in Settings). */
+    const val DISCLOSURE_TEXT =
+        "Click VPN routes ALL of your device's internet traffic through " +
+        "third-party servers (Prince's Canada VPS, or a " +
+        "custom server you add yourself). The server operator can see the " +
+        "sites you visit. All DNS queries travel inside the encrypted " +
+        "tunnel — use the DNS Leak Test to verify."
+}

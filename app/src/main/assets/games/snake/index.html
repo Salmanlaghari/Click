@@ -1,0 +1,83 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+<title>Snake — Click Games</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+body{background:#0b1020;color:#fff;font-family:system-ui,sans-serif;display:flex;flex-direction:column;align-items:center;min-height:100vh;touch-action:none;user-select:none}
+#hud{width:100%;max-width:420px;display:flex;justify-content:space-between;align-items:center;padding:14px 18px}
+#score{font-size:20px;font-weight:800}
+#best{font-size:13px;color:#8b93b8}
+canvas{background:#131a30;border-radius:14px;box-shadow:0 8px 30px rgba(0,0,0,.45)}
+#pad{display:grid;grid-template-columns:repeat(3,64px);grid-template-rows:repeat(3,64px);gap:8px;margin-top:18px}
+#pad button{background:#1d2745;border:1px solid #2e3a63;color:#fff;font-size:24px;border-radius:14px}
+#pad button:active{background:#2e3a63}
+#pad .up{grid-column:2;grid-row:1}#pad .left{grid-column:1;grid-row:2}#pad .right{grid-column:3;grid-row:2}#pad .down{grid-column:2;grid-row:3}
+#overlay{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;background:rgba(5,8,18,.82);z-index:10}
+#overlay .box{text-align:center;background:#1d2745;padding:28px 34px;border-radius:18px}
+#overlay button{margin-top:14px;background:#22c55e;border:none;color:#fff;font-weight:800;font-size:16px;padding:12px 34px;border-radius:12px}
+.hidden{display:none!important}
+</style>
+</head>
+<body>
+<div id="hud"><div id="score">🍎 0</div><div id="best">Best: 0</div></div>
+<canvas id="c" width="380" height="380"></canvas>
+<div id="pad">
+<button class="up" data-d="up">▲</button>
+<button class="left" data-d="left">◀</button>
+<button class="right" data-d="right">▶</button>
+<button class="down" data-d="down">▼</button>
+</div>
+<div id="overlay" class="hidden"><div class="box"><h2 id="otitle">Game Over</h2><p id="osub"></p><button id="again">Play Again</button></div></div>
+<script>
+const cv=document.getElementById('c'),ctx=cv.getContext('2d');
+const N=19,CELL=cv.width/N;
+let snake,dir,ndir,food,score,alive,speed,timer;
+let best=+(localStorage.getItem('click_snake_best')||0);
+document.getElementById('best').textContent='Best: '+best;
+function reset(){
+  snake=[{x:9,y:9},{x:8,y:9},{x:7,y:9}];dir={x:1,y:0};ndir=dir;score=0;alive=true;speed=130;
+  place();updateHud();hideOverlay();clearInterval(timer);timer=setInterval(step,speed);
+}
+function place(){do{food={x:Math.floor(Math.random()*N),y:Math.floor(Math.random()*N)};}while(snake.some(s=>s.x===food.x&&s.y===food.y));}
+function updateHud(){document.getElementById('score').textContent='🍎 '+score;}
+function step(){
+  dir=ndir;const h={x:snake[0].x+dir.x,y:snake[0].y+dir.y};
+  if(h.x<0||h.y<0||h.x>=N||h.y>=N||snake.some(s=>s.x===h.x&&s.y===h.y)){die();return;}
+  snake.unshift(h);
+  if(h.x===food.x&&h.y===food.y){score++;updateHud();place();if(speed>70){speed-=2;clearInterval(timer);timer=setInterval(step,speed);}}
+  else snake.pop();
+  draw();
+}
+function die(){alive=false;clearInterval(timer);if(score>best){best=score;localStorage.setItem('click_snake_best',best);document.getElementById('best').textContent='Best: '+best;}
+  document.getElementById('otitle').textContent='Game Over';document.getElementById('osub').textContent='Score: '+score;
+  document.getElementById('overlay').classList.remove('hidden');}
+function draw(){
+  ctx.fillStyle='#131a30';ctx.fillRect(0,0,cv.width,cv.height);
+  ctx.fillStyle='#ef4444';round(food.x*CELL+3,food.y*CELL+3,CELL-6,CELL-6,6);
+  snake.forEach((s,i)=>{ctx.fillStyle=i===0?'#22c55e':'#16a34a';round(s.x*CELL+1,s.y*CELL+1,CELL-2,CELL-2,5);});
+}
+function round(x,y,w,h,r){ctx.beginPath();ctx.roundRect(x,y,w,h,r);ctx.fill();}
+function hideOverlay(){document.getElementById('overlay').classList.add('hidden');}
+function setDir(d){
+  if(d==='up'&&dir.y!==1)ndir={x:0,y:-1};
+  if(d==='down'&&dir.y!==-1)ndir={x:0,y:1};
+  if(d==='left'&&dir.x!==1)ndir={x:-1,y:0};
+  if(d==='right'&&dir.x!==-1)ndir={x:1,y:0};
+  if(!alive)reset();
+}
+document.querySelectorAll('#pad button').forEach(b=>b.addEventListener('pointerdown',e=>{e.preventDefault();setDir(b.dataset.d);}));
+let tx=0,ty=0;
+cv.addEventListener('touchstart',e=>{tx=e.touches[0].clientX;ty=e.touches[0].clientY;},{passive:true});
+cv.addEventListener('touchend',e=>{
+  const dx=e.changedTouches[0].clientX-tx,dy=e.changedTouches[0].clientY-ty;
+  if(Math.abs(dx)>24||Math.abs(dy)>24)setDir(Math.abs(dx)>Math.abs(dy)?(dx>0?'right':'left'):(dy>0?'down':'up'));
+},{passive:true});
+document.addEventListener('keydown',e=>{if(e.key==='ArrowUp')setDir('up');if(e.key==='ArrowDown')setDir('down');if(e.key==='ArrowLeft')setDir('left');if(e.key==='ArrowRight')setDir('right');});
+document.getElementById('again').addEventListener('click',reset);
+reset();
+</script>
+</body>
+</html>

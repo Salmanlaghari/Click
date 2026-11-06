@@ -1,0 +1,216 @@
+package com.click.browser.engine
+
+import android.util.Log
+import androidx.datastore.preferences.core.Preferences
+import androidx.datastore.preferences.core.booleanPreferencesKey
+import androidx.datastore.preferences.core.intPreferencesKey
+import androidx.datastore.preferences.core.longPreferencesKey
+import androidx.datastore.preferences.core.stringPreferencesKey
+import androidx.datastore.preferences.core.stringSetPreferencesKey
+import org.json.JSONArray
+import org.json.JSONException
+import org.json.JSONObject
+
+/**
+ * DataStore keys for the AI chat + privacy-guard settings.
+ * The AI API key lives ONLY in DataStore on the device — it is never
+ * hardcoded, never shipped in resources, and never committed to git.
+ */
+object AppSettings {
+
+    val AI_API_KEY = stringPreferencesKey("ai_api_key")
+    val AI_PROVIDER = stringPreferencesKey("ai_provider") // "groq" | "openrouter"
+    val AI_MODEL = stringPreferencesKey("ai_model")
+    val AI_REPORTS_JSON = stringPreferencesKey("ai_reports_json") // flagged AI responses (Play policy)
+
+    val SECURE_DNS_ENABLED = booleanPreferencesKey("secure_dns_enabled")
+    // Playlist-adjacent: let web-page audio keep playing when the app is
+    // backgrounded. Default OFF (standard browser behavior = pause).
+    // Generic media setting — never marketed for any specific site/service.
+    val BACKGROUND_AUDIO_ENABLED = booleanPreferencesKey("background_audio_enabled")
+
+    // ---- HTTPS Strict / DNT+GPC ----
+    // HTTPS mode: "off" | "standard" | "strict". Default "standard" matches
+    // the historical HTTPS-Only default-on behavior (upgrade http -> https).
+    // "strict" BLOCKS plain-http navigations instead of upgrading them.
+    val HTTPS_MODE = stringPreferencesKey("https_mode")
+    // HTTPS-Strict per-site exceptions: JSON array of host strings that are
+    // allowed over plain http even in Strict mode.
+    val HTTPS_STRICT_EXCEPTIONS = stringPreferencesKey("https_strict_exceptions")
+    // Do-Not-Track + Global Privacy Control. OPT-IN, default OFF.
+    // Honest labeling: these are voluntary signals — most sites ignore
+    // them; they are requests, not enforcement.
+    val DNT_ENABLED = booleanPreferencesKey("dnt_enabled")
+    val GPC_ENABLED = booleanPreferencesKey("gpc_enabled")
+    val UI_DARK_MODE = booleanPreferencesKey("ui_dark_mode")
+    val WALLPAPER_URI = stringPreferencesKey("wallpaper_uri")
+    /**
+     * Appearance mode: "auto" | "light" | "dark". Default "auto" — the app
+     * follows the system night mode (light during the day). This replaced
+     * the old Dark-default: fresh installs start in Light unless the
+     * system is in night mode.
+     */
+    val APPEARANCE_MODE = stringPreferencesKey("appearance_mode")
+
+    /**
+     * True when the Android system is currently in night mode
+     * (user's system theme / bedtime schedule).
+     */
+    fun isSystemNightMode(context: android.content.Context): Boolean {
+        val uiMode = context.resources.configuration.uiMode and
+            android.content.res.Configuration.UI_MODE_NIGHT_MASK
+        return uiMode == android.content.res.Configuration.UI_MODE_NIGHT_YES
+    }
+
+    // ---- Privacy & Security suite (PR: feature/privacy-security) ----
+    /** Click account (Google Sign-In): JSON {name,email,photo} or empty. */
+    val CLICK_ACCOUNT_JSON = stringPreferencesKey("click_account_json")
+    /** Offer / use Android autofill (Credential Manager + system service). Default ON. */
+    val AUTOFILL_ENABLED = booleanPreferencesKey("autofill_enabled")
+
+    // ---- Settings/Reports/Themes suite (PR: feature/settings-reports-themes) ----
+    /** Theme mode: "auto" (follow system) | "light" | "dark" | "scheduled". */
+    val THEME_MODE = stringPreferencesKey("theme_mode")
+    /** Last-applied light palette; also the starting point for launch rotation. */
+    val LIGHT_THEME_VARIANT = stringPreferencesKey("light_theme_variant")
+    /** Opt-in: advance the light palette once on each fresh app launch. */
+    val AUTO_ROTATE_THEMES = booleanPreferencesKey("auto_rotate_themes")
+    /** Scheduled light-theme window, hours 0-23. Light between START (incl) and END (excl). */
+    val THEME_SCHEDULE_START_HOUR = intPreferencesKey("theme_schedule_start_hour")
+    val THEME_SCHEDULE_END_HOUR = intPreferencesKey("theme_schedule_end_hour")
+    /** Accessibility. */
+    val FORCE_ZOOM = booleanPreferencesKey("force_zoom")
+    val READER_MODE = booleanPreferencesKey("reader_mode")
+    val REDUCED_MOTION = booleanPreferencesKey("reduced_motion")
+    /** Language: "en" | "ur" | "roman" (Roman Urdu). */
+    val APP_LANGUAGE = stringPreferencesKey("app_language")
+    /** Page translate: ML Kit target language code + auto-translate toggle. */
+    val TRANSLATE_TARGET = stringPreferencesKey("translate_target")
+    val TRANSLATE_AUTO = booleanPreferencesKey("translate_auto")
+    /** Downloads: "phone" (public Downloads, default) | "app" (private) | "custom" (SAF tree). */
+    val DOWNLOAD_LOCATION = stringPreferencesKey("download_location")
+    val DOWNLOAD_CUSTOM_URI = stringPreferencesKey("download_custom_uri")
+    /** Tab groups JSON: [{id,name,color,tabIds[]}]. */
+    val TAB_GROUPS_JSON = stringPreferencesKey("tab_groups_json")
+
+    // Biometric private-tab lock: when ON, private/incognito tabs re-lock
+    // with the device biometric (or device PIN/pattern fallback) every time
+    // the app goes to background and returns.
+    val BIOMETRIC_TAB_LOCK = booleanPreferencesKey("biometric_tab_lock")
+
+    // Text scaling: global default percent (50..300) + per-host overrides
+    // stored as a JSON object { "example.com": 125 }.
+    val TEXT_SCALE_GLOBAL = intPreferencesKey("text_scale_global")
+    val TEXT_SCALE_HOSTS_JSON = stringPreferencesKey("text_scale_hosts_json")
+
+    /** Legacy per-mode dark preference key, retained only for migration compatibility. */
+    fun darkModeKey(mode: BrowserMode): Preferences.Key<Boolean> =
+        booleanPreferencesKey("ui_dark_mode_${mode.name.lowercase()}")
+
+    /** Appearance is deliberately light-only; legacy saved values are ignored. */
+    @Suppress("UNUSED_PARAMETER")
+    fun effectiveDarkMode(prefs: Preferences, mode: BrowserMode): Boolean = false
+
+    /** Strict DNS is opt-in; missing preference keeps the existing fallback behavior. */
+    fun strictDnsEnabled(prefs: Preferences): Boolean = prefs[STRICT_DNS_ENABLED] ?: false
+
+    // V9 Shield: DNS-over-HTTPS provider + VPN toggle.
+    // "cloudflare" | "google" | "custom" (see V9DohResolver).
+    val DOH_PROVIDER = stringPreferencesKey("doh_provider")
+    val DOH_CUSTOM_URL = stringPreferencesKey("doh_custom_url")
+    /** When true, a failed DoH lookup must not fall back to plain DNS. Default OFF. */
+    val STRICT_DNS_ENABLED = booleanPreferencesKey("strict_dns_enabled")
+    val V9_VPN_ENABLED = booleanPreferencesKey("v9_vpn_enabled")
+    /** Advance Mode 5s intro animation on engine boot. Default ON; tap skips. */
+    val ADVANCE_INTRO_ENABLED = booleanPreferencesKey("advance_intro_enabled")
+    /** True once the "About Advance Mode" specs sheet has been shown (first entry). */
+    val ADVANCE_SPECS_SEEN = booleanPreferencesKey("advance_specs_seen")
+    /** Sharp View: full-density WebView rendering (setInitialScale(0)). Default ON. */
+    val SHARP_VIEW_ENABLED = booleanPreferencesKey("sharp_view_enabled")
+
+    // Brave-inspired privacy quick wins.
+    /** Strip tracking query params (utm_*, gclid, fbclid, ...) on navigation. Default ON. */
+    val STRIP_TRACKING_PARAMS = booleanPreferencesKey("strip_tracking_params")
+    /** Forgetful Browsing: wipe a site's cookies+storage when its last tab closes. Opt-in. */
+    val FORGETFUL_BROWSING = booleanPreferencesKey("forgetful_browsing")
+    /** Hosts exempted from Forgetful Browsing (kept data). */
+    val FORGETFUL_BROWSING_EXCEPTIONS = stringSetPreferencesKey("forgetful_browsing_exceptions")
+    // Default-browser prompt: true once the one-time "Make Click your
+    // default browser?" prompt has been shown (or acted on), so it never nags.
+    val DEFAULT_BROWSER_PROMPT_SHOWN = booleanPreferencesKey("default_browser_prompt_shown")
+    /** True after the first-run feature tour is completed or skipped. */
+    val ONBOARDING_COMPLETED = booleanPreferencesKey("onboarding_completed")
+
+    // ---- Background news notifications (WhatsApp-style alerts) ----
+    // Opt-in, default OFF (Play-policy friendly): the user enables them in
+    // Settings → General → News Notifications and picks topics. A
+    // battery-friendly WorkManager job checks the RSS feeds every ~2 hours
+    // (network-connected + battery-not-low constraints) and posts a system
+    // notification for fresh articles. Tapping opens the article in a new tab.
+    /** Master switch for news notifications. Default OFF — user must opt in. */
+    val NEWS_NOTIFICATIONS_ENABLED = booleanPreferencesKey("news_notifications_enabled")
+    /** Enabled topics as NewsCategory names (e.g. "NEWS", "TECH"). Default: NEWS + TECH. */
+    val NEWS_NOTIFICATION_TOPICS = stringSetPreferencesKey("news_notification_topics")
+    /** JSON array of recently-notified article links (dedup, capped at ~100). */
+    val NEWS_SEEN_LINKS_JSON = stringPreferencesKey("news_seen_links_json")
+    /** Wall-clock ms of the last successful news check. */
+    val NEWS_LAST_CHECK_MS = longPreferencesKey("news_last_check_ms")
+
+    /** Auto-detect provider from the key prefix: `AIza` -> Gemini, `gsk_` -> Groq, `sk-or-` -> OpenRouter. */
+    fun detectProvider(apiKey: String): String = when {
+        apiKey.startsWith("AIza") -> "gemini"
+        apiKey.startsWith("sk-or-") -> "openrouter"
+        apiKey.startsWith("gsk_") -> "groq"
+        else -> "groq"
+    }
+
+    /** Parses the HTTPS-Strict exception host list (JSON array of strings). */
+    fun parseHostList(json: String?): List<String> {
+        if (json.isNullOrBlank()) return emptyList()
+        return try {
+            val arr = JSONArray(json)
+            (0 until arr.length()).mapNotNull { i ->
+                arr.optString(i)?.trim()?.lowercase()?.takeIf { it.isNotEmpty() }
+            }.distinct()
+        } catch (_: Exception) {
+            emptyList()
+        }
+    }
+
+    fun hostsToJson(hosts: List<String>): String {
+        val arr = JSONArray()
+        hosts.map { it.trim().lowercase() }.filter { it.isNotEmpty() }.distinct()
+            .forEach { arr.put(it) }
+        return arr.toString()
+    }
+
+    /** Normalizes a mode string to one of "off" | "standard" | "strict". */
+    fun normalizeMode(value: String?, default: String = "standard"): String =
+        when (value?.lowercase()) {
+            "off", "standard", "strict" -> value.lowercase()
+            else -> default
+        }
+
+    /**
+     * Appends a user-flagged AI response to the on-device report log
+     * (Google Play AI-Generated Content policy: in-app reporting).
+     * Keeps the last 100 entries.
+     */
+    fun appendReport(existingJson: String?, text: String): String {
+        val arr = try {
+            JSONArray(existingJson.orEmpty())
+        } catch (e: JSONException) {
+            // Malformed stored JSON: log and start fresh rather than silently
+            // dropping history without a trace (Kilo review).
+            Log.w("AppSettings", "AI reports JSON corrupted, resetting", e)
+            JSONArray()
+        }
+        arr.put(
+            JSONObject()
+                .put("text", text.take(2000))
+                .put("ts", System.currentTimeMillis())
+        )
+        while (arr.length() > 100) arr.remove(0)
+        return arr.toString()
+    }
+}

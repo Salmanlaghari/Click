@@ -1,0 +1,61 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+<title>Memory Match — Click Games</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+body{background:#0b1020;color:#fff;font-family:system-ui,sans-serif;display:flex;flex-direction:column;align-items:center;min-height:100vh;user-select:none}
+#hud{width:100%;max-width:420px;display:flex;justify-content:space-between;padding:14px 18px;font-weight:800}
+#grid{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;width:100%;max-width:380px;padding:0 14px}
+.card{aspect-ratio:1;background:#1d2745;border:1px solid #2e3a63;border-radius:12px;font-size:38px;display:flex;align-items:center;justify-content:center;cursor:pointer;transition:transform .15s}
+.card:active{transform:scale(.94)}
+.card.open{background:#2e3a63}
+.card.done{background:#14532d;border-color:#22c55e;cursor:default}
+#win{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;background:rgba(5,8,18,.85);z-index:10}
+#win .box{text-align:center;background:#1d2745;padding:30px 40px;border-radius:18px}
+#win button{margin-top:14px;background:#22c55e;border:none;color:#fff;font-weight:800;font-size:16px;padding:12px 34px;border-radius:12px}
+.hidden{display:none!important}
+</style>
+</head>
+<body>
+<div id="hud"><div>Moves: <span id="moves">0</span></div><div>Pairs: <span id="pairs">0</span>/8</div></div>
+<div id="grid"></div>
+<div id="win" class="hidden"><div class="box"><h2>🎉 You Win!</h2><p id="wsub"></p><button id="again">Play Again</button></div></div>
+<script>
+const EMO=['🐶','🐱','🦊','🐼','🐸','🐵','🦁','🐷'];
+const grid=document.getElementById('grid');
+let first=null,lock=false,moves=0,found=0;
+function build(){
+  const deck=[...EMO,...EMO].sort(()=>Math.random()-.5);
+  grid.innerHTML='';first=null;lock=false;moves=0;found=0;upd();
+  deck.forEach(e=>{
+    const d=document.createElement('div');d.className='card';d.dataset.e=e;
+    d.addEventListener('click',()=>flip(d));grid.appendChild(d);
+  });
+  document.getElementById('win').classList.add('hidden');
+}
+function upd(){
+  document.getElementById('moves').textContent=moves;
+  document.getElementById('pairs').textContent=found;
+}
+function flip(d){
+  if(lock||d.classList.contains('open')||d.classList.contains('done'))return;
+  d.classList.add('open');d.textContent=d.dataset.e;
+  if(!first){first=d;return;}
+  moves++;
+  if(first.dataset.e===d.dataset.e){
+    first.classList.add('done');d.classList.add('done');first=null;found++;upd();
+    if(found===8){document.getElementById('wsub').textContent='Finished in '+moves+' moves!';
+      setTimeout(()=>document.getElementById('win').classList.remove('hidden'),400);}
+  }else{
+    lock=true;const a=first;first=null;upd();
+    setTimeout(()=>{a.classList.remove('open');a.textContent='';d.classList.remove('open');d.textContent='';lock=false;},650);
+  }
+}
+document.getElementById('again').addEventListener('click',build);
+build();
+</script>
+</body>
+</html>

@@ -1,0 +1,820 @@
+package com.click.browser.ui.screens
+
+import android.content.ContentUris
+import android.content.Context
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
+import android.graphics.pdf.PdfRenderer
+import android.media.MediaPlayer
+import android.net.Uri
+import android.os.Build
+import android.provider.MediaStore
+import android.widget.MediaController
+import android.widget.VideoView
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.PickVisualMediaRequest
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.Image
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
+import androidx.compose.foundation.lazy.grid.items
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.*
+import androidx.compose.material3.*
+import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.font.FontStyle
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import androidx.compose.ui.viewinterop.AndroidView
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+
+// ---------------------------------------------------------------------------
+// Runtime media-permission helper: MediaStore audio reads need a runtime
+// grant — READ_MEDIA_AUDIO on API 33+, READ_EXTERNAL_STORAGE below. Without
+// the grant the query silently returns nothing, so the music dialog gates on
+// this first (never query blindly). Photos and videos deliberately have NO
+// permission helper: the image gallery uses the system photo picker, which
+// needs no permission at all (Google Play photo and video policy).
+// ---------------------------------------------------------------------------
+
+private fun audioReadPermission(): String =
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU)
+        android.Manifest.permission.READ_MEDIA_AUDIO
+    else
+        android.Manifest.permission.READ_EXTERNAL_STORAGE
+
+private fun Context.hasMediaPermission(permission: String): Boolean =
+    checkSelfPermission(permission) == android.content.pm.PackageManager.PERMISSION_GRANTED
+
+// ---------------------------------------------------------------------------
+// Real on-device audio player: lists the device's music library (MediaStore)
+// and plays it with MediaPlayer. Empty library => honest empty state.
+// ---------------------------------------------------------------------------
+
+private data class AudioTrack(
+    val id: Long,
+    val title: String,
+    val artist: String,
+    val uri: Uri,
+    val durationMs: Long
+)
+
+private fun queryDeviceAudio(context: Context): List<AudioTrack> {
+    val out = mutableListOf<AudioTrack>()
+    val projection = arrayOf(
+        MediaStore.Audio.Media._ID,
+        MediaStore.Audio.Media.TITLE,
+        MediaStore.Audio.Media.ARTIST,
+        MediaStore.Audio.Media.DURATION
+    )
+    val selection = "${MediaStore.Audio.Media.IS_MUSIC} != 0"
+    try {
+        context.contentResolver.query(
+            MediaStore.Audio.Media.EXTERNAL_CONTENT_URI,
+            projection, selection, null,
+            "${MediaStore.Audio.Media.TITLE} ASC"
+        )?.use { c ->
+            val idCol = c.getColumnIndexOrThrow(MediaStore.Audio.Media._ID)
+            val titleCol = c.getColumnIndexOrThrow(MediaStore.Audio.Media.TITLE)
+            val artistCol = c.getColumnIndexOrThrow(MediaStore.Audio.Media.ARTIST)
+            val durCol = c.getColumnIndexOrThrow(MediaStore.Audio.Media.DURATION)
+            while (c.moveToNext()) {
+                val id = c.getLong(idCol)
+                out.add(
+                    AudioTrack(
+                        id = id,
+                        title = c.getString(titleCol) ?: "Unknown track",
+                        artist = c.getString(artistCol) ?: "Unknown artist",
+                        uri = ContentUris.withAppendedId(MediaStore.Audio.Media.EXTERNAL_CONTENT_URI, id),
+                        durationMs = c.getLong(durCol)
+                    )
+                )
+            }
+        }
+    } catch (_: Exception) { }
+    return out
+}
+
+private fun formatMs(ms: Int): String {
+    val s = (ms / 1000).coerceAtLeast(0)
+    return "%d:%02d".format(s / 60, s % 60)
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun InteractiveMusicPlayerDialog(onClose: () -> Unit) {
+    val context = LocalContext.current
+    var tracks by remember { mutableStateOf<List<AudioTrack>>(emptyList()) }
+    var loading by remember { mutableStateOf(true) }
+    var currentIndex by remember { mutableStateOf(-1) }
+    var isPlaying by remember { mutableStateOf(false) }
+    var positionMs by remember { mutableStateOf(0) }
+    var durationMs by remember { mutableStateOf(0) }
+
+    val player = remember { MediaPlayer() }
+    DisposableEffect(Unit) {
+        onDispose {
+            try { player.release() } catch (_: Exception) { }
+        }
+    }
+
+    // Runtime permission gate: MediaStore.Audio is invisible without the grant.
+    var audioPermissionGranted by remember { mutableStateOf(context.hasMediaPermission(audioReadPermission())) }
+    val audioPermissionLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { granted -> audioPermissionGranted = granted }
+
+    LaunchedEffect(audioPermissionGranted) {
+        if (audioPermissionGranted) {
+            tracks = withContext(Dispatchers.IO) { queryDeviceAudio(context) }
+        }
+        loading = false
+    }
+
+    // Ask once when the dialog opens without the grant.
+    LaunchedEffect(Unit) {
+        if (!audioPermissionGranted) audioPermissionLauncher.launch(audioReadPermission())
+    }
+
+    // Poll the real playback position while playing
+    LaunchedEffect(isPlaying) {
+        while (isPlaying) {
+            delay(500)
+            try {
+                if (player.isPlaying) positionMs = player.currentPosition
+            } catch (_: Exception) { }
+        }
+    }
+
+    fun playAt(index: Int) {
+        val track = tracks.getOrNull(index) ?: return
+        try {
+            player.reset()
+            player.setDataSource(context, track.uri)
+            player.prepare()
+            player.setOnCompletionListener {
+                isPlaying = false
+                if (index + 1 < tracks.size) playAt(index + 1)
+            }
+            durationMs = player.duration
+            positionMs = 0
+            player.start()
+            currentIndex = index
+            isPlaying = true
+        } catch (_: Exception) { }
+    }
+
+    fun togglePlayPause() {
+        if (currentIndex !in tracks.indices) {
+            if (tracks.isNotEmpty()) playAt(0)
+            return
+        }
+        try {
+            if (player.isPlaying) {
+                player.pause()
+                isPlaying = false
+            } else {
+                player.start()
+                isPlaying = true
+            }
+        } catch (_: Exception) { }
+    }
+
+    AlertDialog(
+        onDismissRequest = onClose,
+        title = { Text("Device Music Player", fontWeight = FontWeight.Bold) },
+        text = {
+            Column(modifier = Modifier.fillMaxWidth()) {
+                when {
+                    loading -> {
+                        Box(modifier = Modifier.fillMaxWidth().height(120.dp), contentAlignment = Alignment.Center) {
+                            CircularProgressIndicator()
+                        }
+                    }
+                    tracks.isEmpty() && !audioPermissionGranted -> {
+                        Column(
+                            modifier = Modifier.fillMaxWidth().padding(16.dp),
+                            horizontalAlignment = Alignment.CenterHorizontally
+                        ) {
+                            Text(
+                                "Music access denied. Grant audio access to play your on-device music.",
+                                fontSize = 12.sp,
+                                textAlign = TextAlign.Center
+                            )
+                            Spacer(modifier = Modifier.height(8.dp))
+                            Button(onClick = { audioPermissionLauncher.launch(audioReadPermission()) }) {
+                                Text("Grant access")
+                            }
+                        }
+                    }
+                    tracks.isEmpty() -> {
+                        Text(
+                            "No music found on this device. Copy MP3 files to the device and allow media access, then reopen.",
+                            fontSize = 12.sp,
+                            textAlign = TextAlign.Center,
+                            modifier = Modifier.fillMaxWidth().padding(16.dp)
+                        )
+                    }
+                    else -> {
+                        val current = tracks.getOrNull(currentIndex)
+                        Text(
+                            current?.title ?: "Pick a track below",
+                            fontWeight = FontWeight.Bold, fontSize = 15.sp, maxLines = 1
+                        )
+                        Text(
+                            current?.artist ?: "${tracks.size} tracks on device",
+                            fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1
+                        )
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Slider(
+                            value = positionMs.toFloat(),
+                            valueRange = 0f..durationMs.coerceAtLeast(1).toFloat(),
+                            onValueChange = { v ->
+                                try {
+                                    player.seekTo(v.toInt())
+                                    positionMs = v.toInt()
+                                } catch (_: Exception) { }
+                            }
+                        )
+                        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                            Text(formatMs(positionMs), fontSize = 10.sp)
+                            Text(formatMs(durationMs), fontSize = 10.sp)
+                        }
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.Center,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            IconButton(onClick = { if (currentIndex > 0) playAt(currentIndex - 1) }) {
+                                Icon(Icons.Default.SkipPrevious, contentDescription = "Previous")
+                            }
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Box(
+                                modifier = Modifier
+                                    .size(56.dp)
+                                    .background(MaterialTheme.colorScheme.primary, CircleShape)
+                                    .clickable { togglePlayPause() },
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Icon(
+                                    imageVector = if (isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
+                                    contentDescription = if (isPlaying) "Pause" else "Play",
+                                    tint = MaterialTheme.colorScheme.onPrimary,
+                                    modifier = Modifier.size(32.dp)
+                                )
+                            }
+                            Spacer(modifier = Modifier.width(8.dp))
+                            IconButton(onClick = { if (currentIndex + 1 < tracks.size) playAt(currentIndex + 1) }) {
+                                Icon(Icons.Default.SkipNext, contentDescription = "Next")
+                            }
+                        }
+                        Spacer(modifier = Modifier.height(8.dp))
+                        HorizontalDivider()
+                        Column(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .heightIn(max = 180.dp)
+                                .verticalScroll(rememberScrollState())
+                        ) {
+                            tracks.forEachIndexed { i, t ->
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .clickable { playAt(i) }
+                                        .padding(vertical = 8.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Icon(
+                                        Icons.Default.MusicNote, contentDescription = null,
+                                        tint = if (i == currentIndex) MaterialTheme.colorScheme.primary
+                                        else MaterialTheme.colorScheme.onSurfaceVariant,
+                                        modifier = Modifier.size(20.dp)
+                                    )
+                                    Spacer(modifier = Modifier.width(8.dp))
+                                    Column(modifier = Modifier.weight(1f)) {
+                                        Text(t.title, fontSize = 13.sp, fontWeight = if (i == currentIndex) FontWeight.Bold else FontWeight.Normal, maxLines = 1)
+                                        Text(t.artist, fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1)
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            Button(onClick = onClose) { Text("Close") }
+        }
+    )
+}
+
+// ---------------------------------------------------------------------------
+// Local media player: plays a video file selected from the device.
+// ---------------------------------------------------------------------------
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun InteractiveVideoPlayerDialog(onClose: () -> Unit, initialVideoUrl: String? = null) {
+    val context = LocalContext.current
+    var videoUri by remember { mutableStateOf<Uri?>(initialVideoUrl?.let { Uri.parse(it) }) }
+    val picker = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
+        if (uri != null) videoUri = uri
+    }
+
+    AlertDialog(
+        onDismissRequest = onClose,
+        title = { Text("Video Player", fontWeight = FontWeight.Bold) },
+        text = {
+            Column(modifier = Modifier.fillMaxWidth(), horizontalAlignment = Alignment.CenterHorizontally) {
+                val uri = videoUri
+                if (uri == null) {
+                    Text(
+                        "No video selected.",
+                        fontSize = 13.sp,
+                        modifier = Modifier.padding(vertical = 12.dp)
+                    )
+                    Button(onClick = { picker.launch("video/*") }) {
+                        Text("Pick a video file")
+                    }
+                } else {
+                    key(uri) {
+                        AndroidView(
+                            factory = { ctx ->
+                                VideoView(ctx).apply {
+                                    setVideoURI(uri)
+                                    setMediaController(MediaController(ctx).also { it.setAnchorView(this) })
+                                    setOnPreparedListener { start() }
+                                    setOnErrorListener { _, _, _ -> true }
+                                }
+                            },
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(220.dp)
+                                .clip(RoundedCornerShape(12.dp))
+                        )
+                    }
+                    Spacer(modifier = Modifier.height(8.dp))
+                    TextButton(onClick = { picker.launch("video/*") }) {
+                        Text("Choose a different video")
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            Button(onClick = onClose) { Text("Close") }
+        }
+    )
+}
+
+// ---------------------------------------------------------------------------
+// Real PDF reader: pick a PDF from the device and render its actual pages
+// with PdfRenderer.
+// ---------------------------------------------------------------------------
+
+private fun queryDisplayName(context: Context, uri: Uri): String {
+    return try {
+        context.contentResolver.query(uri, arrayOf(MediaStore.MediaColumns.DISPLAY_NAME), null, null, null)?.use { c ->
+            if (c.moveToFirst()) c.getString(0) else null
+        } ?: "document.pdf"
+    } catch (_: Exception) { "document.pdf" }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun InteractivePdfReaderDialog(onClose: () -> Unit) {
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    var renderer by remember { mutableStateOf<PdfRenderer?>(null) }
+    var pageCount by remember { mutableStateOf(0) }
+    var pageIndex by remember { mutableStateOf(0) }
+    var pageBitmap by remember { mutableStateOf<Bitmap?>(null) }
+    var fileName by remember { mutableStateOf<String?>(null) }
+    var rendering by remember { mutableStateOf(false) }
+
+    fun renderPage(index: Int) {
+        val r = renderer ?: return
+        if (index !in 0 until r.pageCount) return
+        rendering = true
+        scope.launch(Dispatchers.IO) {
+            try {
+                r.openPage(index).use { page ->
+                    // Render at 2x for readability on small screens
+                    val bmp = Bitmap.createBitmap(page.width * 2, page.height * 2, Bitmap.Config.ARGB_8888)
+                    page.render(bmp, null, null, PdfRenderer.Page.RENDER_MODE_FOR_DISPLAY)
+                    withContext(Dispatchers.Main) {
+                        pageBitmap?.recycle()
+                        pageBitmap = bmp
+                        pageIndex = index
+                    }
+                }
+            } catch (_: Exception) { }
+            withContext(Dispatchers.Main) { rendering = false }
+        }
+    }
+
+    val picker = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
+        if (uri == null) return@rememberLauncherForActivityResult
+        try {
+            try { renderer?.close() } catch (_: Exception) { }
+            renderer = null
+            val pfd = context.contentResolver.openFileDescriptor(uri, "r")
+            if (pfd != null) {
+                val r = PdfRenderer(pfd) // PdfRenderer takes ownership of the descriptor
+                renderer = r
+                pageCount = r.pageCount
+                fileName = queryDisplayName(context, uri)
+                renderPage(0)
+            }
+        } catch (_: Exception) { }
+    }
+
+    DisposableEffect(Unit) {
+        onDispose {
+            try { renderer?.close() } catch (_: Exception) { }
+            pageBitmap?.recycle()
+        }
+    }
+
+    AlertDialog(
+        onDismissRequest = onClose,
+        title = { Text("PDF Reader", fontWeight = FontWeight.Bold) },
+        text = {
+            Column(modifier = Modifier.fillMaxWidth(), horizontalAlignment = Alignment.CenterHorizontally) {
+                if (renderer == null) {
+                    Text("No PDF opened.", fontSize = 13.sp, modifier = Modifier.padding(vertical = 12.dp))
+                    Button(onClick = { picker.launch("application/pdf") }) {
+                        Text("Pick a PDF file")
+                    }
+                } else {
+                    Text(fileName ?: "", fontSize = 12.sp, fontWeight = FontWeight.Bold, maxLines = 1)
+                    Text("Page ${pageIndex + 1} of $pageCount", fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(280.dp)
+                            .clip(RoundedCornerShape(8.dp))
+                            .background(MaterialTheme.colorScheme.surfaceVariant),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        val bmp = pageBitmap
+                        if (bmp != null) {
+                            Image(
+                                bitmap = bmp.asImageBitmap(),
+                                contentDescription = "PDF page ${pageIndex + 1}",
+                                modifier = Modifier.fillMaxSize()
+                            )
+                        } else if (rendering) {
+                            CircularProgressIndicator()
+                        }
+                    }
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                        Button(onClick = { renderPage(pageIndex - 1) }, enabled = pageIndex > 0) { Text("Prev") }
+                        TextButton(onClick = { picker.launch("application/pdf") }) { Text("Open another") }
+                        Button(onClick = { renderPage(pageIndex + 1) }, enabled = pageIndex + 1 < pageCount) { Text("Next") }
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            Button(onClick = onClose) { Text("Close") }
+        }
+    )
+}
+
+// ---------------------------------------------------------------------------
+// Image gallery: photos are chosen with the Android system photo picker
+// (ActivityResultContracts.PickMultipleVisualMedia), so the app needs NO
+// photo/video permission at all. Google Play's photo and video policy
+// requires the system picker instead of broad shared-media access for apps
+// whose core job is not media management. Picked photos open in a viewer
+// with working rotate / zoom.
+// ---------------------------------------------------------------------------
+
+private data class DeviceImage(val uri: Uri)
+
+private fun decodeSampledBitmap(context: Context, uri: Uri, maxDim: Int = 256): Bitmap? {
+    return try {
+        val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+        context.contentResolver.openInputStream(uri)?.use { BitmapFactory.decodeStream(it, null, bounds) }
+        var sample = 1
+        while (bounds.outWidth / (sample * 2) > maxDim || bounds.outHeight / (sample * 2) > maxDim) sample *= 2
+        val opts = BitmapFactory.Options().apply { inSampleSize = sample }
+        context.contentResolver.openInputStream(uri)?.use { BitmapFactory.decodeStream(it, null, opts) }
+    } catch (_: Exception) { null }
+}
+
+@Composable
+private fun DeviceImageThumb(image: DeviceImage, modifier: Modifier = Modifier, onClick: () -> Unit = {}) {
+    val context = LocalContext.current
+    var bmp by remember(image.uri) { mutableStateOf<Bitmap?>(null) }
+    LaunchedEffect(image.uri) {
+        bmp = withContext(Dispatchers.IO) { decodeSampledBitmap(context, image.uri) }
+    }
+    val b = bmp
+    if (b != null) {
+        Image(
+            bitmap = b.asImageBitmap(), contentDescription = null,
+            modifier = modifier.clip(RoundedCornerShape(8.dp)).clickable { onClick() }
+        )
+    } else {
+        Box(modifier = modifier.clip(RoundedCornerShape(8.dp)).background(MaterialTheme.colorScheme.surfaceVariant))
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun InteractiveImageGalleryDialog(onClose: () -> Unit) {
+    val context = LocalContext.current
+    var images by remember { mutableStateOf<List<DeviceImage>>(emptyList()) }
+    var selected by remember { mutableStateOf<DeviceImage?>(null) }
+    var fullBitmap by remember { mutableStateOf<Bitmap?>(null) }
+    var rotation by remember { mutableStateOf(0f) }
+    var zoomScale by remember { mutableStateOf(1f) }
+
+    // System photo picker: no permission needed; the user picks the photos.
+    val photoPicker = rememberLauncherForActivityResult(
+        ActivityResultContracts.PickMultipleVisualMedia(maxItems = 60)
+    ) { uris ->
+        if (uris.isNotEmpty()) {
+            images = uris.map { DeviceImage(it) }
+            selected = null
+        }
+    }
+
+    fun launchPicker() {
+        photoPicker.launch(
+            PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
+        )
+    }
+
+    // Load the full image when one is selected
+    LaunchedEffect(selected) {
+        fullBitmap?.recycle()
+        fullBitmap = null
+        rotation = 0f
+        zoomScale = 1f
+        val sel = selected ?: return@LaunchedEffect
+        fullBitmap = withContext(Dispatchers.IO) {
+            try {
+                context.contentResolver.openInputStream(sel.uri)?.use { BitmapFactory.decodeStream(it) }
+            } catch (_: Exception) { null }
+        }
+    }
+
+    DisposableEffect(Unit) {
+        onDispose { fullBitmap?.recycle() }
+    }
+
+    AlertDialog(
+        onDismissRequest = onClose,
+        title = { Text("Image Gallery", fontWeight = FontWeight.Bold) },
+        text = {
+            Column(modifier = Modifier.fillMaxWidth()) {
+                when {
+                    images.isEmpty() -> {
+                        Column(
+                            modifier = Modifier.fillMaxWidth().padding(16.dp),
+                            horizontalAlignment = Alignment.CenterHorizontally
+                        ) {
+                            Text(
+                                "Pick photos with the system photo picker to view them here. No gallery permission is needed — you choose exactly which photos the app can see.",
+                                fontSize = 12.sp,
+                                textAlign = TextAlign.Center
+                            )
+                            Spacer(modifier = Modifier.height(8.dp))
+                            Button(onClick = { launchPicker() }) {
+                                Text("Pick photos")
+                            }
+                        }
+                    }
+                    selected == null -> {
+                        Text("${images.size} photos picked — tap to view", fontSize = 12.sp)
+                        Spacer(modifier = Modifier.height(8.dp))
+                        LazyVerticalGrid(
+                            columns = GridCells.Fixed(3),
+                            modifier = Modifier.heightIn(max = 320.dp),
+                            verticalArrangement = Arrangement.spacedBy(6.dp),
+                            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
+                            items(images, key = { it.uri.toString() }) { img ->
+                                DeviceImageThumb(
+                                    image = img,
+                                    modifier = Modifier.aspectRatio(1f).fillMaxWidth(),
+                                    onClick = { selected = img }
+                                )
+                            }
+                        }
+                        Spacer(modifier = Modifier.height(8.dp))
+                        TextButton(onClick = { launchPicker() }) { Text("Pick different photos") }
+                    }
+                    else -> {
+                        val bmp = fullBitmap
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(260.dp)
+                                .clip(RoundedCornerShape(12.dp))
+                                .background(MaterialTheme.colorScheme.surfaceVariant)
+                                .graphicsLayer {
+                                    scaleX = zoomScale
+                                    scaleY = zoomScale
+                                    rotationZ = rotation
+                                }
+                                .clickable { selected = null },
+                            contentAlignment = Alignment.Center
+                        ) {
+                            if (bmp != null) {
+                                Image(bmp.asImageBitmap(), contentDescription = "Selected photo", modifier = Modifier.fillMaxSize())
+                            } else {
+                                CircularProgressIndicator()
+                            }
+                        }
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly) {
+                            Button(onClick = { rotation += 90f }) { Text("Rotate") }
+                            Button(onClick = { zoomScale = if (zoomScale == 1f) 1.5f else 1f }) { Text("Zoom") }
+                            TextButton(onClick = { selected = null }) { Text("Back") }
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            Button(onClick = onClose) { Text("Close") }
+        }
+    )
+}
+
+// ---------------------------------------------------------------------------
+// Built-in quick toggle plus the policy-gated Firefox/AMO add-on manager.
+// ---------------------------------------------------------------------------
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun InteractiveExtensionsDialog(
+    adblock: Boolean,
+    onToggleAdblock: (Boolean) -> Unit,
+    onOpenExtensionBrowser: () -> Unit,
+    onClose: () -> Unit
+) {
+    AlertDialog(
+        onDismissRequest = onClose,
+        title = { Text("Quick Toggles", fontWeight = FontWeight.Bold) },
+        text = {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(8.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text("Built-in AdBlocker", fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                    Switch(checked = adblock, onCheckedChange = onToggleAdblock)
+                }
+                Text(
+                    "Add-ons work only in GeckoView. Extensions in the sidebar can switch this normal tab and reload it; WebView sign-ins, cookies and page history do not transfer. Private tabs stay on WebView.",
+                    fontSize = 12.sp
+                )
+                Button(onClick = onOpenExtensionBrowser, modifier = Modifier.fillMaxWidth()) {
+                    Icon(Icons.Default.Extension, contentDescription = null, modifier = Modifier.padding(end = 6.dp))
+                    Text("Manage compatible add-ons for this tab")
+                }
+                Text(
+                    "The catalog opens in the manager, not another browser tab. Before adding, Click shows requested browser permissions and site access for your review. Add-ons run only in regular GeckoView tabs—not WebView or private tabs.",
+                    fontSize = 11.sp,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Text(
+                    "More toggles (HTTPS-Only, Data Saver, JavaScript) live in the home screen Settings module.",
+                    fontSize = 11.sp,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+        },
+        confirmButton = {
+            Button(onClick = onClose) { Text("Close") }
+        }
+    )
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun PrivacyPolicyDialog(onClose: () -> Unit) {
+    AlertDialog(
+        onDismissRequest = onClose,
+        title = { Text("Privacy Policy", fontWeight = FontWeight.Bold) },
+        text = {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(320.dp)
+                    .verticalScroll(rememberScrollState())
+            ) {
+                Text(
+                    text = "Click Browser Privacy Policy\n\n" +
+                        "• Bookmarks, history, download records, settings and Click's on-device credential vault are kept in app-private storage. Credentials saved to Google Password Manager are handled by Google. Android may include some app data in device backups when backups are enabled; private tabs skip local history recording but are not anonymous.\n\n" +
+                        "• Regular tabs use Android System WebView by default. A user may opt a non-private tab into GeckoView for add-ons; Click reloads that same tab in a Gecko storage context, and WebView cookies, sign-ins, back history and page state are not transferred. Private tabs remain on WebView and do not run add-ons. Click denies website geolocation, camera, microphone and notification requests in GeckoView.\n\n" +
+                        "• Add-ons must be public on Mozilla AMO, compatible with Click's pinned GeckoView Android version, Mozilla-signed and not blocklisted. GeckoView validates signatures and Click shows requested permission names and exact site patterns before Add; optional requests appear separately when the add-on asks. Add-ons can read or change the sites shown and may process or send data under their own code and privacy terms. Native messaging, GeckoView add-on-install privileges and extension geolocation remain blocked. Mozilla signing is not blanket Google Play or AdSense approval; review each publisher's disclosures.\n\n" +
+                        "• HTTPS mode upgrades or blocks navigation URLs according to your setting. HTTPS describes the connection scheme; it does not guarantee that a site is trustworthy. Optional DNT/GPC signals are voluntary and sites may ignore them.\n\n" +
+                        "• If you use AI chat, the prompt and recent conversation sent with it go over HTTPS to the selected provider (Groq or OpenRouter). The provider's own privacy terms apply.\n\n" +
+                        "• Google sign-in is handled by Google Play services. Click caches the selected profile name, email and photo in app storage and does not operate its own account backend.\n\n" +
+                        "• Feedback and crash/bug reports open an email draft with app/device details. Nothing is emailed until you review and send it. Opt-in news alerts periodically fetch selected topics.\n\n" +
+                        "• Click does not run app analytics. Regular tabs default to Android System WebView; opted-in non-private tabs use GeckoView, while private tabs stay on WebView. Gecko storage follows Click's profile-group separation. Click does not substitute device identity.",
+                    fontSize = 12.sp,
+                    lineHeight = 18.sp
+                )
+            }
+        },
+        confirmButton = {
+            Button(onClick = onClose) { Text("Close") }
+        }
+    )
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun AboutAppDialog(onClose: () -> Unit) {
+    AlertDialog(
+        onDismissRequest = onClose,
+        title = { Text("Click Browser", fontWeight = FontWeight.Bold) },
+        text = {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(8.dp)
+            ) {
+                Text("Ecosystem built by: Team PK AI", fontSize = 13.sp, fontWeight = FontWeight.Bold)
+                Spacer(modifier = Modifier.height(8.dp))
+                Text("UI Design Built By: Prince Laghari", fontSize = 13.sp, fontWeight = FontWeight.ExtraBold)
+                Spacer(modifier = Modifier.height(12.dp))
+                Text(
+                    "Click Browser is an Android browser with four profiles: Simple, Developer, Power and Advance. Normal tabs use Android System WebView by default; add-ons use Click's GeckoView runtime, separate from WebView storage. A tab switches only after the user approves a same-tab reload.",
+                    fontSize = 11.sp,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Spacer(modifier = Modifier.height(12.dp))
+                // V9 — Prince's signature feature.
+                Text(
+                    "V9 — 1 Browser, 4 Profiles",
+                    fontSize = 13.sp,
+                    fontWeight = FontWeight.ExtraBold,
+                    color = MaterialTheme.colorScheme.primary
+                )
+                Spacer(modifier = Modifier.height(4.dp))
+                Text(
+                    "The four main profiles use Android System WebView by default. GeckoView-backed tabs share Click's add-on runtime; private tabs remain on WebView. Click does not substitute device identity.",
+                    fontSize = 11.sp,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Spacer(modifier = Modifier.height(12.dp))
+                Text(
+                    "Safety",
+                    fontSize = 13.sp,
+                    fontWeight = FontWeight.ExtraBold,
+                    color = MaterialTheme.colorScheme.primary
+                )
+                Spacer(modifier = Modifier.height(4.dp))
+                Text(
+                    "Click includes Safe Browsing when supported by the installed WebView, HTTPS controls, optional ad/tracker blocking and V9 Shield DNS-layer protection. These tools reduce some risks but cannot guarantee every site is safe. Only public AMO add-ons compatible with the pinned GeckoView Android version, Mozilla-signed and non-blocklisted can install after explicit permission review. Required browser permissions and exact site patterns are shown; optional requests prompt separately. Native messaging, GeckoView add-on-install privileges and extension geolocation remain blocked. Add-ons may read or change listed pages and process or send data under their own code and privacy terms. Mozilla signing is not Google Play or AdSense approval. Website geolocation, camera and microphone requests remain denied.",
+                    fontSize = 11.sp,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Spacer(modifier = Modifier.height(8.dp))
+                Text(
+                    "See click://version for build and browser-profile information.",
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = MaterialTheme.colorScheme.primary
+                )
+            }
+        },
+        confirmButton = {
+            Button(onClick = onClose) { Text("Close") }
+        }
+    )
+}

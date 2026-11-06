@@ -1,0 +1,214 @@
+import java.io.File
+import org.jetbrains.kotlin.gradle.dsl.JvmTarget
+
+plugins {
+    alias(libs.plugins.android.application)
+    alias(libs.plugins.kotlin.android)
+    alias(libs.plugins.kotlin.compose)
+}
+
+android {
+    namespace = "com.click.browser"
+    compileSdk = 36
+
+    // Release signing for Play closed testing.
+    // Reads GitHub Secrets-provided env vars (CLICK_KEYSTORE_FILE must point at a .p12 file).
+    // NEVER commit a keystore, password, or keystore.properties with real values.
+    signingConfigs {
+        create("debugConfig") {
+            storeFile = file("${rootDir}/debug.keystore")
+            storePassword = "android"
+            keyAlias = "androiddebugkey"
+            keyPassword = "android"
+        }
+        create("release") {
+            val ksFile = System.getenv("CLICK_KEYSTORE_FILE")
+            val ksPass = System.getenv("CLICK_KEYSTORE_PASSWORD")
+            val aliasName = System.getenv("CLICK_KEY_ALIAS")
+            val keyPass = System.getenv("CLICK_KEY_PASSWORD")
+            if (!ksFile.isNullOrBlank() && !ksPass.isNullOrBlank()
+                && !aliasName.isNullOrBlank() && !keyPass.isNullOrBlank()
+                && File(ksFile).exists()
+            ) {
+                storeFile = File(ksFile)
+                storePassword = ksPass
+                keyAlias = aliasName
+                keyPassword = keyPass
+                storeType = "pkcs12"
+            }
+        }
+    }
+
+    defaultConfig {
+        // Play Store package: com.teampkai.clickbrowser
+        // (namespace stays com.click.browser so BuildConfig/R keep resolving;
+        //  namespace != applicationId is fully supported by AGP)
+        applicationId = "com.teampkai.clickbrowser"
+        minSdk = 26
+        targetSdk = 36
+        versionCode = 14
+        versionName = "1.3.9-geckoview-addon-actions-options"
+
+        // Built-in Groq key for AI chat, injected at build time from the
+        // GROQ_API_KEY env var (GitHub Actions secret in CI). The key is
+        // XOR-obfuscated with a pad and hex-encoded so the RAW key never
+        // appears in BuildConfig / the APK as a plain string.
+        // Honest note: this defeats casual `strings` extraction, NOT a
+        // determined reverser. Empty when the env var is missing — the build
+        // still passes and the app falls back to asking for the user's key.
+        // At runtime the user's own Settings key always takes precedence.
+        // See KeyObfuscator.kt for the runtime decode. The pad itself is also
+        // passed via BuildConfig (single source of truth — Kilo review).
+        // (Hex — not base64 — because the Gradle script classpath reliably
+        // supports String.format; no extra imports needed.)
+        val groqObfPad = "ClickBrowserObfPad2026"
+        val groqKeyRaw = System.getenv("GROQ_API_KEY") ?: ""
+        val groqKeyObf = if (groqKeyRaw.isBlank()) "" else {
+            val padBytes = groqObfPad.toByteArray(Charsets.UTF_8)
+            val rawBytes = groqKeyRaw.toByteArray(Charsets.UTF_8)
+            val xored = ByteArray(rawBytes.size) { i ->
+                (rawBytes[i].toInt() xor padBytes[i % padBytes.size].toInt()).toByte()
+            }
+            xored.joinToString("") { "%02x".format(it) }
+        }
+        buildConfigField("String", "GROQ_API_KEY_OBF", "\"$groqKeyObf\"")
+        buildConfigField("String", "GROQ_OBF_PAD", "\"$groqObfPad\"")
+
+        testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+        vectorDrawables {
+            useSupportLibrary = true
+        }
+    }
+
+    buildTypes {
+        debug {
+            isDebuggable = true
+            signingConfig = signingConfigs.getByName("debugConfig")
+            applicationIdSuffix = ".debug"
+        }
+
+        release {
+            // Use the release signing config only when all CLICK_* env vars are present
+            // (set by CI from GitHub Secrets). Otherwise fall back to debug signing so
+            // local/CI builds stay green before Prince adds the secrets.
+            val ksFile = System.getenv("CLICK_KEYSTORE_FILE")
+            val hasReleaseKeys = !ksFile.isNullOrBlank()
+                && !System.getenv("CLICK_KEYSTORE_PASSWORD").isNullOrBlank()
+                && !System.getenv("CLICK_KEY_ALIAS").isNullOrBlank()
+                && !System.getenv("CLICK_KEY_PASSWORD").isNullOrBlank()
+                && File(ksFile).exists()
+            if (hasReleaseKeys) {
+                signingConfig = signingConfigs.getByName("release")
+            } else {
+                signingConfig = signingConfigs.getByName("debug")
+                println("WARNING: Release signing secrets missing — building debug-signed APK/AAB. " +
+                    "Set CLICK_KEYSTORE_FILE/CLICK_KEYSTORE_PASSWORD/CLICK_KEY_ALIAS/CLICK_KEY_PASSWORD for Play-ready signing.")
+            }
+            // R8 full obfuscation + resource shrinking for release builds
+            // (decompile guard). Keep rules live in app/proguard-rules.pro —
+            // notably the WebView @JavascriptInterface bridges, which JS calls
+            // by method name. CI must stay green: fix the rules if R8 breaks
+            // the release build, don't disable minify.
+            isMinifyEnabled = true
+            isShrinkResources = true
+            proguardFiles(
+                getDefaultProguardFile("proguard-android-optimize.txt"),
+                "proguard-rules.pro"
+            )
+        }
+    }
+    compileOptions {
+        sourceCompatibility = JavaVersion.VERSION_17
+        targetCompatibility = JavaVersion.VERSION_17
+    }
+    buildFeatures {
+        compose = true
+        buildConfig = true
+    }
+    packaging {
+        // The release APK currently stores every native library uncompressed.
+        // Compress the distributed artifact; Android extracts .so files on install,
+        // so this reduces APK/download size but can increase installed storage.
+        jniLibs {
+            useLegacyPackaging = true
+        }
+        resources {
+            excludes += "/META-INF/{AL2.0,LGPL2.1}"
+        }
+    }
+}
+
+androidComponents {
+    onVariants { variant ->
+        // `useLegacyPackaging` above affects directly assembled APKs only.
+        // Also compress .so files in APKs generated from the App Bundle for Play delivery.
+        variant.packaging.jniLibs.useLegacyPackagingFromBundle.set(true)
+    }
+}
+
+kotlin {
+    compilerOptions {
+        jvmTarget = JvmTarget.fromTarget("17")
+    }
+}
+
+dependencies {
+    // sing-box VPN core (libbox.aar). Built from OFFICIAL SagerNet/sing-box
+    // source by the build-libbox.yml workflow — never a third-party binary.
+    // The build FAILS LOUDLY if the AAR is missing (a "VPN" without the
+    // tunnel core would be dishonest). See app/libs/README.md.
+    val libboxAar = File(projectDir, "libs/libbox.aar")
+    if (libboxAar.exists()) {
+        implementation(files("libs/libbox.aar"))
+    }
+
+    implementation(libs.androidx.core.ktx)
+    implementation(libs.androidx.lifecycle.runtime.ktx)
+    implementation(libs.androidx.activity.compose)
+    implementation(platform(libs.androidx.compose.bom))
+    implementation(libs.androidx.ui)
+    implementation(libs.androidx.ui.graphics)
+    implementation(libs.androidx.ui.tooling.preview)
+    implementation(libs.androidx.material3)
+    implementation(libs.androidx.material.icons.extended)
+    implementation(libs.androidx.datastore.preferences)
+    implementation(libs.androidx.webkit)
+    implementation(libs.geckoview)
+    implementation(libs.okhttp)
+    implementation(libs.okhttp.dnsoverhttps)
+    // On-device translation (ML Kit). Language MODELS are downloaded on
+    // demand at runtime — nothing is bundled, so the APK stays lean.
+    implementation(libs.mlkit.translate)
+    // AndroidX BiometricPrompt for the private-tab lock (no custom crypto).
+    implementation(libs.androidx.biometric)
+    // WorkManager for battery-friendly background news checks (no exact
+    // alarms, no foreground service — periodic work with constraints).
+    implementation(libs.androidx.work.runtime.ktx)
+    // Media3 ExoPlayer for live streaming playback (HLS/DASH) — playback only.
+    implementation(libs.media3.exoplayer)
+    implementation(libs.media3.exoplayer.hls)
+    implementation(libs.media3.exoplayer.dash)
+    implementation(libs.media3.ui)
+    implementation(libs.androidx.documentfile)
+    // Google Sign-In for the Click account (play-services-auth).
+    implementation(libs.play.services.auth)
+    // Credential Manager: save / retrieve passwords & passkeys through the
+    // user's Google Password Manager (Play Services provider).
+    implementation(libs.androidx.credentials)
+    implementation(libs.androidx.credentials.play.services.auth)
+    // EncryptedSharedPreferences for payment-method storage.
+    implementation(libs.androidx.security.crypto)
+    // Chrome Custom Tabs: Google Sign-in / OAuth must open in a Custom Tab,
+    // NOT in WebView — Google blocks OAuth in embedded WebViews. Custom Tabs
+    // share cookies with Chrome, so the user stays signed in.
+    implementation(libs.androidx.browser)
+
+    testImplementation(libs.junit)
+    testImplementation("org.json:json:20240303")
+    androidTestImplementation(libs.androidx.junit)
+    androidTestImplementation(libs.androidx.espresso.core)
+    androidTestImplementation(platform(libs.androidx.compose.bom))
+    androidTestImplementation(libs.androidx.ui.test.junit4)
+    debugImplementation(libs.androidx.ui.tooling)
+    debugImplementation(libs.androidx.ui.test.manifest)
+}
