@@ -135,26 +135,19 @@ object V9Engine {
      * directory takes effect. setMode() is suspend and returns after the
      * DataStore write completes, so the new mode is durable before we die.
      *
-     * RELIABILITY: the old code called Process.killProcess() UNCONDITIONALLY,
-     * even when the restart alarm was never scheduled (null launch intent or
-     * exception) — the app died and never came back. It also used an inexact
-     * 400ms alarm that MIUI/OEM battery optimizers routinely swallow after a
-     * kill. This version:
-     *  1. NEVER kills the process unless a restart alarm is scheduled or the
-     *     relaunch Activity was started successfully.
-     *  2. Uses AlarmManager.setAlarmClock (alarm-clock alarms are delivered
-     *     at the highest priority and are NOT swallowed by MIUI/Oppo/Vivo
-     *     battery optimizers after a kill — the classic OEM-proof restart
-     *     trick; needs no SCHEDULE_EXACT_ALARM permission) with a 1s delay.
-     *  3. Also starts the relaunch intent directly as a backup before dying.
+     * A process restart is needed because WebView's data-directory suffix is
+     * process-wide. Use a permission-free inexact alarm to launch the Activity
+     * after this process exits. Inexact delivery may be delayed by Android; do
+     * not claim an exact restart time or add exact-alarm permissions. A direct
+     * Activity launch in the still-running singleTask process is not a cold
+     * restart and must never be used to justify killing that process.
      *
      * @param hackIntro legacy flag name; when true, the relaunched process shows
      *   the Power Mode Markhor intro animation once (see HackIntroOverlay).
      * @param advanceIntro when true, the relaunched process shows the Advance
      *   Mode teal intro animation once (see AdvanceIntroOverlay).
-     * @return true if a restart path was started; false if neither the alarm
-     *   nor direct relaunch could be started. The caller must keep the current
-     *   profile selected when false is returned.
+     * @return true if a cold relaunch alarm was scheduled; false if the caller
+     *   must keep the current profile selected.
      */
     suspend fun restartForEngineSwitch(
         context: Context,
@@ -184,15 +177,10 @@ object V9Engine {
             return false
         }
 
-        // 2. Schedule the relaunch via AlarmManager.setAlarmClock. Alarm-clock
-        // alarms are the OEM-proof restart mechanism: unlike
-        // setAndAllowWhileIdle (which MIUI's battery optimizer swallows after
-        // the process is killed), alarm-clock alarms are delivered at the
-        // highest priority on all skins — Xiaomi/Oppo/Vivo treat them as
-        // user-visible and do not suppress them. No SCHEDULE_EXACT_ALARM
-        // permission is needed for setAlarmClock. The showIntent is null —
-        // tapping the transient status-bar alarm icon does nothing; the
-        // operation PendingIntent is what relaunches the app.
+        // 2. Schedule an inexact RTC_WAKEUP relaunch. setAlarmClock is an exact
+        // alarm and can throw SecurityException for this app (target SDK 36,
+        // no exact-alarm permission). A direct startActivity here would reuse
+        // the current process and is not a safe substitute.
         var scheduled = false
         try {
             val pi = PendingIntent.getActivity(
@@ -200,11 +188,9 @@ object V9Engine {
                 PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
             )
             val am = context.getSystemService(Context.ALARM_SERVICE) as AlarmManager
-            am.setAlarmClock(
-                AlarmManager.AlarmClockInfo(
-                    System.currentTimeMillis() + RESTART_DELAY_MS,
-                    null
-                ),
+            am.set(
+                AlarmManager.RTC_WAKEUP,
+                System.currentTimeMillis() + RELAUNCH_DELAY_MS,
                 pi
             )
             scheduled = true
@@ -212,40 +198,19 @@ object V9Engine {
             Log.e(TAG, "V9 restart schedule failed", t)
         }
 
-        // 3. Backup: start the relaunch intent directly NOW. With
-        // CLEAR_TASK|NEW_TASK the old stack is torn down. If an OEM skin
-        // swallows the alarm after killProcess, the system still has a live
-        // activity record to keep the app visible.
-        var directRelaunchStarted = false
-        try {
-            context.startActivity(launch)
-            directRelaunchStarted = true
-        } catch (t: Throwable) {
-            Log.e(TAG, "V9: direct relaunch failed, relying on alarm", t)
-        }
-
-        if (!hasEngineRestartPath(scheduled, directRelaunchStarted)) {
+        if (!hasEngineRestartPath(scheduled)) {
             // Last resort: do NOT kill or pretend the process-pinned profile
             // changed. The caller restores the saved selection to bootMode.
             Log.e(TAG, "V9: no restart path available — staying in the current profile")
             return false
         }
 
-        // 4. Give the alarm + the directly-started activity a moment, then die.
-        // The alarm fires in a FRESH process where ClickApplication pins the
-        // new engine's WebView data directory.
-        //
-        // RACE FIX (mode switch "not working", reported in Simple mode): this
-        // MUST run non-cancellably. The caller invokes us from the Activity's
-        // coroutine scope (rememberCoroutineScope), and step 3's CLEAR_TASK
-        // destroys that Activity -> its scope is cancelled -> a plain delay()
-        // throws CancellationException and killProcess() NEVER runs. The app
-        // would then survive on the OLD engine while the UI shows the NEW
-        // mode (the DataStore was already updated in step 0) — the exact
-        // "mode switch doesn't work" symptom. NonCancellable guarantees the
-        // kill happens no matter what the Activity does.
+        // 3. Let the Activity finish its current UI work, then exit so the
+        // scheduled PendingIntent can create a fresh process using the target
+        // profile. This remains non-cancellable because it is called from the
+        // Activity's coroutine scope.
         withContext(NonCancellable) {
-            delay(RESTART_DELAY_MS)
+            delay(PROCESS_EXIT_DELAY_MS)
             Process.killProcess(Process.myPid())
         }
         return true // unreachable
@@ -258,6 +223,7 @@ object V9Engine {
     const val EXTRA_ADVANCE_INTRO = "v9_advance_intro"
 
     private const val RESTART_REQUEST_CODE = 9001
-    private const val RESTART_DELAY_MS = 1000L
+    private const val PROCESS_EXIT_DELAY_MS = 700L
+    private const val RELAUNCH_DELAY_MS = 3_000L
 
 }

@@ -7,7 +7,7 @@ import org.junit.Test
 
 class NormalTabExtensionSupportTest {
     @Test
-    fun clickReactivatesTheRequestedVisibleTabBeforeDispatch() {
+    fun clickRequestReactivatesVisibleTabButDoesNotClaimPopupOpened() {
         val events = mutableListOf<String>()
 
         val dispatched = dispatchNormalTabActionClick(
@@ -19,12 +19,14 @@ class NormalTabExtensionSupportTest {
             clickAction = { events += "click" }
         )
 
-        assertTrue(dispatched)
+        // No popup callback is simulated here: REQUESTED only means that the
+        // asynchronous GeckoView action request was sent.
+        assertEquals(NormalTabActionDispatchResult.REQUESTED, dispatched)
         assertEquals(listOf("activate:visible-tab", "click"), events)
     }
 
     @Test
-    fun clickActionFailureReturnsFalseAfterReactivatingTheRequestedTab() {
+    fun clickActionFailureIsRejectedAfterReactivatingTheRequestedTab() {
         val events = mutableListOf<String>()
 
         val dispatched = dispatchNormalTabActionClick(
@@ -39,7 +41,7 @@ class NormalTabExtensionSupportTest {
             }
         )
 
-        assertFalse(dispatched)
+        assertEquals(NormalTabActionDispatchResult.REJECTED, dispatched)
         assertEquals(listOf("activate:visible-tab", "click"), events)
     }
 
@@ -56,7 +58,7 @@ class NormalTabExtensionSupportTest {
             clickAction = { events += "click" }
         )
 
-        assertFalse(dispatched)
+        assertEquals(NormalTabActionDispatchResult.REJECTED, dispatched)
         assertTrue(events.isEmpty())
     }
 
@@ -66,14 +68,14 @@ class NormalTabExtensionSupportTest {
         val activate: (String) -> Unit = { events += "activate:$it" }
         val click: () -> Unit = { events += "click" }
 
-        assertFalse(
+        assertEquals(NormalTabActionDispatchResult.REJECTED,
             dispatchNormalTabActionClick(
                 "visible-tab", setOf("visible-tab"),
                 isEnabled = false, isPolicyApproved = true,
                 activateTab = activate, clickAction = click
             )
         )
-        assertFalse(
+        assertEquals(NormalTabActionDispatchResult.REJECTED,
             dispatchNormalTabActionClick(
                 "visible-tab", setOf("visible-tab"),
                 isEnabled = true, isPolicyApproved = false,

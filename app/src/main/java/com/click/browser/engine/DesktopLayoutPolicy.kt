@@ -1,5 +1,7 @@
 package com.click.browser.engine
 
+import org.mozilla.geckoview.GeckoSessionSettings
+
 /**
  * Policy for Click's safe desktop-style layout controls.
  *
@@ -58,6 +60,11 @@ object DesktopLayoutPolicy {
             useWideViewPort = enabled,
             loadWithOverviewMode = enabled
         )
+
+    /** Standard GeckoView viewport mode; deliberately does not alter its real User-Agent. */
+    fun geckoViewportMode(enabled: Boolean): Int =
+        if (enabled) GeckoSessionSettings.VIEWPORT_MODE_DESKTOP
+        else GeckoSessionSettings.VIEWPORT_MODE_MOBILE
 
     private fun normalizeHost(host: String): String =
         host.trim().trimEnd('.').lowercase()

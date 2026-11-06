@@ -17,10 +17,29 @@ class BrowserTabNavigationTest {
     }
 
     @Test
+    fun backAfterExternalGoogleSignInWithNoHistoryKeepsOriginPage() {
+        val originUrl = "https://example.test/account"
+        val session = FakeNavigation(canBack = false, currentUrl = originUrl)
+
+        assertEquals(BrowserBackResult.KEEP_CURRENT_PAGE, session.handleBrowserBackPress())
+        assertEquals(originUrl, session.currentUrl)
+        assertTrue(session.loadedUrls.isEmpty())
+        assertEquals(0, session.backCalls)
+    }
+
+    @Test
     fun backUsesTheSessionWhenHistoryIsAvailable() {
         val session = FakeNavigation(canBack = true)
 
         assertTrue(session.goBackIfPossible())
+        assertEquals(1, session.backCalls)
+    }
+
+    @Test
+    fun backPressReportsNavigationWhenHistoryIsAvailable() {
+        val session = FakeNavigation(canBack = true)
+
+        assertEquals(BrowserBackResult.NAVIGATED_BACK, session.handleBrowserBackPress())
         assertEquals(1, session.backCalls)
     }
 
@@ -43,17 +62,22 @@ class BrowserTabNavigationTest {
     private class FakeNavigation(
         private val canBack: Boolean = false,
         private val canForward: Boolean = false,
+        var currentUrl: String = "https://example.test/start",
     ) : BrowserTabNavigation {
         var backCalls: Int = 0
             private set
         var forwardCalls: Int = 0
             private set
+        val loadedUrls = mutableListOf<String>()
 
         override fun canGoBack(): Boolean = canBack
         override fun goBack() { backCalls++ }
         override fun canGoForward(): Boolean = canForward
         override fun goForward() { forwardCalls++ }
-        override fun loadUrl(url: String) = Unit
+        override fun loadUrl(url: String) {
+            loadedUrls += url
+            currentUrl = url
+        }
         override fun reload() = Unit
         override fun stopLoading() = Unit
     }

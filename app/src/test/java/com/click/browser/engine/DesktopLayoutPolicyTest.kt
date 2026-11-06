@@ -4,6 +4,7 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import org.mozilla.geckoview.GeckoSessionSettings
 
 class DesktopLayoutPolicyTest {
     @Test
@@ -73,5 +74,18 @@ class DesktopLayoutPolicyTest {
             DesktopLayoutPolicy.WebViewLayout(false, false),
             DesktopLayoutPolicy.webViewLayout(enabled = false)
         )
+    }
+
+    @Test
+    fun geckoWideLayoutUsesViewportModeConstantsWithoutChangingUserAgentMode() {
+        assertEquals(
+            GeckoSessionSettings.VIEWPORT_MODE_DESKTOP,
+            DesktopLayoutPolicy.geckoViewportMode(enabled = true)
+        )
+        assertEquals(
+            GeckoSessionSettings.VIEWPORT_MODE_MOBILE,
+            DesktopLayoutPolicy.geckoViewportMode(enabled = false)
+        )
+        // No USER_AGENT_MODE_* or override is selected by the layout policy.
     }
 }

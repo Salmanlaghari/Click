@@ -13,6 +13,13 @@ enum class BrowserTabEngine {
 internal fun defaultBrowserTabEngine(isIncognito: Boolean): BrowserTabEngine =
     if (isIncognito) BrowserTabEngine.WEBVIEW else BrowserTabEngine.GECKOVIEW
 
+internal enum class GeckoRenderEvent { LOAD_STARTED, FIRST_COMPOSITE, PROCESS_CRASHED, PROCESS_KILLED }
+
+internal fun geckoRendererRecoveryRequired(event: GeckoRenderEvent): Boolean = when (event) {
+    GeckoRenderEvent.LOAD_STARTED, GeckoRenderEvent.FIRST_COMPOSITE -> false
+    GeckoRenderEvent.PROCESS_CRASHED, GeckoRenderEvent.PROCESS_KILLED -> true
+}
+
 /**
  * Navigation operations shared by a logical browser tab regardless of its
  * rendering engine. Keep profile-wide storage, cookies, history, downloads,
@@ -24,6 +31,8 @@ internal interface BrowserTabNavigation {
     fun canGoForward(): Boolean
     fun goForward()
     fun loadUrl(url: String)
+    /** Apply the standard wide/mobile viewport without changing browser identity. */
+    fun setWideLayout(enabled: Boolean) = Unit
     fun reload()
     fun stopLoading()
 }
@@ -59,6 +68,11 @@ internal class WebViewBrowserTabSession(
     override fun canGoForward(): Boolean = webView.canGoForward()
     override fun goForward() = webView.goForward()
     override fun loadUrl(url: String) = webView.loadUrl(url)
+    override fun setWideLayout(enabled: Boolean) {
+        val layout = DesktopLayoutPolicy.webViewLayout(enabled)
+        webView.settings.useWideViewPort = layout.useWideViewPort
+        webView.settings.loadWithOverviewMode = layout.loadWithOverviewMode
+    }
     override fun reload() = webView.reload()
     override fun stopLoading() = webView.stopLoading()
 
@@ -76,12 +90,21 @@ internal class WebViewBrowserTabSession(
 
 /**
  * Shared, testable browser-chrome behavior. A missing session or unavailable
- * history entry is a no-op; the caller decides what to show instead.
+ * history entry is a no-op; callers should preserve the currently rendered page.
  */
 internal fun BrowserTabNavigation?.goBackIfPossible(): Boolean {
     if (this?.canGoBack() != true) return false
     goBack()
     return true
+}
+
+internal enum class BrowserBackResult { NAVIGATED_BACK, KEEP_CURRENT_PAGE }
+
+/** Back without a history entry preserves the current page instead of navigating to about:blank. */
+internal fun BrowserTabNavigation?.handleBrowserBackPress(): BrowserBackResult {
+    if (this?.canGoBack() != true) return BrowserBackResult.KEEP_CURRENT_PAGE
+    goBack()
+    return BrowserBackResult.NAVIGATED_BACK
 }
 
 internal fun BrowserTabNavigation?.goForwardIfPossible(): Boolean {

@@ -6,8 +6,7 @@ internal fun shouldPersistNoRestartModeSelection(
     requestedMode: BrowserMode
 ): Boolean = savedMode != requestedMode
 
-/** At least one relaunch route must have started before the old process is killed. */
+/** A direct activity launch is not a cold-process restart; only a scheduled relaunch qualifies. */
 internal fun hasEngineRestartPath(
-    alarmScheduled: Boolean,
-    directRelaunchStarted: Boolean
-): Boolean = alarmScheduled || directRelaunchStarted
+    alarmScheduled: Boolean
+): Boolean = alarmScheduled

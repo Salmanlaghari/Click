@@ -21,6 +21,11 @@ internal data class NormalTabExtensionPopup(
     val session: GeckoSession
 )
 
+internal enum class NormalTabActionDispatchResult {
+    REJECTED,
+    REQUESTED
+}
+
 internal fun dispatchNormalTabActionClick(
     tabId: String,
     attachedTabIds: Set<String>,
@@ -28,14 +33,18 @@ internal fun dispatchNormalTabActionClick(
     isPolicyApproved: Boolean,
     activateTab: (String) -> Unit,
     clickAction: () -> Unit
-): Boolean {
-    if (tabId !in attachedTabIds || !isEnabled || !isPolicyApproved) return false
+): NormalTabActionDispatchResult {
+    if (tabId !in attachedTabIds || !isEnabled || !isPolicyApproved) {
+        return NormalTabActionDispatchResult.REJECTED
+    }
     activateTab(tabId)
     return try {
         clickAction()
-        true
+        // GeckoView Action.click() is a void/asynchronous dispatch. This means
+        // only that the request was sent, not that a popup was created.
+        NormalTabActionDispatchResult.REQUESTED
     } catch (_: RuntimeException) {
-        false
+        NormalTabActionDispatchResult.REJECTED
     }
 }
 
@@ -117,7 +126,7 @@ internal class NormalTabExtensionRouter(
         }
     }
 
-    fun clickAction(tabId: String, item: NormalTabExtensionAction): Boolean =
+    fun clickAction(tabId: String, item: NormalTabExtensionAction): NormalTabActionDispatchResult =
         dispatchNormalTabActionClick(
             tabId = tabId,
             attachedTabIds = sessions.keys,

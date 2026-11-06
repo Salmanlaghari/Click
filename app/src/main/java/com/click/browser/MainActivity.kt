@@ -107,6 +107,7 @@ import com.click.browser.extensions.InstalledAddonPanelItem
 import com.click.browser.extensions.InstalledAddonsPanel
 import com.click.browser.extensions.safeBuildInstalledAddonPanelItems
 import com.click.browser.extensions.NormalTabExtensionAction
+import com.click.browser.extensions.NormalTabActionDispatchResult
 import com.click.browser.extensions.NormalTabExtensionPopup
 import com.click.browser.extensions.NormalTabExtensionRouter
 import com.click.browser.extensions.extensionPolicyBlockers
@@ -170,6 +171,7 @@ class TabItem(
     var loadProgress by mutableStateOf(0)
     var isPageLoading by mutableStateOf(false)
     var hasCommittedContent by mutableStateOf(false)
+    var rendererRecoveryRequired by mutableStateOf(false)
 }
 
 /** Keeps the same logical tab selected after a close, without indexing past the list. */
@@ -797,6 +799,27 @@ class MainActivity : FragmentActivity() {
         modeManager.applyDesktopOverride(webView, liveMode, desktop)
     }
 
+    /** Resolve the persisted viewport preference for a URL on either browser engine. */
+    private fun wideLayoutEnabledForUrl(url: String): Boolean {
+        val host = try {
+            android.net.Uri.parse(url).host?.lowercase().orEmpty()
+        } catch (_: Exception) {
+            ""
+        }
+        return DesktopLayoutPolicy.enabledForHost(
+            host = host,
+            overrides = liveDesktopOverrides,
+            mode = liveMode,
+            forceDesktopMode = liveForceDesktopMode,
+            desktopDefault = liveFlags.desktopDefault
+        )
+    }
+
+    private fun applyWideLayoutToTab(tab: TabItem, enabled: Boolean, reload: Boolean = true) {
+        tab.browserSession?.setWideLayout(enabled)
+        if (reload) tab.browserSession?.reload()
+    }
+
     /** Persist and publish the choice before a caller reloads the current page. */
     private suspend fun persistDesktopOverride(host: String, desktop: Boolean) {
         val normalizedHost = host.trim().trimEnd('.').lowercase()
@@ -878,29 +901,13 @@ class MainActivity : FragmentActivity() {
         ""
     }
 
-    /**
-     * Returns true if [url] is a Google OAuth / sign-in URL.
-     * Google blocks OAuth in embedded WebViews ("disallowed_useragent").
-     * These URLs must open in a Chrome Custom Tab instead, which shares
-     * cookies with Chrome and is allowed by Google.
-     */
-    private fun isGoogleAuthUrl(url: String): Boolean {
-        // Accept BOTH http:// and https:// — an http:// Google OAuth URL must
-        // still route to Custom Tab, not WebView (Google blocks OAuth there).
-        // Reject non-HTTP(S) schemes (e.g. intent://, about:) outright.
-        if (!url.startsWith("https://") && !url.startsWith("http://")) return false
-        val host = hostOfUrl(url)
-        if (host == "accounts.google.com" || host.endsWith(".accounts.google.com")) return true
-        // OAuth authorize endpoints on Google domains.
-        if (host.endsWith(".google.com") && url.contains("/o/oauth2/")) return true
-        if (host == "accounts.youtube.com") return true
-        return false
-    }
+    /** Recognizes valid Google OAuth authorization requests; account pages stay in the current tab. */
+    private fun isGoogleAuthUrl(url: String): Boolean =
+        GoogleAuthPolicy.shouldOpenInCustomTab(url)
 
     /**
-     * Opens [url] in a Chrome Custom Tab. Used for Google Sign-in / OAuth
-     * (WebView is blocked by Google) and any other auth flow that needs a
-     * real browser context.
+     * Opens [url] in the system-provided Custom Tab for a recognized Google
+     * OAuth authorization request, as required by Google's secure-browser policy.
      */
     private fun openInCustomTab(url: String) {
         try {
@@ -1667,6 +1674,9 @@ class MainActivity : FragmentActivity() {
             var installedAddonPanelLoading by remember { mutableStateOf(false) }
             var installedAddonPanelError by remember { mutableStateOf<String?>(null) }
             var installedAddonPanelRequestId by remember { mutableIntStateOf(0) }
+            LaunchedEffect(geckoTabPopupState.value) {
+                if (geckoTabPopupState.value != null) showInstalledAddonsPanel = false
+            }
             val approvedExtensionOptionsBasesByTab = remember {
                 androidx.compose.runtime.mutableStateMapOf<String, String>()
             }
@@ -2094,10 +2104,7 @@ class MainActivity : FragmentActivity() {
                                     host, liveDesktopOverrides, activeMode,
                                     forceDesktopMode, liveFlags.desktopDefault
                                 )
-                                currentTab.webView?.let { wv ->
-                                    modeManager.applyDesktopOverride(wv, activeMode, nextWideLayout)
-                                    wv.reload()
-                                }
+                                applyWideLayoutToTab(currentTab, nextWideLayout)
                                 Toast.makeText(
                                     this@MainActivity,
                                     if (nextWideLayout) "Wide layout ON" else "Wide layout OFF",
@@ -2428,10 +2435,9 @@ class MainActivity : FragmentActivity() {
                 exitFullscreenVideo?.invoke()
             }
             BackHandler(enabled = currentTab.url != "about:blank" && exitFullscreenVideo == null) {
-                if (!currentTab.browserSession.goBackIfPossible()) {
-                    currentTab.url = "about:blank"
-                    currentTab.browserSession?.loadUrl("about:blank")
-                }
+                // If there is no page history (including after returning from
+                // Google sign-in), keep the rendered page instead of blanking it.
+                currentTab.browserSession.handleBrowserBackPress()
             }
 
             // click:// page open: back closes the native page first.
@@ -3076,10 +3082,7 @@ class MainActivity : FragmentActivity() {
                                                     pageHost, liveDesktopOverrides, activeMode,
                                                     forceDesktopMode, liveFlags.desktopDefault
                                                 )
-                                                currentTab.webView?.let { wv ->
-                                                    modeManager.applyDesktopOverride(wv, activeMode, nextWideLayout)
-                                                    wv.reload()
-                                                }
+                                                applyWideLayoutToTab(currentTab, nextWideLayout)
                                                 Toast.makeText(
                                                     this@MainActivity,
                                                     if (nextWideLayout) "Wide layout enabled for $pageHost"
@@ -3672,6 +3675,7 @@ class MainActivity : FragmentActivity() {
                                                                     if (liveMode == BrowserMode.HACK) targetUrl = forceDesktopHost(targetUrl)
                                                                     targetUrl
                                                                 },
+                                                                wideLayoutForUrl = ::wideLayoutEnabledForUrl,
                                                                 onNavigationBlocked = { blockedUrl ->
                                                                     val scheme = runCatching {
                                                                         android.net.Uri.parse(blockedUrl).scheme?.lowercase()
@@ -3755,6 +3759,18 @@ class MainActivity : FragmentActivity() {
                                                                         exitFullscreenVideo = if (active) {
                                                                             { createdGeckoSession?.session?.exitFullScreen() }
                                                                         } else null
+                                                                    }
+                                                                },
+                                                                onRendererFailure = {
+                                                                    runOnUiThread {
+                                                                        tabs.firstOrNull { it.id == tabId }?.rendererRecoveryRequired =
+                                                                            geckoRendererRecoveryRequired(GeckoRenderEvent.PROCESS_CRASHED)
+                                                                    }
+                                                                },
+                                                                onRendererRecovery = { event ->
+                                                                    runOnUiThread {
+                                                                        tabs.firstOrNull { it.id == tabId }?.rendererRecoveryRequired =
+                                                                            geckoRendererRecoveryRequired(event)
                                                                     }
                                                                 },
                                                                 onExternalResponse = { response ->
@@ -3844,13 +3860,13 @@ class MainActivity : FragmentActivity() {
                                                                             pdfOfferUrl = urlStr
                                                                             return true
                                                                         }
-                                                                        if (request != null && request.isRedirect) return false
-                                                                        // Google OAuth / sign-in: Google blocks embedded
-                                                                        // WebViews. Open in a Chrome Custom Tab instead.
+                                                                        // Only actual Google OAuth authorization requests use
+                                                                        // the supported browser context, even after redirects.
                                                                         if (isGoogleAuthUrl(urlStr)) {
                                                                             openInCustomTab(urlStr)
                                                                             return true
                                                                         }
+                                                                        if (request != null && request.isRedirect) return false
                                                                         // HTTPS mode handling FIRST (so http://click://
                                                                         // can't bypass it). Standard upgrades http->https;
                                                                         // Strict BLOCKS plain-http unless the host is
@@ -3911,7 +3927,7 @@ class MainActivity : FragmentActivity() {
                                                                         var urlStr = url ?: ""
                                                                         // Query-param stripping (Brave-style).
                                                                         urlStr = cleanTrackingUrl(urlStr)
-                                                                        // Google OAuth / sign-in: open in Custom Tab (see above).
+                                                                        // Only valid Google OAuth authorization requests hand off.
                                                                         if (isGoogleAuthUrl(urlStr)) {
                                                                             openInCustomTab(urlStr)
                                                                             return true
@@ -4514,6 +4530,50 @@ class MainActivity : FragmentActivity() {
                                                         }
                                                     )
                                                 }
+                                                if (currentTab.engine == BrowserTabEngine.GECKOVIEW &&
+                                                    currentTab.rendererRecoveryRequired
+                                                ) {
+                                                    Surface(
+                                                        modifier = Modifier
+                                                            .align(Alignment.Center)
+                                                            .padding(horizontal = 20.dp)
+                                                            .fillMaxWidth(),
+                                                        shape = RoundedCornerShape(20.dp),
+                                                        color = theme.surface,
+                                                        tonalElevation = 8.dp
+                                                    ) {
+                                                        Column(
+                                                            modifier = Modifier.padding(20.dp),
+                                                            verticalArrangement = Arrangement.spacedBy(10.dp)
+                                                        ) {
+                                                            Text(
+                                                                "This page stopped rendering",
+                                                                color = theme.onSurface,
+                                                                fontWeight = FontWeight.SemiBold
+                                                            )
+                                                            Text(
+                                                                "The page address and browser history are still available. Reload the page or return to the previous page.",
+                                                                color = theme.onSurface.copy(alpha = 0.8f)
+                                                            )
+                                                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                                                if (currentTab.canGoBack) {
+                                                                    TextButton(onClick = {
+                                                                        if (currentTab.browserSession.goBackIfPossible()) {
+                                                                            currentTab.rendererRecoveryRequired = false
+                                                                        }
+                                                                    }) {
+                                                                        Text("Back")
+                                                                    }
+                                                                }
+                                                                Button(onClick = {
+                                                                    currentTab.browserSession?.reload()
+                                                                }) {
+                                                                    Text("Reload")
+                                                                }
+                                                            }
+                                                        }
+                                                    }
+                                                }
                                             }
                                         }
                                         }
@@ -4827,15 +4887,14 @@ class MainActivity : FragmentActivity() {
                                             .orEmpty()
                                             .firstOrNull { it.extensionId == extensionId }
                                         if (tab.engine != BrowserTabEngine.GECKOVIEW || tab.isIncognito ||
-                                            action == null || normalTabExtensionRouter?.clickAction(tab.id, action) != true
+                                            action == null || normalTabExtensionRouter?.clickAction(tab.id, action) !=
+                                            NormalTabActionDispatchResult.REQUESTED
                                         ) {
                                             Toast.makeText(
                                                 this@MainActivity,
                                                 "This add-on action is unavailable on the active regular tab.",
                                                 Toast.LENGTH_SHORT
                                             ).show()
-                                        } else {
-                                            showInstalledAddonsPanel = false
                                         }
                                     },
                                     onOpenOptions = { extensionId ->
@@ -5007,6 +5066,14 @@ class MainActivity : FragmentActivity() {
                                             // Re-apply to all live WebViews right away.
                                             liveWebViews.forEach { wv ->
                                                 try { applyExperimentalFlags(wv) } catch (_: Exception) { }
+                                            }
+                                            if (meta == ExperimentalFlags.Meta.DESKTOP_DEFAULT) {
+                                                liveBrowserSessions.forEach { session ->
+                                                    val tab = tabs.firstOrNull { it.browserSession === session }
+                                                        ?: return@forEach
+                                                    session.setWideLayout(wideLayoutEnabledForUrl(tab.url))
+                                                }
+                                                currentTab.browserSession?.reload()
                                             }
                                         }
                                     },
@@ -5782,7 +5849,7 @@ class MainActivity : FragmentActivity() {
                                     },
                                     text = {
                                         androidx.compose.material3.Text(
-                                            "Mode change requires a restart. Your tabs will be restored. Restart now?"
+                                            "Switching profiles closes and reopens Click; Android may take a little time to relaunch it. Eligible regular web tabs are saved in this profile and restored when you return. Private and internal tabs are not included. Continue?"
                                         )
                                     },
                                     confirmButton = {
@@ -5863,12 +5930,7 @@ class MainActivity : FragmentActivity() {
                                                     siteHost, liveDesktopOverrides, activeMode,
                                                     forceDesktopMode, liveFlags.desktopDefault
                                                 )
-                                                currentTab.webView?.let { wv ->
-                                                    modeManager.applyDesktopOverride(
-                                                        wv, activeMode, nextWideLayout
-                                                    )
-                                                    wv.reload()
-                                                }
+                                                applyWideLayoutToTab(currentTab, nextWideLayout)
                                             }
                                         },
                                         onApplyToWebView = { next ->
@@ -6577,10 +6639,7 @@ class MainActivity : FragmentActivity() {
                                                     menuPageHost, liveDesktopOverrides, activeMode,
                                                     forceDesktopMode, liveFlags.desktopDefault
                                                 )
-                                                currentTab.webView?.let { wv ->
-                                                    modeManager.applyDesktopOverride(wv, activeMode, nextWideLayout)
-                                                    wv.reload()
-                                                }
+                                                applyWideLayoutToTab(currentTab, nextWideLayout)
                                                 Toast.makeText(
                                                     this@MainActivity,
                                                     if (nextWideLayout) "Wide layout enabled for $menuPageHost"
