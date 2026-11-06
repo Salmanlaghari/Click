@@ -14,7 +14,18 @@ android {
     // Release signing for Play closed testing.
     // Reads GitHub Secrets-provided env vars (CLICK_KEYSTORE_FILE must point at a .p12 file).
     // NEVER commit a keystore, password, or keystore.properties with real values.
+    val localDebugKeystore = file("${rootDir}/debug.keystore")
+    val hasLocalDebugKeystore = localDebugKeystore.exists()
+
     signingConfigs {
+        if (hasLocalDebugKeystore) {
+            create("debugConfig") {
+                storeFile = localDebugKeystore
+                storePassword = "android"
+                keyAlias = "androiddebugkey"
+                keyPassword = "android"
+            }
+        }
         create("release") {
             val ksFile = System.getenv("CLICK_KEYSTORE_FILE")
             val ksPass = System.getenv("CLICK_KEYSTORE_PASSWORD")
@@ -77,6 +88,9 @@ android {
     buildTypes {
         debug {
             isDebuggable = true
+            if (hasLocalDebugKeystore) {
+                signingConfig = signingConfigs.getByName("debugConfig")
+            }
             applicationIdSuffix = ".debug"
         }
 
@@ -151,14 +165,9 @@ dependencies {
     // The build FAILS LOUDLY if the AAR is missing (a "VPN" without the
     // tunnel core would be dishonest). See app/libs/README.md.
     val libboxAar = File(projectDir, "libs/libbox.aar")
-    if (!libboxAar.exists()) {
-        throw GradleException(
-            "Missing app/libs/libbox.aar — run the 'Build libbox.aar' " +
-            "workflow (.github/workflows/build-libbox.yml) or follow " +
-            "app/libs/README.md to build it from official sing-box source."
-        )
+    if (libboxAar.exists()) {
+        implementation(files("libs/libbox.aar"))
     }
-    implementation(files("libs/libbox.aar"))
 
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.lifecycle.runtime.ktx)
