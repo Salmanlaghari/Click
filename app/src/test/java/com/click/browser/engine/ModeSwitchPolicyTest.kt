@@ -1,5 +1,6 @@
 package com.click.browser.engine
 
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -22,6 +23,26 @@ class ModeSwitchPolicyTest {
                 savedMode = BrowserMode.SIMPLE,
                 requestedMode = BrowserMode.SIMPLE
             )
+        )
+    }
+
+    @Test
+    fun relaunchPendingIntentUsesApiSpecificCreatorBackgroundStartMode() {
+        assertEquals(
+            RelaunchPendingIntentBalMode.PLATFORM_DEFAULT,
+            relaunchPendingIntentCreatorBalMode(33)
+        )
+        assertEquals(
+            RelaunchPendingIntentBalMode.ALLOW_BACKGROUND,
+            relaunchPendingIntentCreatorBalMode(34)
+        )
+        assertEquals(
+            RelaunchPendingIntentBalMode.ALLOW_BACKGROUND,
+            relaunchPendingIntentCreatorBalMode(35)
+        )
+        assertEquals(
+            RelaunchPendingIntentBalMode.ALLOW_ALWAYS,
+            relaunchPendingIntentCreatorBalMode(36)
         )
     }
 

@@ -1,9 +1,11 @@
 package com.click.browser.engine
 
 import android.app.AlarmManager
+import android.app.ActivityOptions
 import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
+import android.os.Build
 import android.os.Process
 import android.util.Log
 import android.webkit.WebView
@@ -195,10 +197,7 @@ object V9Engine {
         // the current process and is not a safe substitute.
         var scheduled = false
         try {
-            val pi = PendingIntent.getActivity(
-                context, RESTART_REQUEST_CODE, launch,
-                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
-            )
+            val pi = createModeSwitchRelaunchPendingIntent(context, launch)
             val am = context.getSystemService(Context.ALARM_SERVICE) as AlarmManager
             am.set(
                 AlarmManager.RTC_WAKEUP,
@@ -233,6 +232,37 @@ object V9Engine {
             Process.killProcess(Process.myPid())
         }
         return true // unreachable
+    }
+
+    /**
+     * Grant only this one-shot, explicit launcher PendingIntent the creator
+     * background-start mode needed to reopen after this user-requested process exit.
+     */
+    @Suppress("DEPRECATION") // API 34–35 use ALLOWED; API 36 uses ALLOW_ALWAYS.
+    private fun createModeSwitchRelaunchPendingIntent(
+        context: Context,
+        launch: Intent,
+    ): PendingIntent {
+        val flags = PendingIntent.FLAG_UPDATE_CURRENT or
+            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_ONE_SHOT
+        val options = when (relaunchPendingIntentCreatorBalMode(Build.VERSION.SDK_INT)) {
+            RelaunchPendingIntentBalMode.PLATFORM_DEFAULT -> null
+            RelaunchPendingIntentBalMode.ALLOW_BACKGROUND -> ActivityOptions.makeBasic()
+                .setPendingIntentCreatorBackgroundActivityStartMode(
+                    ActivityOptions.MODE_BACKGROUND_ACTIVITY_START_ALLOWED
+                )
+            RelaunchPendingIntentBalMode.ALLOW_ALWAYS -> ActivityOptions.makeBasic()
+                .setPendingIntentCreatorBackgroundActivityStartMode(
+                    ActivityOptions.MODE_BACKGROUND_ACTIVITY_START_ALLOW_ALWAYS
+                )
+        }
+        return if (options == null) {
+            PendingIntent.getActivity(context, RESTART_REQUEST_CODE, launch, flags)
+        } else {
+            PendingIntent.getActivity(
+                context, RESTART_REQUEST_CODE, launch, flags, options.toBundle()
+            )
+        }
     }
 
     /** Legacy intent extra: show the Power Mode intro animation on launch. */
