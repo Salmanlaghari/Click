@@ -74,12 +74,22 @@ export const ClickDevToolsPage: React.FC<ClickDevToolsPageProps> = ({ currentUrl
             const op = mulDiv[i];
             const nextVal = parseFloat(mulDiv[i + 1]);
             if (op === '*') termVal *= nextVal;
-            if (op === '/') termVal = nextVal !== 0 ? termVal / nextVal : Infinity;
+            if (op === '/') {
+              if (nextVal === 0) {
+                valid = false;
+                resultMessage = 'Error: Division by zero';
+                resultType = 'error';
+                break;
+              }
+              termVal = termVal / nextVal;
+            }
           }
-          if (isNaN(termVal)) { valid = false; break; }
+          if (!valid || isNaN(termVal)) { valid = false; break; }
           total += sign * termVal;
         }
-        resultMessage = valid && !isNaN(total) ? String(total) : 'undefined';
+        if (valid && !isNaN(total)) {
+          resultMessage = String(total);
+        }
       } else {
         resultMessage = `[Click WebView Sandbox] evaluated: "${input}"`;
       }
