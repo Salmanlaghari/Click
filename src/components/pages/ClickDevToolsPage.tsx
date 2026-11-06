@@ -58,10 +58,30 @@ export const ClickDevToolsPage: React.FC<ClickDevToolsPageProps> = ({ currentUrl
         resultMessage = `"${currentUrl}"`;
       } else if (input.startsWith('window.') || input.startsWith('console.')) {
         resultMessage = 'ƒ () { [native code] }';
+      } else if (/^[\d\s+\-*/().]+$/.test(input)) {
+        // Safe simple arithmetic evaluator without Function() or eval()
+        const clean = input.replace(/\s+/g, '');
+        const addSub = clean.split(/(?=[+-])/);
+        let total = 0;
+        let valid = true;
+        for (const part of addSub) {
+          if (!part) continue;
+          const sign = part.startsWith('-') ? -1 : 1;
+          const term = part.replace(/^[+-]/, '');
+          const mulDiv = term.split(/([*/])/);
+          let termVal = parseFloat(mulDiv[0]);
+          for (let i = 1; i < mulDiv.length; i += 2) {
+            const op = mulDiv[i];
+            const nextVal = parseFloat(mulDiv[i + 1]);
+            if (op === '*') termVal *= nextVal;
+            if (op === '/') termVal = nextVal !== 0 ? termVal / nextVal : Infinity;
+          }
+          if (isNaN(termVal)) { valid = false; break; }
+          total += sign * termVal;
+        }
+        resultMessage = valid && !isNaN(total) ? String(total) : 'undefined';
       } else {
-        // Safe arithmetic or evaluation simulation
-        const evalVal = Function(`"use strict"; return (${input});`)();
-        resultMessage = typeof evalVal === 'object' ? JSON.stringify(evalVal) : String(evalVal);
+        resultMessage = `[Click WebView Sandbox] evaluated: "${input}"`;
       }
     } catch (err: any) {
       resultMessage = `Uncaught ${err.name || 'Error'}: ${err.message || 'SyntaxError'}`;

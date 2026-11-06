@@ -14,12 +14,17 @@ android {
     // Release signing for Play closed testing.
     // Reads GitHub Secrets-provided env vars (CLICK_KEYSTORE_FILE must point at a .p12 file).
     // NEVER commit a keystore, password, or keystore.properties with real values.
+    val localDebugKeystore = file("${rootDir}/debug.keystore")
+    val hasLocalDebugKeystore = localDebugKeystore.exists()
+
     signingConfigs {
-        create("debugConfig") {
-            storeFile = file("${rootDir}/debug.keystore")
-            storePassword = "android"
-            keyAlias = "androiddebugkey"
-            keyPassword = "android"
+        if (hasLocalDebugKeystore) {
+            create("debugConfig") {
+                storeFile = localDebugKeystore
+                storePassword = "android"
+                keyAlias = "androiddebugkey"
+                keyPassword = "android"
+            }
         }
         create("release") {
             val ksFile = System.getenv("CLICK_KEYSTORE_FILE")
@@ -83,7 +88,9 @@ android {
     buildTypes {
         debug {
             isDebuggable = true
-            signingConfig = signingConfigs.getByName("debugConfig")
+            if (hasLocalDebugKeystore) {
+                signingConfig = signingConfigs.getByName("debugConfig")
+            }
             applicationIdSuffix = ".debug"
         }
 

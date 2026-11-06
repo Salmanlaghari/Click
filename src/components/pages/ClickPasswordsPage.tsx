@@ -19,7 +19,7 @@ export const ClickPasswordsPage: React.FC = () => {
 
   const handleUnlock = (e: React.FormEvent) => {
     e.preventDefault();
-    if (pin === '1234' || pin === '0000' || pin.length >= 4) {
+    if (pin === '1234' || pin === '0000') {
       setUnlocked(true);
       setPinError(false);
     } else {

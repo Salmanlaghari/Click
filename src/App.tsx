@@ -363,7 +363,7 @@ export const App: React.FC = () => {
           src={url}
           title={activeTab.title}
           className="w-full flex-1 border-0"
-          sandbox="allow-scripts allow-same-origin allow-forms allow-popups"
+          sandbox="allow-scripts allow-forms allow-popups"
         />
       </div>
     );
