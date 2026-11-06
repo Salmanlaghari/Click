@@ -1,100 +1,91 @@
 import React from 'react';
 import { 
-  ArrowLeft, 
-  ArrowRight, 
-  Home, 
-  Layers, 
-  MoreVertical,
-  ShieldCheck,
-  Terminal
+  Sparkles, 
+  Bookmark, 
+  Menu, 
+  Sliders, 
+  Command,
+  Layers,
+  Bot
 } from 'lucide-react';
 import { BrowserProfile } from '../types/browser';
 
 interface BrowserToolbarProps {
-  canGoBack: boolean;
-  canGoForward: boolean;
-  onGoBack: () => void;
-  onGoForward: () => void;
-  onGoHome: () => void;
   tabCount: number;
   onOpenTabs: () => void;
   onOpenMenu: () => void;
+  onOpenBookmarks: () => void;
+  onOpenAi: () => void;
+  onQuickAction: () => void;
   currentProfile: BrowserProfile;
-  onQuickDevTools?: () => void;
 }
 
 export const BrowserToolbar: React.FC<BrowserToolbarProps> = ({
-  canGoBack,
-  canGoForward,
-  onGoBack,
-  onGoForward,
-  onGoHome,
   tabCount,
   onOpenTabs,
   onOpenMenu,
+  onOpenBookmarks,
+  onOpenAi,
+  onQuickAction,
   currentProfile,
-  onQuickDevTools,
 }) => {
   return (
-    <div className="h-12 bg-neutral-900 border-t border-neutral-800 flex items-center justify-around px-2 text-neutral-300 select-none flex-shrink-0 z-20">
-      {/* Back button */}
+    <div className="h-16 px-4 bg-neutral-950/95 border-t border-neutral-800/80 backdrop-blur-md flex items-center justify-between text-neutral-300 select-none flex-shrink-0 z-20">
+      {/* 1. Left Action Button (Textured Circle from screenshot) */}
       <button
-        onClick={onGoBack}
-        disabled={!canGoBack}
-        className="p-2 rounded-xl hover:bg-neutral-800 disabled:opacity-30 disabled:hover:bg-transparent transition active:scale-95 text-neutral-300"
-        title="Go Back"
+        onClick={onQuickAction}
+        className="w-11 h-11 rounded-full bg-gradient-to-br from-amber-600 to-amber-800 text-amber-100 flex items-center justify-center shadow-lg shadow-amber-950/40 active:scale-95 transition"
+        title="Quick Action"
       >
-        <ArrowLeft className="w-4 h-4" />
+        <Command className="w-5 h-5" />
       </button>
 
-      {/* Forward button */}
-      <button
-        onClick={onGoForward}
-        disabled={!canGoForward}
-        className="p-2 rounded-xl hover:bg-neutral-800 disabled:opacity-30 disabled:hover:bg-transparent transition active:scale-95 text-neutral-300"
-        title="Go Forward"
-      >
-        <ArrowRight className="w-4 h-4" />
-      </button>
-
-      {/* Home button */}
-      <button
-        onClick={onGoHome}
-        className="p-2 rounded-xl hover:bg-neutral-800 transition active:scale-95 text-neutral-300"
-        title="Click Home"
-      >
-        <Home className="w-4 h-4" />
-      </button>
-
-      {/* Developer Profile quick DevTools icon */}
-      {currentProfile === 'developer' && onQuickDevTools && (
-        <button
-          onClick={onQuickDevTools}
-          className="p-2 rounded-xl bg-emerald-500/10 text-emerald-400 hover:bg-emerald-500/20 border border-emerald-500/30 transition active:scale-95"
-          title="Open DevTools"
-        >
-          <Terminal className="w-4 h-4" />
-        </button>
-      )}
-
-      {/* Tab Switcher Button with count badge */}
+      {/* 2. Tabs Button with Badge */}
       <button
         onClick={onOpenTabs}
-        className="p-1.5 rounded-xl hover:bg-neutral-800 transition active:scale-95 relative"
+        className="flex flex-col items-center justify-center gap-0.5 text-neutral-400 hover:text-neutral-200 transition active:scale-95 px-2"
         title="Tabs"
       >
-        <div className="w-6 h-6 rounded-md border-2 border-neutral-400 flex items-center justify-center font-bold text-[11px] text-neutral-200">
-          {tabCount}
+        <div className="relative">
+          <Layers className="w-5 h-5" />
+          <span className="absolute -top-1 -right-1.5 w-3.5 h-3.5 rounded-full bg-amber-500 text-black font-bold text-[8px] flex items-center justify-center">
+            {tabCount}
+          </span>
         </div>
+        <span className="text-[10px] font-medium">Tabs</span>
       </button>
 
-      {/* 3-dots Menu Button */}
+      {/* 3. Center Glowing AI Copilot Button (Prominent Circular Button) */}
+      <div className="relative -top-2 flex flex-col items-center">
+        <div className="absolute -inset-1.5 rounded-full bg-amber-500/25 blur-md animate-pulse" />
+        <button
+          onClick={onOpenAi}
+          className="w-13 h-13 rounded-full bg-gradient-to-b from-amber-700 via-amber-800 to-amber-950 border border-amber-400/40 text-amber-200 flex flex-col items-center justify-center shadow-xl shadow-amber-900/50 active:scale-95 transition relative z-10"
+          title="Click AI Copilot"
+        >
+          <Sparkles className="w-5 h-5 text-amber-200" />
+          <span className="text-[9px] font-bold tracking-wider mt-0.5">AI</span>
+        </button>
+      </div>
+
+      {/* 4. Bookmarks Button */}
+      <button
+        onClick={onOpenBookmarks}
+        className="flex flex-col items-center justify-center gap-0.5 text-neutral-400 hover:text-neutral-200 transition active:scale-95 px-2"
+        title="Bookmarks"
+      >
+        <Bookmark className="w-5 h-5" />
+        <span className="text-[10px] font-medium">Bookmarks</span>
+      </button>
+
+      {/* 5. Menu Button */}
       <button
         onClick={onOpenMenu}
-        className="p-2 rounded-xl hover:bg-neutral-800 transition active:scale-95 text-neutral-300"
-        title="Browser Menu"
+        className="flex flex-col items-center justify-center gap-0.5 text-neutral-400 hover:text-neutral-200 transition active:scale-95 px-2"
+        title="Menu"
       >
-        <MoreVertical className="w-4 h-4" />
+        <Menu className="w-5 h-5" />
+        <span className="text-[10px] font-medium">Menu</span>
       </button>
     </div>
   );

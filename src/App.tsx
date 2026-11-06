@@ -246,6 +246,11 @@ export const App: React.FC = () => {
           vpnConnected={vpnConnected}
           onNavigate={handleNavigate}
           onOpenProfilePicker={() => setIsProfileModalOpen(true)}
+          onSelectProfile={handleSelectProfile}
+          onNewTab={handleNewTab}
+          onOpenTabs={() => setIsTabSwitcherOpen(true)}
+          onToggleDesktop={handleToggleDesktop}
+          isDesktop={!!activeTab.isDesktop}
           bookmarks={bookmarks}
         />
       );
@@ -419,6 +424,17 @@ export const App: React.FC = () => {
             currentProfile={currentProfile}
             onOpenProfilePicker={() => setIsProfileModalOpen(true)}
             vpnConnected={vpnConnected}
+            tabs={tabs}
+            activeTabId={activeTabId}
+            onSelectTab={(id) => setActiveTabId(id)}
+            onCloseTab={handleCloseTab}
+            onNewTab={() => handleNewTab(false)}
+            canGoBack={activeTab.historyIndex > 0}
+            canGoForward={activeTab.historyIndex < activeTab.history.length - 1}
+            onGoBack={handleGoBack}
+            onGoForward={handleGoForward}
+            onOpenMenu={() => setIsMenuOpen(true)}
+            onOpenTabs={() => setIsTabSwitcherOpen(true)}
           />
 
           {/* Web Content Render Area */}
@@ -428,16 +444,13 @@ export const App: React.FC = () => {
 
           {/* Bottom Browser Navigation Toolbar */}
           <BrowserToolbar
-            canGoBack={activeTab.historyIndex > 0}
-            canGoForward={activeTab.historyIndex < activeTab.history.length - 1}
-            onGoBack={handleGoBack}
-            onGoForward={handleGoForward}
-            onGoHome={() => handleNavigate('click://home')}
             tabCount={tabs.length}
             onOpenTabs={() => setIsTabSwitcherOpen(true)}
             onOpenMenu={() => setIsMenuOpen(true)}
+            onOpenBookmarks={() => handleNavigate('click://bookmarks')}
+            onOpenAi={() => handleNavigate('click://ai')}
+            onQuickAction={() => setIsMenuOpen(true)}
             currentProfile={currentProfile}
-            onQuickDevTools={() => handleNavigate('click://devtools')}
           />
 
           {/* Overlays inside Phone viewport */}

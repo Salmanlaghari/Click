@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { 
   BrowserProfile, 
   Bookmark 
@@ -20,7 +20,22 @@ import {
   Sliders,
   Bookmark as BookmarkIcon,
   Download,
-  Key
+  Key,
+  Clock,
+  Settings as SettingsIcon,
+  HardDrive,
+  Cookie,
+  Wrench,
+  Code,
+  Sparkles,
+  Languages,
+  Laptop,
+  Plus,
+  EyeOff,
+  Folder,
+  RotateCcw,
+  User,
+  Check
 } from 'lucide-react';
 
 interface ClickHomePageProps {
@@ -28,6 +43,11 @@ interface ClickHomePageProps {
   vpnConnected: boolean;
   onNavigate: (url: string) => void;
   onOpenProfilePicker: () => void;
+  onSelectProfile?: (profile: BrowserProfile) => void;
+  onNewTab?: (incognito?: boolean) => void;
+  onOpenTabs?: () => void;
+  onToggleDesktop?: () => void;
+  isDesktop?: boolean;
   bookmarks: Bookmark[];
 }
 
@@ -36,9 +56,22 @@ export const ClickHomePage: React.FC<ClickHomePageProps> = ({
   vpnConnected,
   onNavigate,
   onOpenProfilePicker,
+  onSelectProfile,
+  onNewTab,
+  onOpenTabs,
+  onToggleDesktop,
+  isDesktop = false,
   bookmarks,
 }) => {
   const [searchQuery, setSearchQuery] = useState('');
+  const [greeting, setGreeting] = useState('Good afternoon');
+
+  useEffect(() => {
+    const hour = new Date().getHours();
+    if (hour < 12) setGreeting('Good morning');
+    else if (hour < 18) setGreeting('Good afternoon');
+    else setGreeting('Good evening');
+  }, []);
 
   const handleSearchSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -53,164 +86,166 @@ export const ClickHomePage: React.FC<ClickHomePageProps> = ({
     }
   };
 
-  const profileConfigs = {
+  const profileDescriptions: Record<BrowserProfile, { name: string; subtitle: string; tagline: string; themeColor: string }> = {
     simple: {
-      name: 'Simple Profile',
-      tagline: 'Clean, fast & distraction-free browsing',
-      badgeClass: 'bg-blue-500/15 text-blue-400 border-blue-500/30',
-      icon: Globe,
-      accentBorder: 'border-blue-500/40',
-      glow: 'from-blue-600/20 to-transparent',
+      name: 'Simple',
+      subtitle: 'Fast, minimal and distraction-free browsing.',
+      tagline: 'Simple — Clean reading · Fast lightweight engine',
+      themeColor: 'bg-blue-500/15 text-blue-400 border-blue-500/40'
     },
     developer: {
-      name: 'Developer Profile',
-      tagline: 'DevTools, DOM inspector, network waterfall & console',
-      badgeClass: 'bg-emerald-500/15 text-emerald-400 border-emerald-500/30',
-      icon: Terminal,
-      accentBorder: 'border-emerald-500/40',
-      glow: 'from-emerald-600/20 to-transparent',
+      name: 'Developer',
+      subtitle: 'Code inspection, network analyzer and DOM tools.',
+      tagline: 'Developer — DevTools · DOM inspector · JS Console · Network',
+      themeColor: 'bg-emerald-500/15 text-emerald-400 border-emerald-500/40'
     },
     power: {
-      name: 'Power Profile',
-      tagline: 'High performance engine, turbo media & strict adblock',
-      badgeClass: 'bg-amber-500/15 text-amber-400 border-amber-500/30',
-      icon: Flame,
-      accentBorder: 'border-amber-500/40',
-      glow: 'from-amber-600/20 to-transparent',
+      name: 'Power',
+      subtitle: 'Wide pages and focused workflows.',
+      tagline: 'Power — Desktop-style browsing · Wide-page layout',
+      themeColor: 'bg-amber-500/20 text-amber-300 border-amber-500/50'
     },
     advance: {
-      name: 'Advance Profile (Isolated)',
-      tagline: 'Separate app-data partition, zero data leakage',
-      badgeClass: 'bg-lime-500/15 text-lime-400 border-lime-500/30',
-      icon: Zap,
-      accentBorder: 'border-lime-500/40',
-      glow: 'from-lime-600/20 to-transparent',
-    },
+      name: 'Advance',
+      subtitle: 'Strict sandbox, isolated app-data & matrix HUD.',
+      tagline: 'Advance — Isolated DB store · Zero data leakage · Cyber UI',
+      themeColor: 'bg-lime-500/20 text-lime-300 border-lime-500/50'
+    }
   };
 
-  const config = profileConfigs[currentProfile];
-  const ProfileIcon = config.icon;
+  const activeProfileInfo = profileDescriptions[currentProfile];
 
-  const quickShortcuts = [
-    { name: 'V9 Shield VPN', url: 'click://vpn', icon: ShieldCheck, color: 'text-indigo-400 bg-indigo-500/10' },
-    { name: 'DevTools', url: 'click://devtools', icon: Code2, color: 'text-emerald-400 bg-emerald-500/10' },
-    { name: 'AI Assistant', url: 'click://ai', icon: Zap, color: 'text-purple-400 bg-purple-500/10' },
-    { name: 'Arcade Game', url: 'click://games', icon: Cpu, color: 'text-pink-400 bg-pink-500/10' },
-    { name: 'Passwords', url: 'click://passwords', icon: Key, color: 'text-cyan-400 bg-cyan-500/10' },
-    { name: 'Downloads', url: 'click://downloads', icon: Download, color: 'text-amber-400 bg-amber-500/10' },
-  ];
-
-  const popularSites = [
-    { title: 'Wikipedia', url: 'https://en.wikipedia.org/wiki/Web_browser', icon: '🌐' },
-    { title: 'GitHub', url: 'https://github.com/trending', icon: '🐙' },
-    { title: 'Hacker News', url: 'https://news.ycombinator.com', icon: '🟧' },
-    { title: 'DuckDuckGo', url: 'https://duckduckgo.com', icon: '🦆' },
+  // The 16 Table tiles from the screenshot
+  const gridTableTiles = [
+    { label: 'History', icon: Clock, action: () => onNavigate('click://history'), color: 'text-amber-400 bg-amber-500/10' },
+    { label: 'Settings', icon: SettingsIcon, action: () => onNavigate('click://settings'), color: 'text-neutral-300 bg-neutral-800' },
+    { label: 'Storage', icon: HardDrive, action: () => onNavigate('click://devtools'), color: 'text-cyan-400 bg-cyan-500/10' },
+    { label: 'Passwords', icon: Lock, action: () => onNavigate('click://passwords'), color: 'text-emerald-400 bg-emerald-500/10' },
+    { label: 'Cookies', icon: Cookie, action: () => onNavigate('click://devtools'), color: 'text-amber-400 bg-amber-500/10' },
+    { label: 'Tools', icon: Wrench, action: () => onNavigate('click://devtools'), color: 'text-purple-400 bg-purple-500/10' },
+    { label: 'DevTools', icon: Code, action: () => onNavigate('click://devtools'), color: 'text-blue-400 bg-blue-500/10' },
+    { label: 'Downloads', icon: Download, action: () => onNavigate('click://downloads'), color: 'text-emerald-400 bg-emerald-500/10' },
+    { label: 'Bookmarks', icon: BookmarkIcon, action: () => onNavigate('click://bookmarks'), color: 'text-orange-400 bg-orange-500/10' },
+    { label: 'AI Chat', icon: Sparkles, action: () => onNavigate('click://ai'), color: 'text-pink-400 bg-pink-500/10' },
+    { label: 'Translate', icon: Languages, action: () => onNavigate('click://devtools'), color: 'text-indigo-400 bg-indigo-500/10' },
+    { 
+      label: 'Wide layout', 
+      icon: Laptop, 
+      action: () => onToggleDesktop && onToggleDesktop(), 
+      color: isDesktop ? 'text-amber-300 bg-amber-500/20 ring-1 ring-amber-400' : 'text-neutral-300 bg-neutral-800',
+      badge: true 
+    },
+    { label: 'New Tab', icon: Plus, action: () => onNewTab && onNewTab(false), color: 'text-blue-400 bg-blue-500/10' },
+    { label: 'Private', icon: EyeOff, action: () => onNewTab && onNewTab(true), color: 'text-purple-400 bg-purple-500/10' },
+    { label: 'Tabs', icon: Folder, action: () => onOpenTabs && onOpenTabs(), color: 'text-teal-400 bg-teal-500/10' },
+    { label: 'Reopen', icon: RotateCcw, action: () => onNavigate('https://en.wikipedia.org/wiki/Web_browser'), color: 'text-rose-400 bg-rose-500/10' },
   ];
 
   return (
-    <div className={`h-full overflow-y-auto px-4 py-5 space-y-5 ${currentProfile === 'advance' ? 'matrix-scanline bg-black font-cyber text-green-400' : 'bg-neutral-950 text-neutral-100'}`}>
-      {/* Profile Header Hero */}
-      <div className={`p-4 rounded-2xl bg-gradient-to-b ${config.glow} bg-neutral-900/80 border ${config.accentBorder} shadow-lg relative overflow-hidden`}>
-        <div className="flex items-start justify-between">
-          <div className="space-y-1">
-            <div className="flex items-center gap-2">
-              <span className={`inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[11px] font-semibold border ${config.badgeClass}`}>
-                <ProfileIcon className="w-3.5 h-3.5" />
-                {config.name}
-              </span>
-              {vpnConnected && (
-                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-mono bg-emerald-500/20 text-emerald-300 border border-emerald-500/30">
-                  <Lock className="w-2.5 h-2.5" /> VPN ON
-                </span>
-              )}
-            </div>
-            <h1 className="text-xl font-bold tracking-tight mt-1 flex items-center gap-2">
-              Click Browser
-              <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-neutral-800 text-neutral-400 font-normal">v1.3.9</span>
-            </h1>
-            <p className="text-xs text-neutral-400 max-w-[280px]">
-              {config.tagline}
-            </p>
-          </div>
-          <button 
-            onClick={onOpenProfilePicker}
-            className="p-2 rounded-xl bg-neutral-800/80 hover:bg-neutral-700/80 border border-neutral-700 text-xs flex items-center gap-1.5 transition active:scale-95"
-            title="Switch Profile"
-          >
-            <Sliders className="w-3.5 h-3.5 text-neutral-300" />
-            <span className="text-[11px] font-medium hidden sm:inline">Profiles</span>
-          </button>
+    <div className={`h-full overflow-y-auto px-4 py-4 space-y-4 ${
+      currentProfile === 'advance' 
+        ? 'matrix-scanline bg-black font-cyber text-green-400' 
+        : currentProfile === 'power'
+        ? 'bg-[#15120e] text-[#f7e6d0]'
+        : 'bg-neutral-950 text-neutral-100'
+    }`}>
+      {/* Top Greeting Header (From Screenshot) */}
+      <div className="flex items-start justify-between pt-1">
+        <div>
+          <h1 className="text-2xl font-bold tracking-tight text-neutral-100">
+            {greeting}
+          </h1>
+          <p className="text-xs text-neutral-400 mt-0.5">
+            {activeProfileInfo.subtitle}
+          </p>
         </div>
+        <button 
+          onClick={onOpenProfilePicker}
+          className="w-10 h-10 rounded-full bg-amber-500/20 border border-amber-500/30 flex items-center justify-center text-amber-300 shadow-sm active:scale-95 transition"
+          title="Account / Profiles"
+        >
+          <User className="w-5 h-5" />
+        </button>
       </div>
 
-      {/* Main Search Bar */}
+      {/* Main Search Bar (Matches Screenshot Omnibox Style) */}
       <form onSubmit={handleSearchSubmit} className="relative">
-        <input
-          type="text"
-          value={searchQuery}
-          onChange={(e) => setSearchQuery(e.target.value)}
-          placeholder="Search web or type click:// address..."
-          className="w-full pl-10 pr-10 py-3.5 rounded-2xl bg-neutral-900/90 border border-neutral-800 focus:border-neutral-600 focus:outline-none text-sm placeholder:text-neutral-500 shadow-inner transition"
-        />
-        <Search className="w-4 h-4 text-neutral-400 absolute left-3.5 top-1/2 -translate-y-1/2" />
-        {searchQuery && (
-          <button
-            type="submit"
-            className="absolute right-2.5 top-1/2 -translate-y-1/2 p-1.5 rounded-xl bg-neutral-800 hover:bg-neutral-700 text-neutral-200 transition"
-          >
-            <ArrowRight className="w-3.5 h-3.5" />
-          </button>
-        )}
+        <div className="w-full flex items-center rounded-2xl bg-neutral-900/90 border border-neutral-800 focus-within:border-amber-500/60 shadow-inner px-3 py-3 transition">
+          <Search className="w-4 h-4 text-neutral-400 mr-2 flex-shrink-0" />
+          <span className="px-1.5 py-0.5 rounded-md bg-amber-500/20 text-amber-300 font-bold text-[10px] mr-2 flex-shrink-0 border border-amber-500/30">
+            B Brave
+          </span>
+          <input
+            type="text"
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            placeholder="Search or type URL"
+            className="flex-1 bg-transparent border-0 text-xs focus:outline-none placeholder:text-neutral-500 truncate"
+          />
+          {searchQuery && (
+            <button
+              type="submit"
+              className="p-1 rounded-lg bg-neutral-800 text-neutral-300 hover:text-white"
+            >
+              <ArrowRight className="w-3.5 h-3.5" />
+            </button>
+          )}
+        </div>
       </form>
 
-      {/* Speed Dial Grid */}
-      <div>
-        <div className="flex items-center justify-between mb-2.5 px-0.5">
-          <span className="text-xs font-semibold text-neutral-400 uppercase tracking-wider">Top Shortcuts</span>
-          <span className="text-[10px] text-neutral-500 font-mono">click:// internal</span>
-        </div>
-        <div className="grid grid-cols-3 gap-2.5">
-          {quickShortcuts.map((item) => {
-            const Icon = item.icon;
+      {/* THE FEATURE TABLE / GRID SHEET (Matches User Screenshot Exactly!) */}
+      <div className="p-4 rounded-3xl bg-neutral-900/90 border border-neutral-800/90 shadow-xl space-y-3.5">
+        {/* Profile Switcher Pills */}
+        <div className="grid grid-cols-4 gap-1.5">
+          {(['simple', 'developer', 'power', 'advance'] as const).map((prof) => {
+            const isSelected = currentProfile === prof;
             return (
               <button
-                key={item.url}
-                onClick={() => onNavigate(item.url)}
-                className="flex flex-col items-center justify-center p-3 rounded-2xl bg-neutral-900/70 border border-neutral-800/80 hover:border-neutral-700 transition active:scale-95 group"
+                key={prof}
+                onClick={() => onSelectProfile && onSelectProfile(prof)}
+                className={`py-2 px-1 rounded-xl text-[11px] font-semibold capitalize transition active:scale-95 text-center border ${
+                  isSelected
+                    ? 'bg-amber-500/20 text-amber-300 border-amber-500/50 shadow-sm ring-1 ring-amber-500/20'
+                    : 'bg-neutral-850 hover:bg-neutral-800 text-neutral-400 border-neutral-800'
+                }`}
               >
-                <div className={`p-2 rounded-xl mb-1.5 ${item.color} group-hover:scale-110 transition`}>
-                  <Icon className="w-4 h-4" />
+                {prof}
+              </button>
+            );
+          })}
+        </div>
+
+        {/* Dynamic Profile Tagline Description */}
+        <div className="text-[11px] text-amber-300/90 font-medium px-1 flex items-center justify-between">
+          <span>{activeProfileInfo.tagline}</span>
+        </div>
+
+        {/* 4x4 Grid of 16 Tools Table */}
+        <div className="grid grid-cols-4 gap-y-3.5 gap-x-2 pt-1">
+          {gridTableTiles.map((tile, idx) => {
+            const Icon = tile.icon;
+            return (
+              <button
+                key={idx}
+                onClick={tile.action}
+                className="flex flex-col items-center justify-center group active:scale-95 transition"
+              >
+                <div className={`w-12 h-12 rounded-2xl flex items-center justify-center mb-1.5 border border-neutral-700/60 shadow-sm relative transition group-hover:scale-105 ${tile.color}`}>
+                  <Icon className="w-5 h-5" />
+                  {tile.badge && (
+                    <span className="w-2 h-2 rounded-full bg-amber-400 absolute top-1.5 right-1.5" />
+                  )}
                 </div>
-                <span className="text-[11px] font-medium text-neutral-200 text-center truncate w-full">{item.name}</span>
+                <span className="text-[10px] font-medium text-neutral-300 text-center truncate w-full">
+                  {tile.label}
+                </span>
               </button>
             );
           })}
         </div>
       </div>
 
-      {/* Popular Websites */}
-      <div>
-        <div className="flex items-center justify-between mb-2.5 px-0.5">
-          <span className="text-xs font-semibold text-neutral-400 uppercase tracking-wider">Popular Dials</span>
-          <span className="text-[10px] text-neutral-500">Live preview</span>
-        </div>
-        <div className="grid grid-cols-4 gap-2">
-          {popularSites.map((site) => (
-            <button
-              key={site.url}
-              onClick={() => onNavigate(site.url)}
-              className="flex flex-col items-center p-2.5 rounded-xl bg-neutral-900/50 border border-neutral-800/60 hover:bg-neutral-800/50 transition active:scale-95"
-            >
-              <div className="w-8 h-8 rounded-full bg-neutral-800 border border-neutral-700 flex items-center justify-center text-sm mb-1">
-                {site.icon}
-              </div>
-              <span className="text-[10px] text-neutral-300 font-medium truncate w-full text-center">{site.title}</span>
-            </button>
-          ))}
-        </div>
-      </div>
-
-      {/* Privacy & Shield Status Card */}
+      {/* V9 Shield & SingBox VPN Status Card (Preserved without removal) */}
       <div 
         onClick={() => onNavigate('click://vpn')}
         className="p-3.5 rounded-2xl bg-gradient-to-r from-indigo-950/40 to-neutral-900 border border-indigo-900/40 hover:border-indigo-700/60 transition cursor-pointer flex items-center justify-between group"
@@ -225,15 +260,15 @@ export const ClickHomePage: React.FC<ClickHomePageProps> = ({
               <span className={`w-1.5 h-1.5 rounded-full ${vpnConnected ? 'bg-emerald-400 animate-ping' : 'bg-neutral-600'}`} />
             </div>
             <p className="text-[11px] text-neutral-400">
-              {vpnConnected ? 'Encrypted tunnel active · IP Hidden' : 'Tap to enable full encrypted IP-tunnel'}
+              {vpnConnected ? 'Encrypted tunnel active · IP Hidden (0.0.0.0/0)' : 'Tap to enable full encrypted IP-tunnel'}
             </p>
           </div>
         </div>
         <ArrowRight className="w-4 h-4 text-neutral-500 group-hover:text-indigo-400 transition transform group-hover:translate-x-0.5" />
       </div>
 
-      {/* Dev & Tech News Feed */}
-      <div className="space-y-2">
+      {/* Curated Tech News Feed (Preserved) */}
+      <div className="space-y-2 pb-2">
         <div className="flex items-center justify-between px-0.5">
           <span className="text-xs font-semibold text-neutral-400 uppercase tracking-wider flex items-center gap-1.5">
             <TrendingUp className="w-3.5 h-3.5 text-emerald-400" />
@@ -255,22 +290,6 @@ export const ClickHomePage: React.FC<ClickHomePageProps> = ({
           </h4>
           <p className="text-[11px] text-neutral-400 line-clamp-1 mt-0.5">
             Full IPv4/IPv6 dual stack support integrated into Click Browser VPN engine.
-          </p>
-        </div>
-
-        <div 
-          onClick={() => onNavigate('https://en.wikipedia.org/wiki/Web_browser')}
-          className="p-3 rounded-xl bg-neutral-900/60 border border-neutral-800 hover:border-neutral-700 transition cursor-pointer"
-        >
-          <div className="flex items-center justify-between text-[11px] text-neutral-400 mb-1">
-            <span className="text-blue-400 font-medium">Browser Tech</span>
-            <span>4h ago</span>
-          </div>
-          <h4 className="text-xs font-semibold text-neutral-200 line-clamp-1">
-            Multi-profile WebView isolation: Cookie partitions and storage separation
-          </h4>
-          <p className="text-[11px] text-neutral-400 line-clamp-1 mt-0.5">
-            How Click isolates cache, cookies, and localStorage across user profiles.
           </p>
         </div>
       </div>

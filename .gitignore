@@ -34,3 +34,5 @@ google-services.json
 node_modules/
 dist/
 .env
+*.bundle
+*.patch
