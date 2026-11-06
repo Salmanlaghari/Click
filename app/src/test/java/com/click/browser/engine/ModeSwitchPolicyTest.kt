@@ -29,20 +29,20 @@ class ModeSwitchPolicyTest {
     @Test
     fun relaunchPendingIntentUsesApiSpecificCreatorBackgroundStartMode() {
         assertEquals(
-            RelaunchPendingIntentBalMode.PLATFORM_DEFAULT,
-            relaunchPendingIntentCreatorBalMode(33)
+            RelaunchBackgroundActivityStartMode.PLATFORM_DEFAULT,
+            relaunchPendingIntentCreatorBackgroundStartMode(33)
         )
         assertEquals(
-            RelaunchPendingIntentBalMode.ALLOW_BACKGROUND,
-            relaunchPendingIntentCreatorBalMode(34)
+            RelaunchBackgroundActivityStartMode.ALLOW_BACKGROUND,
+            relaunchPendingIntentCreatorBackgroundStartMode(34)
         )
         assertEquals(
-            RelaunchPendingIntentBalMode.ALLOW_BACKGROUND,
-            relaunchPendingIntentCreatorBalMode(35)
+            RelaunchBackgroundActivityStartMode.ALLOW_BACKGROUND,
+            relaunchPendingIntentCreatorBackgroundStartMode(35)
         )
         assertEquals(
-            RelaunchPendingIntentBalMode.ALLOW_ALWAYS,
-            relaunchPendingIntentCreatorBalMode(36)
+            RelaunchBackgroundActivityStartMode.ALLOW_ALWAYS,
+            relaunchPendingIntentCreatorBackgroundStartMode(36)
         )
     }
 

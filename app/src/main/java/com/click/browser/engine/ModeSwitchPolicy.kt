@@ -6,17 +6,17 @@ internal fun shouldPersistNoRestartModeSelection(
     requestedMode: BrowserMode
 ): Boolean = savedMode != requestedMode
 
-internal enum class RelaunchPendingIntentBalMode {
+internal enum class RelaunchBackgroundActivityStartMode {
     PLATFORM_DEFAULT,
     ALLOW_BACKGROUND,
     ALLOW_ALWAYS,
 }
 
 /** Use the narrow API 34/35 opt-in and API 36's replacement for process-death relaunch. */
-internal fun relaunchPendingIntentCreatorBalMode(apiLevel: Int): RelaunchPendingIntentBalMode = when {
-    apiLevel >= 36 -> RelaunchPendingIntentBalMode.ALLOW_ALWAYS
-    apiLevel >= 34 -> RelaunchPendingIntentBalMode.ALLOW_BACKGROUND
-    else -> RelaunchPendingIntentBalMode.PLATFORM_DEFAULT
+internal fun relaunchPendingIntentCreatorBackgroundStartMode(apiLevel: Int): RelaunchBackgroundActivityStartMode = when {
+    apiLevel >= 36 -> RelaunchBackgroundActivityStartMode.ALLOW_ALWAYS
+    apiLevel >= 34 -> RelaunchBackgroundActivityStartMode.ALLOW_BACKGROUND
+    else -> RelaunchBackgroundActivityStartMode.PLATFORM_DEFAULT
 }
 
 /** A direct activity launch is not a cold-process restart; only a scheduled relaunch qualifies. */
