@@ -9,13 +9,7 @@ import {
   ArrowRight, 
   Menu, 
   MoreVertical, 
-  Search,
-  Maximize2,
-  Minimize2,
-  Puzzle,
-  Globe,
-  CheckCircle2,
-  Sparkles
+  Puzzle
 } from 'lucide-react';
 import { BrowserProfile, Tab } from '../types/browser';
 

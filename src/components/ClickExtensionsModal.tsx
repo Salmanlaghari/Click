@@ -9,20 +9,12 @@ import {
   Lock, 
   X, 
   Check, 
-  Info, 
-  ExternalLink,
-  Sparkles,
-  ToggleLeft,
-  ToggleRight,
-  Settings,
-  Play,
-  Plus,
-  Sliders,
-  ChevronDown,
-  ChevronUp,
-  FileCode2,
-  Trash2,
-  RefreshCw
+  ToggleLeft, 
+  ToggleRight, 
+  Settings, 
+  Play, 
+  Plus, 
+  FileCode2
 } from 'lucide-react';
 import { BrowserExtension } from '../types/browser';
 

@@ -3,26 +3,9 @@ import {
   BrowserProfile 
 } from '../../types/browser';
 import { 
-  Shield, 
-  Lock, 
   Sliders, 
   Trash2, 
-  Globe, 
-  EyeOff, 
-  Layers, 
-  Smartphone, 
-  Check, 
-  Cpu, 
-  FileCode,
-  Info,
-  Search,
-  Zap,
-  Download,
-  Maximize2,
-  RefreshCw,
-  Server,
-  ToggleLeft,
-  ToggleRight
+  Check 
 } from 'lucide-react';
 
 interface ClickSettingsPageProps {
