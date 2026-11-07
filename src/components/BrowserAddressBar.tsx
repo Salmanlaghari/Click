@@ -150,7 +150,7 @@ export const BrowserAddressBar: React.FC<BrowserAddressBarProps> = ({
     },
   };
 
-  const currentModeStyle = modeStyles[currentProfile];
+  const currentModeStyle = modeStyles[currentProfile] || modeStyles.power;
 
   // If in Immersive Full View, show ultra-compact minimal top bar
   if (isFullView) {

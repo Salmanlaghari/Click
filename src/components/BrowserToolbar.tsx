@@ -64,7 +64,7 @@ export const BrowserToolbar: React.FC<BrowserToolbarProps> = ({
     },
   };
 
-  const style = toolbarStyles[currentProfile];
+  const style = toolbarStyles[currentProfile] || toolbarStyles.power;
 
   // If in full view mode, toolbar is subtly translucent
   return (
