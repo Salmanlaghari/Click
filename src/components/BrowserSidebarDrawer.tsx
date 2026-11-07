@@ -118,7 +118,7 @@ export const BrowserSidebarDrawer: React.FC<BrowserSidebarDrawerProps> = ({
               <span className="text-[10px] font-bold uppercase tracking-wider text-neutral-400">
                 Active Profile
               </span>
-              <span className={`text-[9px] px-2 py-0.5 rounded-full font-bold uppercase border ${profileData[currentProfile].badgeColor}`}>
+              <span className={`text-[9px] px-2 py-0.5 rounded-full font-bold uppercase border ${profileData[currentProfile]?.badgeColor || profileData.power.badgeColor}`}>
                 {currentProfile}
               </span>
             </div>

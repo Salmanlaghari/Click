@@ -337,9 +337,20 @@ export const App: React.FC = () => {
     );
   };
 
-  const handleSelectProfile = (p: BrowserProfile) => {
-    setCurrentProfile(p);
-    setIsProfileModalOpen(false);
+  const handleSelectProfile = (p: BrowserProfile | string) => {
+    try {
+      const valid: BrowserProfile[] = ['simple', 'developer', 'power', 'advance'];
+      const target: BrowserProfile = (typeof p === 'string' && valid.includes(p.toLowerCase() as BrowserProfile))
+        ? (p.toLowerCase() as BrowserProfile)
+        : 'power';
+      setCurrentProfile(target);
+      setIsProfileModalOpen(false);
+      setTabs((prev) =>
+        prev.map((t) => (t.id === activeTabId ? { ...t, profile: target } : t))
+      );
+    } catch (err) {
+      console.error('Failed to switch profile:', err);
+    }
   };
 
   const handleClearData = () => {
