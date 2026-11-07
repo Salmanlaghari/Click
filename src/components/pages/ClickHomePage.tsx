@@ -174,7 +174,7 @@ export const ClickHomePage: React.FC<ClickHomePageProps> = ({
     },
   };
 
-  const activeCfg = profileConfigs[currentProfile];
+  const activeCfg = profileConfigs[currentProfile] || profileConfigs.power;
 
   // The 16 Table tiles from the user's screenshot
   const gridTableTiles = [
