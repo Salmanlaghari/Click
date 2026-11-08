@@ -56,6 +56,13 @@ object MenuCustomization {
         return withNew.filter { it !in hidden }
     }
 
+    /** Filters mode-scoped actions without changing the user's menu order or hidden choices. */
+    fun filterItemsForMode(items: List<MenuItemId>, mode: BrowserMode): List<MenuItemId> =
+        items.filter { item ->
+            item != MenuItemId.FIND_IN_PAGE ||
+                ModeCapabilityRegistry.supportsMode(FeatureId.FIND_IN_PAGE, mode)
+        }
+
     /** Full editable order (including hidden) for the customize UI. */
     fun effectiveFullOrder(storedOrder: List<MenuItemId>): List<MenuItemId> {
         val known = storedOrder.filter { it in MenuItemId.values().toSet() }
