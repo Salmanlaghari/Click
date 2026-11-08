@@ -101,6 +101,9 @@ fun SiteSettingsSheet(
     onApplyToWebView: (SiteSettings) -> Unit,
     onReload: () -> Unit,
     onDismiss: () -> Unit,
+    siteAdBlockOverrideVisible: Boolean = true,
+    siteAdBlockOverrideEnabled: Boolean = true,
+    siteAdBlockUnavailableExplanation: String? = null,
     // Brave-style Shields info (optional — defaults keep old call sites working).
     trackersBlocked: Int = 0,
     cookieCount: Int = 0,
@@ -269,20 +272,20 @@ fun SiteSettingsSheet(
                     onApplyToWebView(next)
                 }
             )
-            // Ads (adBlock) — tri-state.
-            TriStateRow(
-                theme = theme,
-                icon = Icons.Default.Block,
-                title = "Intrusive ads",
-                subtitle = "Block misleading ads on this site",
-                value = current.adBlock?.not(),
-                globalLabel = if (globalAdBlock) "Blocked" else "Allowed",
-                onChange = { blocked ->
-                    val next = current.copy(adBlock = blocked?.not())
-                    onSettingsChange(next)
-                    onReload()
-                }
-            )
+            if (siteAdBlockOverrideVisible) {
+                SiteAdBlockOverrideRow(
+                    theme = theme,
+                    value = current.adBlock?.not(),
+                    globalAdBlock = globalAdBlock,
+                    enabled = siteAdBlockOverrideEnabled,
+                    unavailableExplanation = siteAdBlockUnavailableExplanation,
+                    onChange = { blocked ->
+                        val next = current.copy(adBlock = blocked?.not())
+                        onSettingsChange(next)
+                        onReload()
+                    }
+                )
+            }
             // Third-party cookies — tri-state.
             TriStateRow(
                 theme = theme,
@@ -576,6 +579,28 @@ private fun WebsitePermissionStatusRow(
     }
 }
 
+@Composable
+internal fun SiteAdBlockOverrideRow(
+    theme: ModeTheme,
+    value: Boolean?,
+    globalAdBlock: Boolean,
+    enabled: Boolean,
+    unavailableExplanation: String?,
+    onChange: (Boolean?) -> Unit
+) {
+    TriStateRow(
+        theme = theme,
+        icon = Icons.Default.Block,
+        title = "Intrusive ads",
+        subtitle = "Block misleading ads on this site",
+        value = value,
+        globalLabel = if (globalAdBlock) "Blocked" else "Allowed",
+        onChange = onChange,
+        enabled = enabled,
+        disabledExplanation = unavailableExplanation
+    )
+}
+
 /**
  * Tri-state row: Default (follows global) / On / Off.
  * `value = null` renders as "Default (global: X)".
@@ -588,7 +613,9 @@ private fun TriStateRow(
     subtitle: String,
     value: Boolean?,
     globalLabel: String,
-    onChange: (Boolean?) -> Unit
+    onChange: (Boolean?) -> Unit,
+    enabled: Boolean = true,
+    disabledExplanation: String? = null
 ) {
     Column(modifier = Modifier.padding(vertical = 8.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
@@ -605,20 +632,39 @@ private fun TriStateRow(
                 Spacer(Modifier.width(12.dp))
             }
             Column(modifier = Modifier.weight(1f)) {
-                Text(title, fontWeight = FontWeight.SemiBold, fontSize = 14.sp, color = theme.onSurface)
-                Text(subtitle, fontSize = 11.sp, color = theme.onSurface.copy(alpha = 0.6f))
+                Text(
+                    title,
+                    fontWeight = FontWeight.SemiBold,
+                    fontSize = 14.sp,
+                    color = if (enabled) theme.onSurface else theme.onSurface.copy(alpha = 0.68f)
+                )
+                Text(
+                    if (enabled) subtitle else disabledExplanation ?: subtitle,
+                    fontSize = 11.sp,
+                    color = theme.onSurface.copy(alpha = if (enabled) 0.6f else 0.72f)
+                )
             }
-            // Segmented Default / On / Off.
-            Row(
-                horizontalArrangement = Arrangement.spacedBy(4.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                TriOption(theme, "Default", value == null) { onChange(null) }
-                TriOption(theme, "On", value == true) { onChange(true) }
-                TriOption(theme, "Off", value == false) { onChange(false) }
+            if (enabled) {
+                // Segmented Default / On / Off.
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(4.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    TriOption(theme, "Default", value == null) { onChange(null) }
+                    TriOption(theme, "On", value == true) { onChange(true) }
+                    TriOption(theme, "Off", value == false) { onChange(false) }
+                }
+            } else {
+                Text(
+                    "Unavailable",
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.Medium,
+                    color = theme.onSurface.copy(alpha = 0.58f),
+                    modifier = Modifier.padding(horizontal = 4.dp)
+                )
             }
         }
-        if (value == null) {
+        if (enabled && value == null) {
             Text(
                 "Using global default: $globalLabel",
                 fontSize = 11.sp,
