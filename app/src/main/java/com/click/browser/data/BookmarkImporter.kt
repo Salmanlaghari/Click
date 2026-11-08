@@ -9,11 +9,24 @@ import android.text.Html
  *
  * Pure client-side string parsing: no network calls, no account access,
  * nothing leaves the device.
+ *
+ * The current [Bookmark] model stores one flat folder label, not a folder tree.
+ * Imported nesting is therefore kept as a readable path in that label, using
+ * [FOLDER_PATH_SEPARATOR], without changing bookmark titles. Paths deeper than
+ * [MAX_IMPORTED_FOLDER_DEPTH], longer than the existing 40-character folder
+ * limit, or invalid under the existing folder-label rules are left unfiled
+ * rather than truncated or misrepresented.
  */
 object BookmarkImporter {
 
     /** Files larger than this are rejected before parsing (10 MiB). */
     const val MAX_FILE_BYTES = 10 * 1024 * 1024
+
+    /** Maximum number of named nested folders retained in an imported path. */
+    const val MAX_IMPORTED_FOLDER_DEPTH = 8
+
+    /** Readable separator used when representing nested folders in a flat label. */
+    const val FOLDER_PATH_SEPARATOR = " › "
 
     data class ParseResult(
         /** Parsed bookmarks, de-duplicated within the file itself. */
@@ -24,13 +37,18 @@ object BookmarkImporter {
         val skippedDuplicates: Int
     )
 
-    // One token pass in document order: bookmark anchors, folder headings and
-    // <DL> tags. Folders are tracked on a stack so their hierarchy can be
-    // flattened into the bookmark title ("Folder / Subfolder / Title").
+    // One token pass in document order. Each <DL> gets a stack frame, including
+    // empty/malformed folders, so closing it cannot accidentally pop its parent.
     private val TokenPattern = Regex(
-        """<DT>\s*<A\s+HREF="([^"]+)"[^>]*>(.*?)</A>|<DT>\s*<H3[^>]*>(.*?)</H3>|</?DL>""",
+        """<DT\b[^>]*>\s*<A\b([^>]*)>(.*?)</A>|<DT\b[^>]*>\s*<H3\b[^>]*>(.*?)</H3>|</?DL\b[^>]*>""",
         setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL)
     )
+    private val HrefPattern = Regex(
+        """(?:^|\s)HREF\s*=\s*(?:"([^"]*)"|'([^']*)')""",
+        RegexOption.IGNORE_CASE
+    )
+
+    private data class FolderFrame(val name: String?)
 
     /**
      * Parses raw bookmark-export HTML.
@@ -38,7 +56,10 @@ object BookmarkImporter {
      * @throws IllegalArgumentException when the content is not a bookmarks export
      * or is otherwise unreadable.
      */
-    fun parse(html: String): ParseResult {
+    fun parse(html: String): ParseResult = parse(html, ::fromHtml)
+
+    /** Injection point keeps parser regression tests independent of Android's HTML framework. */
+    internal fun parse(html: String, decodeHtml: (String) -> String): ParseResult {
         if (!html.contains("NETSCAPE-Bookmark-file-1", ignoreCase = true) &&
             !TokenPattern.containsMatchIn(html)
         ) {
@@ -49,18 +70,24 @@ object BookmarkImporter {
         val seenUrls = mutableSetOf<String>()
         var skippedNonHttp = 0
         var skippedDuplicates = 0
-        val folderStack = ArrayDeque<String>()
+        val folderStack = ArrayDeque<FolderFrame>()
+        var pendingFolder: String? = null
 
         for (match in TokenPattern.findAll(html)) {
-            val href = match.groups[1]?.value
+            val anchorAttributes = match.groups[1]?.value
             val anchorText = match.groups[2]?.value
             val folderName = match.groups[3]?.value
             val token = match.value
 
             when {
                 // Bookmark entry
-                href != null -> {
-                    val url = href.trim()
+                anchorAttributes != null -> {
+                    // A heading with no following <DL> is malformed; do not apply
+                    // it to this bookmark or to later siblings.
+                    pendingFolder = null
+                    val hrefMatch = HrefPattern.find(anchorAttributes) ?: continue
+                    val href = hrefMatch.groups[1]?.value ?: hrefMatch.groups[2]?.value.orEmpty()
+                    val url = decodeHtml(href).trim()
                     if (!url.startsWith("http://", ignoreCase = true) &&
                         !url.startsWith("https://", ignoreCase = true)
                     ) {
@@ -72,27 +99,30 @@ object BookmarkImporter {
                         continue
                     }
                     val decodedTitle = anchorText
-                        ?.let { fromHtml(it).trim() }
+                        ?.let { decodeHtml(it).trim() }
                         ?.takeIf { it.isNotEmpty() }
                     val baseTitle = decodedTitle ?: url
-                    val title = if (folderStack.isNotEmpty()) {
-                        (folderStack.toList() + baseTitle).joinToString(" / ")
-                    } else {
-                        baseTitle
-                    }
-                    bookmarks.add(Bookmark(title = title, url = url))
+                    bookmarks.add(
+                        Bookmark(
+                            title = baseTitle,
+                            url = url,
+                            folder = folderPath(folderStack)
+                        )
+                    )
                 }
-                // Folder heading — push, popped when its <DL> closes
+                // A folder heading belongs to the next <DL>. Empty names are kept
+                // as pending null frames so their matching close remains balanced.
                 folderName != null -> {
-                    val name = fromHtml(folderName).trim()
-                    if (name.isNotEmpty()) folderStack.addLast(name)
+                    pendingFolder = decodeHtml(folderName).trim().takeIf { it.isNotEmpty() }
                 }
-                // </DL> closes a folder level (the root <DL> closes with an empty stack)
-                token.equals("</DL>", ignoreCase = true) -> {
+                token.startsWith("</", ignoreCase = true) -> {
                     if (folderStack.isNotEmpty()) folderStack.removeLast()
+                    pendingFolder = null
                 }
-                // <DL> open tag — nothing to do
-                else -> Unit
+                else -> {
+                    folderStack.addLast(FolderFrame(pendingFolder))
+                    pendingFolder = null
+                }
             }
         }
 
@@ -101,6 +131,13 @@ object BookmarkImporter {
             skippedNonHttp = skippedNonHttp,
             skippedDuplicates = skippedDuplicates
         )
+    }
+
+    private fun folderPath(folderStack: Iterable<FolderFrame>): String? {
+        val names = folderStack.mapNotNull { it.name }
+        if (names.isEmpty() || names.size > MAX_IMPORTED_FOLDER_DEPTH) return null
+        val path = names.joinToString(FOLDER_PATH_SEPARATOR)
+        return path.takeIf { BookmarkOrganizationPolicy.normalizeFolderName(it) != null }
     }
 
     private fun fromHtml(html: String): String =
