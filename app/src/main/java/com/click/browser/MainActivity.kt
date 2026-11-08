@@ -7250,6 +7250,7 @@ class MainActivity : FragmentActivity() {
                                 )
                                 BrowserMenuSheet(
                                     theme = theme,
+                                    mode = activeMode,
                                     isDesktopForSite = menuDesktopForSite,
                                     onHome = {
                                         showBrowserMenu = false

@@ -33,6 +33,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.click.browser.engine.BrowserMode
 import com.click.browser.engine.ClosedTab
 import com.click.browser.engine.MenuCustomization
 import com.click.browser.engine.ModeTheme
@@ -50,6 +51,7 @@ import com.click.browser.engine.ModeTheme
 @Composable
 fun BrowserMenuSheet(
     theme: ModeTheme,
+    mode: BrowserMode,
     isDesktopForSite: Boolean,
     visibleItems: List<MenuCustomization.MenuItemId> =
         MenuCustomization.effectiveVisibleItems(
@@ -98,7 +100,10 @@ fun BrowserMenuSheet(
                     onClick = onHome
                 )
             }
-            val items = visibleItems.ifEmpty { MenuCustomization.DEFAULT_ORDER }
+            val items = MenuCustomization.filterItemsForMode(
+                visibleItems.ifEmpty { MenuCustomization.DEFAULT_ORDER },
+                mode
+            )
             items.forEach { id ->
                 item(key = id.name) {
                     when (id) {
