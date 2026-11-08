@@ -28,6 +28,11 @@ import java.io.InputStream
  */
 data class SavedDownload(val fileName: String, val location: String)
 
+private data class SavedLocationWrite(
+    val location: String,
+    val usedPublicFallback: Boolean = false
+)
+
 object DownloadHelper {
 
     /** Shared OkHttpClient — reused across downloads (connection pooling). */
@@ -98,7 +103,7 @@ object DownloadHelper {
         } catch (_: Exception) {
             DownloadSettings.LOCATION_PHONE
         }
-        val savedLocation = withContext(Dispatchers.IO) {
+        val savedWrite = withContext(Dispatchers.IO) {
             val staged = File.createTempFile("click-gecko-download-", ".tmp", context.cacheDir)
             try {
                 responseBody.use { input ->
@@ -113,13 +118,19 @@ object DownloadHelper {
                         destination.outputStream().use { output ->
                             staged.inputStream().use { input -> input.copyTo(output) }
                         }
-                        destination.absolutePath
+                        SavedLocationWrite(destination.absolutePath)
                     }
                     DownloadSettings.LOCATION_CUSTOM -> {
-                        copyToCustomFolder(context, staged, safeName, mimeType)
-                            ?: copyToPublicDownloads(context, staged, safeName, mimeType)
+                        val customLocation = copyToCustomFolder(context, staged, safeName, mimeType)
+                        if (customLocation != null) {
+                            SavedLocationWrite(customLocation)
+                        } else {
+                            copyToPublicDownloads(context, staged, safeName, mimeType)
+                                ?.let { SavedLocationWrite(it, usedPublicFallback = true) }
+                        }
                     }
                     else -> copyToPublicDownloads(context, staged, safeName, mimeType)
+                        ?.let { SavedLocationWrite(it) }
                 }
             } catch (_: Exception) {
                 runCatching { responseBody.close() }
@@ -128,14 +139,19 @@ object DownloadHelper {
                 runCatching { staged.delete() }
             }
         }
+        val outcome = when {
+            savedWrite == null -> DownloadSaveOutcome.FAILED
+            savedWrite.usedPublicFallback -> DownloadSaveOutcome.FALLBACK_TO_PUBLIC_DOWNLOADS
+            else -> DownloadSaveOutcome.SAVED_TO_SELECTED_LOCATION
+        }
         withContext(Dispatchers.Main) {
             Toast.makeText(
                 context,
-                if (savedLocation != null) "Saved $safeName" else "Could not save the authenticated download. Check the selected folder.",
+                downloadSaveStatusMessage(safeName, outcome),
                 Toast.LENGTH_LONG
             ).show()
         }
-        return savedLocation?.let { SavedDownload(safeName, it) }
+        return savedWrite?.let { SavedDownload(safeName, it.location) }
     }
 
     private suspend fun copyToCustomFolder(
@@ -151,10 +167,16 @@ object DownloadHelper {
         val document = tree.createFile(mimeType?.takeIf { it.isNotBlank() } ?: guessMime(fileName), fileName)
             ?: return null
         return try {
-            context.contentResolver.openOutputStream(document.uri)?.use { output ->
-                source.inputStream().use { it.copyTo(output) }
-            } ?: return null
-            document.uri.toString()
+            val output = context.contentResolver.openOutputStream(document.uri)
+            if (output == null) {
+                runCatching { document.delete() }
+                null
+            } else {
+                output.use { destination ->
+                    source.inputStream().use { input -> input.copyTo(destination) }
+                }
+                document.uri.toString()
+            }
         } catch (_: Exception) {
             runCatching { document.delete() }
             null
