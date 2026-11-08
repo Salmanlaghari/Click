@@ -98,7 +98,7 @@ fun PasswordManagerScreen(
             ) {
                 item {
                     Text(
-                        "🔒 Encrypted with your device's secure hardware key.",
+                        "🔒 Credential values use Android Keystore AES-GCM; site names stay on this device for matching. Hardware backing depends on your device. Authenticate before viewing or filling saved logins.",
                         color = theme.onSurface.copy(alpha = 0.6f),
                         fontSize = 12.sp,
                         modifier = Modifier.padding(bottom = 4.dp)

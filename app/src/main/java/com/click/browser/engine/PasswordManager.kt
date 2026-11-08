@@ -22,8 +22,10 @@ import javax.crypto.spec.GCMParameterSpec
  * into a site, stores credentials encrypted with an Android Keystore-backed
  * AES-GCM key, and auto-fills on return visits.
  *
- * Security: the AES key never leaves the Android Keystore (hardware-backed
- * where available). Only the encrypted blobs are stored in DataStore.
+ * Security: the AES key never leaves the Android Keystore and is hardware-backed
+ * only where the device supports it. Credential values are AES-GCM encrypted;
+ * site origin/host metadata remains local in DataStore for matching. UI display
+ * and autofill must pass the device-authentication policy first.
  */
 data class SavedPassword(
     val host: String,
@@ -128,6 +130,24 @@ object PasswordManager {
     suspend fun getForOrigin(context: Context, origin: String): SavedPassword? {
         val normalized = PasswordOriginPolicy.secureOrigin(origin, isMainFrame = true) ?: return null
         return getAll(context).firstOrNull { it.origin == normalized }
+    }
+
+    /** Checks stored origin metadata without decrypting usernames or passwords. */
+    suspend fun hasForOrigin(context: Context, origin: String): Boolean {
+        val normalized = PasswordOriginPolicy.secureOrigin(origin, isMainFrame = true) ?: return false
+        return try {
+            val json = context.profileDataStore.data.map { it[PASSWORDS_KEY].orEmpty() }.first()
+            if (json.isBlank()) return false
+            val entries = JSONArray(json)
+            (0 until entries.length()).any { index ->
+                val entry = entries.optJSONObject(index) ?: return@any false
+                val legacyHost = entry.optString("host")
+                val storedOrigin = entry.optString("origin").ifBlank { "https://$legacyHost" }
+                PasswordOriginPolicy.secureOrigin(storedOrigin, isMainFrame = true) == normalized
+            }
+        } catch (_: Exception) {
+            false
+        }
     }
 
     suspend fun save(context: Context, host: String, username: String, password: String) {
