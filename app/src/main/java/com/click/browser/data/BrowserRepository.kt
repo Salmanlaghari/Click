@@ -148,7 +148,9 @@ class BrowserRepository(private val context: Context) {
         list.sortedByDescending { it.timestamp }
     }
 
-    suspend fun addHistoryItem(item: HistoryItem) {
+    suspend fun addHistoryItem(item: HistoryItem, isIncognitoTab: Boolean) {
+        if (!HistoryRecordingPolicy.shouldRecord(isIncognitoTab, item.url)) return
+
         context.profileDataStore.edit { preferences ->
             val jsonStr = preferences[HISTORY_KEY] ?: "[]"
             val array = JSONArray(jsonStr)

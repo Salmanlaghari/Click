@@ -3757,13 +3757,15 @@ class MainActivity : FragmentActivity() {
                                                                 },
                                                                 onPageLoaded = { url ->
                                                                     val loadedTab = tabs.firstOrNull { it.id == tabId }
-                                                                    if (loadedTab != null && !loadedTab.isIncognito &&
+                                                                    if (loadedTab != null &&
                                                                         (url.startsWith("http://") || url.startsWith("https://"))
                                                                     ) {
                                                                         val title = loadedTab.title.ifBlank { url }
+                                                                        val isIncognitoTab = loadedTab.isIncognito
                                                                         scope.launch {
                                                                             repository.addHistoryItem(
-                                                                                HistoryItem(title, url, System.currentTimeMillis())
+                                                                                HistoryItem(title, url, System.currentTimeMillis()),
+                                                                                isIncognitoTab = isIncognitoTab
                                                                             )
                                                                         }
                                                                     }
@@ -4230,10 +4232,14 @@ class MainActivity : FragmentActivity() {
                                                                     }
                                                                 }
 
-                                                                // History tracking (skip if Incognito Tab)
-                                                                if (!finishedTab.isIncognito && url != null && url != "about:blank") {
+                                                                // History persistence enforces the captured private-mode flag.
+                                                                if (url != null && url != "about:blank") {
+                                                                    val isIncognitoTab = finishedTab.isIncognito
                                                                     scope.launch {
-                                                                        repository.addHistoryItem(HistoryItem(finishedTab.title, url, System.currentTimeMillis()))
+                                                                        repository.addHistoryItem(
+                                                                            HistoryItem(finishedTab.title, url, System.currentTimeMillis()),
+                                                                            isIncognitoTab = isIncognitoTab
+                                                                        )
                                                                     }
                                                                 }
 
