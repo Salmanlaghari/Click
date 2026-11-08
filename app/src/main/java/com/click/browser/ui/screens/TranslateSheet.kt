@@ -45,8 +45,10 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.platform.LocalContext
 import androidx.datastore.preferences.core.edit
 import com.click.browser.engine.AppSettings
+import com.click.browser.engine.AiSelectedTextPolicy
 import com.click.browser.engine.MlKitTranslator
 import com.click.browser.engine.ModeTheme
+import com.click.browser.engine.SelectedTextTranslationPolicy
 import com.click.browser.engine.dataStore
 import kotlinx.coroutines.flow.first
 import androidx.compose.ui.Alignment
@@ -75,17 +77,25 @@ fun TranslateSheet(
     webView: WebView?,
     pageUrl: String,
     onDismiss: () -> Unit,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    initialText: String = "",
+    selectedTextOnly: Boolean = false,
+    selectionSessionIdentity: String = "",
+    selectionWasTruncated: Boolean = false
 ) {
     val scope = rememberCoroutineScope()
     val context = LocalContext.current
     var sourceLang by remember { mutableStateOf(TranslateLanguage.ENGLISH) }
     var targetLang by remember { mutableStateOf(MlKitTranslator.defaultTargetLanguage()) }
     var autoTranslatePages by remember { mutableStateOf(false) }
-    var inputText by remember { mutableStateOf("") }
-    var resultText by remember { mutableStateOf("") }
-    var status by remember { mutableStateOf("") }
-    var busy by remember { mutableStateOf(false) }
+    var inputText by remember(selectionSessionIdentity) {
+        mutableStateOf(
+            SelectedTextTranslationPolicy.initialInputText(selectedTextOnly, initialText)
+        )
+    }
+    var resultText by remember(selectionSessionIdentity) { mutableStateOf("") }
+    var status by remember(selectionSessionIdentity) { mutableStateOf("") }
+    var busy by remember(selectionSessionIdentity) { mutableStateOf(false) }
     var pageTranslated by remember { mutableStateOf(false) }
     var pageProgress by remember { mutableStateOf<Float?>(null) }
 
@@ -144,7 +154,12 @@ fun TranslateSheet(
                 autoTranslatePages = autoPref
                 val effectiveTarget = if (!saved.isNullOrBlank()) saved else targetLang
                 if (!saved.isNullOrBlank()) targetLang = saved
-                if (autoPref && webView != null && pageUrl.startsWith("http")) {
+                if (autoPref && SelectedTextTranslationPolicy.canTranslatePage(
+                        selectedTextOnly = selectedTextOnly,
+                        hasWebView = webView != null,
+                        pageUrl = pageUrl
+                    )
+                ) {
                     startPageTranslation(effectiveTarget)
                 }
             } catch (_: Exception) { }
@@ -171,7 +186,7 @@ fun TranslateSheet(
                 Icon(Icons.Filled.Translate, contentDescription = null, tint = theme.primary)
                 Spacer(Modifier.size(8.dp))
                 Text(
-                    "Translate Page & Text",
+                    if (selectedTextOnly) "Translate Selected Text" else "Translate Page & Text",
                     color = theme.onSurface,
                     fontSize = 18.sp,
                     fontWeight = FontWeight.Bold,
@@ -180,6 +195,21 @@ fun TranslateSheet(
                 IconButton(onClick = onDismiss) {
                     Icon(Icons.Filled.Close, contentDescription = "Close", tint = theme.onSurface)
                 }
+            }
+
+            if (selectedTextOnly) {
+                Text(
+                    buildString {
+                        append("Only the selected text below is translated on this device. Language models may download on first use.")
+                        if (selectionWasTruncated) {
+                            append(" The original selection exceeded ")
+                            append(AiSelectedTextPolicy.MAX_SELECTED_TEXT_CHARS)
+                            append(" characters; only the shown text will be translated.")
+                        }
+                    },
+                    color = theme.onSurface.copy(alpha = 0.7f),
+                    fontSize = 12.sp
+                )
             }
 
             Row(
@@ -221,7 +251,13 @@ fun TranslateSheet(
             }
 
             // ---- Full-page translation controls (shown first when browsing a live page) ----
-            if (webView != null && pageUrl.startsWith("http")) {
+            if (SelectedTextTranslationPolicy.canTranslatePage(
+                    selectedTextOnly = selectedTextOnly,
+                    hasWebView = webView != null,
+                    pageUrl = pageUrl
+                )
+            ) {
+                val pageWebView = requireNotNull(webView)
                 if (pageProgress != null) {
                     LinearProgressIndicator(
                         progress = { pageProgress ?: 0f },
@@ -248,7 +284,7 @@ fun TranslateSheet(
                         OutlinedButton(
                             onClick = {
                                 scope.launch {
-                                    restoreOriginalPageInPlace(webView)
+                                    restoreOriginalPageInPlace(pageWebView)
                                     pageTranslated = false
                                     status = "Restored original page"
                                 }
@@ -298,7 +334,7 @@ fun TranslateSheet(
                         colors = SwitchDefaults.colors(checkedThumbColor = Color.White, checkedTrackColor = theme.primary)
                     )
                 }
-            } else if (pageUrl.startsWith("http")) {
+            } else if (!selectedTextOnly && pageUrl.startsWith("http")) {
                 Text(
                     "For GeckoView pages, page translation is not connected yet. You can still translate text below; the page will not be modified.",
                     color = theme.onSurface.copy(alpha = 0.7f),
@@ -308,8 +344,11 @@ fun TranslateSheet(
 
             OutlinedTextField(
                 value = inputText,
-                onValueChange = { inputText = it },
-                label = { Text("Or enter custom text to translate") },
+                onValueChange = {
+                    inputText = it
+                    if (selectedTextOnly) resultText = ""
+                },
+                label = { Text(if (selectedTextOnly) "Selected text" else "Or enter custom text to translate") },
                 modifier = Modifier.fillMaxWidth(),
                 minLines = 2,
                 colors = TextFieldDefaults.colors(
@@ -324,6 +363,7 @@ fun TranslateSheet(
                 onClick = {
                     if (inputText.isBlank() || busy) return@Button
                     busy = true
+                    resultText = ""
                     status = ""
                     scope.launch {
                         try {
@@ -357,7 +397,7 @@ fun TranslateSheet(
                     )
                     Spacer(Modifier.size(8.dp))
                 }
-                Text("Translate text")
+                Text(if (selectedTextOnly) "Translate selected text" else "Translate text")
             }
 
             if (resultText.isNotEmpty()) {

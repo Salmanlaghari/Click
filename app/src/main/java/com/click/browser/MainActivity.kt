@@ -221,6 +221,14 @@ private data class PendingAiSelectedTextOffer(
     val selection: AiSelectedTextPolicy.PreparedSelection
 )
 
+private data class PendingSelectedTextTranslation(
+    val selectionId: String,
+    val tabId: String,
+    val pageUrl: String,
+    val selection: AiSelectedTextPolicy.PreparedSelection
+)
+
+
 /**
  * Page transition wrapper — subtle fade + slide on every navigation start.
  * Extracted to a top-level composable because [androidx.compose.animation.AnimatedVisibility]
@@ -1833,6 +1841,9 @@ class MainActivity : FragmentActivity() {
             // AI chat + privacy guards
             var showAiChat by remember { mutableStateOf(false) }
             var pendingAiSelectedText by remember { mutableStateOf<PendingAiSelectedTextOffer?>(null) }
+            var pendingSelectedTextTranslation by remember {
+                mutableStateOf<PendingSelectedTextTranslation?>(null)
+            }
             var showPrivacyGuards by remember { mutableStateOf(false) }
             // click:// internal pages (chrome://-style). Holds the page key or null.
             var showClickPage by remember { mutableStateOf<String?>(null) }
@@ -1975,6 +1986,36 @@ class MainActivity : FragmentActivity() {
                 )
                 showAiChat = true
             }
+            fun openSelectedTextForTranslation(
+                selection: AiSelectedTextPolicy.PreparedSelection,
+                sourceTabId: String,
+                sourcePageUrl: String
+            ) {
+                val sourceTab = activeSelectedTextSource(
+                    sourceTabId = sourceTabId,
+                    sourceEngine = selection.sourceEngine,
+                    sourcePageUrl = sourcePageUrl
+                ) ?: return
+                if (!AiSelectedTextPolicy.canOfferSelection(
+                        engine = sourceTab.engine,
+                        isPrivateTab = sourceTab.isIncognito
+                    )
+                ) return
+                val verifiedSelection = AiSelectedTextPolicy.prepareSelection(
+                    rawText = selection.text,
+                    engine = sourceTab.engine,
+                    isPrivateTab = sourceTab.isIncognito
+                ) ?: return
+                pendingSelectedTextTranslation = PendingSelectedTextTranslation(
+                    selectionId = java.util.UUID.randomUUID().toString(),
+                    tabId = sourceTabId,
+                    pageUrl = sourcePageUrl,
+                    selection = verifiedSelection.copy(
+                        wasTruncated = selection.wasTruncated || verifiedSelection.wasTruncated
+                    )
+                )
+                showTranslateSheet = true
+            }
             LaunchedEffect(
                 pendingAiSelectedText?.selectionId,
                 currentTab.id,
@@ -1992,6 +2033,27 @@ class MainActivity : FragmentActivity() {
                 ) {
                     pendingAiSelectedText = null
                     showAiChat = false
+                }
+            }
+            LaunchedEffect(
+                pendingSelectedTextTranslation?.selectionId,
+                currentTab.id,
+                selectedTextPageUrl(currentTab),
+                currentTab.engine,
+                currentTab.isIncognito
+            ) {
+                val pending = pendingSelectedTextTranslation ?: return@LaunchedEffect
+                val stillEligible = activeSelectedTextSource(
+                    sourceTabId = pending.tabId,
+                    sourceEngine = pending.selection.sourceEngine,
+                    sourcePageUrl = pending.pageUrl
+                ) != null && AiSelectedTextPolicy.canOfferSelection(
+                    engine = currentTab.engine,
+                    isPrivateTab = currentTab.isIncognito
+                )
+                if (!stillEligible) {
+                    pendingSelectedTextTranslation = null
+                    showTranslateSheet = false
                 }
             }
             var aiApiKey by remember { mutableStateOf("") }
@@ -3963,6 +4025,13 @@ class MainActivity : FragmentActivity() {
                                                                 },
                                                                 onSelectedText = { selection, pageUrl ->
                                                                     openSelectedTextForAi(
+                                                                        selection = selection,
+                                                                        sourceTabId = tabId,
+                                                                        sourcePageUrl = pageUrl
+                                                                    )
+                                                                },
+                                                                onTranslateSelectedText = { selection, pageUrl ->
+                                                                    openSelectedTextForTranslation(
                                                                         selection = selection,
                                                                         sourceTabId = tabId,
                                                                         sourcePageUrl = pageUrl
@@ -6350,11 +6419,19 @@ class MainActivity : FragmentActivity() {
                             }
                             // On-device ML Kit translation sheet.
                             if (showTranslateSheet) {
+                                val selectedTranslation = pendingSelectedTextTranslation
                                 com.click.browser.ui.screens.TranslateSheet(
                                     theme = theme,
-                                    webView = currentTab.webView,
-                                    pageUrl = currentTab.url,
-                                    onDismiss = { showTranslateSheet = false }
+                                    webView = if (selectedTranslation == null) currentTab.webView else null,
+                                    pageUrl = if (selectedTranslation == null) currentTab.url else "",
+                                    onDismiss = {
+                                        showTranslateSheet = false
+                                        pendingSelectedTextTranslation = null
+                                    },
+                                    initialText = selectedTranslation?.selection?.text.orEmpty(),
+                                    selectedTextOnly = selectedTranslation != null,
+                                    selectionSessionIdentity = selectedTranslation?.selectionId.orEmpty(),
+                                    selectionWasTruncated = selectedTranslation?.selection?.wasTruncated == true
                                 )
                             }
                             // Long-press context menu (links + images). Every action

@@ -52,6 +52,7 @@ internal fun geckoSessionStartupPlan(
 }
 
 private const val GECKO_ACTION_EXPLAIN_SELECTED_TEXT = "com.click.browser.EXPLAIN_SELECTED_TEXT"
+private const val GECKO_ACTION_TRANSLATE_SELECTED_TEXT = "com.click.browser.TRANSLATE_SELECTED_TEXT"
 
 /** GeckoView provider for one regular browser tab. */
 internal class GeckoBrowserTabSession(
@@ -82,6 +83,7 @@ internal class GeckoBrowserTabSession(
     private val onRendererRecovery: (GeckoRenderEvent) -> Unit,
     private val onExternalResponse: (WebResponse) -> Unit,
     private val onSelectedText: (AiSelectedTextPolicy.PreparedSelection, String) -> Unit,
+    private val onTranslateSelectedText: (AiSelectedTextPolicy.PreparedSelection, String) -> Unit,
     private val onLoginSavePrompt: (
         String,
         GeckoSession,
@@ -112,10 +114,15 @@ internal class GeckoBrowserTabSession(
 
     private val selectionActionDelegate = object : BasicSelectionActionDelegate(selectionActivity) {
         override fun getAllActions(): Array<String> =
-            super.getAllActions() + GECKO_ACTION_EXPLAIN_SELECTED_TEXT
+            super.getAllActions() + arrayOf(
+                GECKO_ACTION_EXPLAIN_SELECTED_TEXT,
+                GECKO_ACTION_TRANSLATE_SELECTED_TEXT
+            )
 
         override fun isActionAvailable(id: String): Boolean {
-            if (id != GECKO_ACTION_EXPLAIN_SELECTED_TEXT) return super.isActionAvailable(id)
+            if (id != GECKO_ACTION_EXPLAIN_SELECTED_TEXT &&
+                id != GECKO_ACTION_TRANSLATE_SELECTED_TEXT
+            ) return super.isActionAvailable(id)
             val selection = getSelection() ?: return false
             val flags = selection.flags
             return AiSelectedTextPolicy.prepareSelection(
@@ -129,16 +136,23 @@ internal class GeckoBrowserTabSession(
         }
 
         override fun prepareAction(id: String, menuItem: MenuItem) {
-            if (id == GECKO_ACTION_EXPLAIN_SELECTED_TEXT) {
-                menuItem.title = "Explain selection"
-                menuItem.setShowAsAction(MenuItem.SHOW_AS_ACTION_IF_ROOM)
-            } else {
-                super.prepareAction(id, menuItem)
+            when (id) {
+                GECKO_ACTION_EXPLAIN_SELECTED_TEXT -> {
+                    menuItem.title = "Explain selection"
+                    menuItem.setShowAsAction(MenuItem.SHOW_AS_ACTION_IF_ROOM)
+                }
+                GECKO_ACTION_TRANSLATE_SELECTED_TEXT -> {
+                    menuItem.title = "Translate selection"
+                    menuItem.setShowAsAction(MenuItem.SHOW_AS_ACTION_IF_ROOM)
+                }
+                else -> super.prepareAction(id, menuItem)
             }
         }
 
         override fun performAction(id: String, menuItem: MenuItem): Boolean {
-            if (id != GECKO_ACTION_EXPLAIN_SELECTED_TEXT) {
+            if (id != GECKO_ACTION_EXPLAIN_SELECTED_TEXT &&
+                id != GECKO_ACTION_TRANSLATE_SELECTED_TEXT
+            ) {
                 return super.performAction(id, menuItem)
             }
             val selection = getSelection() ?: return false
@@ -151,7 +165,11 @@ internal class GeckoBrowserTabSession(
                 isEditable = (flags and GeckoSession.SelectionActionDelegate.FLAG_IS_EDITABLE) != 0,
                 isPassword = (flags and GeckoSession.SelectionActionDelegate.FLAG_IS_PASSWORD) != 0
             ) ?: return false
-            onSelectedText(prepared, lastKnownPageUrl)
+            if (id == GECKO_ACTION_TRANSLATE_SELECTED_TEXT) {
+                onTranslateSelectedText(prepared, lastKnownPageUrl)
+            } else {
+                onSelectedText(prepared, lastKnownPageUrl)
+            }
             clearSelection()
             return true
         }
