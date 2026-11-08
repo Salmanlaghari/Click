@@ -98,6 +98,7 @@ import androidx.core.content.ContextCompat
 import com.click.browser.engine.AiChatClient
 import com.click.browser.engine.AiPageContextPolicy
 import com.click.browser.engine.AiProviders
+import com.click.browser.engine.AiRolePresets
 import com.click.browser.engine.AiSafetyFilter
 import com.click.browser.engine.ChatMessage
 import com.click.browser.engine.PrivacyGuards
