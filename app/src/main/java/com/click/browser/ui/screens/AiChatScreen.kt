@@ -118,7 +118,7 @@ import java.util.Locale
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun AiChatScreen(
+internal fun AiChatScreen(
     apiKey: String,
     providerId: String,
     model: String,
