@@ -4718,12 +4718,12 @@ class MainActivity : FragmentActivity() {
                                     // DevTools icon sits at the TOP-RIGHT corner (Prince's
                                     // request); the diagnostics overlay hangs below it.
                                     if (activeMode == BrowserMode.DEVELOPER &&
-                                        currentTab.url != "about:blank" &&
+                                        currentTab.url.isNotBlank() && currentTab.url != "about:blank" &&
                                         ModeCapabilityRegistry.availability(
                                             feature = FeatureId.DEVTOOLS,
                                             mode = activeMode,
                                             engine = currentTab.engine,
-                                            hasLoadedPage = true
+                                            hasLoadedPage = currentTab.url.isNotBlank() && currentTab.url != "about:blank"
                                         ).enabled
                                     ) {
                                         Column(
