@@ -6082,10 +6082,17 @@ class MainActivity : FragmentActivity() {
                                 InteractiveImageGalleryDialog(onClose = { showImageDetails = false })
                             }
                             if (showQuickTogglesDialog) {
+                                val quickToggleAdBlock = com.click.browser.engine.QuickTogglesAvailabilityPolicy.adBlockState(
+                                    engine = currentTab.engine,
+                                    globalEnabled = adBlockerEnabled,
+                                    siteOverride = siteSettings.forHost(hostOfUrl(currentTab.url))?.adBlock
+                                )
                                 QuickTogglesDialog(
                                     engine = currentTab.engine,
                                     isPrivate = currentTab.isIncognito,
-                                    adblock = adBlockerEnabled,
+                                    adblock = quickToggleAdBlock.checked,
+                                    adblockToggleEnabled = quickToggleAdBlock.toggleEnabled,
+                                    adblockSiteOverrideActive = quickToggleAdBlock.siteOverrideActive,
                                     onToggleAdblock = { enabled ->
                                         adBlockerEnabled = enabled
                                         liveAdBlockerEnabled = enabled
@@ -6132,6 +6139,12 @@ class MainActivity : FragmentActivity() {
                                     onOpenExtensionBrowser = {
                                         showQuickTogglesDialog = false
                                         requestExtensionsForTab(currentTab)
+                                    },
+                                    onOpenSiteSettings = {
+                                        if (!currentTab.isIncognito && currentTab.url.startsWith("http")) {
+                                            showQuickTogglesDialog = false
+                                            showSiteSettings = true
+                                        }
                                     },
                                     onClose = { showQuickTogglesDialog = false }
                                 )

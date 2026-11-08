@@ -678,6 +678,8 @@ fun QuickTogglesDialog(
     engine: BrowserTabEngine,
     isPrivate: Boolean,
     adblock: Boolean,
+    adblockToggleEnabled: Boolean,
+    adblockSiteOverrideActive: Boolean,
     onToggleAdblock: (Boolean) -> Unit,
     javaScriptEnabled: Boolean,
     onToggleJavaScript: (Boolean) -> Unit,
@@ -686,9 +688,20 @@ fun QuickTogglesDialog(
     httpsMode: String,
     onCycleHttpsMode: () -> Unit,
     onOpenExtensionBrowser: () -> Unit,
+    onOpenSiteSettings: () -> Unit,
     onClose: () -> Unit
 ) {
     val capabilities = QuickTogglesAvailabilityPolicy.forTab(engine, isPrivate)
+    val adBlockDescription = when {
+        !capabilities.webViewPageActions ->
+            "Unavailable on GeckoView; its built-in tracking protection remains active."
+        adblockSiteOverrideActive && isPrivate ->
+            "A saved site override controls this page. Quick Toggles won't change it in Private tabs."
+        adblockSiteOverrideActive ->
+            "A site override controls this page instead of the global default. Manage it in Site Settings."
+        else ->
+            "Sets the global default on WebView pages; site overrides take precedence. Changes reload this page."
+    }
     AlertDialog(
         onDismissRequest = onClose,
         title = { Text("Quick Toggles", fontWeight = FontWeight.Bold) },
@@ -704,11 +717,19 @@ fun QuickTogglesDialog(
                 Text("Page controls", fontWeight = FontWeight.Bold, fontSize = 13.sp)
                 QuickToggleSwitchRow(
                     title = "Click Ad & Tracker Filter",
-                    description = "Blocks matched requests in WebView; the open page reloads after a change.",
+                    description = adBlockDescription,
                     checked = adblock,
-                    enabled = capabilities.webViewPageActions,
+                    enabled = adblockToggleEnabled,
                     onCheckedChange = onToggleAdblock
                 )
+                if (adblockSiteOverrideActive && !isPrivate && capabilities.webViewPageActions) {
+                    TextButton(
+                        onClick = onOpenSiteSettings,
+                        modifier = Modifier.align(Alignment.Start)
+                    ) {
+                        Text("Manage site override")
+                    }
+                }
                 QuickToggleSwitchRow(
                     title = "JavaScript",
                     description = "Controls JavaScript in WebView tabs and reloads this page to apply.",
