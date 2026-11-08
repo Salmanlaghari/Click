@@ -51,6 +51,32 @@ class DownloadCenterPolicyTest {
         assertTrue(history.isEmpty())
     }
 
+    @Test
+    fun failedInitialQueryIsNotTreatedAsAnEmptyDownloadList() {
+        val state = DownloadCenterQueryState.Loading.recordFailure()
+
+        assertTrue(state is DownloadCenterQueryState.Failed)
+        assertFalse(state.shouldShowEmptyState(savedFileCount = 0))
+        assertTrue(state.downloadsForDisplay().isEmpty())
+    }
+
+    @Test
+    fun emptyMessageRequiresSuccessfulQueryAndNoSavedFiles() {
+        assertFalse(DownloadCenterQueryState.Loading.shouldShowEmptyState(savedFileCount = 0))
+        assertTrue(DownloadCenterQueryState.Loaded(emptyList()).shouldShowEmptyState(savedFileCount = 0))
+        assertFalse(DownloadCenterQueryState.Loaded(emptyList()).shouldShowEmptyState(savedFileCount = 1))
+    }
+
+    @Test
+    fun failedRefreshRetainsLastSuccessfulDownloads() {
+        val previouslyLoaded = listOf(item(9L))
+        val failed = DownloadCenterQueryState.Loaded(previouslyLoaded).recordFailure()
+
+        assertEquals(previouslyLoaded, failed.downloadsForDisplay())
+        assertFalse(failed.shouldShowEmptyState(savedFileCount = 0))
+        assertEquals(failed, failed.recordFailure())
+    }
+
     private fun item(
         id: Long,
         label: String = "download-$id.bin",
