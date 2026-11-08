@@ -28,45 +28,158 @@ import { ClickPasswordsPage } from './components/pages/ClickPasswordsPage';
 import { ClickDownloadsPage } from './components/pages/ClickDownloadsPage';
 import { ClickBookmarksPage } from './components/pages/ClickBookmarksPage';
 
+export const VALID_PROFILES: readonly BrowserProfile[] = ['simple', 'developer', 'power', 'advance'] as const;
+
+export const isValidProfile = (profile: unknown): profile is BrowserProfile => {
+  return typeof profile === 'string' && VALID_PROFILES.includes(profile as BrowserProfile);
+};
+
+// Safe tab factory & sanitizer
+export const sanitizeTab = (raw: unknown, targetProfile: BrowserProfile, fallbackIndex: number = 0): Tab => {
+  const safeProfile = isValidProfile(targetProfile) ? targetProfile : 'power';
+  const defaultTab: Tab = {
+    id: `tab-${safeProfile}-${Date.now()}-${fallbackIndex}`,
+    url: 'click://home',
+    title: 'Click Home',
+    isIncognito: false,
+    history: ['click://home'],
+    historyIndex: 0,
+    profile: safeProfile,
+    lastActive: Date.now(),
+  };
+
+  if (!raw || typeof raw !== 'object') {
+    return defaultTab;
+  }
+
+  const obj = raw as Record<string, unknown>;
+  const id = typeof obj.id === 'string' && obj.id.trim() ? obj.id.trim() : defaultTab.id;
+  const isIncognito = Boolean(obj.isIncognito);
+  const rawUrl = typeof obj.url === 'string' && obj.url.trim() ? obj.url.trim() : 'click://home';
+  const validUrl = rawUrl.startsWith('http://') || rawUrl.startsWith('https://') || rawUrl.startsWith('click://')
+    ? rawUrl
+    : 'click://home';
+  
+  // History array reconciliation
+  const rawHistory = Array.isArray(obj.history) ? obj.history : [];
+  const safeHistory = rawHistory
+    .filter((h): h is string => typeof h === 'string' && h.trim().length > 0)
+    .map((h) => h.trim());
+  if (safeHistory.length === 0) {
+    safeHistory.push(validUrl);
+  }
+
+  // History index clamping
+  const rawIndex = typeof obj.historyIndex === 'number' && Number.isFinite(obj.historyIndex)
+    ? Math.floor(obj.historyIndex)
+    : safeHistory.length - 1;
+  const safeHistoryIndex = Math.max(0, Math.min(rawIndex, safeHistory.length - 1));
+
+  // Title reconciliation
+  const title = typeof obj.title === 'string' && obj.title.trim()
+    ? obj.title.trim()
+    : (validUrl === 'click://home' ? 'Click Home' : validUrl);
+
+  const lastActive = typeof obj.lastActive === 'number' && Number.isFinite(obj.lastActive)
+    ? obj.lastActive
+    : Date.now();
+
+  return {
+    id,
+    url: validUrl,
+    title,
+    isIncognito,
+    history: safeHistory,
+    historyIndex: safeHistoryIndex,
+    profile: safeProfile,
+    lastActive,
+    isLoading: false,
+    readerMode: Boolean(obj.readerMode),
+    isDesktop: Boolean(obj.isDesktop),
+  };
+};
+
+export const sanitizeTabs = (rawTabs: unknown, targetProfile: BrowserProfile): Tab[] => {
+  if (!Array.isArray(rawTabs) || rawTabs.length === 0) {
+    return [sanitizeTab(null, targetProfile, 1)];
+  }
+  const seenIds = new Set<string>();
+  const sanitized = rawTabs.map((t, idx) => {
+    const tab = sanitizeTab(t, targetProfile, idx + 1);
+    if (seenIds.has(tab.id)) {
+      tab.id = `${tab.id}-${idx}-${Date.now()}`;
+    }
+    seenIds.add(tab.id);
+    return tab;
+  });
+  return sanitized.length > 0 ? sanitized : [sanitizeTab(null, targetProfile, 1)];
+};
+
+export const sanitizeHistory = (rawHistory: unknown): HistoryItem[] => {
+  if (!Array.isArray(rawHistory)) return [];
+  return rawHistory
+    .filter((h): h is Record<string, unknown> => Boolean(h && typeof h === 'object'))
+    .map((h, idx) => {
+      const url = typeof h.url === 'string' && h.url.trim() ? h.url.trim() : 'click://home';
+      return {
+        id: typeof h.id === 'string' && h.id.trim() ? h.id.trim() : `hist-${idx}-${Date.now()}`,
+        title: typeof h.title === 'string' && h.title.trim() ? h.title.trim() : url,
+        url,
+        visitedAt: typeof h.visitedAt === 'number' && Number.isFinite(h.visitedAt) ? h.visitedAt : Date.now(),
+        profile: isValidProfile(h.profile) ? h.profile : 'power',
+        isIncognito: Boolean(h.isIncognito),
+      };
+    });
+};
+
+const createDefaultSession = (profile: BrowserProfile): Tab[] => [
+  {
+    id: `tab-${profile}-1`,
+    url: 'click://home',
+    title: 'Click Home',
+    isIncognito: false,
+    history: ['click://home'],
+    historyIndex: 0,
+    profile,
+    lastActive: Date.now(),
+  },
+  {
+    id: `tab-${profile}-2`,
+    url: 'https://en.wikipedia.org/wiki/Web_browser',
+    title: 'Web browser - Wikipedia',
+    isIncognito: false,
+    history: ['https://en.wikipedia.org/wiki/Web_browser'],
+    historyIndex: 0,
+    profile,
+    lastActive: Date.now() - 1000,
+  },
+  {
+    id: `tab-${profile}-3`,
+    url: profile === 'developer' ? 'click://devtools' : 'click://vpn',
+    title: profile === 'developer' ? 'Click DevTools' : 'V9 Shield VPN',
+    isIncognito: false,
+    history: [profile === 'developer' ? 'click://devtools' : 'click://vpn'],
+    historyIndex: 0,
+    profile,
+    lastActive: Date.now() - 2000,
+  }
+];
+
 export const App: React.FC = () => {
   // Profiles: Defaults to 'power' mode (matches user screenshot with warm sand theme and 16-tool card)
   const [currentProfile, setCurrentProfile] = useState<BrowserProfile>('power');
 
-  // Tabs state
-  const [tabs, setTabs] = useState<Tab[]>([
-    {
-      id: 'tab-1',
-      url: 'click://home',
-      title: 'Click Home',
-      isIncognito: false,
-      history: ['click://home'],
-      historyIndex: 0,
-      profile: 'power',
-      lastActive: Date.now(),
-    },
-    {
-      id: 'tab-2',
-      url: 'https://en.wikipedia.org/wiki/Web_browser',
-      title: 'Web browser - Wikipedia',
-      isIncognito: false,
-      history: ['https://en.wikipedia.org/wiki/Web_browser'],
-      historyIndex: 0,
-      profile: 'power',
-      lastActive: Date.now() - 1000,
-    },
-    {
-      id: 'tab-3',
-      url: 'click://vpn',
-      title: 'V9 Shield VPN',
-      isIncognito: false,
-      history: ['click://vpn'],
-      historyIndex: 0,
-      profile: 'power',
-      lastActive: Date.now() - 2000,
-    }
-  ]);
+  // Isolated per-profile tab sessions (prevents state corruption and simulates Android WebView data partitions)
+  const [profileTabSessions, setProfileTabSessions] = useState<Record<BrowserProfile, Tab[]>>({
+    power: createDefaultSession('power'),
+    developer: createDefaultSession('developer'),
+    simple: createDefaultSession('simple'),
+    advance: createDefaultSession('advance'),
+  });
 
-  const [activeTabId, setActiveTabId] = useState<string>('tab-1');
+  // Active tabs state initialized with verified power session
+  const [tabs, setTabs] = useState<Tab[]>(() => createDefaultSession('power'));
+  const [activeTabId, setActiveTabId] = useState<string>('tab-power-1');
 
   // VPN State
   const [vpnConnected, setVpnConnected] = useState<boolean>(true);
@@ -177,8 +290,36 @@ export const App: React.FC = () => {
     { id: 'h3', title: 'Web browser - Wikipedia', url: 'https://en.wikipedia.org/wiki/Web_browser', visitedAt: Date.now() - 30000, profile: 'power', isIncognito: false },
   ]);
 
-  // Current Active Tab
-  const activeTab = tabs.find((t) => t.id === activeTabId) || tabs[0];
+  // Continuous State Reconciliation Check: Resets invalid configurations instead of propagating them
+  useEffect(() => {
+    // 1. Reconcile invalid profile configuration
+    if (!isValidProfile(currentProfile)) {
+      console.warn('Reconciling invalid profile configuration:', currentProfile);
+      setCurrentProfile('power');
+      return;
+    }
+
+    // 2. Reconcile empty or non-array tabs
+    if (!Array.isArray(tabs) || tabs.length === 0) {
+      console.warn('Reconciling empty tabs configuration');
+      const recovered = createDefaultSession(currentProfile);
+      setTabs(recovered);
+      setActiveTabId(recovered[0].id);
+      return;
+    }
+
+    // 3. Reconcile orphan or missing activeTabId
+    const activeExists = tabs.some((t) => t && t.id === activeTabId);
+    if (!activeExists) {
+      console.warn('Reconciling orphan activeTabId:', activeTabId);
+      setActiveTabId(tabs[0].id);
+    }
+  }, [tabs, activeTabId, currentProfile]);
+
+  // Defensive activeTab resolution: never undefined
+  const activeTab: Tab = (Array.isArray(tabs) && tabs.find((t) => t && t.id === activeTabId))
+    || (Array.isArray(tabs) && tabs[0])
+    || sanitizeTab(null, currentProfile, 1);
 
   // Extension toggle handler
   const handleToggleExtension = (id: string) => {
@@ -187,12 +328,13 @@ export const App: React.FC = () => {
     );
   };
 
-  // Navigate URL on active tab with smooth loading progress
+  // Safe navigation handler
   const handleNavigate = (newUrl: string) => {
-    // Start smooth loading bar animation
+    const safeUrl = (typeof newUrl === 'string' && newUrl.trim()) ? newUrl.trim() : 'click://home';
+
     setLoadingProgress(20);
     setTabs((prev) =>
-      prev.map((tab) => (tab.id === activeTabId ? { ...tab, isLoading: true } : tab))
+      sanitizeTabs(prev, currentProfile).map((tab) => (tab.id === activeTab.id ? { ...tab, isLoading: true } : tab))
     );
 
     setTimeout(() => setLoadingProgress(65), 120);
@@ -201,22 +343,24 @@ export const App: React.FC = () => {
     setTimeout(() => {
       setLoadingProgress(100);
       setTabs((prev) =>
-        prev.map((tab) => {
-          if (tab.id !== activeTabId) return tab;
-          const newHist = tab.history.slice(0, tab.historyIndex + 1);
-          newHist.push(newUrl);
+        sanitizeTabs(prev, currentProfile).map((tab) => {
+          if (tab.id !== activeTab.id) return tab;
+          const currentHist = Array.isArray(tab.history) ? tab.history : ['click://home'];
+          const currentIndex = typeof tab.historyIndex === 'number' ? tab.historyIndex : 0;
+          const newHist = currentHist.slice(0, currentIndex + 1);
+          newHist.push(safeUrl);
 
-          let pageTitle = newUrl;
-          if (newUrl.startsWith('click://')) {
-            const name = newUrl.replace('click://', '');
+          let pageTitle = safeUrl;
+          if (safeUrl.startsWith('click://')) {
+            const name = safeUrl.replace('click://', '');
             pageTitle = `Click ${name.charAt(0).toUpperCase() + name.slice(1)}`;
-          } else if (MOCK_PAGES[newUrl]) {
-            pageTitle = MOCK_PAGES[newUrl].title;
+          } else if (MOCK_PAGES[safeUrl]) {
+            pageTitle = MOCK_PAGES[safeUrl].title;
           }
 
           return {
             ...tab,
-            url: newUrl,
+            url: safeUrl,
             title: pageTitle,
             history: newHist,
             historyIndex: newHist.length - 1,
@@ -230,62 +374,62 @@ export const App: React.FC = () => {
 
     // Record history if not incognito
     if (!activeTab.isIncognito) {
-      let title = newUrl;
-      if (newUrl.startsWith('click://')) {
-        const name = newUrl.replace('click://', '');
+      let title = safeUrl;
+      if (safeUrl.startsWith('click://')) {
+        const name = safeUrl.replace('click://', '');
         title = `Click ${name.charAt(0).toUpperCase() + name.slice(1)}`;
-      } else if (MOCK_PAGES[newUrl]) {
-        title = MOCK_PAGES[newUrl].title;
+      } else if (MOCK_PAGES[safeUrl]) {
+        title = MOCK_PAGES[safeUrl].title;
       }
       setHistory((prev) => [
         {
           id: String(Date.now()),
           title,
-          url: newUrl,
+          url: safeUrl,
           visitedAt: Date.now(),
           profile: currentProfile,
           isIncognito: false,
         },
-        ...prev,
+        ...sanitizeHistory(prev),
       ]);
     }
   };
 
   const handleGoBack = () => {
     if (!activeTab || activeTab.historyIndex <= 0) return;
-    const newIdx = activeTab.historyIndex - 1;
-    const prevUrl = activeTab.history[newIdx];
+    const newIdx = Math.max(0, activeTab.historyIndex - 1);
+    const prevUrl = activeTab.history[newIdx] || 'click://home';
     setTabs((prev) =>
-      prev.map((t) => (t.id === activeTab.id ? { ...t, url: prevUrl, historyIndex: newIdx } : t))
+      sanitizeTabs(prev, currentProfile).map((t) => (t.id === activeTab.id ? { ...t, url: prevUrl, historyIndex: newIdx } : t))
     );
   };
 
   const handleGoForward = () => {
     if (!activeTab || activeTab.historyIndex >= activeTab.history.length - 1) return;
-    const newIdx = activeTab.historyIndex + 1;
-    const nextUrl = activeTab.history[newIdx];
+    const newIdx = Math.min(activeTab.history.length - 1, activeTab.historyIndex + 1);
+    const nextUrl = activeTab.history[newIdx] || 'click://home';
     setTabs((prev) =>
-      prev.map((t) => (t.id === activeTab.id ? { ...t, url: nextUrl, historyIndex: newIdx } : t))
+      sanitizeTabs(prev, currentProfile).map((t) => (t.id === activeTab.id ? { ...t, url: nextUrl, historyIndex: newIdx } : t))
     );
   };
 
   const handleReload = () => {
     setLoadingProgress(25);
     setTabs((prev) =>
-      prev.map((t) => (t.id === activeTab.id ? { ...t, isLoading: true } : t))
+      sanitizeTabs(prev, currentProfile).map((t) => (t.id === activeTab.id ? { ...t, isLoading: true } : t))
     );
     setTimeout(() => setLoadingProgress(75), 150);
     setTimeout(() => {
       setLoadingProgress(100);
       setTabs((prev) =>
-        prev.map((t) => (t.id === activeTab.id ? { ...t, isLoading: false } : t))
+        sanitizeTabs(prev, currentProfile).map((t) => (t.id === activeTab.id ? { ...t, isLoading: false } : t))
       );
       setTimeout(() => setLoadingProgress(0), 150);
     }, 350);
   };
 
   const handleNewTab = (incognito: boolean = false) => {
-    const newId = `tab-${Date.now()}`;
+    const newId = `tab-${currentProfile}-${Date.now()}`;
     const newTabObj: Tab = {
       id: newId,
       url: 'click://home',
@@ -296,29 +440,19 @@ export const App: React.FC = () => {
       profile: currentProfile,
       lastActive: Date.now(),
     };
-    setTabs((prev) => [...prev, newTabObj]);
+    setTabs((prev) => [...sanitizeTabs(prev, currentProfile), newTabObj]);
     setActiveTabId(newId);
   };
 
   const handleCloseTab = (id: string) => {
-    if (tabs.length === 1) {
-      const fallbackId = `tab-${Date.now()}`;
-      setTabs([
-        {
-          id: fallbackId,
-          url: 'click://home',
-          title: 'Click Home',
-          isIncognito: false,
-          history: ['click://home'],
-          historyIndex: 0,
-          profile: currentProfile,
-          lastActive: Date.now(),
-        },
-      ]);
-      setActiveTabId(fallbackId);
+    const currentList = sanitizeTabs(tabs, currentProfile);
+    if (currentList.length <= 1) {
+      const fallback = sanitizeTab(null, currentProfile, 1);
+      setTabs([fallback]);
+      setActiveTabId(fallback.id);
       return;
     }
-    const remaining = tabs.filter((t) => t.id !== id);
+    const remaining = currentList.filter((t) => t.id !== id);
     setTabs(remaining);
     if (activeTabId === id) {
       setActiveTabId(remaining[remaining.length - 1].id);
@@ -327,29 +461,56 @@ export const App: React.FC = () => {
 
   const handleToggleReaderMode = () => {
     setTabs((prev) =>
-      prev.map((t) => (t.id === activeTab.id ? { ...t, readerMode: !t.readerMode } : t))
+      sanitizeTabs(prev, currentProfile).map((t) => (t.id === activeTab.id ? { ...t, readerMode: !t.readerMode } : t))
     );
   };
 
   const handleToggleDesktop = () => {
     setTabs((prev) =>
-      prev.map((t) => (t.id === activeTab.id ? { ...t, isDesktop: !t.isDesktop } : t))
+      sanitizeTabs(prev, currentProfile).map((t) => (t.id === activeTab.id ? { ...t, isDesktop: !t.isDesktop } : t))
     );
   };
 
+  // Robust Profile Switching with State Reconciliation & Session Partitioning
   const handleSelectProfile = (p: BrowserProfile | string) => {
     try {
-      const valid: BrowserProfile[] = ['simple', 'developer', 'power', 'advance'];
-      const target: BrowserProfile = (typeof p === 'string' && valid.includes(p.toLowerCase() as BrowserProfile))
-        ? (p.toLowerCase() as BrowserProfile)
-        : 'power';
-      setCurrentProfile(target);
-      setIsProfileModalOpen(false);
-      setTabs((prev) =>
-        prev.map((t) => (t.id === activeTabId ? { ...t, profile: target } : t))
+      // 1. Reconcile target profile
+      const targetProfile: BrowserProfile = isValidProfile(p)
+        ? p
+        : (typeof p === 'string' && isValidProfile(p.toLowerCase()) ? (p.toLowerCase() as BrowserProfile) : 'power');
+
+      if (targetProfile === currentProfile) {
+        setIsProfileModalOpen(false);
+        return;
+      }
+
+      // 2. Safely snapshot and deep-copy current profile tabs
+      const sanitizedCurrentTabs = sanitizeTabs(tabs, currentProfile);
+      setProfileTabSessions((prev) => ({
+        ...prev,
+        [currentProfile]: JSON.parse(JSON.stringify(sanitizedCurrentTabs)),
+      }));
+
+      // 3. Reconcile target profile tab session
+      const targetSessionRaw = profileTabSessions[targetProfile];
+      const nextTabs = sanitizeTabs(
+        targetSessionRaw && targetSessionRaw.length > 0 ? targetSessionRaw : createDefaultSession(targetProfile),
+        targetProfile
       );
+
+      // 4. Safely set new profile state and active tab
+      setCurrentProfile(targetProfile);
+      setTabs(nextTabs);
+      setActiveTabId(nextTabs[0]?.id || `tab-${targetProfile}-${Date.now()}`);
+      setIsProfileModalOpen(false);
     } catch (err) {
-      console.error('Failed to switch profile:', err);
+      console.error('Safe fallback during profile switch:', err);
+      // Hard fallback if anything throws: safely reset to power profile with verified default tabs
+      const safeTabs = createDefaultSession('power');
+      setCurrentProfile('power');
+      setTabs(safeTabs);
+      setActiveTabId(safeTabs[0].id);
+      setIsProfileModalOpen(false);
     }
   };
 
@@ -540,19 +701,10 @@ export const App: React.FC = () => {
         onOpenDevTools={() => handleNavigate('click://devtools')}
         onOpenVpn={() => handleNavigate('click://vpn')}
         onResetEmulator={() => {
-          setTabs([
-            {
-              id: 'tab-1',
-              url: 'click://home',
-              title: 'Click Home',
-              isIncognito: false,
-              history: ['click://home'],
-              historyIndex: 0,
-              profile: currentProfile,
-              lastActive: Date.now(),
-            },
-          ]);
-          setActiveTabId('tab-1');
+          const freshTabs = createDefaultSession('power');
+          setTabs(freshTabs);
+          setActiveTabId(freshTabs[0].id);
+          setCurrentProfile('power');
           setVpnConnected(true);
           setIsFullView(false);
         }}
