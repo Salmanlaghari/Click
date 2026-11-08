@@ -60,6 +60,9 @@ import androidx.compose.ui.unit.sp
 import com.click.browser.engine.CookieStore
 import com.click.browser.engine.ModeTheme
 import com.click.browser.engine.SiteSettings
+import com.click.browser.engine.WebsitePermissionCapability
+import com.click.browser.engine.WebsitePermissionStatus
+import com.click.browser.engine.websitePermissionStatus
 import kotlinx.coroutines.launch
 
 /**
@@ -70,7 +73,8 @@ import kotlinx.coroutines.launch
  * Sections (mirroring Chrome's site-details page):
  * - Site header: host + a factual HTTP/HTTPS URL-scheme label.
  * - Permissions: a clear explanation of website permissions that Click does
- *   not grant in this build (camera, microphone and notifications).
+ *   not grant in this build (camera, microphone and location); notifications
+ *   are unsupported for websites.
  * - Content: JavaScript / Images / Pop-ups / Ads / Third-party cookies.
  *   Applied to the current WebView.
  * - Shields: Brave-style trackers/cookies/history info (existing).
@@ -172,11 +176,34 @@ fun SiteSettingsSheet(
             // ================= WEBSITE PERMISSIONS =================
             SectionTitle(theme, "Website permissions")
             Text(
-                "Click blocks website camera and microphone requests. Website notifications are not supported. " +
-                    "The microphone permission, if granted, is used only for Click's optional AI voice input.",
+                "These statuses apply to all websites. This build has no per-site allow controls for device permissions.",
                 fontSize = 12.sp,
                 color = theme.onSurface.copy(alpha = 0.68f),
                 lineHeight = 18.sp
+            )
+            WebsitePermissionStatusRow(
+                theme = theme,
+                capability = WebsitePermissionCapability.CAMERA,
+                title = "Camera",
+                explanation = "Click denies website camera requests."
+            )
+            WebsitePermissionStatusRow(
+                theme = theme,
+                capability = WebsitePermissionCapability.MICROPHONE,
+                title = "Microphone",
+                explanation = "Website access is denied. Android microphone access is reserved for Click's optional AI voice input."
+            )
+            WebsitePermissionStatusRow(
+                theme = theme,
+                capability = WebsitePermissionCapability.LOCATION,
+                title = "Location",
+                explanation = "Click denies website location requests and does not request Android location access."
+            )
+            WebsitePermissionStatusRow(
+                theme = theme,
+                capability = WebsitePermissionCapability.NOTIFICATIONS,
+                title = "Notifications",
+                explanation = "Website notifications are not supported; app notifications are separate."
             )
 
             // ================= CONTENT =================
@@ -483,6 +510,30 @@ private fun SectionTitle(theme: ModeTheme, title: String) {
         color = theme.primary,
         modifier = Modifier.padding(top = 18.dp, bottom = 4.dp)
     )
+}
+
+@Composable
+private fun WebsitePermissionStatusRow(
+    theme: ModeTheme,
+    capability: WebsitePermissionCapability,
+    title: String,
+    explanation: String
+) {
+    val statusLabel = when (websitePermissionStatus(capability)) {
+        WebsitePermissionStatus.BLOCKED_IN_CLICK -> "Blocked by Click"
+        WebsitePermissionStatus.UNSUPPORTED -> "Not supported"
+    }
+    Column(modifier = Modifier.fillMaxWidth().padding(vertical = 6.dp)) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(title, fontWeight = FontWeight.SemiBold, fontSize = 13.sp, color = theme.onSurface)
+            Text(statusLabel, fontSize = 12.sp, color = theme.onSurface.copy(alpha = 0.7f))
+        }
+        Text(explanation, fontSize = 11.sp, color = theme.onSurface.copy(alpha = 0.62f))
+    }
 }
 
 /**
