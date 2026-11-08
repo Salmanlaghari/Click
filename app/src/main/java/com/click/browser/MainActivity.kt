@@ -1819,7 +1819,6 @@ class MainActivity : FragmentActivity() {
                 }
             }
             var pendingWebViewSwitchTabId by remember { mutableStateOf<String?>(null) }
-            var pendingWebViewSwitchForDevTools by remember { mutableStateOf(false) }
             var showPrivacyPolicy by remember { mutableStateOf(false) }
             var showAboutApp by remember { mutableStateOf(false) }
             var showLicenses by remember { mutableStateOf(false) }
@@ -2015,16 +2014,6 @@ class MainActivity : FragmentActivity() {
                 currentTab.url
             ) {
                 if (currentTab.engine == BrowserTabEngine.GECKOVIEW) {
-                    if (showDevToolsSheet && DevToolsAvailabilityPolicy.shouldOfferWebViewFallback(
-                            activeMode, currentTab.engine, currentTab.url
-                        )
-                    ) {
-                        showDevToolsSheet = false
-                        pendingWebViewSwitchTabId = currentTab.id
-                        pendingWebViewSwitchForDevTools = true
-                        showWebViewSwitchConfirmation = true
-                        return@LaunchedEffect
-                    }
                     val unavailable = when {
                         showCookieManager -> { showCookieManager = false; "Cookie manager" }
                         showTextScaleSheet -> { showTextScaleSheet = false; "Page text zoom" }
@@ -2055,35 +2044,20 @@ class MainActivity : FragmentActivity() {
              */
             fun handleFeature(id: FeatureId) {
                 showFeatureMenu = false
-                if (currentTab.engine == BrowserTabEngine.GECKOVIEW) {
-                    if (id == FeatureId.DEVTOOLS && activeMode == BrowserMode.DEVELOPER &&
-                        currentTab.url.isNotBlank() && currentTab.url != "about:blank"
-                    ) {
-                        devToolsTab = 1
-                        pendingWebViewSwitchTabId = currentTab.id
-                        pendingWebViewSwitchForDevTools = true
-                        showWebViewSwitchConfirmation = true
-                        return
-                    }
-                    val unavailable = when (id) {
-                        FeatureId.COOKIES -> "Cookie manager"
-                        FeatureId.DEVTOOLS -> "DevTools"
-                        FeatureId.DESKTOP -> "Desktop-layout override"
-                        FeatureId.ADBLOCK -> "Click's custom AdBlock filter"
-                        FeatureId.READER -> "Reader mode"
-                        FeatureId.SCREENSHOT -> "Page screenshot"
-                        FeatureId.TEXT_SIZE -> "Page text zoom"
-                        else -> null
-                    }
-                    if (unavailable != null) {
-                        val detail = if (id == FeatureId.ADBLOCK) {
-                            "GeckoView tracking protection remains enabled."
-                        } else {
-                            "This tool is not yet connected to GeckoView; the page stays open."
-                        }
-                        Toast.makeText(this@MainActivity, "$unavailable unavailable. $detail", Toast.LENGTH_LONG).show()
-                        return
-                    }
+                val capability = ModeCapabilityRegistry.availability(
+                    feature = id,
+                    mode = activeMode,
+                    engine = currentTab.engine,
+                    hasLoadedPage = currentTab.url.isNotBlank() && currentTab.url != "about:blank"
+                )
+                if (!capability.visible) return
+                if (!capability.enabled) {
+                    Toast.makeText(
+                        this@MainActivity,
+                        capability.explanation ?: "This action is not available in the current mode.",
+                        Toast.LENGTH_LONG
+                    ).show()
+                    return
                 }
                 when (id) {
                     FeatureId.HISTORY -> showHistory = true
@@ -2104,15 +2078,7 @@ class MainActivity : FragmentActivity() {
                     FeatureId.DEVTOOLS -> {
                         // Opens the DevTools bottom sheet (website stays visible).
                         // The FPS diagnostics overlay has its own drawer toggle.
-                        if (activeMode == BrowserMode.DEVELOPER && currentTab.url != "about:blank") {
-                            showDevToolsSheet = true
-                        } else {
-                            Toast.makeText(
-                                this@MainActivity,
-                                "DevTools needs Developer mode with a page loaded.",
-                                Toast.LENGTH_SHORT
-                            ).show()
-                        }
+                        showDevToolsSheet = true
                     }
                     FeatureId.DOWNLOADS -> showDownloads = true
                     FeatureId.BOOKMARKS -> showBookmarks = true
@@ -2702,23 +2668,22 @@ class MainActivity : FragmentActivity() {
                 }
             }
 
-            // Opens the real DevTools bottom sheet on the requested tab (0=Elements,
-            // 1=Console, 2=Network, 3=Sources, 4=Device), switching to Developer
-            // mode if needed. Declared after drawerState so the drawer can be
-            // closed from it.
+            // Opens the real DevTools bottom sheet only when the current mode
+            // and tab engine support it. This launcher never switches modes or engines.
             fun openDevToolsTab(tab: Int) {
                 scope.launch {
                     drawerState.close()
-                    if (currentTab.url == "about:blank") {
-                        Toast.makeText(this@MainActivity, "Load a web page first.", Toast.LENGTH_SHORT).show()
+                    val capability = ModeCapabilityRegistry.availability(
+                        feature = FeatureId.DEVTOOLS,
+                        mode = activeMode,
+                        engine = currentTab.engine,
+                        hasLoadedPage = currentTab.url.isNotBlank() && currentTab.url != "about:blank"
+                    )
+                    if (!capability.visible || !capability.enabled) {
+                        val reason = capability.explanation
+                            ?: "DevTools is only available in Developer mode."
+                        Toast.makeText(this@MainActivity, reason, Toast.LENGTH_LONG).show()
                         return@launch
-                    }
-                    if (activeMode != BrowserMode.DEVELOPER) {
-                        // V9: DevTools runs in the Developer engine.
-                        val restarting = v9SwitchMode(BrowserMode.DEVELOPER, currentTab.webView, forceDesktopMode)
-                        if (restarting) return@launch
-                        if (V9Engine.bootMode != BrowserMode.DEVELOPER) return@launch
-                        currentTab.browserSession?.reload()
                     }
                     devToolsTab = tab
                     if (activeMode == BrowserMode.DEVELOPER && (tab == 0 || tab == 3)) {
@@ -2726,13 +2691,7 @@ class MainActivity : FragmentActivity() {
                     }
                     // Refresh device facts when the Device tab is requested.
                     if (tab == 4) refreshDevToolsDeviceInfo()
-                    if (currentTab.engine == BrowserTabEngine.GECKOVIEW) {
-                        pendingWebViewSwitchTabId = currentTab.id
-                        pendingWebViewSwitchForDevTools = true
-                        showWebViewSwitchConfirmation = true
-                    } else {
-                        showDevToolsSheet = true
-                    }
+                    showDevToolsSheet = true
                 }
             }
 
@@ -4758,7 +4717,15 @@ class MainActivity : FragmentActivity() {
                                     // 5. FLOATING DEV DEBUG STATUS OVERLAY + DevTools toggle
                                     // DevTools icon sits at the TOP-RIGHT corner (Prince's
                                     // request); the diagnostics overlay hangs below it.
-                                    if (activeMode == BrowserMode.DEVELOPER && currentTab.url != "about:blank") {
+                                    if (activeMode == BrowserMode.DEVELOPER &&
+                                        currentTab.url.isNotBlank() && currentTab.url != "about:blank" &&
+                                        ModeCapabilityRegistry.availability(
+                                            feature = FeatureId.DEVTOOLS,
+                                            mode = activeMode,
+                                            engine = currentTab.engine,
+                                            hasLoadedPage = currentTab.url.isNotBlank() && currentTab.url != "about:blank"
+                                        ).enabled
+                                    ) {
                                         Column(
                                             modifier = Modifier
                                                 .align(Alignment.TopEnd)
@@ -4940,6 +4907,8 @@ class MainActivity : FragmentActivity() {
                                     theme = theme,
                                     expanded = showFeatureMenu,
                                     activeMode = activeMode,
+                                    activeEngine = currentTab.engine,
+                                    hasLoadedPage = currentTab.url.isNotBlank() && currentTab.url != "about:blank",
                                     desktopLayoutEnabled = featureMenuWideLayout,
                                     onToggle = { showFeatureMenu = !showFeatureMenu },
                                     onDismiss = { showFeatureMenu = false },
@@ -5926,49 +5895,28 @@ class MainActivity : FragmentActivity() {
                                     onDismissRequest = {
                                         showWebViewSwitchConfirmation = false
                                         pendingWebViewSwitchTabId = null
-                                        pendingWebViewSwitchForDevTools = false
                                     },
-                                    title = {
-                                        Text(
-                                            if (pendingWebViewSwitchForDevTools) "Switch to WebView for DevTools?"
-                                            else "Switch this tab to WebView?"
-                                        )
-                                    },
+                                    title = { Text("Switch this tab to WebView?") },
                                     text = {
                                         Text(
-                                            if (pendingWebViewSwitchForDevTools) {
-                                                "Click's Console, page inspection, network and source tools currently work on WebView tabs, not GeckoView. The page will reload; Gecko cookies, extension data and back history are not copied, and add-ons will not run in this tab. Cancel keeps this tab in GeckoView."
-                                            } else {
-                                                "The same tab will reload in WebView. Gecko cookies, extension data and back history are not copied, and add-ons will not run in this tab. Private mode is not enabled automatically."
-                                            }
+                                            "The same tab will reload in WebView. Gecko cookies, extension data and back history are not copied, and add-ons will not run in this tab. Private mode is not enabled automatically."
                                         )
                                     },
                                     confirmButton = {
                                         TextButton(onClick = {
                                             val tabId = pendingWebViewSwitchTabId
-                                            val openDevToolsAfterSwitch = pendingWebViewSwitchForDevTools
                                             pendingWebViewSwitchTabId = null
-                                            pendingWebViewSwitchForDevTools = false
                                             showWebViewSwitchConfirmation = false
                                             val tab = tabs.firstOrNull { it.id == tabId }
                                             if (tab != null && !tab.isIncognito && tab.engine == BrowserTabEngine.GECKOVIEW) {
-                                                val switched = replaceTabEngine(tab, BrowserTabEngine.WEBVIEW)
-                                                if (switched && openDevToolsAfterSwitch) {
-                                                    showDevToolsSheet = true
-                                                }
+                                                replaceTabEngine(tab, BrowserTabEngine.WEBVIEW)
                                             }
-                                        }) {
-                                            Text(
-                                                if (pendingWebViewSwitchForDevTools) "Switch and open DevTools"
-                                                else "Switch to WebView"
-                                            )
-                                        }
+                                        }) { Text("Switch to WebView") }
                                     },
                                     dismissButton = {
                                         TextButton(onClick = {
                                             showWebViewSwitchConfirmation = false
                                             pendingWebViewSwitchTabId = null
-                                            pendingWebViewSwitchForDevTools = false
                                         }) { Text("Cancel") }
                                     }
                                 )

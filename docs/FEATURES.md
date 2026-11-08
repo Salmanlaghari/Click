@@ -4,7 +4,20 @@ This overview reflects repository source, not necessarily the version currently 
 
 ## Browser profiles and browsing
 
-Click has four profiles—Simple, Developer, Power and Advance—on Android System WebView. Each profile uses a separate WebView data directory for website cookies and cache. Simple, Developer and Power share app-level history, bookmarks, passwords and other browser settings; Advance also has a separate app-data store. Profiles do not create separate browser engines or device identities.
+Click has four profiles—Simple, Developer, Power and Advance. Regular tabs currently use GeckoView; private tabs remain on WebView. A mode selects a browsing profile and its shortcut scope, not a rendering engine. Simple, Developer and Power share app-level history, bookmarks, passwords and other browser settings; Advance also has a separate app-data store. Profiles do not create separate browser engines or device identities.
+
+### Mode-specific shortcut scope
+
+The shared shortcut catalog is filtered by the active mode and the selected tab's engine:
+
+| Mode | Mode-specific shortcuts |
+| --- | --- |
+| Simple | Everyday navigation and core browsing; advanced storage-management and Developer/Power shortcuts stay out of this catalog. |
+| Developer | DevTools, experimental flags, wide layout and find-in-page. DevTools requires a WebView tab and a loaded page. |
+| Power | Wide layout, find-in-page, recent tabs and fullscreen for productivity and tab workflows. |
+| Advance | Cookies, storage clearing and experimental flags for advanced configuration. |
+
+DevTools, cookie management, wide-layout overrides, Click's custom AdBlock control, Reader mode, page screenshots and page text zoom are currently WebView-only. When a mode offers one of these actions on a GeckoView tab, the catalog disables it and explains the limitation; it does not switch engines to make the action appear supported. GeckoView's own tracking protection remains active when Click's custom AdBlock control is unavailable.
 
 Other browsing features include tabs, private tabs, bookmarks, history, downloads, per-site desktop layout, reader mode and browser-menu customization. Internal `click://` pages provide settings, history, downloads, bookmarks, VPN, cookies, DNS, games and build/profile information.
 

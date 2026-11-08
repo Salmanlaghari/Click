@@ -1,39 +1,33 @@
 package com.click.browser.engine
 
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class DevToolsAvailabilityPolicyTest {
     @Test
-    fun capturesConsoleOnlyForDeveloperModeWebViewTabs() {
-        assertTrue(DevToolsAvailabilityPolicy.canCapture(BrowserMode.DEVELOPER, BrowserTabEngine.WEBVIEW))
-        assertFalse(DevToolsAvailabilityPolicy.canCapture(BrowserMode.DEVELOPER, BrowserTabEngine.GECKOVIEW))
-        assertFalse(DevToolsAvailabilityPolicy.canCapture(BrowserMode.SIMPLE, BrowserTabEngine.WEBVIEW))
+    fun capturesOnlyForDeveloperModeWebViewPages() {
+        BrowserMode.values().forEach { mode ->
+            BrowserTabEngine.values().forEach { engine ->
+                assertEquals(
+                    mode == BrowserMode.DEVELOPER && engine == BrowserTabEngine.WEBVIEW,
+                    DevToolsAvailabilityPolicy.canCapture(mode, engine)
+                )
+            }
+        }
     }
 
     @Test
-    fun offersWebViewSwitchOnlyForLoadedDeveloperModeGeckoPages() {
-        assertTrue(
-            DevToolsAvailabilityPolicy.shouldOfferWebViewFallback(
-                BrowserMode.DEVELOPER,
-                BrowserTabEngine.GECKOVIEW,
-                "https://example.com"
-            )
+    fun GeckoViewDevToolsIsDisabledAndNeverRequestsAnEngineFallback() {
+        val access = ModeCapabilityRegistry.availability(
+            FeatureId.DEVTOOLS,
+            BrowserMode.DEVELOPER,
+            BrowserTabEngine.GECKOVIEW
         )
-        assertFalse(
-            DevToolsAvailabilityPolicy.shouldOfferWebViewFallback(
-                BrowserMode.DEVELOPER,
-                BrowserTabEngine.GECKOVIEW,
-                "about:blank"
-            )
-        )
-        assertFalse(
-            DevToolsAvailabilityPolicy.shouldOfferWebViewFallback(
-                BrowserMode.SIMPLE,
-                BrowserTabEngine.GECKOVIEW,
-                "https://example.com"
-            )
-        )
+
+        assertTrue(access.visible)
+        assertFalse(access.enabled)
+        assertTrue(access.explanation.orEmpty().contains("GeckoView"))
     }
 }
