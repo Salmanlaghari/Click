@@ -24,6 +24,22 @@ class BookmarkEditPolicyTest {
     }
 
     @Test
+    fun editingBookmarkPreservesItsCurrentFolder() {
+        val original = Bookmark("Guide", "https://guide.example", "Work")
+        val decision = applyBookmarkEdit(
+            bookmarks = listOf(original),
+            existingUrl = original.url,
+            replacement = Bookmark("Updated guide", "https://guide.example/updated")
+        )
+
+        assertEquals(BookmarkEditResult.UPDATED, decision.result)
+        assertEquals(
+            Bookmark("Updated guide", "https://guide.example/updated", "Work"),
+            decision.bookmarks.single()
+        )
+    }
+
+    @Test
     fun rejectsBlankTitlesAndNonHttpSchemesOrHostlessUrls() {
         assertEquals(BookmarkEditValidationError.EMPTY_TITLE, validateBookmarkEdit("  ", "https://example.com"))
         assertEquals(BookmarkEditValidationError.INVALID_URL, validateBookmarkEdit("Title", "javascript:alert(1)"))

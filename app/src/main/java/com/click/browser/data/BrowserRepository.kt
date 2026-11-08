@@ -12,7 +12,7 @@ import kotlinx.coroutines.flow.map
 import org.json.JSONArray
 import org.json.JSONObject
 
-data class Bookmark(val title: String, val url: String)
+data class Bookmark(val title: String, val url: String, val folder: String? = null)
 data class HistoryItem(val title: String, val url: String, val timestamp: Long)
 data class DownloadItem(val fileName: String, val url: String, val path: String, val timestamp: Long)
 
@@ -33,13 +33,19 @@ class BrowserRepository(private val context: Context) {
         val array = JSONArray(jsonStr)
         for (i in 0 until array.length()) {
             val obj = array.getJSONObject(i)
-            list.add(Bookmark(obj.getString("title"), obj.getString("url")))
+            list.add(
+                Bookmark(
+                    obj.getString("title"),
+                    obj.getString("url"),
+                    obj.optString("folder").takeIf { it.isNotBlank() }
+                )
+            )
         }
         list
     }
 
     suspend fun addBookmark(bookmark: Bookmark): Boolean {
-        val normalizedBookmark = BookmarkAddPolicy.prepare(bookmark.title, bookmark.url) ?: return false
+        val normalizedBookmark = BookmarkAddPolicy.prepare(bookmark.title, bookmark.url, bookmark.folder) ?: return false
         var added = false
         context.profileDataStore.edit { preferences ->
             val jsonStr = preferences[BOOKMARKS_KEY] ?: "[]"
@@ -52,6 +58,7 @@ class BrowserRepository(private val context: Context) {
                 val newObj = JSONObject().apply {
                     put("title", normalizedBookmark.title)
                     put("url", normalizedBookmark.url)
+                    normalizedBookmark.folder?.let { put("folder", it) }
                 }
                 array.put(newObj)
                 preferences[BOOKMARKS_KEY] = array.toString()
@@ -68,7 +75,11 @@ class BrowserRepository(private val context: Context) {
             val source = JSONArray(preferences[BOOKMARKS_KEY] ?: "[]")
             val current = List(source.length()) { index ->
                 val obj = source.getJSONObject(index)
-                Bookmark(obj.getString("title"), obj.getString("url"))
+                Bookmark(
+                    obj.getString("title"),
+                    obj.getString("url"),
+                    obj.optString("folder").takeIf { it.isNotBlank() }
+                )
             }
             val decision = applyBookmarkEdit(current, existingUrl, replacement)
             result = decision.result
@@ -78,6 +89,7 @@ class BrowserRepository(private val context: Context) {
                     updated.put(JSONObject().apply {
                         put("title", bookmark.title)
                         put("url", bookmark.url)
+                        bookmark.folder?.let { put("folder", it) }
                     })
                 }
                 preferences[BOOKMARKS_KEY] = updated.toString()
@@ -101,6 +113,36 @@ class BrowserRepository(private val context: Context) {
         }
     }
 
+    /** Assigns or clears a bookmark folder atomically in the current profile. */
+    internal suspend fun moveBookmarkToFolder(url: String, folderName: String?): BookmarkOrganizationResult {
+        var result = BookmarkOrganizationResult.NOT_FOUND
+        context.profileDataStore.edit { preferences ->
+            val source = JSONArray(preferences[BOOKMARKS_KEY] ?: "[]")
+            val current = List(source.length()) { index ->
+                val obj = source.getJSONObject(index)
+                Bookmark(
+                    obj.getString("title"),
+                    obj.getString("url"),
+                    obj.optString("folder").takeIf { it.isNotBlank() }
+                )
+            }
+            val decision = BookmarkOrganizationPolicy.move(current, url, folderName)
+            result = decision.result
+            if (result == BookmarkOrganizationResult.UPDATED) {
+                val updated = JSONArray()
+                decision.bookmarks.forEach { bookmark ->
+                    updated.put(JSONObject().apply {
+                        put("title", bookmark.title)
+                        put("url", bookmark.url)
+                        bookmark.folder?.let { put("folder", it) }
+                    })
+                }
+                preferences[BOOKMARKS_KEY] = updated.toString()
+            }
+        }
+        return result
+    }
+
     data class ImportResult(val added: Int, val skippedExisting: Int)
 
     /**
@@ -120,13 +162,15 @@ class BrowserRepository(private val context: Context) {
             }
 
             for (bookmark in newBookmarks) {
-                if (!existingUrls.add(bookmark.url)) {
+                val normalizedBookmark = BookmarkOrganizationPolicy.normalizeImportedBookmark(bookmark)
+                if (!existingUrls.add(normalizedBookmark.url)) {
                     skippedExisting++
                     continue
                 }
                 val newObj = JSONObject()
-                newObj.put("title", bookmark.title)
-                newObj.put("url", bookmark.url)
+                newObj.put("title", normalizedBookmark.title)
+                newObj.put("url", normalizedBookmark.url)
+                normalizedBookmark.folder?.let { newObj.put("folder", it) }
                 array.put(newObj)
                 added++
             }
