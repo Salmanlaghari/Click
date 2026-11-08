@@ -228,8 +228,6 @@ private data class PendingSelectedTextTranslation(
     val selection: AiSelectedTextPolicy.PreparedSelection
 )
 
-private const val WEBVIEW_ACTION_EXPLAIN_SELECTED_TEXT = 0x434C494B
-private const val WEBVIEW_ACTION_TRANSLATE_SELECTED_TEXT = 0x434C4950
 
 /**
  * Page transition wrapper — subtle fade + slide on every navigation start.
@@ -4726,117 +4724,8 @@ class MainActivity : FragmentActivity() {
                                                                     }
                                                                 }
 
-                                                                // Native WebView selection toolbar: only regular tabs with JavaScript
-                                                                // enabled may offer the selected-range handoff. Empty/stale results are
-                                                                // discarded; this script never reads the document or falls back to a page capture.
-                                                                val selectionTabId = currentTab.id
-                                                                val selectionWebView = this
-                                                                setCustomSelectionActionModeCallback(object : android.view.ActionMode.Callback {
-                                                                    override fun onCreateActionMode(
-                                                                        mode: android.view.ActionMode,
-                                                                        menu: android.view.Menu
-                                                                    ): Boolean {
-                                                                        if (activeSelectedTextSource(
-                                                                                sourceTabId = selectionTabId,
-                                                                                sourceEngine = BrowserTabEngine.WEBVIEW,
-                                                                                sourcePageUrl = selectionWebView.url.orEmpty()
-                                                                            ) != null &&
-                                                                            AiSelectedTextPolicy.canOfferSelection(
-                                                                                engine = BrowserTabEngine.WEBVIEW,
-                                                                                isPrivateTab = false,
-                                                                                webViewJavaScriptEnabled = javaScriptEnabledGlobal &&
-                                                                                    selectionWebView.settings.javaScriptEnabled
-                                                                            )
-                                                                        ) {
-                                                                            menu.add(
-                                                                                android.view.Menu.NONE,
-                                                                                WEBVIEW_ACTION_EXPLAIN_SELECTED_TEXT,
-                                                                                android.view.Menu.NONE,
-                                                                                "Explain selection"
-                                                                            ).setShowAsAction(android.view.MenuItem.SHOW_AS_ACTION_IF_ROOM)
-                                                                            menu.add(
-                                                                                android.view.Menu.NONE,
-                                                                                WEBVIEW_ACTION_TRANSLATE_SELECTED_TEXT,
-                                                                                android.view.Menu.NONE,
-                                                                                "Translate selection"
-                                                                            ).setShowAsAction(android.view.MenuItem.SHOW_AS_ACTION_IF_ROOM)
-                                                                        }
-                                                                        return true
-                                                                    }
-
-                                                                    override fun onPrepareActionMode(
-                                                                        mode: android.view.ActionMode,
-                                                                        menu: android.view.Menu
-                                                                    ): Boolean = false
-
-                                                                    override fun onActionItemClicked(
-                                                                        mode: android.view.ActionMode,
-                                                                        item: android.view.MenuItem
-                                                                    ): Boolean {
-                                                                        if (item.itemId != WEBVIEW_ACTION_EXPLAIN_SELECTED_TEXT &&
-                                                                            item.itemId != WEBVIEW_ACTION_TRANSLATE_SELECTED_TEXT
-                                                                        ) return false
-                                                                        val expectedUrl = selectionWebView.url.orEmpty()
-                                                                        val activeSource = activeSelectedTextSource(
-                                                                            sourceTabId = selectionTabId,
-                                                                            sourceEngine = BrowserTabEngine.WEBVIEW,
-                                                                            sourcePageUrl = expectedUrl
-                                                                        )
-                                                                        val isStillEligible = activeSource != null &&
-                                                                            javaScriptEnabledGlobal &&
-                                                                            selectionWebView.settings.javaScriptEnabled
-                                                                        if (!isStillEligible) {
-                                                                            mode.finish()
-                                                                            return true
-                                                                        }
-                                                                        runCatching {
-                                                                            selectionWebView.evaluateJavascript(
-                                                                                AiSelectedTextPolicy.WEBVIEW_SELECTION_SCRIPT
-                                                                            ) { raw ->
-                                                                                mode.finish()
-                                                                                val selectedText = try {
-                                                                                    if (raw.isNullOrBlank() || raw == "null") null
-                                                                                    else org.json.JSONTokener(raw).nextValue() as? String
-                                                                                } catch (_: Exception) {
-                                                                                    null
-                                                                                } ?: return@evaluateJavascript
-                                                                                val sourceTabAfterRead = activeSelectedTextSource(
-                                                                                    sourceTabId = selectionTabId,
-                                                                                    sourceEngine = BrowserTabEngine.WEBVIEW,
-                                                                                    sourcePageUrl = expectedUrl
-                                                                                ) ?: return@evaluateJavascript
-                                                                                val prepared = AiSelectedTextPolicy.prepareSelection(
-                                                                                    rawText = selectedText,
-                                                                                    engine = BrowserTabEngine.WEBVIEW,
-                                                                                    isPrivateTab = sourceTabAfterRead.isIncognito,
-                                                                                    webViewJavaScriptEnabled = javaScriptEnabledGlobal &&
-                                                                                        selectionWebView.settings.javaScriptEnabled
-                                                                                ) ?: return@evaluateJavascript
-                                                                                if (selectionWebView.url.orEmpty() != expectedUrl) {
-                                                                                    return@evaluateJavascript
-                                                                                }
-                                                                                if (item.itemId == WEBVIEW_ACTION_TRANSLATE_SELECTED_TEXT) {
-                                                                                    openSelectedTextForTranslation(
-                                                                                        selection = prepared,
-                                                                                        sourceTabId = selectionTabId,
-                                                                                        sourcePageUrl = expectedUrl
-                                                                                    )
-                                                                                } else {
-                                                                                    openSelectedTextForAi(
-                                                                                        selection = prepared,
-                                                                                        sourceTabId = selectionTabId,
-                                                                                        sourcePageUrl = expectedUrl
-                                                                                    )
-                                                                                }
-                                                                            }
-                                                                        }.onFailure {
-                                                                            mode.finish()
-                                                                        }
-                                                                        return true
-                                                                    }
-
-                                                                    override fun onDestroyActionMode(mode: android.view.ActionMode) = Unit
-                                                                })
+                                                                // WebView has no public native selection-action callback, so it
+                                                                // deliberately offers no selected-text AI action.
 
                                                                 // Long-press context menu (links + images).
                                                                 // Attached once at WebView creation, so it works in
