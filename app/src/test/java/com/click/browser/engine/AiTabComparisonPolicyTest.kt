@@ -140,12 +140,14 @@ class AiTabComparisonPolicyTest {
         val original = listOf(option("one"), option("two"))
         val sameScope = listOf(option("one"), option("two"))
         val anotherTab = listOf(option("one"), option("three"))
+        val anotherTitle = listOf(option("one"), option("two").copy(title = "Updated title"))
         val anotherUrl = listOf(option("one"), option("two", "https://two.example/changed"))
 
         val originalKey = AiTabComparisonPolicy.consentScopeKey("groq", original)
         assertEquals(originalKey, AiTabComparisonPolicy.consentScopeKey("groq", sameScope))
         assertFalse(originalKey == AiTabComparisonPolicy.consentScopeKey("gemini", original))
         assertFalse(originalKey == AiTabComparisonPolicy.consentScopeKey("groq", anotherTab))
+        assertFalse(originalKey == AiTabComparisonPolicy.consentScopeKey("groq", anotherTitle))
         assertFalse(originalKey == AiTabComparisonPolicy.consentScopeKey("groq", anotherUrl))
     }
 }

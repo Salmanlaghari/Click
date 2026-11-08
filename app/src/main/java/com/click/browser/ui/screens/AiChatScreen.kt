@@ -195,6 +195,10 @@ internal fun AiChatScreen(
     var pendingComparisonTabs by remember(provider.id) {
         mutableStateOf<List<AiTabComparisonOption>>(emptyList())
     }
+    LaunchedEffect(comparisonTabs) {
+        val availableIds = comparisonTabs.map { it.id }.toSet()
+        selectedComparisonTabIds = selectedComparisonTabIds.intersect(availableIds)
+    }
     val selectedTextOnlySession = selectedText != null
     val selectedTextConsentKey = "${provider.id}|$selectedTextSessionIdentity|${apiKey.isNotBlank()}"
     var showSelectedTextConsent by remember(selectedTextConsentKey) {

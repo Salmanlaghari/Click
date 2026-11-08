@@ -76,12 +76,18 @@ internal object AiTabComparisonPolicy {
         providerId: String,
         selectedTabs: List<AiTabComparisonOption>
     ): String = buildString {
+        append("compare|")
         append(providerId)
         selectedTabs.forEach { tab ->
             append('|')
             append(tab.id.length)
             append(':')
             append(tab.id)
+            append(':')
+            val title = tab.title.take(MAX_TITLE_CHARS)
+            append(title.length)
+            append(':')
+            append(title)
             append(':')
             append(tab.url.length)
             append(':')
