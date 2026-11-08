@@ -4030,7 +4030,10 @@ class MainActivity : FragmentActivity() {
                                                                     }
                                                                 },
                                                                 onUrlChanged = { url ->
-                                                                    tabs.firstOrNull { it.id == tabId }?.url = url
+                                                                    tabs.firstOrNull { it.id == tabId }?.let { changedTab ->
+                                                                        changedTab.passwordAutofillPromptGuard.onNavigationStarted()
+                                                                        changedTab.url = url
+                                                                    }
                                                                 },
                                                                 onConnectionSecurityChanged = { info ->
                                                                     val update = {
