@@ -112,6 +112,8 @@ internal class GeckoBrowserTabSession(
     @Volatile private var latestSessionState: String? = initialSessionState
     @Volatile private var rendererRecoveryRequired = false
     @Volatile private var rendererRecoveryInProgress = false
+    private val recoveryFailureLock = Any()
+    private var recoveryFailureTimesMillis: List<Long> = emptyList()
     private val adoptedChildSession = initialGeckoSession != null
 
     private val selectionActionDelegate = object : BasicSelectionActionDelegate(selectionActivity) {
@@ -332,6 +334,7 @@ internal class GeckoBrowserTabSession(
             }
 
             override fun onCrash(session: GeckoSession) {
+                recordRendererRecoveryFailure()
                 rendererRecoveryRequired = true
                 rendererRecoveryInProgress = false
                 detachExtensionRouterAfterRendererFailure()
@@ -339,6 +342,7 @@ internal class GeckoBrowserTabSession(
             }
 
             override fun onKill(session: GeckoSession) {
+                recordRendererRecoveryFailure()
                 rendererRecoveryRequired = true
                 rendererRecoveryInProgress = false
                 detachExtensionRouterAfterRendererFailure()
@@ -346,6 +350,7 @@ internal class GeckoBrowserTabSession(
             }
 
             override fun onFirstComposite(session: GeckoSession) {
+                clearRendererRecoveryFailures()
                 rendererRecoveryRequired = false
                 rendererRecoveryInProgress = false
                 onRendererRecovery(GeckoRenderEvent.FIRST_COMPOSITE)
@@ -419,6 +424,10 @@ internal class GeckoBrowserTabSession(
     }
     override fun reload() {
         if (destroyed || rendererRecoveryInProgress) return
+        if (rendererRecoveryRequired && !rendererRecoveryRetryDecision().retryAllowed) {
+            onRendererRecovery(GeckoRenderEvent.RECOVERY_RETRY_THROTTLED)
+            return
+        }
         val action = geckoSessionRecoveryAction(
             sessionIsOpen = session.isOpen,
             recoveryInProgress = rendererRecoveryInProgress,
@@ -502,6 +511,28 @@ internal class GeckoBrowserTabSession(
         onRendererRecovery(event)
     }
 
+    private fun rendererRecoveryRetryDecision(): GeckoRendererRetryDecision = synchronized(recoveryFailureLock) {
+        geckoRendererRetryDecision(
+            failureTimesMillis = recoveryFailureTimesMillis,
+            nowMillis = android.os.SystemClock.elapsedRealtime()
+        )
+    }
+
+    private fun recordRendererRecoveryFailure() {
+        synchronized(recoveryFailureLock) {
+            recoveryFailureTimesMillis = recordGeckoRendererFailure(
+                failureTimesMillis = recoveryFailureTimesMillis,
+                failedAtMillis = android.os.SystemClock.elapsedRealtime()
+            )
+        }
+    }
+
+    private fun clearRendererRecoveryFailures() {
+        synchronized(recoveryFailureLock) {
+            recoveryFailureTimesMillis = emptyList()
+        }
+    }
+
     /** Reopen the same session object, preserving its profile and saved history. */
     private fun reopenAndRestore(fallbackUrl: String): Boolean {
         session.open(runtime)
@@ -523,6 +554,7 @@ internal class GeckoBrowserTabSession(
     }
 
     private fun reportRecoveryFailure(error: Exception) {
+        recordRendererRecoveryFailure()
         rendererRecoveryRequired = true
         rendererRecoveryInProgress = false
         onRendererFailure(GeckoRenderEvent.RECOVERY_FAILED, error)

@@ -4057,6 +4057,15 @@ class MainActivity : FragmentActivity() {
                                                                                 recoveringTab.isPageLoading = false
                                                                             }
                                                                         }
+                                                                        if (event == GeckoRenderEvent.RECOVERY_RETRY_THROTTLED &&
+                                                                            tabs.getOrNull(activeTabIndex)?.id == tabId
+                                                                        ) {
+                                                                            Toast.makeText(
+                                                                                this@MainActivity,
+                                                                                "Repeated renderer failures. Retry is paused temporarily; use Back or close the tab, or try again later.",
+                                                                                Toast.LENGTH_LONG
+                                                                            ).show()
+                                                                        }
                                                                         val diagnostic = when (event) {
                                                                             GeckoRenderEvent.RECOVERY_STARTED ->
                                                                                 com.click.browser.engine.ClickCatLogCode.GECKO_RECOVERY_STARTED to
@@ -4064,6 +4073,9 @@ class MainActivity : FragmentActivity() {
                                                                             GeckoRenderEvent.RECOVERY_RELOAD_STARTED ->
                                                                                 com.click.browser.engine.ClickCatLogCode.GECKO_RECOVERY_RELOAD_STARTED to
                                                                                     "Retry requested on the already-open GeckoSession; a close/open recovery cycle was not needed."
+                                                                            GeckoRenderEvent.RECOVERY_RETRY_THROTTLED ->
+                                                                                com.click.browser.engine.ClickCatLogCode.GECKO_RECOVERY_RETRY_THROTTLED to
+                                                                                    "Retry was withheld after three recent renderer/recovery failures in the rolling 60-second window."
                                                                             GeckoRenderEvent.FIRST_COMPOSITE -> if (wasRecoveryRequired) {
                                                                                 com.click.browser.engine.ClickCatLogCode.GECKO_RECOVERY_SUCCEEDED to
                                                                                     "GeckoSession.ContentDelegate.onFirstComposite; recovery frame confirmed and overlay cleared."

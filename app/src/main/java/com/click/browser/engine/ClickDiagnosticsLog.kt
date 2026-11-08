@@ -24,7 +24,8 @@ internal enum class ClickCatLogCode(val label: String) {
     GECKO_RECOVERY_STARTED("GeckoView session recovery started"),
     GECKO_RECOVERY_RELOAD_STARTED("Open GeckoView session reload started"),
     GECKO_RECOVERY_SUCCEEDED("GeckoView renderer produced a recovery frame"),
-    GECKO_RECOVERY_FAILED("GeckoView session recovery failed")
+    GECKO_RECOVERY_FAILED("GeckoView session recovery failed"),
+    GECKO_RECOVERY_RETRY_THROTTLED("GeckoView recovery retry was temporarily paused")
 }
 
 internal data class ClickRendererDiagnosticDetails(
