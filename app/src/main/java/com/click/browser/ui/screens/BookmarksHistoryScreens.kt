@@ -225,6 +225,7 @@ private fun BookmarkEditorDialog(
                         validationMessage = when (validation) {
                             BookmarkEditValidationError.EMPTY_TITLE -> "Enter a title for this bookmark."
                             BookmarkEditValidationError.INVALID_URL -> "Enter a complete HTTP or HTTPS URL."
+                            null -> "Check the title and website URL."
                         }
                     } else {
                         isSaving = true
