@@ -101,33 +101,26 @@ class AiSelectedTextPolicyTest {
     }
 
     @Test
-    fun engineHandoffsStaySeparateAndWebViewRequiresJavaScript() {
+    fun onlyGeckoViewOffersNativeSelectionActions() {
         assertTrue(
             AiSelectedTextPolicy.canOfferSelection(
                 BrowserTabEngine.GECKOVIEW,
-                isPrivateTab = false,
-                webViewJavaScriptEnabled = false
+                isPrivateTab = false
             )
         )
         assertFalse(
             AiSelectedTextPolicy.canOfferSelection(
                 BrowserTabEngine.WEBVIEW,
-                isPrivateTab = false,
-                webViewJavaScriptEnabled = false
+                isPrivateTab = false
             )
         )
         val gecko = requireNotNull(
             AiSelectedTextPolicy.prepareSelection("Gecko selection", BrowserTabEngine.GECKOVIEW, false)
         )
-        val webView = requireNotNull(
+        assertNull(
             AiSelectedTextPolicy.prepareSelection("WebView selection", BrowserTabEngine.WEBVIEW, false)
         )
         assertEquals(BrowserTabEngine.GECKOVIEW, gecko.sourceEngine)
-        assertEquals(BrowserTabEngine.WEBVIEW, webView.sourceEngine)
-        assertTrue(AiSelectedTextPolicy.WEBVIEW_SELECTION_SCRIPT.contains("window.getSelection()"))
-        assertFalse(AiSelectedTextPolicy.WEBVIEW_SELECTION_SCRIPT.contains("document.body"))
-        assertFalse(AiSelectedTextPolicy.WEBVIEW_SELECTION_SCRIPT.contains("innerText"))
-        assertFalse(AiSelectedTextPolicy.WEBVIEW_SELECTION_SCRIPT.contains("innerHTML"))
     }
 
     private fun prepare(

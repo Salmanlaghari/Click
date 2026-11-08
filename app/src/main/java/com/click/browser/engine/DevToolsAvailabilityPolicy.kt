@@ -1,14 +1,11 @@
 package com.click.browser.engine
 
+/** Compatibility seam for DevTools capture call sites; capability truth lives in the registry. */
 internal object DevToolsAvailabilityPolicy {
     fun canCapture(mode: BrowserMode, engine: BrowserTabEngine): Boolean =
-        mode == BrowserMode.DEVELOPER && engine == BrowserTabEngine.WEBVIEW
-
-    fun shouldOfferWebViewFallback(
-        mode: BrowserMode,
-        engine: BrowserTabEngine,
-        url: String
-    ): Boolean = mode == BrowserMode.DEVELOPER &&
-        engine == BrowserTabEngine.GECKOVIEW &&
-        url.isNotBlank() && url != "about:blank"
+        ModeCapabilityRegistry.availability(
+            feature = FeatureId.DEVTOOLS,
+            mode = mode,
+            engine = engine
+        ).enabled
 }

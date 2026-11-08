@@ -4,11 +4,11 @@ package com.click.browser.engine
  * Safety boundary for explaining text the user explicitly selected in a browser page.
  * This is intentionally separate from [AiPageContextPolicy]: a selection is never a
  * fallback for, or approval to capture, whole-page context.
+ * Only GeckoView currently exposes a supported native selection action delegate; WebView
+ * is intentionally unavailable rather than using a page-script fallback.
  */
 internal object AiSelectedTextPolicy {
     const val MAX_SELECTED_TEXT_CHARS = 4_000
-    const val WEBVIEW_SELECTION_SCRIPT =
-        "(function(){try{var selection=window.getSelection();return selection?String(selection.toString()):'';}catch(e){return '';}})()"
 
     data class PreparedSelection(
         val text: String,
@@ -18,23 +18,18 @@ internal object AiSelectedTextPolicy {
 
     fun canOfferSelection(
         engine: BrowserTabEngine,
-        isPrivateTab: Boolean,
-        webViewJavaScriptEnabled: Boolean = true
-    ): Boolean = !isPrivateTab && when (engine) {
-        BrowserTabEngine.GECKOVIEW -> true
-        BrowserTabEngine.WEBVIEW -> webViewJavaScriptEnabled
-    }
+        isPrivateTab: Boolean
+    ): Boolean = !isPrivateTab && engine == BrowserTabEngine.GECKOVIEW
 
     fun prepareSelection(
         rawText: String?,
         engine: BrowserTabEngine,
         isPrivateTab: Boolean,
-        webViewJavaScriptEnabled: Boolean = true,
         isCollapsed: Boolean = false,
         isEditable: Boolean = false,
         isPassword: Boolean = false
     ): PreparedSelection? {
-        if (!canOfferSelection(engine, isPrivateTab, webViewJavaScriptEnabled)) return null
+        if (!canOfferSelection(engine, isPrivateTab)) return null
         if (isCollapsed || isEditable || isPassword) return null
         val selected = rawText?.takeIf { it.isNotBlank() } ?: return null
         val bounded = selected.take(MAX_SELECTED_TEXT_CHARS)
