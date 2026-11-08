@@ -25,6 +25,7 @@ import com.click.browser.data.Bookmark
 import com.click.browser.data.BookmarkEditResult
 import com.click.browser.data.BookmarkEditValidationError
 import com.click.browser.data.BookmarkImporter
+import com.click.browser.data.validateBookmarkEdit
 import com.click.browser.data.BrowserRepository
 import com.click.browser.data.HistoryItem
 import com.click.browser.engine.ModeTheme
@@ -225,7 +226,6 @@ private fun BookmarkEditorDialog(
                         validationMessage = when (validation) {
                             BookmarkEditValidationError.EMPTY_TITLE -> "Enter a title for this bookmark."
                             BookmarkEditValidationError.INVALID_URL -> "Enter a complete HTTP or HTTPS URL."
-                            null -> "Check the title and website URL."
                         }
                     } else {
                         isSaving = true

@@ -63,7 +63,7 @@ class BrowserRepository(private val context: Context) {
     }
 
     /** Atomically edits one bookmark in the current profile without changing its list position. */
-    suspend fun updateBookmark(existingUrl: String, replacement: Bookmark): BookmarkEditResult {
+    internal suspend fun updateBookmark(existingUrl: String, replacement: Bookmark): BookmarkEditResult {
         var result = BookmarkEditResult.NOT_FOUND
         context.profileDataStore.edit { preferences ->
             val source = JSONArray(preferences[BOOKMARKS_KEY] ?: "[]")
