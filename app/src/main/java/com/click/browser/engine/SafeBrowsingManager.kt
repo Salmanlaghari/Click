@@ -31,7 +31,7 @@ object SafeBrowsingManager {
     fun reportHit(url: String, threatType: Int, response: SafeBrowsingResponse) {
         _pendingHit.value = PendingHit(url, threatType, response)
         _threatsBlocked.value = _threatsBlocked.value + 1
-        // Feed the home privacy pill ("Protected · N trackers blocked").
+        // Add Safe Browsing threats to the shared blocked-this-session count.
         AdBlocker.reportBlockedThreat()
     }
 

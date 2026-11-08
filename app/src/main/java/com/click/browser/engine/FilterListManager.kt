@@ -6,12 +6,24 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import org.json.JSONObject
 import java.io.File
 import java.util.concurrent.TimeUnit
+
+/** A cached list is trusted only when its parsed version is positive and current. */
+internal fun isUsableCachedFilterList(
+    cachedVersion: Int,
+    bundledVersion: Int,
+    cachedDomains: Set<String>?
+): Boolean = cachedVersion > 0 &&
+    cachedVersion >= bundledVersion &&
+    !cachedDomains.isNullOrEmpty()
 
 /**
  * Bundled + updatable ad/tracker filter lists.
@@ -23,6 +35,9 @@ import java.util.concurrent.TimeUnit
  * - Matching is suffix-based on a HashSet: O(segments) per request.
  */
 object FilterListManager {
+
+    private val _readinessFlow = MutableStateFlow(FilterListReadiness.LOADING)
+    internal val readinessFlow: StateFlow<FilterListReadiness> = _readinessFlow.asStateFlow()
 
     private const val PREFS = "click_filter_lists"
     private const val KEY_VERSION = "list_version"
@@ -83,6 +98,9 @@ object FilterListManager {
         try { http.connectionPool.evictAll() } catch (e: Exception) { }
         prefs = null
         filesDir = null
+        domains = emptySet()
+        listVersion = 0
+        _readinessFlow.value = FilterListReadiness.LOADING
         initialized = false
     }
 
@@ -107,9 +125,11 @@ object FilterListManager {
     }
 
     private fun loadBestAvailable(app: Context) {
+        var loaded = false
         // 1) Cached remote copy (newer) wins if present and valid.
         val cached = filesDir?.let { File(it, CACHED_FILE) }
-        val cachedDomains = cached?.takeIf { it.exists() }?.let { parseFile(it) }
+        val cachedList = cached?.takeIf { it.exists() }?.let { parseFile(it) }
+        val cachedDomains = cachedList?.second
         // 2) Bundled asset always exists as fallback.
         val bundled = try {
             app.assets.open(ASSET_PATH).use { ins ->
@@ -118,15 +138,23 @@ object FilterListManager {
         } catch (e: Exception) {
             null
         }
-        val cachedVersion = prefs?.getInt(KEY_VERSION, 0) ?: 0
+        val cachedVersion = cachedList?.first ?: 0
         val bundledVersion = bundled?.first ?: 0
-        if (cachedDomains != null && cachedVersion >= bundledVersion && cachedDomains.isNotEmpty()) {
-            domains = cachedDomains
+        if (isUsableCachedFilterList(cachedVersion, bundledVersion, cachedDomains)) {
+            domains = cachedDomains.orEmpty()
             listVersion = cachedVersion
+            prefs?.edit()?.putInt(KEY_VERSION, cachedVersion)?.apply()
+            loaded = domains.isNotEmpty() && listVersion > 0
         } else if (bundled != null) {
             domains = bundled.second
             listVersion = bundledVersion
             prefs?.edit()?.putInt(KEY_VERSION, bundledVersion)?.apply()
+            loaded = domains.isNotEmpty() && listVersion > 0
+        }
+        _readinessFlow.value = if (loaded) {
+            FilterListReadiness.READY
+        } else {
+            FilterListReadiness.BUILTIN_ONLY
         }
     }
 
@@ -147,6 +175,7 @@ object FilterListManager {
                         ?.apply()
                     domains = set
                     listVersion = version
+                    _readinessFlow.value = FilterListReadiness.READY
                 } else {
                     // Still fresh — don't hammer the server next launch.
                     prefs?.edit()?.putLong(KEY_UPDATED_AT, System.currentTimeMillis())?.apply()
@@ -158,8 +187,8 @@ object FilterListManager {
         }
     }
 
-    private fun parseFile(f: File): Set<String>? = try {
-        parseJson(f.readText())?.second
+    private fun parseFile(f: File): Pair<Int, Set<String>>? = try {
+        parseJson(f.readText())
     } catch (e: Exception) {
         null
     }

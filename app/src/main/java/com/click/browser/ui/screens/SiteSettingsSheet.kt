@@ -80,7 +80,7 @@ import kotlinx.coroutines.launch
  *   are unsupported for websites.
  * - Content: JavaScript / Images / Pop-ups / Ads / Third-party cookies.
  *   Applied to the current WebView.
- * - Shields: Brave-style trackers/cookies/history info (existing).
+ * - Shields: protection status plus cookies and history information.
  * - Usage: storage used + Clear site data + Reset supported site settings.
  *
  * Null (unset) = "use global default" for the supported content settings.
@@ -95,6 +95,7 @@ fun SiteSettingsSheet(
     desktopMode: Boolean,
     globalJavaScript: Boolean,
     globalAdBlock: Boolean,
+    adBlockStatusLabel: String,
     globalThirdPartyCookies: Boolean,
     onSettingsChange: (SiteSettings) -> Unit,
     onDesktopModeChange: (Boolean) -> Unit,
@@ -104,8 +105,7 @@ fun SiteSettingsSheet(
     siteAdBlockOverrideVisible: Boolean = true,
     siteAdBlockOverrideEnabled: Boolean = true,
     siteAdBlockUnavailableExplanation: String? = null,
-    // Brave-style Shields info (optional — defaults keep old call sites working).
-    trackersBlocked: Int = 0,
+    // Site data displayed in the Shields section.
     cookieCount: Int = 0,
     onManageCookies: () -> Unit = {},
     onOpenHistory: () -> Unit = {},
@@ -386,9 +386,8 @@ fun SiteSettingsSheet(
             ShieldsInfoRow(
                 theme = theme,
                 icon = Icons.Default.Shield,
-                title = "Trackers & ads blocked",
-                subtitle = if (globalAdBlock) "$trackersBlocked blocked by Click Shields"
-                else "Shields are off for this browser",
+                title = "Ad & tracker protection",
+                subtitle = adBlockStatusLabel,
                 onClick = null
             )
             ShieldsInfoRow(

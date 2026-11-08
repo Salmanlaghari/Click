@@ -150,8 +150,8 @@ fun ClickHomeScreen(
     theme: ModeTheme,
     activeMode: BrowserMode,
     searchEngine: String,
-    adBlockerEnabled: Boolean,
-    blockedCount: Int,
+    adBlockStatusLabel: String,
+    adBlockStatusActive: Boolean,
     wallpaperUri: String? = null,
     shieldActive: Boolean = false,
     onNavigate: (String) -> Unit,
@@ -224,8 +224,8 @@ fun ClickHomeScreen(
         HomeTopRow(
             theme = theme,
             activeMode = activeMode,
-            adBlockerEnabled = adBlockerEnabled,
-            blockedCount = blockedCount,
+            adBlockStatusLabel = adBlockStatusLabel,
+            adBlockStatusActive = adBlockStatusActive,
             neon = false,
             onProfileClick = onProfileClick
         )
@@ -417,8 +417,8 @@ private fun V9ShieldCard(
 private fun HomeTopRow(
     theme: ModeTheme,
     activeMode: BrowserMode,
-    adBlockerEnabled: Boolean,
-    blockedCount: Int,
+    adBlockStatusLabel: String,
+    adBlockStatusActive: Boolean,
     neon: Boolean,
     onProfileClick: () -> Unit
 ) {
@@ -450,14 +450,12 @@ private fun HomeTopRow(
                 Icon(
                     Icons.Default.Shield,
                     contentDescription = null,
-                    tint = if (adBlockerEnabled) Color(0xFF16A34A) else theme.onSurface.copy(alpha = 0.45f),
+                    tint = if (adBlockStatusActive) Color(0xFF16A34A) else theme.onSurface.copy(alpha = 0.45f),
                     modifier = Modifier.size(13.dp)
                 )
                 Spacer(Modifier.width(5.dp))
                 Text(
-                    if (adBlockerEnabled) {
-                        if (blockedCount > 0) "$blockedCount trackers blocked" else "Ad and tracker blocking is on"
-                    } else "Ad and tracker blocking is off",
+                    adBlockStatusLabel,
                     color = theme.onSurface.copy(alpha = 0.62f),
                     fontSize = 10.sp
                 )
@@ -1869,12 +1867,12 @@ fun CompactBrowseBar(
     }
 }
 
-/** Slim privacy strip under the compact bar: 🛡 Protected · N trackers blocked. */
+/** Slim privacy strip under the compact bar, showing verified filter status. */
 @Composable
 fun PrivacyStrip(
     theme: ModeTheme,
-    adBlockerEnabled: Boolean,
-    blockedCount: Int,
+    adBlockStatusLabel: String,
+    adBlockStatusActive: Boolean,
     onClick: () -> Unit,
     modifier: Modifier = Modifier
 ) {
@@ -1898,13 +1896,12 @@ fun PrivacyStrip(
             Icon(
                 Icons.Default.Shield,
                 contentDescription = null,
-                tint = Color(0xFF22C55E),
+                tint = if (adBlockStatusActive) Color(0xFF22C55E) else theme.onSurface.copy(alpha = 0.45f),
                 modifier = Modifier.size(13.dp)
             )
             Spacer(modifier = Modifier.width(5.dp))
             Text(
-                if (adBlockerEnabled) "Protected · $blockedCount trackers blocked"
-                else "AdBlock off",
+                adBlockStatusLabel,
                 color = theme.onSurface.copy(alpha = 0.65f),
                 fontSize = 11.sp,
                 fontWeight = FontWeight.Medium

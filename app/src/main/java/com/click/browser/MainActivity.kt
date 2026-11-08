@@ -1573,8 +1573,7 @@ class MainActivity : FragmentActivity() {
             // start; drives a subtle fade+slide over the WebView (never blocks
             // loading, purely visual). Disabled via the Settings toggle.
             var pageTransitionTick by remember { mutableStateOf(0) }
-            // Real session count of blocked tracker/ad requests (home privacy pill).
-            val blockedCount by AdBlocker.blockedCountFlow.collectAsState()
+            val filterListReadiness by com.click.browser.engine.FilterListManager.readinessFlow.collectAsState()
             // V9 Shield DNS-only service running state (for the home shield card).
             val shieldActive by com.click.browser.engine.V9VpnController.isRunning.collectAsState()
             var forceNightModeWebsites by remember { mutableStateOf(false) }
@@ -2222,6 +2221,12 @@ class MainActivity : FragmentActivity() {
             val desktopOverrides by repository.desktopOverridesFlow.collectAsState(initial = emptyMap())
             // Per-site settings overrides (persisted per host, per engine mode).
             val siteSettings by repository.siteSettingsFlow.collectAsState(initial = emptyMap())
+            val adBlockStatus = com.click.browser.engine.AdBlockStatusPolicy.forPage(
+                engine = currentTab.engine,
+                globalEnabled = adBlockerEnabled,
+                siteOverride = siteSettings.forHost(hostOfUrl(currentTab.url))?.adBlock,
+                readiness = filterListReadiness
+            )
 
             /**
              * Premium UI v2: wires the 32 bottom-left FAB menu features to the
@@ -3767,8 +3772,8 @@ class MainActivity : FragmentActivity() {
                                             theme = theme,
                                             activeMode = activeMode,
                                             searchEngine = currentSearchEngineSetting,
-                                            adBlockerEnabled = adBlockerEnabled,
-                                            blockedCount = blockedCount,
+                                            adBlockStatusLabel = adBlockStatus.label,
+                                            adBlockStatusActive = adBlockStatus.active,
                                             wallpaperUri = wallpaperUri,
                                             shieldActive = shieldActive,
                                             onV9ShieldClick = { showV9Shield = true },
@@ -5071,8 +5076,7 @@ class MainActivity : FragmentActivity() {
                                         )
                                     }
 
-                                    // Periodic privacy-status glass popup (top-center):
-                                    // "🛡️ Protected · N trackers blocked". One-shot
+                                    // Periodic verified protection-status popup (top-center). One-shot
                                     // fade in/out every ~18s; browsing surface only.
                                     androidx.compose.animation.AnimatedVisibility(
                                         visible = showPrivacyPopup && !immersiveMode && !showOverlays,
@@ -5103,13 +5107,16 @@ class MainActivity : FragmentActivity() {
                                                 Icon(
                                                     Icons.Default.Shield,
                                                     contentDescription = null,
-                                                    tint = Color(0xFF22C55E),
+                                                    tint = if (adBlockStatus.active) {
+                                                        Color(0xFF22C55E)
+                                                    } else {
+                                                        theme.onSurface.copy(alpha = 0.45f)
+                                                    },
                                                     modifier = Modifier.size(15.dp)
                                                 )
                                                 Spacer(modifier = Modifier.width(6.dp))
                                                 Text(
-                                                    if (adBlockerEnabled) "Protected · $blockedCount trackers blocked"
-                                                    else "AdBlock off",
+                                                    adBlockStatus.label,
                                                     color = theme.onSurface,
                                                     fontSize = 12.sp,
                                                     fontWeight = FontWeight.SemiBold
@@ -6452,6 +6459,7 @@ class MainActivity : FragmentActivity() {
                                         desktopMode = siteDesktop,
                                         globalJavaScript = javaScriptEnabledGlobal,
                                         globalAdBlock = adBlockerEnabled,
+                                        adBlockStatusLabel = adBlockStatus.label,
                                         siteAdBlockOverrideVisible = siteAdBlockCapability.visible,
                                         siteAdBlockOverrideEnabled = siteAdBlockCapability.enabled,
                                         siteAdBlockUnavailableExplanation = siteAdBlockCapability.explanation,
@@ -6478,8 +6486,7 @@ class MainActivity : FragmentActivity() {
                                         },
                                         onReload = { currentTab.browserSession?.reload() },
                                         onDismiss = { showSiteSettings = false },
-                                        // Brave-style Shields panel data.
-                                        trackersBlocked = blockedCount,
+                                        // Protection status and site data for the active host.
                                         cookieCount = siteCookieCount,
                                         historyScopeDescription = if (V9Engine.bootMode == BrowserMode.ADVANCED) {
                                             "Advanced history"
