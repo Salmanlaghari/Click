@@ -1998,15 +1998,13 @@ class MainActivity : FragmentActivity() {
                 ) ?: return
                 if (!AiSelectedTextPolicy.canOfferSelection(
                         engine = sourceTab.engine,
-                        isPrivateTab = sourceTab.isIncognito,
-                        webViewJavaScriptEnabled = javaScriptEnabledGlobal
+                        isPrivateTab = sourceTab.isIncognito
                     )
                 ) return
                 val verifiedSelection = AiSelectedTextPolicy.prepareSelection(
                     rawText = selection.text,
                     engine = sourceTab.engine,
-                    isPrivateTab = sourceTab.isIncognito,
-                    webViewJavaScriptEnabled = javaScriptEnabledGlobal
+                    isPrivateTab = sourceTab.isIncognito
                 ) ?: return
                 pendingSelectedTextTranslation = PendingSelectedTextTranslation(
                     selectionId = java.util.UUID.randomUUID().toString(),
@@ -2042,8 +2040,7 @@ class MainActivity : FragmentActivity() {
                 currentTab.id,
                 selectedTextPageUrl(currentTab),
                 currentTab.engine,
-                currentTab.isIncognito,
-                javaScriptEnabledGlobal
+                currentTab.isIncognito
             ) {
                 val pending = pendingSelectedTextTranslation ?: return@LaunchedEffect
                 val stillEligible = activeSelectedTextSource(
@@ -2052,8 +2049,7 @@ class MainActivity : FragmentActivity() {
                     sourcePageUrl = pending.pageUrl
                 ) != null && AiSelectedTextPolicy.canOfferSelection(
                     engine = currentTab.engine,
-                    isPrivateTab = currentTab.isIncognito,
-                    webViewJavaScriptEnabled = javaScriptEnabledGlobal
+                    isPrivateTab = currentTab.isIncognito
                 )
                 if (!stillEligible) {
                     pendingSelectedTextTranslation = null
