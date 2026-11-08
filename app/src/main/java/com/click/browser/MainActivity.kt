@@ -4545,7 +4545,8 @@ class MainActivity : FragmentActivity() {
                                                                             )
                                                                             if (!hasCredential) return@launch
                                                                             val isActiveTarget =
-                                                                                finishedTab === currentTab &&
+                                                                                finishedTab.webView === wv &&
+                                                                                    finishedTab === currentTab &&
                                                                                     tabs.indexOf(finishedTab) == activeTabIndex &&
                                                                                     hasWindowFocus()
                                                                             val requestContext =
@@ -4569,27 +4570,94 @@ class MainActivity : FragmentActivity() {
                                                                                 return@launch
                                                                             }
 
+                                                                            fun launchAutofillPrompt(manualRetry: Boolean = false) {
                                                                             val promptStarted = promptPasswordAction(
                                                                                 title = "Use saved password?",
-                                                                                subtitle = "Authenticate to fill the login for ${pageOrigin.removePrefix("https://")}"
+                                                                                subtitle = "Authenticate to fill the login for ${pageOrigin.removePrefix("https://")}",
+                                                                                onCancelled = {
+                                                                                    scope.launch {
+                                                                                        val result = snackbarHostState.showSnackbar(
+                                                                                            message = "Authentication canceled; no password was filled.",
+                                                                                            actionLabel = "Retry",
+                                                                                            duration = SnackbarDuration.Long
+                                                                                        )
+                                                                                        if (result != SnackbarResult.ActionPerformed) return@launch
+                                                                                        if (finishedTab.webView !== wv || finishedTab !== currentTab ||
+                                                                                            tabs.indexOf(finishedTab) != activeTabIndex || !hasWindowFocus()
+                                                                                        ) {
+                                                                                            Toast.makeText(
+                                                                                                this@MainActivity,
+                                                                                                "Switch back to the login tab to retry.",
+                                                                                                Toast.LENGTH_SHORT
+                                                                                            ).show()
+                                                                                            return@launch
+                                                                                        }
+                                                                                        val retryManagerEnabled = try {
+                                                                                            com.click.browser.engine.PasswordManager.isEnabled(this@MainActivity)
+                                                                                        } catch (_: Exception) { false }
+                                                                                        val retryHasCredential = if (retryManagerEnabled) {
+                                                                                            try {
+                                                                                                com.click.browser.engine.PasswordManager.hasForOrigin(
+                                                                                                    this@MainActivity, pageOrigin
+                                                                                                )
+                                                                                            } catch (_: Exception) { false }
+                                                                                        } else false
+                                                                                        if (finishedTab.webView !== wv || finishedTab !== currentTab ||
+                                                                                            tabs.indexOf(finishedTab) != activeTabIndex || !hasWindowFocus()
+                                                                                        ) return@launch
+                                                                                        val retryUrl = wv.url.orEmpty()
+                                                                                        val retryContext = requestContext.copy(
+                                                                                            passwordManagerEnabled = retryManagerEnabled,
+                                                                                            hasSavedCredential = retryHasCredential,
+                                                                                            isPrivateTab = finishedTab.isIncognito,
+                                                                                            isActiveTab =
+                                                                                                finishedTab.webView === wv &&
+                                                                                                    finishedTab === currentTab &&
+                                                                                                    tabs.indexOf(finishedTab) == activeTabIndex &&
+                                                                                                    hasWindowFocus(),
+                                                                                            isSecurePage =
+                                                                                                com.click.browser.engine.PasswordOriginPolicy.securePageOrigin(retryUrl) != null,
+                                                                                            isSameOrigin =
+                                                                                                com.click.browser.engine.PasswordOriginPolicy.isSameSecureOrigin(
+                                                                                                    pageUrl, retryUrl
+                                                                                                ),
+                                                                                            deviceAuthenticationAvailable =
+                                                                                                com.click.browser.engine.PrivateTabLock.canLock(this@MainActivity)
+                                                                                        )
+                                                                                        if (com.click.browser.engine.PasswordAccessPolicy
+                                                                                                .shouldRequestAutofillAuthentication(retryContext)
+                                                                                        ) {
+                                                                                            launchAutofillPrompt(manualRetry = true)
+                                                                                        } else {
+                                                                                            Toast.makeText(
+                                                                                                this@MainActivity,
+                                                                                                "Page changed or saved login is unavailable.",
+                                                                                                Toast.LENGTH_SHORT
+                                                                                            ).show()
+                                                                                        }
+                                                                                    }
+                                                                                }
                                                                             ) {
                                                                                 scope.launch {
                                                                                     val enabledAfterAuth = try {
                                                                                         com.click.browser.engine.PasswordManager.isEnabled(this@MainActivity)
                                                                                     } catch (_: Exception) { false }
                                                                                     if (!enabledAfterAuth) return@launch
+                                                                                    if (finishedTab.webView !== wv) return@launch
                                                                                     val saved = try {
                                                                                         com.click.browser.engine.PasswordManager.getForOrigin(
                                                                                             this@MainActivity, pageOrigin
                                                                                         )
                                                                                     } catch (_: Exception) { null } ?: return@launch
+                                                                                    if (finishedTab.webView !== wv) return@launch
                                                                                     val authContext =
                                                                                         com.click.browser.engine.PasswordAccessPolicy.AutofillContext(
                                                                                             passwordManagerEnabled = enabledAfterAuth,
                                                                                             hasSavedCredential = true,
                                                                                             isPrivateTab = finishedTab.isIncognito,
                                                                                             isActiveTab =
-                                                                                                finishedTab === currentTab &&
+                                                                                                finishedTab.webView === wv &&
+                                                                                                    finishedTab === currentTab &&
                                                                                                     tabs.indexOf(finishedTab) == activeTabIndex &&
                                                                                                     hasWindowFocus(),
                                                                                             isSecurePage =
@@ -4604,9 +4672,9 @@ class MainActivity : FragmentActivity() {
                                                                                                 com.click.browser.engine.PrivateTabLock.canLock(this@MainActivity),
                                                                                             deviceAuthenticated = true
                                                                                         )
-                                                                                    if (!com.click.browser.engine.PasswordAccessPolicy.mayAutofill(authContext)) {
-                                                                                        return@launch
-                                                                                    }
+                                                                                        if (!com.click.browser.engine.PasswordAccessPolicy.mayAutofill(authContext)) {
+                                                                                            return@launch
+                                                                                        }
                                                                                     val js = "(function(expectedOrigin, username, password) {" +
                                                                                         "if (window.location.origin !== expectedOrigin || window.top !== window) return;" +
                                                                                         "if (typeof window.__clickFillLogin !== 'function') return;" +
@@ -4615,6 +4683,7 @@ class MainActivity : FragmentActivity() {
                                                                                         "${org.json.JSONObject.quote(saved.username)}, " +
                                                                                         "${org.json.JSONObject.quote(saved.password)});"
                                                                                     fun fillIfStillEligible(managerIsEnabled: Boolean) {
+                                                                                        if (finishedTab.webView !== wv) return
                                                                                         val latestUrl = wv.url.orEmpty()
                                                                                         val latestContext =
                                                                                             com.click.browser.engine.PasswordAccessPolicy.AutofillContext(
@@ -4622,7 +4691,8 @@ class MainActivity : FragmentActivity() {
                                                                                                 hasSavedCredential = true,
                                                                                                 isPrivateTab = finishedTab.isIncognito,
                                                                                                 isActiveTab =
-                                                                                                    finishedTab === currentTab &&
+                                                                                                    finishedTab.webView === wv &&
+                                                                                                        finishedTab === currentTab &&
                                                                                                         tabs.indexOf(finishedTab) == activeTabIndex &&
                                                                                                         hasWindowFocus(),
                                                                                                 isSecurePage =
@@ -4635,7 +4705,9 @@ class MainActivity : FragmentActivity() {
                                                                                                     com.click.browser.engine.PrivateTabLock.canLock(this@MainActivity),
                                                                                                 deviceAuthenticated = true
                                                                                             )
-                                                                                        if (com.click.browser.engine.PasswordAccessPolicy.mayAutofill(latestContext)) {
+                                                                                        if (finishedTab.webView === wv &&
+                                                                                            com.click.browser.engine.PasswordAccessPolicy.mayAutofill(latestContext)
+                                                                                        ) {
                                                                                             wv.evaluateJavascript(js, null)
                                                                                         }
                                                                                     }
@@ -4654,8 +4726,18 @@ class MainActivity : FragmentActivity() {
                                                                                 }
                                                                             }
                                                                             if (!promptStarted) {
-                                                                                finishedTab.passwordAutofillPromptGuard.clearIfNotStarted(pageOrigin)
+                                                                                if (manualRetry) {
+                                                                                    Toast.makeText(
+                                                                                        this@MainActivity,
+                                                                                        "Could not start authentication; no password was filled.",
+                                                                                        Toast.LENGTH_SHORT
+                                                                                    ).show()
+                                                                                } else {
+                                                                                    finishedTab.passwordAutofillPromptGuard.clearIfNotStarted(pageOrigin)
+                                                                                }
                                                                             }
+                                                                            }
+                                                                            launchAutofillPrompt()
                                                                         }
                                                                     }
                                                                 }
