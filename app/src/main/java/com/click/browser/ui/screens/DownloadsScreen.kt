@@ -20,6 +20,7 @@ import androidx.compose.ui.unit.dp
 import com.click.browser.data.BrowserRepository
 import com.click.browser.data.DownloadItem
 import com.click.browser.engine.DownloadHelper
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
@@ -42,16 +43,29 @@ fun DownloadsScreen(
 ) {
     val context = LocalContext.current
     val downloads by repository.downloadsFlow.collectAsState(initial = emptyList())
-    var managedDownloads by remember { mutableStateOf<List<ManagedDownload>>(emptyList()) }
+    var queryState by remember {
+        mutableStateOf<DownloadCenterQueryState>(DownloadCenterQueryState.Loading)
+    }
+    var retryToken by remember { mutableStateOf(0) }
+    var isRetrying by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
 
-    LaunchedEffect(Unit) {
+    LaunchedEffect(retryToken) {
         while (isActive) {
-            managedDownloads = queryManagedDownloads(context)
+            val result = queryManagedDownloads(context)
+            if (result.isSuccess) {
+                queryState = DownloadCenterQueryState.Loaded(result.getOrThrow())
+                isRetrying = false
+            } else {
+                queryState = queryState.recordFailure()
+                isRetrying = false
+                return@LaunchedEffect
+            }
             delay(2_000)
         }
     }
 
+    val managedDownloads = queryState.downloadsForDisplay()
     val active = managedDownloads.filter {
         it.state == ManagedDownloadState.PENDING ||
             it.state == ManagedDownloadState.RUNNING ||
@@ -77,6 +91,62 @@ fun DownloadsScreen(
                 .fillMaxSize()
                 .padding(padding)
         ) {
+            when (val state = queryState) {
+                DownloadCenterQueryState.Loading -> {
+                    if (downloads.isEmpty()) {
+                        item(key = "downloads-query-loading") {
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(16.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                CircularProgressIndicator(
+                                    modifier = Modifier.size(20.dp),
+                                    strokeWidth = 2.dp
+                                )
+                                Spacer(Modifier.width(12.dp))
+                                Text("Checking downloads…")
+                            }
+                        }
+                    }
+                }
+                is DownloadCenterQueryState.Failed -> {
+                    item(key = "downloads-query-error") {
+                        Column(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 16.dp, vertical = 12.dp)
+                        ) {
+                            Text(
+                                if (state.lastSuccessfulDownloads == null) {
+                                    "Couldn't load downloads."
+                                } else {
+                                    "Couldn't refresh downloads."
+                                },
+                                color = MaterialTheme.colorScheme.error,
+                                style = MaterialTheme.typography.titleSmall
+                            )
+                            Text(
+                                "Android's download list is unavailable. Saved Click records are unaffected.",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                            TextButton(
+                                onClick = {
+                                    isRetrying = true
+                                    retryToken += 1
+                                },
+                                enabled = !isRetrying
+                            ) {
+                                Text(if (isRetrying) "Retrying…" else "Retry")
+                            }
+                        }
+                    }
+                }
+                is DownloadCenterQueryState.Loaded -> Unit
+            }
+
             if (active.isNotEmpty()) {
                 item {
                     Text(
@@ -149,7 +219,7 @@ fun DownloadsScreen(
                 items(downloads) { item -> SavedDownloadRow(item) }
             }
 
-            if (managedDownloads.isEmpty() && downloads.isEmpty()) {
+            if (queryState.shouldShowEmptyState(savedFileCount = downloads.size)) {
                 item {
                     Box(
                         modifier = Modifier
@@ -313,37 +383,39 @@ private fun shareManagedDownload(context: Context, id: Long, label: String) {
 }
 
 /** Queries all Click-owned DownloadManager lifecycle states; unrelated apps are excluded. */
-private suspend fun queryManagedDownloads(context: Context): List<ManagedDownload> =
+private suspend fun queryManagedDownloads(context: Context): Result<List<ManagedDownload>> =
     withContext(Dispatchers.IO) {
         val active = mutableListOf<ManagedDownload>()
         val recentHistory = mutableListOf<ManagedDownload>()
         var cursor: Cursor? = null
         try {
-            val dm = context.getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager
+            val dm = context.getSystemService(Context.DOWNLOAD_SERVICE) as? DownloadManager
+                ?: throw IllegalStateException("DownloadManager unavailable")
             val statuses = DownloadManager.STATUS_RUNNING or
                 DownloadManager.STATUS_PAUSED or
                 DownloadManager.STATUS_PENDING or
                 DownloadManager.STATUS_SUCCESSFUL or
                 DownloadManager.STATUS_FAILED
             cursor = dm.query(DownloadManager.Query().setFilterByStatus(statuses))
-            val idCol = cursor.getColumnIndexOrThrow(DownloadManager.COLUMN_ID)
-            val titleCol = cursor.getColumnIndexOrThrow(DownloadManager.COLUMN_TITLE)
-            val descCol = cursor.getColumnIndexOrThrow(DownloadManager.COLUMN_DESCRIPTION)
-            val downloadedCol = cursor.getColumnIndexOrThrow(DownloadManager.COLUMN_BYTES_DOWNLOADED_SO_FAR)
-            val totalCol = cursor.getColumnIndexOrThrow(DownloadManager.COLUMN_TOTAL_SIZE_BYTES)
-            val statusCol = cursor.getColumnIndexOrThrow(DownloadManager.COLUMN_STATUS)
-            val uriCol = cursor.getColumnIndexOrThrow(DownloadManager.COLUMN_URI)
-            while (cursor.moveToNext()) {
-                val status = cursor.getInt(statusCol)
-                if (!isClickManagedDownload(cursor.getString(titleCol), status)) continue
+            val queryCursor = cursor ?: throw IllegalStateException("DownloadManager returned no results")
+            val idCol = queryCursor.getColumnIndexOrThrow(DownloadManager.COLUMN_ID)
+            val titleCol = queryCursor.getColumnIndexOrThrow(DownloadManager.COLUMN_TITLE)
+            val descCol = queryCursor.getColumnIndexOrThrow(DownloadManager.COLUMN_DESCRIPTION)
+            val downloadedCol = queryCursor.getColumnIndexOrThrow(DownloadManager.COLUMN_BYTES_DOWNLOADED_SO_FAR)
+            val totalCol = queryCursor.getColumnIndexOrThrow(DownloadManager.COLUMN_TOTAL_SIZE_BYTES)
+            val statusCol = queryCursor.getColumnIndexOrThrow(DownloadManager.COLUMN_STATUS)
+            val uriCol = queryCursor.getColumnIndexOrThrow(DownloadManager.COLUMN_URI)
+            while (queryCursor.moveToNext()) {
+                val status = queryCursor.getInt(statusCol)
+                if (!isClickManagedDownload(queryCursor.getString(titleCol), status)) continue
                 val state = managedDownloadState(status) ?: continue
                 val item = ManagedDownload(
-                    id = cursor.getLong(idCol),
-                    label = cursor.getString(descCol).orEmpty().ifBlank { "Click download" }.take(120),
-                    downloadedBytes = cursor.getLong(downloadedCol),
-                    totalBytes = cursor.getLong(totalCol),
+                    id = queryCursor.getLong(idCol),
+                    label = queryCursor.getString(descCol).orEmpty().ifBlank { "Click download" }.take(120),
+                    downloadedBytes = queryCursor.getLong(downloadedCol),
+                    totalBytes = queryCursor.getLong(totalCol),
                     state = state,
-                    sourceUrl = cursor.getString(uriCol).orEmpty()
+                    sourceUrl = queryCursor.getString(uriCol).orEmpty()
                 )
                 when (state) {
                     ManagedDownloadState.PENDING,
@@ -353,12 +425,14 @@ private suspend fun queryManagedDownloads(context: Context): List<ManagedDownloa
                     ManagedDownloadState.FAILED -> retainRecentManagedDownload(recentHistory, item)
                 }
             }
-        } catch (_: Exception) {
-            // DownloadManager unavailable or query failed — do not crash the screen.
+            Result.success(active.sortedByDescending { it.id } + recentHistory)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            Result.failure(e)
         } finally {
             try { cursor?.close() } catch (_: Exception) { }
         }
-        active.sortedByDescending { it.id } + recentHistory
     }
 
 private fun formatBytes(bytes: Long): String {

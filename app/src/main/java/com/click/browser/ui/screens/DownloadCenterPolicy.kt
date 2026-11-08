@@ -20,6 +20,28 @@ internal data class ManagedDownload(
     val sourceUrl: String
 )
 
+/** Keeps query failure distinct from a successful empty download list. */
+internal sealed class DownloadCenterQueryState {
+    object Loading : DownloadCenterQueryState()
+    data class Loaded(val downloads: List<ManagedDownload>) : DownloadCenterQueryState()
+    data class Failed(val lastSuccessfulDownloads: List<ManagedDownload>?) : DownloadCenterQueryState()
+
+    fun downloadsForDisplay(): List<ManagedDownload> = when (this) {
+        Loading -> emptyList()
+        is Loaded -> downloads
+        is Failed -> lastSuccessfulDownloads.orEmpty()
+    }
+
+    fun recordFailure(): DownloadCenterQueryState = when (this) {
+        Loading -> Failed(lastSuccessfulDownloads = null)
+        is Loaded -> Failed(lastSuccessfulDownloads = downloads)
+        is Failed -> this
+    }
+
+    fun shouldShowEmptyState(savedFileCount: Int): Boolean =
+        this is Loaded && downloads.isEmpty() && savedFileCount == 0
+}
+
 internal const val CLICK_DOWNLOAD_TITLE = "Click Browser Download"
 internal const val MAX_MANAGED_DOWNLOAD_HISTORY = 100
 
