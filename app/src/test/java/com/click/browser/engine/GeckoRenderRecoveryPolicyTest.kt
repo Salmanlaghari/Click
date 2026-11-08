@@ -15,9 +15,43 @@ class GeckoRenderRecoveryPolicyTest {
         assertFalse(geckoRendererRecoveryRequired(crashed, GeckoRenderEvent.FIRST_COMPOSITE))
         assertTrue(geckoRendererRecoveryRequired(false, GeckoRenderEvent.PROCESS_KILLED))
         assertTrue(geckoRendererRecoveryRequired(false, GeckoRenderEvent.RECOVERY_FAILED))
+        assertTrue(geckoRendererRecoveryRequired(false, GeckoRenderEvent.RECOVERY_RETRY_THROTTLED))
         assertTrue(geckoRendererRecoveryRequired(false, GeckoRenderEvent.RECOVERY_STARTED))
         assertTrue(geckoRendererRecoveryRequired(false, GeckoRenderEvent.RECOVERY_RELOAD_STARTED))
         assertFalse(geckoRendererRecoveryRequired(false, GeckoRenderEvent.LOAD_STARTED))
+    }
+
+    @Test
+    fun repeatedFailuresTemporarilyThrottleRetryAndAllowItAfterWindowExpires() {
+        val failures = listOf(10_000L, 20_000L, 30_000L)
+
+        val throttled = geckoRendererRetryDecision(failures, nowMillis = 31_000L)
+        assertFalse(throttled.retryAllowed)
+        assertEquals(3, throttled.recentFailureCount)
+        assertEquals(39_000L, throttled.retryAfterMillis)
+
+        val afterOldestFailureExpires = geckoRendererRetryDecision(failures, nowMillis = 70_000L)
+        assertTrue(afterOldestFailureExpires.retryAllowed)
+        assertEquals(2, afterOldestFailureExpires.recentFailureCount)
+        assertEquals(0L, afterOldestFailureExpires.retryAfterMillis)
+    }
+
+    @Test
+    fun failureRecordingPrunesOldEntriesAndKeepsOnlyTheNewestBoundedWindow() {
+        assertEquals(
+            listOf(20_000L, 30_000L, 40_000L),
+            recordGeckoRendererFailure(
+                failureTimesMillis = listOf(0L, 10_000L, 20_000L, 30_000L),
+                failedAtMillis = 40_000L
+            )
+        )
+        assertEquals(
+            listOf(20_000L, 30_000L, 70_000L),
+            recordGeckoRendererFailure(
+                failureTimesMillis = listOf(0L, 10_000L, 20_000L, 30_000L),
+                failedAtMillis = 70_000L
+            )
+        )
     }
 
     @Test

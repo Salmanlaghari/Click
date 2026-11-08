@@ -20,7 +20,8 @@ internal enum class GeckoRenderEvent {
     PROCESS_KILLED,
     RECOVERY_STARTED,
     RECOVERY_RELOAD_STARTED,
-    RECOVERY_FAILED
+    RECOVERY_FAILED,
+    RECOVERY_RETRY_THROTTLED
 }
 
 internal fun geckoRendererRecoveryRequired(
@@ -32,9 +33,46 @@ internal fun geckoRendererRecoveryRequired(
     GeckoRenderEvent.PROCESS_KILLED,
     GeckoRenderEvent.RECOVERY_STARTED,
     GeckoRenderEvent.RECOVERY_RELOAD_STARTED,
-    GeckoRenderEvent.RECOVERY_FAILED -> true
+    GeckoRenderEvent.RECOVERY_FAILED,
+    GeckoRenderEvent.RECOVERY_RETRY_THROTTLED -> true
     GeckoRenderEvent.LOAD_STARTED -> currentlyRequired
 }
+
+internal const val GECKO_RECOVERY_FAILURE_WINDOW_MS = 60_000L
+internal const val GECKO_RECOVERY_FAILURE_LIMIT = 3
+
+internal data class GeckoRendererRetryDecision(
+    val retryAllowed: Boolean,
+    val retryAfterMillis: Long,
+    val recentFailureCount: Int
+)
+
+internal fun geckoRendererRetryDecision(
+    failureTimesMillis: List<Long>,
+    nowMillis: Long
+): GeckoRendererRetryDecision {
+    val recentFailures = failureTimesMillis
+        .filter { failedAt -> failedAt <= nowMillis && nowMillis - failedAt < GECKO_RECOVERY_FAILURE_WINDOW_MS }
+        .sorted()
+    val isThrottled = recentFailures.size >= GECKO_RECOVERY_FAILURE_LIMIT
+    val retryAt = if (isThrottled) {
+        recentFailures[recentFailures.size - GECKO_RECOVERY_FAILURE_LIMIT] + GECKO_RECOVERY_FAILURE_WINDOW_MS
+    } else {
+        nowMillis
+    }
+    return GeckoRendererRetryDecision(
+        retryAllowed = !isThrottled,
+        retryAfterMillis = (retryAt - nowMillis).coerceAtLeast(0),
+        recentFailureCount = recentFailures.size
+    )
+}
+
+internal fun recordGeckoRendererFailure(
+    failureTimesMillis: List<Long>,
+    failedAtMillis: Long
+): List<Long> = (failureTimesMillis.filter { failedAt ->
+    failedAt <= failedAtMillis && failedAtMillis - failedAt < GECKO_RECOVERY_FAILURE_WINDOW_MS
+} + failedAtMillis).takeLast(GECKO_RECOVERY_FAILURE_LIMIT)
 
 internal enum class GeckoSessionRecoveryAction {
     IGNORE_IN_PROGRESS,
