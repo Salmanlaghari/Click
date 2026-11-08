@@ -13,8 +13,8 @@ import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Add
-import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
@@ -40,6 +40,9 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.click.browser.engine.WebRtcTestOutcome
+import com.click.browser.engine.WebRtcTestPresentation
+import com.click.browser.engine.WebRtcTestResult
 /**
  * Privacy controls with clear behavior: optional DNT/GPC request signals,
  * DNS-over-HTTPS for the app's AI requests, and a WebRTC visibility test.
@@ -55,8 +58,7 @@ fun PrivacyGuardsScreen(
     secureDns: Boolean,
     onToggleSecureDns: (Boolean) -> Unit,
     webrtcRunning: Boolean,
-    webrtcIps: List<String>?,
-    webrtcTested: Boolean,
+    webrtcResult: WebRtcTestResult?,
     onRunWebrtcTest: () -> Unit,
     onClose: () -> Unit
 ) {
@@ -122,9 +124,9 @@ fun PrivacyGuardsScreen(
                         Spacer(modifier = Modifier.height(4.dp))
                         Text(
                             "Runs a real STUN check in the current tab and lists the IP " +
-                                "addresses a website could discover via WebRTC. This is a " +
-                                "test, not a blocker — WebView has no API to disable " +
-                                "WebRTC, so a system-wide VPN remains the real fix.",
+                                "addresses observed during ICE gathering. This is a " +
+                                "best-effort test, not a blocker or proof that WebRTC " +
+                                "cannot reveal an address.",
                             fontSize = 12.sp,
                             color = Color.Gray
                         )
@@ -136,43 +138,75 @@ fun PrivacyGuardsScreen(
                         ) {
                             Text(if (webrtcRunning) "Testing…" else "Run WebRTC leak test")
                         }
-                        if (webrtcTested && !webrtcRunning) {
+                        if (webrtcResult != null && !webrtcRunning) {
                             Spacer(modifier = Modifier.height(12.dp))
-                            if (webrtcIps.isNullOrEmpty()) {
-                                Row(verticalAlignment = Alignment.CenterVertically) {
-                                    Icon(
-                                        Icons.Default.CheckCircle,
-                                        contentDescription = null,
-                                        tint = Color(0xFF22C55E)
-                                    )
-                                    Spacer(modifier = Modifier.width(8.dp))
-                                    Text(
-                                        "No IPs leaked — WebRTC exposed nothing on this page.",
-                                        fontSize = 13.sp
-                                    )
+                            when (webrtcResult.presentation) {
+                                WebRtcTestPresentation.ADDRESSES_FOUND -> {
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        Icon(
+                                            Icons.Default.Warning,
+                                            contentDescription = "Candidate addresses observed",
+                                            tint = Color(0xFFF59E0B)
+                                        )
+                                        Spacer(modifier = Modifier.width(8.dp))
+                                        Text(
+                                            "Candidate IPv4 addresses observed during this test:",
+                                            fontSize = 13.sp,
+                                            fontWeight = FontWeight.SemiBold
+                                        )
+                                    }
+                                    if (webrtcResult.outcome != WebRtcTestOutcome.COMPLETED) {
+                                        Text(
+                                            "The test did not complete, so this list may be incomplete.",
+                                            fontSize = 12.sp,
+                                            color = Color.Gray,
+                                            modifier = Modifier.padding(start = 26.dp, top = 4.dp)
+                                        )
+                                    }
+                                    Spacer(modifier = Modifier.height(6.dp))
+                                    webrtcResult.ipv4Addresses.forEach { ip ->
+                                        Text(
+                                            "• $ip",
+                                            fontSize = 13.sp,
+                                            fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
+                                            modifier = Modifier.padding(start = 26.dp, top = 2.dp)
+                                        )
+                                    }
                                 }
-                            } else {
-                                Row(verticalAlignment = Alignment.CenterVertically) {
-                                    Icon(
-                                        Icons.Default.Warning,
-                                        contentDescription = null,
-                                        tint = Color(0xFFF59E0B)
-                                    )
-                                    Spacer(modifier = Modifier.width(8.dp))
-                                    Text(
-                                        "These IPs were visible to the page via WebRTC:",
-                                        fontSize = 13.sp,
-                                        fontWeight = FontWeight.SemiBold
-                                    )
+                                WebRtcTestPresentation.NO_ADDRESSES_OBSERVED -> {
+                                    Row(verticalAlignment = Alignment.Top) {
+                                        Icon(
+                                            Icons.Default.Info,
+                                            contentDescription = "No addresses observed; not a guarantee",
+                                            tint = MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+                                        Spacer(modifier = Modifier.width(8.dp))
+                                        Text(
+                                            "ICE gathering completed; no IPv4 candidate addresses were observed. This does not prove WebRTC cannot expose an address.",
+                                            fontSize = 13.sp
+                                        )
+                                    }
                                 }
-                                Spacer(modifier = Modifier.height(6.dp))
-                                webrtcIps.forEach { ip ->
-                                    Text(
-                                        "• $ip",
-                                        fontSize = 13.sp,
-                                        fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
-                                        modifier = Modifier.padding(start = 8.dp, top = 2.dp)
-                                    )
+                                WebRtcTestPresentation.INCONCLUSIVE -> {
+                                    val message = when (webrtcResult.outcome) {
+                                        WebRtcTestOutcome.UNSUPPORTED ->
+                                            "Inconclusive: WebRTC is unavailable in this WebView."
+                                        WebRtcTestOutcome.TIMED_OUT ->
+                                            "Inconclusive: ICE gathering did not finish in time. You can try the test again."
+                                        WebRtcTestOutcome.ERROR ->
+                                            "Inconclusive: the test could not complete. You can try again on a loaded page."
+                                        WebRtcTestOutcome.COMPLETED ->
+                                            "Inconclusive: the test returned no usable result."
+                                    }
+                                    Row(verticalAlignment = Alignment.Top) {
+                                        Icon(
+                                            Icons.Default.Info,
+                                            contentDescription = "Test result inconclusive",
+                                            tint = MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+                                        Spacer(modifier = Modifier.width(8.dp))
+                                        Text(message, fontSize = 13.sp)
+                                    }
                                 }
                             }
                         }
