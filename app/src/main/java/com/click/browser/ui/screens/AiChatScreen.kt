@@ -97,6 +97,7 @@ import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
 import com.click.browser.engine.AiChatClient
 import com.click.browser.engine.AiPageContextPolicy
+import com.click.browser.engine.AiSelectedTextPolicy
 import com.click.browser.engine.AiProviders
 import com.click.browser.engine.AiRolePresets
 import com.click.browser.engine.AiSafetyFilter
@@ -117,7 +118,7 @@ import java.util.Locale
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun AiChatScreen(
+internal fun AiChatScreen(
     apiKey: String,
     providerId: String,
     model: String,
@@ -127,7 +128,10 @@ fun AiChatScreen(
     pageUrl: String = "",
     pageContextIdentity: String = "",
     canSharePageContext: Boolean = false,
+    selectedText: AiSelectedTextPolicy.PreparedSelection? = null,
+    selectedTextSessionIdentity: String = "",
     onRequestPageContext: (onCaptured: (String) -> Unit) -> Unit = { onCaptured -> onCaptured("") },
+    onCancelSelectedText: () -> Unit = {},
     onOpenUrl: (String) -> Unit = {},
     onReportMessage: (String) -> Unit = {},
     onOpenSettings: () -> Unit,
@@ -154,6 +158,11 @@ fun AiChatScreen(
     var pageExcerpt by remember(pageContextKey) { mutableStateOf("") }
     var showPageContextConsent by remember(pageContextKey) { mutableStateOf(false) }
     var pendingPagePrompt by remember(pageContextKey) { mutableStateOf<String?>(null) }
+    val selectedTextOnlySession = selectedText != null
+    val selectedTextConsentKey = "${provider.id}|$selectedTextSessionIdentity|${apiKey.isNotBlank()}"
+    var showSelectedTextConsent by remember(selectedTextConsentKey) {
+        mutableStateOf(selectedTextOnlySession && apiKey.isNotBlank())
+    }
     var screenActive by remember { mutableStateOf(true) }
 
     DisposableEffect(Unit) {
@@ -228,7 +237,7 @@ fun AiChatScreen(
                 model = model,
                 history = messages.toList(),
                 systemInstruction = sysInstruction,
-                enableGoogleSearch = isGemini && searchGroundingEnabled
+                enableGoogleSearch = isGemini && searchGroundingEnabled && !selectedTextOnlySession
             )
             typing = false
             result
@@ -272,6 +281,16 @@ fun AiChatScreen(
             pageContextLoading = false
             pendingPagePrompt?.let { input = it }
             pendingPagePrompt = null
+        }
+    }
+
+    fun submitSelectedTextConsent(accepted: Boolean) {
+        showSelectedTextConsent = false
+        val prompt = AiSelectedTextPolicy.promptAfterConsent(selectedText, accepted)
+        if (prompt == null) {
+            onCancelSelectedText()
+        } else {
+            sendMessage(prompt)
         }
     }
 
@@ -380,7 +399,7 @@ fun AiChatScreen(
                             label = { Text(preset.label, fontSize = 11.sp) }
                         )
                     }
-                    if (isGemini) {
+                    if (isGemini && !selectedTextOnlySession) {
                         FilterChip(
                             selected = searchGroundingEnabled,
                             onClick = { searchGroundingEnabled = !searchGroundingEnabled },
@@ -401,7 +420,7 @@ fun AiChatScreen(
                     }
                 }
 
-                if (pageUrl.isNotBlank() && pageUrl != "about:blank") {
+                if (!selectedTextOnlySession && pageUrl.isNotBlank() && pageUrl != "about:blank") {
                     if (canSharePageContext && apiKey.isNotBlank()) {
                         Row(
                             modifier = Modifier
@@ -525,7 +544,12 @@ fun AiChatScreen(
                         value = input,
                         onValueChange = { input = it },
                         modifier = Modifier.weight(1f),
-                        placeholder = { Text("Ask about this page or the web…") },
+                        placeholder = {
+                            Text(
+                                if (selectedTextOnlySession) "Ask a follow-up about this explanation…"
+                                else "Ask about this page or the web…"
+                            )
+                        },
                         shape = RoundedCornerShape(24.dp),
                         singleLine = false,
                         maxLines = 4
@@ -593,6 +617,41 @@ fun AiChatScreen(
                         showPageContextConsent = false
                         pendingPagePrompt = null
                     }) { Text("Not now") }
+                }
+            )
+        }
+
+        if (showSelectedTextConsent && selectedText != null && apiKey.isNotBlank()) {
+            AlertDialog(
+                onDismissRequest = { submitSelectedTextConsent(accepted = false) },
+                title = { Text("Explain selected text with $externalProviderName?") },
+                text = {
+                    Column(
+                        modifier = Modifier
+                            .heightIn(max = 360.dp)
+                            .verticalScroll(rememberScrollState())
+                    ) {
+                        Text(
+                            AiSelectedTextPolicy.consentDisclosure(
+                                providerName = externalProviderName,
+                                selection = selectedText
+                            )
+                        )
+                        Spacer(modifier = Modifier.height(12.dp))
+                        Text("Selected text", fontWeight = FontWeight.SemiBold, fontSize = 12.sp)
+                        Spacer(modifier = Modifier.height(4.dp))
+                        Text(selectedText.text, fontSize = 13.sp)
+                    }
+                },
+                confirmButton = {
+                    TextButton(onClick = { submitSelectedTextConsent(accepted = true) }) {
+                        Text("Explain selected text")
+                    }
+                },
+                dismissButton = {
+                    TextButton(onClick = { submitSelectedTextConsent(accepted = false) }) {
+                        Text("Cancel")
+                    }
                 }
             )
         }

@@ -214,6 +214,13 @@ private data class PendingGeckoPasswordSaveOffer(
     val credential: SavedPassword
 )
 
+private data class PendingAiSelectedTextOffer(
+    val selectionId: String,
+    val tabId: String,
+    val pageUrl: String,
+    val selection: AiSelectedTextPolicy.PreparedSelection
+)
+
 /**
  * Page transition wrapper — subtle fade + slide on every navigation start.
  * Extracted to a top-level composable because [androidx.compose.animation.AnimatedVisibility]
@@ -1825,6 +1832,7 @@ class MainActivity : FragmentActivity() {
 
             // AI chat + privacy guards
             var showAiChat by remember { mutableStateOf(false) }
+            var pendingAiSelectedText by remember { mutableStateOf<PendingAiSelectedTextOffer?>(null) }
             var showPrivacyGuards by remember { mutableStateOf(false) }
             // click:// internal pages (chrome://-style). Holds the page key or null.
             var showClickPage by remember { mutableStateOf<String?>(null) }
@@ -1920,6 +1928,71 @@ class MainActivity : FragmentActivity() {
             LaunchedEffect(Unit) {
                 tamperBlocked = !TamperCheck.isReleaseSignatureValid(this@MainActivity)
                 if (tamperBlocked) showTamperDialog = true
+            }
+            fun selectedTextPageUrl(tab: TabItem): String = when (tab.engine) {
+                BrowserTabEngine.WEBVIEW -> tab.webView?.url?.takeIf { it.isNotBlank() } ?: tab.url
+                BrowserTabEngine.GECKOVIEW -> tab.url
+            }
+            fun activeSelectedTextSource(
+                sourceTabId: String,
+                sourceEngine: BrowserTabEngine,
+                sourcePageUrl: String
+            ): TabItem? {
+                val activeTab = tabs.getOrNull(activeTabIndex) ?: return null
+                if (activeTab.id != sourceTabId || activeTab.engine != sourceEngine || activeTab.isIncognito ||
+                    selectedTextPageUrl(activeTab) != sourcePageUrl ||
+                    !(sourcePageUrl.startsWith("http://", ignoreCase = true) ||
+                        sourcePageUrl.startsWith("https://", ignoreCase = true))
+                ) return null
+                return activeTab
+            }
+            fun openSelectedTextForAi(
+                selection: AiSelectedTextPolicy.PreparedSelection,
+                sourceTabId: String,
+                sourcePageUrl: String
+            ) {
+                if (tamperBlocked) {
+                    showTamperDialog = true
+                    return
+                }
+                val sourceTab = activeSelectedTextSource(
+                    sourceTabId = sourceTabId,
+                    sourceEngine = selection.sourceEngine,
+                    sourcePageUrl = sourcePageUrl
+                ) ?: return
+                val verifiedSelection = AiSelectedTextPolicy.prepareSelection(
+                    rawText = selection.text,
+                    engine = sourceTab.engine,
+                    isPrivateTab = sourceTab.isIncognito
+                ) ?: return
+                pendingAiSelectedText = PendingAiSelectedTextOffer(
+                    selectionId = java.util.UUID.randomUUID().toString(),
+                    tabId = sourceTabId,
+                    pageUrl = sourcePageUrl,
+                    selection = verifiedSelection.copy(
+                        wasTruncated = selection.wasTruncated || verifiedSelection.wasTruncated
+                    )
+                )
+                showAiChat = true
+            }
+            LaunchedEffect(
+                pendingAiSelectedText?.selectionId,
+                currentTab.id,
+                currentTab.url,
+                currentTab.engine,
+                currentTab.isIncognito
+            ) {
+                val pending = pendingAiSelectedText ?: return@LaunchedEffect
+                val stillEligible = AiSelectedTextPolicy.canOfferSelection(
+                    engine = currentTab.engine,
+                    isPrivateTab = currentTab.isIncognito
+                )
+                if (pending.tabId != currentTab.id || pending.selection.sourceEngine != currentTab.engine ||
+                    pending.pageUrl != selectedTextPageUrl(currentTab) || !stillEligible
+                ) {
+                    pendingAiSelectedText = null
+                    showAiChat = false
+                }
             }
             var aiApiKey by remember { mutableStateOf("") }
             var aiProvider by remember { mutableStateOf("groq") }
@@ -3630,6 +3703,7 @@ class MainActivity : FragmentActivity() {
                                                             var createdGeckoSession: GeckoBrowserTabSession? = null
                                                             val geckoSession = GeckoBrowserTabSession(
                                                                 context = ctx,
+                                                                selectionActivity = this@MainActivity,
                                                                 runtime = ExtensionBrowserRuntime.get(applicationContext),
                                                                 tabId = tabId,
                                                                 mode = activeMode,
@@ -3886,6 +3960,13 @@ class MainActivity : FragmentActivity() {
                                                                             )
                                                                         }
                                                                     }
+                                                                },
+                                                                onSelectedText = { selection, pageUrl ->
+                                                                    openSelectedTextForAi(
+                                                                        selection = selection,
+                                                                        sourceTabId = tabId,
+                                                                        sourcePageUrl = pageUrl
+                                                                    )
                                                                 },
                                                                 onLoginSavePrompt = { promptTabId, promptSession, request ->
                                                                     val completion = org.mozilla.geckoview.GeckoResult<org.mozilla.geckoview.GeckoSession.PromptDelegate.PromptResponse>()
@@ -4569,6 +4650,9 @@ class MainActivity : FragmentActivity() {
                                                                         }
                                                                     }
                                                                 }
+
+                                                                // WebView has no public native selection-action callback, so it
+                                                                // deliberately offers no selected-text AI action.
 
                                                                 // Long-press context menu (links + images).
                                                                 // Attached once at WebView creation, so it works in
@@ -6688,16 +6772,24 @@ class MainActivity : FragmentActivity() {
                                     pageTitle = currentTab.title,
                                     pageUrl = currentTab.url,
                                     pageContextIdentity = currentTab.id,
-                                    canSharePageContext = com.click.browser.engine.AiPageContextPolicy.canOfferPageContext(
+                                    selectedText = pendingAiSelectedText?.selection,
+                                    selectedTextSessionIdentity = pendingAiSelectedText?.selectionId.orEmpty(),
+                                    canSharePageContext = pendingAiSelectedText == null &&
+                                        com.click.browser.engine.AiPageContextPolicy.canOfferPageContext(
                                         isPrivateTab = currentTab.isIncognito,
                                         isWebViewSupported = currentTab.engine == BrowserTabEngine.WEBVIEW && currentTab.webView != null,
                                         pageUrl = currentTab.url
                                     ),
+                                    onCancelSelectedText = {
+                                        pendingAiSelectedText = null
+                                        showAiChat = false
+                                    },
                                     onRequestPageContext = { onCaptured ->
                                         val requestedTabId = currentTab.id
                                         val requestedUrl = currentTab.url
                                         val requestedWebView = currentTab.webView
-                                        val mayCapture = com.click.browser.engine.AiPageContextPolicy.canOfferPageContext(
+                                        val mayCapture = pendingAiSelectedText == null &&
+                                            com.click.browser.engine.AiPageContextPolicy.canOfferPageContext(
                                             isPrivateTab = currentTab.isIncognito,
                                             isWebViewSupported = currentTab.engine == BrowserTabEngine.WEBVIEW && requestedWebView != null,
                                             pageUrl = requestedUrl
@@ -6710,6 +6802,7 @@ class MainActivity : FragmentActivity() {
                                             ) { raw ->
                                                 val samePageStillActive = currentTab.id == requestedTabId &&
                                                     currentTab.url == requestedUrl &&
+                                                    pendingAiSelectedText == null &&
                                                     !currentTab.isIncognito &&
                                                     currentTab.engine == BrowserTabEngine.WEBVIEW
                                                 if (!samePageStillActive) {
@@ -6730,6 +6823,7 @@ class MainActivity : FragmentActivity() {
                                         }
                                     },
                                     onOpenUrl = { targetUri ->
+                                        pendingAiSelectedText = null
                                         showAiChat = false
                                         val destination = cleanTrackingUrl(formatUrl(targetUri, currentSearchEngineSetting))
                                         currentTab.url = destination
@@ -6750,8 +6844,15 @@ class MainActivity : FragmentActivity() {
                                             Toast.LENGTH_SHORT
                                         ).show()
                                     },
-                                    onOpenSettings = { showAiChat = false; showSettings = true },
-                                    onClose = { showAiChat = false }
+                                    onOpenSettings = {
+                                        pendingAiSelectedText = null
+                                        showAiChat = false
+                                        showSettings = true
+                                    },
+                                    onClose = {
+                                        pendingAiSelectedText = null
+                                        showAiChat = false
+                                    }
                                 )
                             }
                             } // AnimatedVisibility (AI chat slide/spring)

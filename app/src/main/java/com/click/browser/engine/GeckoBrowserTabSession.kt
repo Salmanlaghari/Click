@@ -1,10 +1,13 @@
 package com.click.browser.engine
 
+import android.app.Activity
 import android.content.Context
+import android.view.MenuItem
 import android.view.View
 import android.view.ViewGroup
 import org.mozilla.geckoview.AllowOrDeny
 import org.mozilla.geckoview.Autocomplete
+import org.mozilla.geckoview.BasicSelectionActionDelegate
 import org.mozilla.geckoview.GeckoResult
 import org.mozilla.geckoview.GeckoRuntime
 import org.mozilla.geckoview.GeckoSession
@@ -48,9 +51,12 @@ internal fun geckoSessionStartupPlan(
     else -> GeckoSessionStartupPlan(true, false, false)
 }
 
+private const val GECKO_ACTION_EXPLAIN_SELECTED_TEXT = "com.click.browser.EXPLAIN_SELECTED_TEXT"
+
 /** GeckoView provider for one regular browser tab. */
 internal class GeckoBrowserTabSession(
     context: Context,
+    selectionActivity: Activity,
     private val runtime: GeckoRuntime,
     private val tabId: String,
     mode: BrowserMode,
@@ -75,6 +81,7 @@ internal class GeckoBrowserTabSession(
     private val onRendererFailure: (GeckoRenderEvent, Throwable?) -> Unit,
     private val onRendererRecovery: (GeckoRenderEvent) -> Unit,
     private val onExternalResponse: (WebResponse) -> Unit,
+    private val onSelectedText: (AiSelectedTextPolicy.PreparedSelection, String) -> Unit,
     private val onLoginSavePrompt: (
         String,
         GeckoSession,
@@ -103,9 +110,57 @@ internal class GeckoBrowserTabSession(
     @Volatile private var rendererRecoveryInProgress = false
     private val adoptedChildSession = initialGeckoSession != null
 
+    private val selectionActionDelegate = object : BasicSelectionActionDelegate(selectionActivity) {
+        override fun getAllActions(): Array<String> =
+            super.getAllActions() + GECKO_ACTION_EXPLAIN_SELECTED_TEXT
+
+        override fun isActionAvailable(id: String): Boolean {
+            if (id != GECKO_ACTION_EXPLAIN_SELECTED_TEXT) return super.isActionAvailable(id)
+            val selection = getSelection() ?: return false
+            val flags = selection.flags
+            return AiSelectedTextPolicy.prepareSelection(
+                rawText = selection.text,
+                engine = BrowserTabEngine.GECKOVIEW,
+                isPrivateTab = false,
+                isCollapsed = (flags and GeckoSession.SelectionActionDelegate.FLAG_IS_COLLAPSED) != 0,
+                isEditable = (flags and GeckoSession.SelectionActionDelegate.FLAG_IS_EDITABLE) != 0,
+                isPassword = (flags and GeckoSession.SelectionActionDelegate.FLAG_IS_PASSWORD) != 0
+            ) != null
+        }
+
+        override fun prepareAction(id: String, menuItem: MenuItem) {
+            if (id == GECKO_ACTION_EXPLAIN_SELECTED_TEXT) {
+                menuItem.title = "Explain selection"
+                menuItem.setShowAsAction(MenuItem.SHOW_AS_ACTION_IF_ROOM)
+            } else {
+                super.prepareAction(id, menuItem)
+            }
+        }
+
+        override fun performAction(id: String, menuItem: MenuItem): Boolean {
+            if (id != GECKO_ACTION_EXPLAIN_SELECTED_TEXT) {
+                return super.performAction(id, menuItem)
+            }
+            val selection = getSelection() ?: return false
+            val flags = selection.flags
+            val prepared = AiSelectedTextPolicy.prepareSelection(
+                rawText = selection.text,
+                engine = BrowserTabEngine.GECKOVIEW,
+                isPrivateTab = false,
+                isCollapsed = (flags and GeckoSession.SelectionActionDelegate.FLAG_IS_COLLAPSED) != 0,
+                isEditable = (flags and GeckoSession.SelectionActionDelegate.FLAG_IS_EDITABLE) != 0,
+                isPassword = (flags and GeckoSession.SelectionActionDelegate.FLAG_IS_PASSWORD) != 0
+            ) ?: return false
+            onSelectedText(prepared, lastKnownPageUrl)
+            clearSelection()
+            return true
+        }
+    }
+
     override val view: View get() = geckoView
 
     init {
+        session.setSelectionActionDelegate(selectionActionDelegate)
         // Adopted child sessions keep their storage and UA identity, but receive
         // the same viewport preference as a newly-created regular tab.
         session.settings.setViewportMode(
