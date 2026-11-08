@@ -46,7 +46,11 @@ internal fun applyBookmarkEdit(
     val existingIndex = bookmarks.indexOfFirst { it.url == existingUrl }
     if (existingIndex < 0) return BookmarkEditDecision(BookmarkEditResult.NOT_FOUND, bookmarks)
 
-    val normalized = Bookmark(replacement.title.trim(), replacement.url.trim())
+    val normalized = Bookmark(
+        replacement.title.trim(),
+        replacement.url.trim(),
+        bookmarks[existingIndex].folder
+    )
     val collides = bookmarks.indices.any { index ->
         index != existingIndex && bookmarks[index].url == normalized.url
     }

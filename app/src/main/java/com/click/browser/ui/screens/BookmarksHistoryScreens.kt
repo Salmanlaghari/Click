@@ -3,14 +3,17 @@ package com.click.browser.ui.screens
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.FileUpload
+import androidx.compose.material.icons.filled.FolderOpen
 import androidx.compose.material.icons.filled.History
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -25,6 +28,8 @@ import com.click.browser.data.Bookmark
 import com.click.browser.data.BookmarkEditResult
 import com.click.browser.data.BookmarkEditValidationError
 import com.click.browser.data.BookmarkImporter
+import com.click.browser.data.BookmarkOrganizationPolicy
+import com.click.browser.data.BookmarkOrganizationResult
 import com.click.browser.data.validateBookmarkEdit
 import com.click.browser.data.BrowserRepository
 import com.click.browser.data.HistoryItem
@@ -47,6 +52,23 @@ fun BookmarksScreen(
     val snackbarHostState = remember { SnackbarHostState() }
     var isImporting by remember { mutableStateOf(false) }
     var bookmarkBeingEdited by remember { mutableStateOf<Bookmark?>(null) }
+    var bookmarkBeingOrganized by remember { mutableStateOf<Bookmark?>(null) }
+    var selectedFolderFilter by remember { mutableStateOf<String?>(null) }
+    val folders = remember(bookmarks) {
+        bookmarks.mapNotNull { it.folder?.takeIf { folder -> folder.isNotBlank() } }
+            .distinct()
+            .sortedBy { it.lowercase() }
+    }
+    val visibleBookmarks = if (selectedFolderFilter == null) {
+        bookmarks
+    } else {
+        bookmarks.filter { it.folder == selectedFolderFilter }
+    }
+    LaunchedEffect(folders, selectedFolderFilter) {
+        if (selectedFolderFilter != null && selectedFolderFilter !in folders) {
+            selectedFolderFilter = null
+        }
+    }
 
     val importLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.GetContent()
@@ -133,12 +155,60 @@ fun BookmarksScreen(
             }
         } else {
             LazyColumn(modifier = Modifier.padding(padding)) {
-                items(bookmarks) { bookmark ->
+                if (folders.isNotEmpty()) {
+                    item {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .horizontalScroll(rememberScrollState())
+                                .padding(horizontal = 16.dp, vertical = 8.dp),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            FilterChip(
+                                selected = selectedFolderFilter == null,
+                                onClick = { selectedFolderFilter = null },
+                                label = { Text("All") }
+                            )
+                            folders.forEach { folder ->
+                                FilterChip(
+                                    selected = selectedFolderFilter == folder,
+                                    onClick = { selectedFolderFilter = folder },
+                                    label = { Text(folder) }
+                                )
+                            }
+                        }
+                    }
+                }
+                if (visibleBookmarks.isEmpty()) {
+                    item {
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(32.dp),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Text("No bookmarks in this folder.")
+                        }
+                    }
+                }
+                items(visibleBookmarks) { bookmark ->
                     ListItem(
                         headlineContent = { Text(bookmark.title) },
-                        supportingContent = { Text(bookmark.url) },
+                        supportingContent = {
+                            Text(
+                                bookmark.folder?.let { "Folder: $it · ${bookmark.url}" } ?: bookmark.url,
+                                maxLines = 2,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                        },
                         trailingContent = {
                             Row(verticalAlignment = Alignment.CenterVertically) {
+                                IconButton(onClick = { bookmarkBeingOrganized = bookmark }) {
+                                    Icon(
+                                        Icons.Default.FolderOpen,
+                                        contentDescription = "Organize bookmark ${bookmark.title}"
+                                    )
+                                }
                                 IconButton(onClick = { bookmarkBeingEdited = bookmark }) {
                                     Icon(Icons.Default.Edit, contentDescription = "Edit bookmark ${bookmark.title}")
                                 }
@@ -169,6 +239,19 @@ fun BookmarksScreen(
             onSaved = {
                 bookmarkBeingEdited = null
                 coroutineScope.launch { snackbarHostState.showSnackbar("Bookmark updated.") }
+            }
+        )
+    }
+
+    bookmarkBeingOrganized?.let { bookmark ->
+        BookmarkFolderDialog(
+            bookmark = bookmark,
+            folders = folders,
+            onDismiss = { bookmarkBeingOrganized = null },
+            onSave = { folder -> repository.moveBookmarkToFolder(bookmark.url, folder) },
+            onSaved = {
+                bookmarkBeingOrganized = null
+                coroutineScope.launch { snackbarHostState.showSnackbar("Bookmark organization updated.") }
             }
         )
     }
@@ -242,6 +325,117 @@ private fun BookmarkEditorDialog(
                                 BookmarkEditResult.DUPLICATE_URL -> validationMessage = "A bookmark with this URL already exists."
                                 BookmarkEditResult.NOT_FOUND -> validationMessage = "This bookmark was removed. Close the editor and try again."
                                 BookmarkEditResult.INVALID_INPUT -> validationMessage = "Enter a title and a complete HTTP or HTTPS URL."
+                            }
+                            isSaving = false
+                        }
+                    }
+                }
+            ) {
+                Text(if (isSaving) "Saving…" else "Save")
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss, enabled = !isSaving) { Text("Cancel") }
+        }
+    )
+}
+
+@Composable
+private fun BookmarkFolderDialog(
+    bookmark: Bookmark,
+    folders: List<String>,
+    onDismiss: () -> Unit,
+    onSave: suspend (String?) -> BookmarkOrganizationResult,
+    onSaved: () -> Unit
+) {
+    var folderName by remember(bookmark.url) { mutableStateOf(bookmark.folder.orEmpty()) }
+    var validationMessage by remember(bookmark.url) { mutableStateOf<String?>(null) }
+    var isSaving by remember(bookmark.url) { mutableStateOf(false) }
+    val scope = rememberCoroutineScope()
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Organize bookmark") },
+        text = {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(max = 320.dp)
+                    .verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                Text("Choose a folder or enter a name to create one. Leave blank for Unfiled.")
+                OutlinedTextField(
+                    value = folderName,
+                    onValueChange = {
+                        folderName = it
+                        validationMessage = null
+                    },
+                    label = { Text("Folder name") },
+                    singleLine = true,
+                    enabled = !isSaving,
+                    modifier = Modifier.fillMaxWidth()
+                )
+                if (folders.isNotEmpty()) {
+                    Text("Existing folders", style = MaterialTheme.typography.labelMedium)
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .horizontalScroll(rememberScrollState()),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        folders.forEach { folder ->
+                            FilterChip(
+                                selected = folderName.trim() == folder,
+                                onClick = {
+                                    folderName = folder
+                                    validationMessage = null
+                                },
+                                label = { Text(folder) },
+                                enabled = !isSaving
+                            )
+                        }
+                    }
+                }
+                TextButton(
+                    onClick = {
+                        folderName = ""
+                        validationMessage = null
+                    },
+                    enabled = !isSaving
+                ) {
+                    Text("Move to Unfiled")
+                }
+                validationMessage?.let {
+                    Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(
+                enabled = !isSaving,
+                onClick = {
+                    val normalizedFolder = if (folderName.isBlank()) {
+                        null
+                    } else {
+                        BookmarkOrganizationPolicy.normalizeFolderName(folderName)
+                    }
+                    if (folderName.isNotBlank() && normalizedFolder == null) {
+                        validationMessage = "Folder names must be 1–40 characters and cannot contain slashes."
+                    } else {
+                        isSaving = true
+                        scope.launch {
+                            val result = try {
+                                onSave(normalizedFolder)
+                            } catch (_: Exception) {
+                                validationMessage = "Could not organize this bookmark. Try again."
+                                isSaving = false
+                                return@launch
+                            }
+                            when (result) {
+                                BookmarkOrganizationResult.UPDATED -> onSaved()
+                                BookmarkOrganizationResult.NOT_FOUND -> validationMessage = "This bookmark was removed. Close the dialog and try again."
+                                BookmarkOrganizationResult.INVALID_FOLDER -> validationMessage = "Folder names must be 1–40 characters and cannot contain slashes."
                             }
                             isSaving = false
                         }

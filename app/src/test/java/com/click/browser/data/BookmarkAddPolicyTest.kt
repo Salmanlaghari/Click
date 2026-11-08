@@ -18,6 +18,17 @@ class BookmarkAddPolicyTest {
             Bookmark("https://example.com/", "https://example.com/"),
             BookmarkAddPolicy.prepare("  ", "https://example.com/")
         )
+        assertEquals(
+            Bookmark("Example page", "https://example.com/path", "Work"),
+            BookmarkAddPolicy.prepare("Example page", "https://example.com/path", "  Work  ")
+        )
+        assertNull(
+            BookmarkAddPolicy.prepare(
+                "Example page",
+                "https://example.com/path",
+                "x".repeat(BookmarkOrganizationPolicy.MAX_FOLDER_NAME_LENGTH + 1)
+            )
+        )
     }
 
     @Test
@@ -34,5 +45,6 @@ class BookmarkAddPolicyTest {
         val existing = listOf("https://example.com/", "https://other.example/")
         assertFalse(BookmarkAddPolicy.shouldAdd(existing, Bookmark("Duplicate", "https://example.com/")))
         assertTrue(BookmarkAddPolicy.shouldAdd(existing, Bookmark("New page", "https://example.com/new")))
+        assertFalse(BookmarkAddPolicy.shouldAdd(emptyList(), Bookmark("Bad folder", "https://example.com/new", "Work/2026")))
     }
 }
