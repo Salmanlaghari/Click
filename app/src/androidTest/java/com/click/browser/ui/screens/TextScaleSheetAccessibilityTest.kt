@@ -4,7 +4,6 @@ import android.content.res.Configuration
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalDensity
-import androidx.compose.ui.test.assertExists
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsNotDisplayed
 import androidx.compose.ui.test.junit4.createComposeRule
@@ -55,7 +54,7 @@ class TextScaleSheetAccessibilityTest {
             }
         }
 
-        composeRule.onNodeWithText("Done").assertExists().assertIsNotDisplayed()
+        composeRule.onNodeWithText("Done").assertIsNotDisplayed()
         composeRule.onNodeWithText("Reset (100%)")
             .performScrollTo()
             .assertIsDisplayed()
