@@ -35,4 +35,64 @@ class QuickTogglesAvailabilityPolicyTest {
             QuickTogglesAvailabilityPolicy.forTab(BrowserTabEngine.GECKOVIEW, isPrivate = true)
         )
     }
+
+    @Test
+    fun adBlockQuickToggleUsesGlobalDefaultWhenNoSiteOverrideExists() {
+        assertEquals(
+            QuickToggleAdBlockState(
+                checked = true,
+                toggleEnabled = true,
+                siteOverrideActive = false
+            ),
+            QuickTogglesAvailabilityPolicy.adBlockState(
+                BrowserTabEngine.WEBVIEW,
+                globalEnabled = true,
+                siteOverride = null
+            )
+        )
+    }
+
+    @Test
+    fun siteOverrideControlsDisplayedStateAndDisablesGlobalToggle() {
+        assertEquals(
+            QuickToggleAdBlockState(
+                checked = false,
+                toggleEnabled = false,
+                siteOverrideActive = true
+            ),
+            QuickTogglesAvailabilityPolicy.adBlockState(
+                BrowserTabEngine.WEBVIEW,
+                globalEnabled = true,
+                siteOverride = false
+            )
+        )
+        assertEquals(
+            QuickToggleAdBlockState(
+                checked = true,
+                toggleEnabled = false,
+                siteOverrideActive = true
+            ),
+            QuickTogglesAvailabilityPolicy.adBlockState(
+                BrowserTabEngine.WEBVIEW,
+                globalEnabled = false,
+                siteOverride = true
+            )
+        )
+    }
+
+    @Test
+    fun geckoViewDoesNotShowClickAdFilterAsActiveOrEditable() {
+        assertEquals(
+            QuickToggleAdBlockState(
+                checked = false,
+                toggleEnabled = false,
+                siteOverrideActive = false
+            ),
+            QuickTogglesAvailabilityPolicy.adBlockState(
+                BrowserTabEngine.GECKOVIEW,
+                globalEnabled = true,
+                siteOverride = true
+            )
+        )
+    }
 }
