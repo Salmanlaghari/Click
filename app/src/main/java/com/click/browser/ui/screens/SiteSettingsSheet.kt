@@ -58,6 +58,9 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.click.browser.engine.CookieStore
+import com.click.browser.engine.ConnectionSecurityInfo
+import com.click.browser.engine.ConnectionSecurityPolicy
+import com.click.browser.engine.ConnectionSecurityStatus
 import com.click.browser.engine.ModeTheme
 import com.click.browser.engine.SiteSettings
 import com.click.browser.engine.WebsitePermissionCapability
@@ -71,7 +74,7 @@ import kotlinx.coroutines.launch
  * Developer = dark glass, Power = OLED neon, Advance = deep-space teal).
  *
  * Sections (mirroring Chrome's site-details page):
- * - Site header: host + a factual HTTP/HTTPS URL-scheme label.
+ * - Site header: host + the browser's observed connection-security state.
  * - Permissions: a clear explanation of website permissions that Click does
  *   not grant in this build (camera, microphone and location); notifications
  *   are unsupported for websites.
@@ -87,7 +90,7 @@ import kotlinx.coroutines.launch
 fun SiteSettingsSheet(
     theme: ModeTheme,
     host: String,
-    isHttps: Boolean,
+    connectionSecurity: ConnectionSecurityInfo,
     current: SiteSettings,
     desktopMode: Boolean,
     globalJavaScript: Boolean,
@@ -109,6 +112,15 @@ fun SiteSettingsSheet(
 ) {
     val scope = rememberCoroutineScope()
     val context = LocalContext.current
+    val securityStatus = connectionSecurity.status
+    val securityColor = when (securityStatus) {
+        ConnectionSecurityStatus.SECURE_HTTPS -> Color(0xFF22C55E)
+        ConnectionSecurityStatus.SECURE_WITH_MIXED_CONTENT,
+        ConnectionSecurityStatus.UNENCRYPTED_HTTP -> Color(0xFFF59E0B)
+        ConnectionSecurityStatus.CERTIFICATE_WARNING -> MaterialTheme.colorScheme.error
+        ConnectionSecurityStatus.CHECKING,
+        ConnectionSecurityStatus.UNKNOWN -> theme.onSurface.copy(alpha = 0.5f)
+    }
     var showClearConfirm by remember { mutableStateOf(false) }
     var showClearHistoryConfirm by remember(host, historyScopeDescription) { mutableStateOf(false) }
 
@@ -124,7 +136,7 @@ fun SiteSettingsSheet(
                 .verticalScroll(rememberScrollState())
                 .padding(horizontal = 20.dp, vertical = 8.dp)
         ) {
-            // ---- Site header: host + HTTP/HTTPS URL-scheme label ----
+            // ---- Site header: host + engine-reported connection status ----
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Box(
                     modifier = Modifier
@@ -138,7 +150,14 @@ fun SiteSettingsSheet(
                     contentAlignment = Alignment.Center
                 ) {
                     Icon(
-                        if (isHttps) Icons.Default.Lock else Icons.Default.LockOpen,
+                        when (securityStatus) {
+                            ConnectionSecurityStatus.SECURE_HTTPS,
+                            ConnectionSecurityStatus.SECURE_WITH_MIXED_CONTENT -> Icons.Default.Lock
+                            ConnectionSecurityStatus.UNENCRYPTED_HTTP,
+                            ConnectionSecurityStatus.CERTIFICATE_WARNING -> Icons.Default.LockOpen
+                            ConnectionSecurityStatus.CHECKING,
+                            ConnectionSecurityStatus.UNKNOWN -> Icons.Default.Shield
+                        },
                         contentDescription = null,
                         tint = Color.White,
                         modifier = Modifier.size(22.dp)
@@ -157,14 +176,11 @@ fun SiteSettingsSheet(
                             modifier = Modifier
                                 .size(8.dp)
                                 .clip(CircleShape)
-                                .background(
-                                    if (isHttps) Color(0xFF22C55E)
-                                    else MaterialTheme.colorScheme.error
-                                )
+                                .background(securityColor)
                         )
                         Spacer(Modifier.width(6.dp))
                         Text(
-                            if (isHttps) "URL uses HTTPS" else "URL uses HTTP (not encrypted)",
+                            ConnectionSecurityPolicy.title(securityStatus),
                             fontSize = 12.sp,
                             color = theme.onSurface.copy(alpha = 0.6f)
                         )
@@ -334,11 +350,35 @@ fun SiteSettingsSheet(
             // ================= SHIELDS =================
             SectionTitle(theme, "🛡️ Shields")
             Text(
-                if (isHttps) "Your connection to this site is encrypted (HTTPS)."
-                else "Not encrypted — avoid entering passwords or payment details here.",
+                ConnectionSecurityPolicy.description(securityStatus),
                 fontSize = 12.sp,
                 color = theme.onSurface.copy(alpha = 0.6f)
             )
+            connectionSecurity.detail?.let { detail ->
+                Text(
+                    detail,
+                    fontSize = 11.sp,
+                    color = theme.onSurface.copy(alpha = 0.58f),
+                    modifier = Modifier.padding(top = 4.dp)
+                )
+            }
+            connectionSecurity.certificateSubject?.let { subject ->
+                Text(
+                    "Certificate subject: $subject",
+                    fontSize = 10.sp,
+                    color = theme.onSurface.copy(alpha = 0.55f),
+                    maxLines = 2,
+                    modifier = Modifier.padding(top = 4.dp)
+                )
+            }
+            connectionSecurity.certificateIssuer?.let { issuer ->
+                Text(
+                    "Issued by: $issuer",
+                    fontSize = 10.sp,
+                    color = theme.onSurface.copy(alpha = 0.55f),
+                    maxLines = 2
+                )
+            }
             Spacer(Modifier.height(8.dp))
             ShieldsInfoRow(
                 theme = theme,
