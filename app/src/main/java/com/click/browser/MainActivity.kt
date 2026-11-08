@@ -221,7 +221,15 @@ private data class PendingAiSelectedTextOffer(
     val selection: AiSelectedTextPolicy.PreparedSelection
 )
 
+private data class PendingSelectedTextTranslation(
+    val selectionId: String,
+    val tabId: String,
+    val pageUrl: String,
+    val selection: AiSelectedTextPolicy.PreparedSelection
+)
+
 private const val WEBVIEW_ACTION_EXPLAIN_SELECTED_TEXT = 0x434C494B
+private const val WEBVIEW_ACTION_TRANSLATE_SELECTED_TEXT = 0x434C4950
 
 /**
  * Page transition wrapper — subtle fade + slide on every navigation start.
@@ -1836,6 +1844,9 @@ class MainActivity : FragmentActivity() {
             // AI chat + privacy guards
             var showAiChat by remember { mutableStateOf(false) }
             var pendingAiSelectedText by remember { mutableStateOf<PendingAiSelectedTextOffer?>(null) }
+            var pendingSelectedTextTranslation by remember {
+                mutableStateOf<PendingSelectedTextTranslation?>(null)
+            }
             var showPrivacyGuards by remember { mutableStateOf(false) }
             // click:// internal pages (chrome://-style). Holds the page key or null.
             var showClickPage by remember { mutableStateOf<String?>(null) }
@@ -1979,6 +1990,38 @@ class MainActivity : FragmentActivity() {
                 )
                 showAiChat = true
             }
+            fun openSelectedTextForTranslation(
+                selection: AiSelectedTextPolicy.PreparedSelection,
+                sourceTabId: String,
+                sourcePageUrl: String
+            ) {
+                val sourceTab = activeSelectedTextSource(
+                    sourceTabId = sourceTabId,
+                    sourceEngine = selection.sourceEngine,
+                    sourcePageUrl = sourcePageUrl
+                ) ?: return
+                if (!AiSelectedTextPolicy.canOfferSelection(
+                        engine = sourceTab.engine,
+                        isPrivateTab = sourceTab.isIncognito,
+                        webViewJavaScriptEnabled = javaScriptEnabledGlobal
+                    )
+                ) return
+                val verifiedSelection = AiSelectedTextPolicy.prepareSelection(
+                    rawText = selection.text,
+                    engine = sourceTab.engine,
+                    isPrivateTab = sourceTab.isIncognito,
+                    webViewJavaScriptEnabled = javaScriptEnabledGlobal
+                ) ?: return
+                pendingSelectedTextTranslation = PendingSelectedTextTranslation(
+                    selectionId = java.util.UUID.randomUUID().toString(),
+                    tabId = sourceTabId,
+                    pageUrl = sourcePageUrl,
+                    selection = verifiedSelection.copy(
+                        wasTruncated = selection.wasTruncated || verifiedSelection.wasTruncated
+                    )
+                )
+                showTranslateSheet = true
+            }
             LaunchedEffect(
                 pendingAiSelectedText?.selectionId,
                 currentTab.id,
@@ -1998,6 +2041,29 @@ class MainActivity : FragmentActivity() {
                 ) {
                     pendingAiSelectedText = null
                     showAiChat = false
+                }
+            }
+            LaunchedEffect(
+                pendingSelectedTextTranslation?.selectionId,
+                currentTab.id,
+                selectedTextPageUrl(currentTab),
+                currentTab.engine,
+                currentTab.isIncognito,
+                javaScriptEnabledGlobal
+            ) {
+                val pending = pendingSelectedTextTranslation ?: return@LaunchedEffect
+                val stillEligible = activeSelectedTextSource(
+                    sourceTabId = pending.tabId,
+                    sourceEngine = pending.selection.sourceEngine,
+                    sourcePageUrl = pending.pageUrl
+                ) != null && AiSelectedTextPolicy.canOfferSelection(
+                    engine = currentTab.engine,
+                    isPrivateTab = currentTab.isIncognito,
+                    webViewJavaScriptEnabled = javaScriptEnabledGlobal
+                )
+                if (!stillEligible) {
+                    pendingSelectedTextTranslation = null
+                    showTranslateSheet = false
                 }
             }
             var aiApiKey by remember { mutableStateOf("") }
@@ -4014,6 +4080,13 @@ class MainActivity : FragmentActivity() {
                                                                         sourcePageUrl = pageUrl
                                                                     )
                                                                 },
+                                                                onTranslateSelectedText = { selection, pageUrl ->
+                                                                    openSelectedTextForTranslation(
+                                                                        selection = selection,
+                                                                        sourceTabId = tabId,
+                                                                        sourcePageUrl = pageUrl
+                                                                    )
+                                                                },
                                                                 onLoginSavePrompt = { promptTabId, promptSession, request ->
                                                                     val completion = org.mozilla.geckoview.GeckoResult<org.mozilla.geckoview.GeckoSession.PromptDelegate.PromptResponse>()
                                                                     val option = request.options.firstOrNull()
@@ -4725,6 +4798,12 @@ class MainActivity : FragmentActivity() {
                                                                                 android.view.Menu.NONE,
                                                                                 "Explain selection"
                                                                             ).setShowAsAction(android.view.MenuItem.SHOW_AS_ACTION_IF_ROOM)
+                                                                            menu.add(
+                                                                                android.view.Menu.NONE,
+                                                                                WEBVIEW_ACTION_TRANSLATE_SELECTED_TEXT,
+                                                                                android.view.Menu.NONE,
+                                                                                "Translate selection"
+                                                                            ).setShowAsAction(android.view.MenuItem.SHOW_AS_ACTION_IF_ROOM)
                                                                         }
                                                                         return true
                                                                     }
@@ -4738,7 +4817,9 @@ class MainActivity : FragmentActivity() {
                                                                         mode: android.view.ActionMode,
                                                                         item: android.view.MenuItem
                                                                     ): Boolean {
-                                                                        if (item.itemId != WEBVIEW_ACTION_EXPLAIN_SELECTED_TEXT) return false
+                                                                        if (item.itemId != WEBVIEW_ACTION_EXPLAIN_SELECTED_TEXT &&
+                                                                            item.itemId != WEBVIEW_ACTION_TRANSLATE_SELECTED_TEXT
+                                                                        ) return false
                                                                         val expectedUrl = selectionWebView.url.orEmpty()
                                                                         val activeSource = activeSelectedTextSource(
                                                                             sourceTabId = selectionTabId,
@@ -4778,11 +4859,19 @@ class MainActivity : FragmentActivity() {
                                                                                 if (selectionWebView.url.orEmpty() != expectedUrl) {
                                                                                     return@evaluateJavascript
                                                                                 }
-                                                                                openSelectedTextForAi(
-                                                                                    selection = prepared,
-                                                                                    sourceTabId = selectionTabId,
-                                                                                    sourcePageUrl = expectedUrl
-                                                                                )
+                                                                                if (item.itemId == WEBVIEW_ACTION_TRANSLATE_SELECTED_TEXT) {
+                                                                                    openSelectedTextForTranslation(
+                                                                                        selection = prepared,
+                                                                                        sourceTabId = selectionTabId,
+                                                                                        sourcePageUrl = expectedUrl
+                                                                                    )
+                                                                                } else {
+                                                                                    openSelectedTextForAi(
+                                                                                        selection = prepared,
+                                                                                        sourceTabId = selectionTabId,
+                                                                                        sourcePageUrl = expectedUrl
+                                                                                    )
+                                                                                }
                                                                             }
                                                                         }.onFailure {
                                                                             mode.finish()
@@ -6500,11 +6589,19 @@ class MainActivity : FragmentActivity() {
                             }
                             // On-device ML Kit translation sheet.
                             if (showTranslateSheet) {
+                                val selectedTranslation = pendingSelectedTextTranslation
                                 com.click.browser.ui.screens.TranslateSheet(
                                     theme = theme,
-                                    webView = currentTab.webView,
-                                    pageUrl = currentTab.url,
-                                    onDismiss = { showTranslateSheet = false }
+                                    webView = if (selectedTranslation == null) currentTab.webView else null,
+                                    pageUrl = if (selectedTranslation == null) currentTab.url else "",
+                                    onDismiss = {
+                                        showTranslateSheet = false
+                                        pendingSelectedTextTranslation = null
+                                    },
+                                    initialText = selectedTranslation?.selection?.text.orEmpty(),
+                                    selectedTextOnly = selectedTranslation != null,
+                                    selectionSessionIdentity = selectedTranslation?.selectionId.orEmpty(),
+                                    selectionWasTruncated = selectedTranslation?.selection?.wasTruncated == true
                                 )
                             }
                             // Long-press context menu (links + images). Every action
