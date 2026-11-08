@@ -16,7 +16,7 @@ object MenuCustomization {
     val MENU_ORDER_JSON = stringPreferencesKey("menu_order_json")
     val MENU_HIDDEN_JSON = stringPreferencesKey("menu_hidden_json")
 
-    enum class MenuItemId(val title: String) {
+    enum class MenuItemId(val title: String, val modeFeature: FeatureId? = null) {
         NEW_TAB("New tab"),
         NEW_PRIVATE_TAB("New Private tab"),
         TABS("Tabs"),
@@ -30,7 +30,7 @@ object MenuCustomization {
         GAMES("Games"),
         RECENT_TABS("Recent tabs"),
         SHARE("Share…"),
-        FIND_IN_PAGE("Find in page"),
+        FIND_IN_PAGE("Find in page", FeatureId.FIND_IN_PAGE),
         TRANSLATE("Translate"),
         DESKTOP_SITE("Wide layout"),
         SITE_SETTINGS("Site settings"),
@@ -59,8 +59,7 @@ object MenuCustomization {
     /** Filters mode-scoped actions without changing the user's menu order or hidden choices. */
     fun filterItemsForMode(items: List<MenuItemId>, mode: BrowserMode): List<MenuItemId> =
         items.filter { item ->
-            item != MenuItemId.FIND_IN_PAGE ||
-                ModeCapabilityRegistry.supportsMode(FeatureId.FIND_IN_PAGE, mode)
+            item.modeFeature?.let { ModeCapabilityRegistry.supportsMode(it, mode) } ?: true
         }
 
     /** Full editable order (including hidden) for the customize UI. */

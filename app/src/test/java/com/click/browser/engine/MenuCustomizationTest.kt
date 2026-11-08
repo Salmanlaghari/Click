@@ -18,7 +18,13 @@ class MenuCustomizationTest {
     }
 
     @Test
-    fun findInPageVisibilityMatchesTheModeCapabilityRegistry() {
+    fun modeScopedMenuItemsFollowTheirDeclaredCapability() {
+        val modeScopedItems = MenuCustomization.MenuItemId.values()
+            .filter { it.modeFeature != null }
+        val findInPageFeature = requireNotNull(MenuCustomization.MenuItemId.FIND_IN_PAGE.modeFeature)
+        assertEquals(FeatureId.FIND_IN_PAGE, findInPageFeature)
+        assertTrue(modeScopedItems.contains(MenuCustomization.MenuItemId.FIND_IN_PAGE))
+
         val defaultItems = MenuCustomization.effectiveVisibleItems(
             MenuCustomization.DEFAULT_ORDER,
             emptySet()
@@ -28,9 +34,18 @@ class MenuCustomizationTest {
             val visibleItems = MenuCustomization.filterItemsForMode(defaultItems, mode)
             assertEquals(
                 "Find in page visibility in $mode",
-                ModeCapabilityRegistry.supportsMode(FeatureId.FIND_IN_PAGE, mode),
+                ModeCapabilityRegistry.supportsMode(findInPageFeature, mode),
                 MenuCustomization.MenuItemId.FIND_IN_PAGE in visibleItems
             )
+
+            modeScopedItems.forEach { item ->
+                val feature = requireNotNull(item.modeFeature)
+                assertEquals(
+                    "$item visibility in $mode",
+                    ModeCapabilityRegistry.supportsMode(feature, mode),
+                    item in MenuCustomization.filterItemsForMode(listOf(item), mode)
+                )
+            }
         }
     }
 
