@@ -5,7 +5,6 @@ import android.content.ClipData
 import android.content.Context
 import android.content.Intent
 import android.database.Cursor
-import android.net.Uri
 import android.widget.Toast
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -29,15 +28,6 @@ import kotlinx.coroutines.withContext
 import java.text.DateFormat
 import java.util.Date
 
-private data class ManagedDownload(
-    val id: Long,
-    val label: String,
-    val downloadedBytes: Long,
-    val totalBytes: Long,
-    val state: ManagedDownloadState,
-    val sourceUrl: String
-)
-
 /**
  * Downloads screen: live DownloadManager state for Click-started downloads plus
  * saved Click download records. Successful and failed system downloads remain
@@ -58,7 +48,7 @@ fun DownloadsScreen(
     LaunchedEffect(Unit) {
         while (isActive) {
             managedDownloads = queryManagedDownloads(context)
-            delay(1000)
+            delay(2_000)
         }
     }
 
@@ -122,7 +112,7 @@ fun DownloadsScreen(
                 items(completed, key = { it.id }) { item ->
                     ManagedDownloadRow(
                         item = item,
-                        onOpen = { openManagedDownload(context, item.id, item.label) },
+                        onOpen = { openManagedDownload(context, item.id) },
                         onShare = { shareManagedDownload(context, item.id, item.label) }
                     )
                 }
@@ -281,7 +271,7 @@ private fun SavedDownloadRow(item: DownloadItem) {
     )
 }
 
-private fun openManagedDownload(context: Context, id: Long, label: String) {
+private fun openManagedDownload(context: Context, id: Long) {
     val dm = context.getSystemService(Context.DOWNLOAD_SERVICE) as? DownloadManager
     val uri = try { dm?.getUriForDownloadedFile(id) } catch (_: Exception) { null }
     if (uri == null) {
@@ -325,7 +315,8 @@ private fun shareManagedDownload(context: Context, id: Long, label: String) {
 /** Queries all Click-owned DownloadManager lifecycle states; unrelated apps are excluded. */
 private suspend fun queryManagedDownloads(context: Context): List<ManagedDownload> =
     withContext(Dispatchers.IO) {
-        val result = mutableListOf<ManagedDownload>()
+        val active = mutableListOf<ManagedDownload>()
+        val recentHistory = mutableListOf<ManagedDownload>()
         var cursor: Cursor? = null
         try {
             val dm = context.getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager
@@ -345,23 +336,29 @@ private suspend fun queryManagedDownloads(context: Context): List<ManagedDownloa
             while (cursor.moveToNext()) {
                 val status = cursor.getInt(statusCol)
                 if (!isClickManagedDownload(cursor.getString(titleCol), status)) continue
-                result.add(
-                    ManagedDownload(
-                        id = cursor.getLong(idCol),
-                        label = cursor.getString(descCol).orEmpty().ifBlank { "Click download" }.take(120),
-                        downloadedBytes = cursor.getLong(downloadedCol),
-                        totalBytes = cursor.getLong(totalCol),
-                        state = managedDownloadState(status) ?: continue,
-                        sourceUrl = cursor.getString(uriCol).orEmpty()
-                    )
+                val state = managedDownloadState(status) ?: continue
+                val item = ManagedDownload(
+                    id = cursor.getLong(idCol),
+                    label = cursor.getString(descCol).orEmpty().ifBlank { "Click download" }.take(120),
+                    downloadedBytes = cursor.getLong(downloadedCol),
+                    totalBytes = cursor.getLong(totalCol),
+                    state = state,
+                    sourceUrl = cursor.getString(uriCol).orEmpty()
                 )
+                when (state) {
+                    ManagedDownloadState.PENDING,
+                    ManagedDownloadState.RUNNING,
+                    ManagedDownloadState.PAUSED -> active.add(item)
+                    ManagedDownloadState.COMPLETED,
+                    ManagedDownloadState.FAILED -> retainRecentManagedDownload(recentHistory, item)
+                }
             }
         } catch (_: Exception) {
             // DownloadManager unavailable or query failed — do not crash the screen.
         } finally {
             try { cursor?.close() } catch (_: Exception) { }
         }
-        result
+        active.sortedByDescending { it.id } + recentHistory
     }
 
 private fun formatBytes(bytes: Long): String {

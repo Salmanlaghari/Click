@@ -27,4 +27,40 @@ class DownloadCenterPolicyTest {
         assertFalse(isClickManagedDownload(null, DownloadManager.STATUS_RUNNING))
         assertFalse(isClickManagedDownload(CLICK_DOWNLOAD_TITLE, Int.MIN_VALUE))
     }
+
+    @Test
+    fun terminalHistoryIsNewestFirstDeduplicatedAndCapped() {
+        val history = mutableListOf<ManagedDownload>()
+        (1L..(MAX_MANAGED_DOWNLOAD_HISTORY + 5).toLong()).forEach { id ->
+            retainRecentManagedDownload(history, item(id))
+        }
+        assertEquals(MAX_MANAGED_DOWNLOAD_HISTORY, history.size)
+        assertEquals((MAX_MANAGED_DOWNLOAD_HISTORY + 5).toLong(), history.first().id)
+        assertEquals(6L, history.last().id)
+
+        retainRecentManagedDownload(history, item(20L, label = "updated name"))
+        assertEquals(MAX_MANAGED_DOWNLOAD_HISTORY, history.size)
+        assertEquals(1, history.count { it.id == 20L })
+        assertEquals("updated name", history.first { it.id == 20L }.label)
+    }
+
+    @Test
+    fun doesNotRetainActiveItemsAsHistory() {
+        val history = mutableListOf<ManagedDownload>()
+        retainRecentManagedDownload(history, item(1L, state = ManagedDownloadState.RUNNING))
+        assertTrue(history.isEmpty())
+    }
+
+    private fun item(
+        id: Long,
+        label: String = "download-$id.bin",
+        state: ManagedDownloadState = ManagedDownloadState.COMPLETED
+    ) = ManagedDownload(
+        id = id,
+        label = label,
+        downloadedBytes = 1,
+        totalBytes = 1,
+        state = state,
+        sourceUrl = "https://example.test/$id.bin"
+    )
 }
