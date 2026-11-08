@@ -1,14 +1,18 @@
 package com.click.browser.engine
 
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import okhttp3.Call
 import okhttp3.Dns
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
+import okhttp3.Response
 import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONArray
 import org.json.JSONObject
+import java.util.concurrent.atomic.AtomicReference
 import java.util.concurrent.TimeUnit
 
 data class GroundingSource(
@@ -128,13 +132,23 @@ object AiProviders {
  * Grounding citations), Groq, and OpenRouter. Keys live only in on-device
  * DataStore (or BuildConfig fallback for Groq) and are never logged.
  */
-class AiChatClient(dns: Dns = Dns.SYSTEM) {
+class AiChatClient internal constructor(
+    private val callFactory: Call.Factory
+) {
+    constructor(dns: Dns = Dns.SYSTEM) : this(
+        OkHttpClient.Builder()
+            .dns(dns)
+            .connectTimeout(30, TimeUnit.SECONDS)
+            .readTimeout(120, TimeUnit.SECONDS)
+            .build()
+    )
 
-    private val http = OkHttpClient.Builder()
-        .dns(dns)
-        .connectTimeout(30, TimeUnit.SECONDS)
-        .readTimeout(120, TimeUnit.SECONDS)
-        .build()
+    private val activeRequest = AtomicReference<AiRequestCancellationController?>(null)
+
+    /** Cancels the current network call; safe to call before the call is created. */
+    fun cancelCurrentRequest() {
+        activeRequest.get()?.cancel()
+    }
 
     suspend fun send(
         apiKey: String,
@@ -155,23 +169,56 @@ class AiChatClient(dns: Dns = Dns.SYSTEM) {
         history: List<ChatMessage>,
         systemInstruction: String = "",
         enableGoogleSearch: Boolean = false
-    ): Result<AiChatReply> = withContext(Dispatchers.IO) {
-        if (provider.id == "gemini" || apiKey.startsWith("AIza")) {
-            sendGemini(
-                apiKey = apiKey,
-                model = model.ifBlank { AiProviders.GEMINI.defaultModel },
-                history = history,
-                systemInstruction = systemInstruction,
-                enableGoogleSearch = enableGoogleSearch
-            )
-        } else {
-            sendOpenAiCompatible(
-                apiKey = apiKey,
-                provider = provider,
-                model = model,
-                history = history,
-                systemInstruction = systemInstruction
-            )
+    ): Result<AiChatReply> {
+        val requestScope = AiRequestCancellationController()
+        activeRequest.getAndSet(requestScope)?.cancel()
+        return try {
+            withContext(Dispatchers.IO) {
+                if (requestScope.isCancelled()) throw CancellationException("AI request cancelled")
+                if (provider.id == "gemini" || apiKey.startsWith("AIza")) {
+                    sendGemini(
+                        apiKey = apiKey,
+                        model = model.ifBlank { AiProviders.GEMINI.defaultModel },
+                        history = history,
+                        systemInstruction = systemInstruction,
+                        enableGoogleSearch = enableGoogleSearch,
+                        requestScope = requestScope
+                    )
+                } else {
+                    sendOpenAiCompatible(
+                        apiKey = apiKey,
+                        provider = provider,
+                        model = model,
+                        history = history,
+                        systemInstruction = systemInstruction,
+                        requestScope = requestScope
+                    )
+                }
+            }
+        } finally {
+            activeRequest.compareAndSet(requestScope, null)
+        }
+    }
+
+    private fun executeRequest(
+        request: Request,
+        requestScope: AiRequestCancellationController,
+        parseResponse: (Response) -> Result<AiChatReply>
+    ): Result<AiChatReply> {
+        val call = callFactory.newCall(request)
+        val cancellation = AiCallCancellation { call.cancel() }
+        requestScope.attach(cancellation)
+        return try {
+            call.execute().use { response -> parseResponse(response) }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            if (call.isCanceled() || requestScope.isCancelled()) {
+                throw CancellationException("AI request cancelled").apply { initCause(e) }
+            }
+            Result.failure(Exception(e.message ?: "network error"))
+        } finally {
+            requestScope.finish(cancellation)
         }
     }
 
@@ -180,7 +227,8 @@ class AiChatClient(dns: Dns = Dns.SYSTEM) {
         model: String,
         history: List<ChatMessage>,
         systemInstruction: String,
-        enableGoogleSearch: Boolean
+        enableGoogleSearch: Boolean,
+        requestScope: AiRequestCancellationController
     ): Result<AiChatReply> {
         return try {
             val contents = JSONArray()
@@ -223,7 +271,7 @@ class AiChatClient(dns: Dns = Dns.SYSTEM) {
                 .post(payload.toString().toRequestBody("application/json".toMediaType()))
                 .build()
 
-            http.newCall(req).execute().use { resp ->
+            executeRequest(req, requestScope) { resp ->
                 val raw = resp.body?.string().orEmpty()
                 if (!resp.isSuccessful) {
                     val detail = try {
@@ -232,42 +280,44 @@ class AiChatClient(dns: Dns = Dns.SYSTEM) {
                     } catch (_: Exception) {
                         raw.take(300)
                     }
-                    return Result.failure(Exception("HTTP ${resp.code}: ${detail.ifBlank { "Gemini request failed" }}"))
-                }
-
-                val root = JSONObject(raw)
-                val candidate = root.optJSONArray("candidates")?.optJSONObject(0)
-                    ?: return Result.failure(Exception("Empty response from Gemini"))
-                val parts = candidate.optJSONObject("content")?.optJSONArray("parts")
-                val sb = StringBuilder()
-                if (parts != null) {
-                    for (i in 0 until parts.length()) {
-                        val t = parts.optJSONObject(i)?.optString("text").orEmpty()
-                        if (t.isNotEmpty()) sb.append(t)
-                    }
-                }
-
-                val sources = mutableListOf<GroundingSource>()
-                val seen = HashSet<String>()
-                val chunks = candidate.optJSONObject("groundingMetadata")?.optJSONArray("groundingChunks")
-                if (chunks != null) {
-                    for (i in 0 until chunks.length()) {
-                        val web = chunks.optJSONObject(i)?.optJSONObject("web") ?: continue
-                        val uri = web.optString("uri").trim()
-                        val title = web.optString("title").trim().ifBlank { uri }
-                        if (uri.startsWith("http") && seen.add(uri)) {
-                            sources.add(GroundingSource(title = title, uri = uri))
+                    Result.failure(Exception("HTTP ${resp.code}: ${detail.ifBlank { "Gemini request failed" }}"))
+                } else {
+                    val root = JSONObject(raw)
+                    val candidate = root.optJSONArray("candidates")?.optJSONObject(0)
+                        ?: return@executeRequest Result.failure(Exception("Empty response from Gemini"))
+                    val parts = candidate.optJSONObject("content")?.optJSONArray("parts")
+                    val sb = StringBuilder()
+                    if (parts != null) {
+                        for (i in 0 until parts.length()) {
+                            val t = parts.optJSONObject(i)?.optString("text").orEmpty()
+                            if (t.isNotEmpty()) sb.append(t)
                         }
                     }
-                }
 
-                Result.success(
-                    AiChatReply(
-                        text = sb.toString().ifBlank { "No text returned." },
-                        sources = sources.take(6)
+                    val sources = mutableListOf<GroundingSource>()
+                    val seen = HashSet<String>()
+                    val chunks = candidate.optJSONObject("groundingMetadata")?.optJSONArray("groundingChunks")
+                    if (chunks != null) {
+                        for (i in 0 until chunks.length()) {
+                            val web = chunks.optJSONObject(i)?.optJSONObject("web") ?: continue
+                            val uri = web.optString("uri").trim()
+                            val title = web.optString("title").trim().ifBlank { uri }
+                            if (uri.startsWith("http") && seen.add(uri)) {
+                                sources.add(GroundingSource(title = title, uri = uri))
+                            }
+                        }
+                    }
+
+                    Result.success(
+                        AiChatReply(
+                            text = sb.toString().ifBlank { "No text returned." },
+                            sources = sources.take(6)
+                        )
                     )
-                )
+                }
             }
+        } catch (e: CancellationException) {
+            throw e
         } catch (e: Exception) {
             Result.failure(Exception(e.message ?: "network error"))
         }
@@ -278,7 +328,8 @@ class AiChatClient(dns: Dns = Dns.SYSTEM) {
         provider: AiProviderInfo,
         model: String,
         history: List<ChatMessage>,
-        systemInstruction: String
+        systemInstruction: String,
+        requestScope: AiRequestCancellationController
     ): Result<AiChatReply> {
         return try {
             val messages = JSONArray()
@@ -306,7 +357,7 @@ class AiChatClient(dns: Dns = Dns.SYSTEM) {
                 reqBuilder.header("X-Title", "Click Browser")
             }
 
-            http.newCall(reqBuilder.build()).execute().use { resp ->
+            executeRequest(reqBuilder.build(), requestScope) { resp ->
                 val text = resp.body?.string().orEmpty()
                 if (!resp.isSuccessful) {
                     val detail = try {
@@ -316,17 +367,20 @@ class AiChatClient(dns: Dns = Dns.SYSTEM) {
                     } catch (_: Exception) {
                         text.take(300)
                     }
-                    return Result.failure(
+                    Result.failure(
                         Exception("HTTP ${resp.code}: ${detail.ifBlank { "request failed" }}")
                     )
+                } else {
+                    val content = JSONObject(text)
+                        .getJSONArray("choices")
+                        .getJSONObject(0)
+                        .getJSONObject("message")
+                        .getString("content")
+                    Result.success(AiChatReply(text = content))
                 }
-                val content = JSONObject(text)
-                    .getJSONArray("choices")
-                    .getJSONObject(0)
-                    .getJSONObject("message")
-                    .getString("content")
-                Result.success(AiChatReply(text = content))
             }
+        } catch (e: CancellationException) {
+            throw e
         } catch (e: Exception) {
             Result.failure(Exception(e.message ?: "network error"))
         }

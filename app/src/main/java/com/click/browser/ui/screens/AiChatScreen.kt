@@ -103,6 +103,9 @@ import com.click.browser.engine.AiRolePresets
 import com.click.browser.engine.AiSafetyFilter
 import com.click.browser.engine.ChatMessage
 import com.click.browser.engine.PrivacyGuards
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 import okhttp3.Dns
 import java.util.Locale
@@ -164,13 +167,25 @@ internal fun AiChatScreen(
         mutableStateOf(selectedTextOnlySession && apiKey.isNotBlank())
     }
     var screenActive by remember { mutableStateOf(true) }
+    var activeRequestId by remember { mutableStateOf(0L) }
+    var activeRequestJob by remember { mutableStateOf<Job?>(null) }
+
+    val client = remember(secureDns) {
+        AiChatClient(dns = if (secureDns) PrivacyGuards.safeSecureDns() else Dns.SYSTEM)
+    }
 
     DisposableEffect(Unit) {
         onDispose { screenActive = false }
     }
 
-    val client = remember(secureDns) {
-        AiChatClient(dns = if (secureDns) PrivacyGuards.safeSecureDns() else Dns.SYSTEM)
+    DisposableEffect(client) {
+        onDispose {
+            activeRequestId += 1L
+            client.cancelCurrentRequest()
+            activeRequestJob?.cancel()
+            activeRequestJob = null
+            typing = false
+        }
     }
 
     var ttsEngine by remember { mutableStateOf<TextToSpeech?>(null) }
@@ -209,6 +224,17 @@ internal fun AiChatScreen(
         Toast.makeText(context, "Copied to clipboard", Toast.LENGTH_SHORT).show()
     }
 
+    fun cancelActiveRequest(showStatus: Boolean = true) {
+        if (!typing) return
+        activeRequestId += 1L
+        val requestJob = activeRequestJob
+        activeRequestJob = null
+        typing = false
+        client.cancelCurrentRequest()
+        requestJob?.cancel()
+        if (showStatus) messages.add(ChatMessage("system", "Request cancelled."))
+    }
+
     LaunchedEffect(messages.size, typing) {
         if (messages.isNotEmpty()) listState.animateScrollToItem(messages.size - 1)
     }
@@ -230,35 +256,50 @@ internal fun AiChatScreen(
             pageUrl = pageUrl,
             pageExcerpt = pageExcerpt
         )
-        scope.launch {
-            val result = client.sendRich(
-                apiKey = apiKey,
-                provider = provider,
-                model = model,
-                history = messages.toList(),
-                systemInstruction = sysInstruction,
-                enableGoogleSearch = isGemini && searchGroundingEnabled && !selectedTextOnlySession
-            )
-            typing = false
-            result
-                .onSuccess { reply ->
-                    messages.add(
-                        ChatMessage(
-                            role = "assistant",
-                            content = reply.text,
-                            sources = reply.sources
-                        )
-                    )
+        val requestId = activeRequestId + 1L
+        activeRequestId = requestId
+        val requestJob = scope.launch(start = CoroutineStart.LAZY) {
+            try {
+                val result = client.sendRich(
+                    apiKey = apiKey,
+                    provider = provider,
+                    model = model,
+                    history = messages.toList(),
+                    systemInstruction = sysInstruction,
+                    enableGoogleSearch = isGemini && searchGroundingEnabled && !selectedTextOnlySession
+                )
+                if (activeRequestId == requestId) {
+                    result
+                        .onSuccess { reply ->
+                            messages.add(
+                                ChatMessage(
+                                    role = "assistant",
+                                    content = reply.text,
+                                    sources = reply.sources
+                                )
+                            )
+                        }
+                        .onFailure { e ->
+                            messages.add(
+                                ChatMessage(
+                                    "error",
+                                    "Request failed: ${e.message ?: "unknown error"}\nCheck your API key in Settings → AI Assistant."
+                                )
+                            )
+                        }
                 }
-                .onFailure { e ->
-                    messages.add(
-                        ChatMessage(
-                            "error",
-                            "Request failed: ${e.message ?: "unknown error"}\nCheck your API key in Settings → AI Assistant."
-                        )
-                    )
+            } catch (_: CancellationException) {
+                // User cancellation is an expected state, not a request-failure message.
+            } finally {
+                if (activeRequestId == requestId) {
+                    activeRequestJob = null
+                    typing = false
                 }
+            }
         }
+        activeRequestJob = requestJob
+        typing = true
+        requestJob.start()
     }
 
     fun requestPageAwarePrompt(prompt: String) {
@@ -322,6 +363,7 @@ internal fun AiChatScreen(
                 actions = {
                     if (messages.isNotEmpty()) {
                         IconButton(onClick = {
+                            cancelActiveRequest(showStatus = false)
                             ttsEngine?.stop()
                             speakingText = null
                             messages.clear()
@@ -555,25 +597,33 @@ internal fun AiChatScreen(
                         maxLines = 4
                     )
                     Spacer(modifier = Modifier.width(8.dp))
-                    MicButton(
-                        enabled = !typing,
-                        onHeard = { heard ->
-                            input = (input.trim() + " " + heard).trim()
+                    if (typing) {
+                        TextButton(onClick = { cancelActiveRequest() }) {
+                            Icon(Icons.Default.Stop, contentDescription = null, tint = MaterialTheme.colorScheme.error)
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text("Cancel", color = MaterialTheme.colorScheme.error)
                         }
-                    )
-                    Spacer(modifier = Modifier.width(8.dp))
-                    IconButton(
-                        onClick = { send() },
-                        enabled = !typing,
-                        modifier = Modifier
-                            .size(48.dp)
-                            .background(MaterialTheme.colorScheme.primary, CircleShape)
-                    ) {
-                        Icon(
-                            Icons.AutoMirrored.Filled.Send,
-                            contentDescription = "Send",
-                            tint = Color.White
+                    } else {
+                        MicButton(
+                            enabled = !pageContextLoading,
+                            onHeard = { heard ->
+                                input = (input.trim() + " " + heard).trim()
+                            }
                         )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        IconButton(
+                            onClick = { send() },
+                            enabled = !pageContextLoading,
+                            modifier = Modifier
+                                .size(48.dp)
+                                .background(MaterialTheme.colorScheme.primary, CircleShape)
+                        ) {
+                            Icon(
+                                Icons.AutoMirrored.Filled.Send,
+                                contentDescription = "Send",
+                                tint = Color.White
+                            )
+                        }
                     }
                 }
             }
