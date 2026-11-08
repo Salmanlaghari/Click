@@ -66,6 +66,7 @@ fun BrowserMenuSheet(
     onPlaylist: () -> Unit,
     onStreamPlayer: () -> Unit,
     onBookmarks: () -> Unit,
+    onAddBookmark: () -> Unit,
     onGames: () -> Unit,
     onRecentTabs: () -> Unit,
     onShare: () -> Unit,
@@ -138,6 +139,10 @@ fun BrowserMenuSheet(
                         MenuCustomization.MenuItemId.STREAM_PLAYER -> MenuRow(
                             theme = theme, icon = Icons.Default.LiveTv,
                             label = "Live Stream", onClick = onStreamPlayer
+                        )
+                        MenuCustomization.MenuItemId.ADD_BOOKMARK -> MenuRow(
+                            theme = theme, icon = Icons.Default.Bookmark,
+                            label = "Add bookmark", onClick = onAddBookmark
                         )
                         MenuCustomization.MenuItemId.BOOKMARKS -> MenuRow(
                             theme = theme, icon = Icons.Default.Bookmark,

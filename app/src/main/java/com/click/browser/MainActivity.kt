@@ -6925,6 +6925,29 @@ class MainActivity : FragmentActivity() {
                                         showStreamPlayer = true
                                     },
                                     onBookmarks = { showBrowserMenu = false; showBookmarks = true },
+                                    onAddBookmark = {
+                                        showBrowserMenu = false
+                                        val bookmark = com.click.browser.data.BookmarkAddPolicy.prepare(
+                                            currentTab.title,
+                                            currentTab.url
+                                        )
+                                        if (bookmark == null) {
+                                            Toast.makeText(
+                                                this@MainActivity,
+                                                "Open a valid web page before adding a bookmark.",
+                                                Toast.LENGTH_SHORT
+                                            ).show()
+                                        } else {
+                                            scope.launch {
+                                                val added = repository.addBookmark(bookmark)
+                                                Toast.makeText(
+                                                    this@MainActivity,
+                                                    if (added) "Bookmark added." else "Already bookmarked.",
+                                                    Toast.LENGTH_SHORT
+                                                ).show()
+                                            }
+                                        }
+                                    },
                                     onGames = { showBrowserMenu = false; showClickPage = "games" },
                                     onRecentTabs = { showBrowserMenu = false; showRecentTabs = true },
                                     onShare = {

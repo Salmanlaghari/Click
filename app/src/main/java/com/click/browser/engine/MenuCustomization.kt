@@ -26,6 +26,7 @@ object MenuCustomization {
         PLAYLIST("Playlist"),
         STREAM_PLAYER("Live Stream"),
         BOOKMARKS("Bookmarks"),
+        ADD_BOOKMARK("Add bookmark"),
         GAMES("Games"),
         RECENT_TABS("Recent tabs"),
         SHARE("Share…"),

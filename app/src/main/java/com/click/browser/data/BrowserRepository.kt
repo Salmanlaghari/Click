@@ -38,28 +38,27 @@ class BrowserRepository(private val context: Context) {
         list
     }
 
-    suspend fun addBookmark(bookmark: Bookmark) {
+    suspend fun addBookmark(bookmark: Bookmark): Boolean {
+        val normalizedBookmark = BookmarkAddPolicy.prepare(bookmark.title, bookmark.url) ?: return false
+        var added = false
         context.profileDataStore.edit { preferences ->
             val jsonStr = preferences[BOOKMARKS_KEY] ?: "[]"
             val array = JSONArray(jsonStr)
 
-            // Avoid duplicate URLs
-            var duplicate = false
-            for (i in 0 until array.length()) {
-                val obj = array.getJSONObject(i)
-                if (obj.getString("url") == bookmark.url) {
-                    duplicate = true
-                    break
-                }
+            val existingUrls = List(array.length()) { index ->
+                array.getJSONObject(index).getString("url")
             }
-            if (!duplicate) {
-                val newObj = JSONObject()
-                newObj.put("title", bookmark.title)
-                newObj.put("url", bookmark.url)
+            if (BookmarkAddPolicy.shouldAdd(existingUrls, normalizedBookmark)) {
+                val newObj = JSONObject().apply {
+                    put("title", normalizedBookmark.title)
+                    put("url", normalizedBookmark.url)
+                }
                 array.put(newObj)
                 preferences[BOOKMARKS_KEY] = array.toString()
+                added = true
             }
         }
+        return added
     }
 
     /** Atomically edits one bookmark in the current profile without changing its list position. */
