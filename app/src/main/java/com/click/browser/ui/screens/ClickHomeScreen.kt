@@ -1309,12 +1309,18 @@ fun ClickBottomNav(
                         Text(tabBadgeText(tabCount), fontSize = 9.sp)
                     }
                 },
-                modifier = Modifier.clickable(
-                    interactionSource = remember { MutableInteractionSource() },
-                    indication = null
-                ) { onTabs() }
+                modifier = Modifier
+                    .sizeIn(minWidth = 48.dp, minHeight = 48.dp)
+                    .clickable(
+                        interactionSource = remember { MutableInteractionSource() },
+                        indication = null
+                    ) { onTabs() }
             ) {
-                Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.padding(4.dp)) {
+                Column(
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.Center,
+                    modifier = Modifier.padding(4.dp)
+                ) {
                     Icon(Icons.Default.Tab, contentDescription = "Tabs", tint = theme.onSurface.copy(alpha = 0.6f), modifier = Modifier.size(24.dp))
                     Text("Tabs", fontSize = 10.sp, color = theme.onSurface.copy(alpha = 0.6f), fontWeight = FontWeight.Bold)
                 }
@@ -1356,7 +1362,9 @@ private fun ClickNavItem(
 ) {
     Column(
         horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.Center,
         modifier = Modifier
+            .sizeIn(minWidth = 48.dp, minHeight = 48.dp)
             .clickable(
                 interactionSource = remember { MutableInteractionSource() },
                 indication = null

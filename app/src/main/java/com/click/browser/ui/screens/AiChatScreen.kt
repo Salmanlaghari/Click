@@ -32,6 +32,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -42,6 +43,7 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.Send
@@ -78,6 +80,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -93,6 +96,7 @@ import androidx.compose.ui.unit.sp
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
 import com.click.browser.engine.AiChatClient
+import com.click.browser.engine.AiPageContextPolicy
 import com.click.browser.engine.AiProviders
 import com.click.browser.engine.AiRolePresets
 import com.click.browser.engine.AiSafetyFilter
@@ -121,7 +125,9 @@ fun AiChatScreen(
     usingBuiltInKey: Boolean = false,
     pageTitle: String = "",
     pageUrl: String = "",
-    pageExcerpt: String = "",
+    pageContextIdentity: String = "",
+    canSharePageContext: Boolean = false,
+    onRequestPageContext: (onCaptured: (String) -> Unit) -> Unit = { onCaptured -> onCaptured("") },
     onOpenUrl: (String) -> Unit = {},
     onReportMessage: (String) -> Unit = {},
     onOpenSettings: () -> Unit,
@@ -130,6 +136,7 @@ fun AiChatScreen(
     val context = LocalContext.current
     val effectiveProviderId = if (apiKey.startsWith("AIza")) "gemini" else providerId
     val provider = AiProviders.byId(effectiveProviderId)
+    val externalProviderName = AiPageContextPolicy.externalProviderName(provider.id)
     val isGemini = provider.id == "gemini"
     val scope = rememberCoroutineScope()
     val messages = remember { mutableStateListOf<ChatMessage>() }
@@ -140,6 +147,18 @@ fun AiChatScreen(
     var reportTarget by remember { mutableStateOf<String?>(null) }
     var speakingText by remember { mutableStateOf<String?>(null) }
     val listState = rememberLazyListState()
+    val pageContextKey = "${provider.id}|$pageContextIdentity|$pageTitle|$pageUrl|$canSharePageContext|$searchGroundingEnabled"
+    val latestPageContextKey = rememberUpdatedState(pageContextKey)
+    var pageContextApproved by remember(pageContextKey) { mutableStateOf(false) }
+    var pageContextLoading by remember(pageContextKey) { mutableStateOf(false) }
+    var pageExcerpt by remember(pageContextKey) { mutableStateOf("") }
+    var showPageContextConsent by remember(pageContextKey) { mutableStateOf(false) }
+    var pendingPagePrompt by remember(pageContextKey) { mutableStateOf<String?>(null) }
+    var screenActive by remember { mutableStateOf(true) }
+
+    DisposableEffect(Unit) {
+        onDispose { screenActive = false }
+    }
 
     val client = remember(secureDns) {
         AiChatClient(dns = if (secureDns) PrivacyGuards.safeSecureDns() else Dns.SYSTEM)
@@ -187,7 +206,7 @@ fun AiChatScreen(
 
     fun sendMessage(prompt: String) {
         val text = prompt.trim()
-        if (text.isEmpty() || typing) return
+        if (text.isEmpty() || typing || pageContextLoading) return
         input = ""
         messages.add(ChatMessage("user", text))
         if (AiSafetyFilter.isBlocked(text)) {
@@ -195,8 +214,9 @@ fun AiChatScreen(
             return
         }
         typing = true
-        val sysInstruction = AiRolePresets.instructionFor(
+        val sysInstruction = AiPageContextPolicy.systemInstruction(
             roleId = selectedRole,
+            consentGranted = pageContextApproved && canSharePageContext,
             pageTitle = pageTitle,
             pageUrl = pageUrl,
             pageExcerpt = pageExcerpt
@@ -229,6 +249,29 @@ fun AiChatScreen(
                         )
                     )
                 }
+        }
+    }
+
+    fun requestPageAwarePrompt(prompt: String) {
+        if (!canSharePageContext || apiKey.isBlank()) return
+        if (pageContextApproved) {
+            sendMessage(prompt)
+        } else {
+            pendingPagePrompt = prompt
+            showPageContextConsent = true
+        }
+    }
+
+    fun capturePageAfterConsent() {
+        val requestKey = pageContextKey
+        pageContextApproved = true
+        pageContextLoading = true
+        onRequestPageContext { captured ->
+            if (!screenActive || latestPageContextKey.value != requestKey) return@onRequestPageContext
+            pageExcerpt = captured.take(AiPageContextPolicy.MAX_EXCERPT_CHARS)
+            pageContextLoading = false
+            pendingPagePrompt?.let { input = it }
+            pendingPagePrompt = null
         }
     }
 
@@ -359,14 +402,52 @@ fun AiChatScreen(
                 }
 
                 if (pageUrl.isNotBlank() && pageUrl != "about:blank") {
-                    Text(
-                        text = "Page context ready: ${pageTitle.ifBlank { pageUrl }}",
-                        fontSize = 11.sp,
-                        color = Color.Gray,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                        modifier = Modifier.padding(horizontal = 14.dp, vertical = 2.dp)
-                    )
+                    if (canSharePageContext && apiKey.isNotBlank()) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 14.dp, vertical = 2.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    if (pageContextApproved) {
+                                        if (pageContextLoading) "Reading page for $externalProviderName…" else "Page sharing is ON with $externalProviderName."
+                                    } else {
+                                        "Page context is OFF. Nothing from this page is sent."
+                                    },
+                                    fontSize = 11.sp,
+                                    fontWeight = FontWeight.SemiBold,
+                                    color = MaterialTheme.colorScheme.onSurface
+                                )
+                                Text(
+                                    if (pageContextApproved) {
+                                        "Title, URL and up to 3,000 visible characters accompany AI requests until this chat closes."
+                                    } else {
+                                        "Click will not read page text unless you allow sharing."
+                                    },
+                                    fontSize = 10.sp,
+                                    color = Color.Gray
+                                )
+                            }
+                            if (!pageContextApproved && !pageContextLoading) {
+                                TextButton(onClick = { showPageContextConsent = true }) {
+                                    Text("Share page")
+                                }
+                            }
+                        }
+                    } else {
+                        Text(
+                            text = when {
+                                !canSharePageContext -> "Page context sharing is unavailable for this page or tab; AI requests will not include its details."
+                                apiKey.isBlank() -> "Add an AI provider key before enabling optional page context. No page text is read or sent."
+                                else -> "Page context sharing is off."
+                            },
+                            fontSize = 11.sp,
+                            color = Color.Gray,
+                            modifier = Modifier.padding(horizontal = 14.dp, vertical = 2.dp)
+                        )
+                    }
                 }
 
                 LazyColumn(
@@ -428,11 +509,9 @@ fun AiChatScreen(
                     }
                 }
 
-                if (messages.isEmpty() && !typing) {
+                if (messages.isEmpty() && !typing && canSharePageContext && apiKey.isNotBlank()) {
                     SuggestionChipsRow(
-                        pageTitle = pageTitle,
-                        pageUrl = pageUrl,
-                        onChipClick = { prompt -> sendMessage(prompt) }
+                        onChipClick = { prompt -> requestPageAwarePrompt(prompt) }
                     )
                 }
 
@@ -474,6 +553,48 @@ fun AiChatScreen(
                     }
                 }
             }
+        }
+
+        if (showPageContextConsent && canSharePageContext && apiKey.isNotBlank()) {
+            AlertDialog(
+                onDismissRequest = {
+                    showPageContextConsent = false
+                    pendingPagePrompt = null
+                },
+                title = { Text("Share this page with $externalProviderName?") },
+                text = {
+                    Column(
+                        modifier = Modifier
+                            .heightIn(max = 360.dp)
+                            .verticalScroll(rememberScrollState())
+                    ) {
+                        Text(
+                            AiPageContextPolicy.consentDisclosure(
+                                providerName = externalProviderName,
+                                includeGoogleSearchGrounding = isGemini && searchGroundingEnabled
+                            )
+                        )
+                        Spacer(modifier = Modifier.height(12.dp))
+                        Text("Page title", fontWeight = FontWeight.SemiBold, fontSize = 12.sp)
+                        Text(pageTitle.take(AiPageContextPolicy.MAX_TITLE_CHARS).ifBlank { "(untitled)" }, fontSize = 12.sp)
+                        Spacer(modifier = Modifier.height(6.dp))
+                        Text("Page URL", fontWeight = FontWeight.SemiBold, fontSize = 12.sp)
+                        Text(pageUrl.take(AiPageContextPolicy.MAX_URL_CHARS), fontSize = 12.sp)
+                    }
+                },
+                confirmButton = {
+                    TextButton(onClick = {
+                        showPageContextConsent = false
+                        capturePageAfterConsent()
+                    }) { Text("Allow for this chat") }
+                },
+                dismissButton = {
+                    TextButton(onClick = {
+                        showPageContextConsent = false
+                        pendingPagePrompt = null
+                    }) { Text("Not now") }
+                }
+            )
         }
 
         reportTarget?.let { target ->
@@ -650,33 +771,19 @@ private fun TypingIndicator() {
 
 private data class SuggestionChip(
     val label: String,
-    val buildPrompt: (pageTitle: String, pageUrl: String) -> String
+    val prompt: String
 )
 
 private val SUGGESTION_CHIPS = listOf(
-    SuggestionChip("Summarize this page") { title, url ->
-        buildString {
-            append("Please summarize this page in 4 concise bullet points.")
-            if (title.isNotBlank() && title != "New Tab") append("\n\nPage title: ").append(title)
-            if (url.isNotBlank() && url != "about:blank") append("\nPage URL: ").append(url)
-        }
-    },
-    SuggestionChip("Translate summary to Urdu") { title, url ->
-        buildString {
-            append("Summarize this page in easy Urdu (اردو) and Roman Urdu.")
-            if (title.isNotBlank() && title != "New Tab") append("\n\nPage title: ").append(title)
-            if (url.isNotBlank() && url != "about:blank") append("\nPage URL: ").append(url)
-        }
-    },
-    SuggestionChip("Explain simply") { _, _ -> "Explain the main topic on this page in simple everyday words." },
-    SuggestionChip("Key takeaways") { _, _ -> "List the top key takeaways and verify important facts." }
+    SuggestionChip("Summarize this page", "Please summarize this page in 4 concise bullet points."),
+    SuggestionChip("Translate summary to Urdu", "Summarize this page in easy Urdu (اردو) and Roman Urdu."),
+    SuggestionChip("Explain simply", "Explain the main topic on this page in simple everyday words."),
+    SuggestionChip("Key takeaways", "List the top key takeaways and verify important facts.")
 )
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun SuggestionChipsRow(
-    pageTitle: String,
-    pageUrl: String,
     onChipClick: (String) -> Unit
 ) {
     LazyRow(
@@ -689,7 +796,7 @@ private fun SuggestionChipsRow(
             val chip = SUGGESTION_CHIPS[index]
             FilterChip(
                 selected = false,
-                onClick = { onChipClick(chip.buildPrompt(pageTitle, pageUrl)) },
+                onClick = { onChipClick(chip.prompt) },
                 label = { Text(chip.label, fontSize = 12.sp) },
                 leadingIcon = {
                     Icon(
