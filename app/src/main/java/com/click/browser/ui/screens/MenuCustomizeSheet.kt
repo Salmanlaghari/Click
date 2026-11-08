@@ -9,9 +9,9 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.KeyboardArrowUp
@@ -79,6 +79,7 @@ fun MenuCustomizeSheet(
         Column(
             modifier = Modifier
                 .fillMaxWidth()
+                .verticalScroll(rememberScrollState())
                 .padding(horizontal = 20.dp)
                 .padding(bottom = 24.dp)
         ) {
@@ -112,13 +113,12 @@ fun MenuCustomizeSheet(
                 colors = CardDefaults.cardColors(containerColor = theme.background.copy(alpha = 0.5f)),
                 modifier = Modifier.fillMaxWidth()
             ) {
-                LazyColumn(
+                Column(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .height(380.dp)
                         .padding(vertical = 4.dp)
                 ) {
-                    itemsIndexed(order, key = { _, id -> id.name }) { index, id ->
+                    order.forEachIndexed { index, id ->
                         val isHidden = id in hidden
                         val locked = id in MenuCustomization.LOCKED_VISIBLE
                         Row(
