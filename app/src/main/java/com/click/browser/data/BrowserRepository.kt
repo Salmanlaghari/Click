@@ -162,14 +162,15 @@ class BrowserRepository(private val context: Context) {
             }
 
             for (bookmark in newBookmarks) {
-                if (!existingUrls.add(bookmark.url)) {
+                val normalizedBookmark = BookmarkOrganizationPolicy.normalizeImportedBookmark(bookmark)
+                if (!existingUrls.add(normalizedBookmark.url)) {
                     skippedExisting++
                     continue
                 }
                 val newObj = JSONObject()
-                newObj.put("title", bookmark.title)
-                newObj.put("url", bookmark.url)
-                bookmark.folder?.let { newObj.put("folder", it) }
+                newObj.put("title", normalizedBookmark.title)
+                newObj.put("url", normalizedBookmark.url)
+                normalizedBookmark.folder?.let { newObj.put("folder", it) }
                 array.put(newObj)
                 added++
             }

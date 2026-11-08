@@ -22,6 +22,12 @@ internal object BookmarkOrganizationPolicy {
         return normalized
     }
 
+    /** Keeps imported bookmarks but never persists folder labels outside the organizer's rules. */
+    fun normalizeImportedBookmark(bookmark: Bookmark): Bookmark {
+        val normalizedFolder = bookmark.folder?.let { normalizeFolderName(it) }
+        return bookmark.copy(folder = normalizedFolder)
+    }
+
     fun move(
         bookmarks: List<Bookmark>,
         existingUrl: String,

@@ -35,6 +35,29 @@ class BookmarkOrganizationPolicyTest {
     }
 
     @Test
+    fun importedFoldersAreNormalizedAndInvalidLabelsBecomeUnfiled() {
+        val bookmark = Bookmark("Example", "https://example.com", "  Work  ")
+        assertEquals(
+            Bookmark("Example", "https://example.com", "Work"),
+            BookmarkOrganizationPolicy.normalizeImportedBookmark(bookmark)
+        )
+
+        listOf(
+            " ",
+            "x".repeat(BookmarkOrganizationPolicy.MAX_FOLDER_NAME_LENGTH + 1),
+            "Work/2026",
+            "Work\\2026"
+        ).forEach { invalidFolder ->
+            assertEquals(
+                Bookmark("Example", "https://example.com"),
+                BookmarkOrganizationPolicy.normalizeImportedBookmark(
+                    bookmark.copy(folder = invalidFolder)
+                )
+            )
+        }
+    }
+
+    @Test
     fun invalidFolderAndMissingBookmarkDoNotChangeTheList() {
         val original = listOf(Bookmark("First", "https://first.example"))
 
