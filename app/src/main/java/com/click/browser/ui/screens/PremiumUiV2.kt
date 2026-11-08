@@ -14,24 +14,27 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.waitForUpOrCancellation
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.lazy.grid.GridCells
-import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
-import androidx.compose.foundation.lazy.grid.items
+import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.ArrowForward
@@ -289,19 +292,37 @@ fun FeatureMenuFabOverlay(
         ) + fadeOut(animationSpec = tween(150)),
         modifier = Modifier.fillMaxSize()
     ) {
-        Box(modifier = Modifier.fillMaxSize()) {
+        BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
+            // The root browser surface already applies WindowInsets.safeDrawing.
+            // Keep the panel above the bottom navigation and cap it to the real
+            // remaining height. Its single scroll container includes the mode
+            // chips and shortcuts, even on a short/landscape display.
+            val bottomNavigationClearance = 84.dp
+            val panelMaxHeight = (maxHeight - bottomNavigationClearance - 12.dp)
+                .coerceAtLeast(0.dp)
             Surface(
                 modifier = Modifier
                     .align(Alignment.BottomStart)
-                    .padding(start = 12.dp, bottom = 84.dp, end = 12.dp)
+                    .padding(start = 12.dp, bottom = bottomNavigationClearance, end = 12.dp)
+                    .widthIn(max = 560.dp)
+                    .fillMaxWidth()
+                    .heightIn(max = panelMaxHeight)
                     .shadow(16.dp, RoundedCornerShape(22.dp)),
                 shape = RoundedCornerShape(22.dp),
                 color = theme.surface,
                 tonalElevation = 8.dp
             ) {
-                Column(modifier = Modifier.padding(12.dp)) {
-                    // Mode chips (official display names per the 4-mode reference)
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(max = panelMaxHeight)
+                        .verticalScroll(rememberScrollState())
+                        .padding(12.dp),
+                    verticalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    // Mode chips stay horizontally scrollable on narrow screens.
                     Row(
+                        modifier = Modifier.horizontalScroll(rememberScrollState()),
                         horizontalArrangement = Arrangement.spacedBy(8.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
@@ -326,70 +347,75 @@ fun FeatureMenuFabOverlay(
                         color = accent,
                         modifier = Modifier.padding(top = 6.dp)
                     )
-                    Spacer(modifier = Modifier.height(10.dp))
-                    // 32-feature grid (4 columns, scrollable)
-                    LazyVerticalGrid(
-                        columns = GridCells.Fixed(4),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp),
-                        verticalArrangement = Arrangement.spacedBy(10.dp),
-                        modifier = Modifier.height(320.dp)
-                    ) {
-                        items(ALL_FEATURES, key = { it.id }) { feature ->
-                            val isWideLayoutTile = feature.id == FeatureId.DESKTOP
-                            val tileContainerColor by animateColorAsState(
-                                targetValue = when {
-                                    isWideLayoutTile && desktopLayoutEnabled -> theme.secondary.copy(alpha = 0.30f)
-                                    isWideLayoutTile -> theme.secondary.copy(alpha = 0.14f)
-                                    else -> theme.surfaceVariant.copy(alpha = 0.7f)
-                                },
-                                animationSpec = tween(180),
-                                label = "featureTileColor"
-                            )
-                            Column(
-                                horizontalAlignment = Alignment.CenterHorizontally,
-                                modifier = Modifier.clickable { onFeature(feature.id) }
-                            ) {
-                                Box(
-                                    modifier = Modifier
-                                        .size(48.dp)
-                                        .clip(RoundedCornerShape(14.dp))
-                                        .background(tileContainerColor)
-                                        .then(
-                                            if (isWideLayoutTile) {
-                                                Modifier.border(
-                                                    width = 1.dp,
-                                                    color = theme.secondary.copy(alpha = if (desktopLayoutEnabled) 0.7f else 0.4f),
-                                                    shape = RoundedCornerShape(14.dp)
-                                                )
-                                            } else Modifier
-                                        ),
-                                    contentAlignment = Alignment.Center
-                                ) {
-                                    Icon(
-                                        feature.icon,
-                                        contentDescription = if (isWideLayoutTile) {
-                                            if (desktopLayoutEnabled) "Wide layout on" else "Wide layout off"
-                                        } else feature.label,
-                                        tint = if (isWideLayoutTile) theme.primary else accent,
-                                        modifier = Modifier.size(24.dp)
-                                    )
-                                    if (isWideLayoutTile && desktopLayoutEnabled) {
-                                        Box(
-                                            Modifier
-                                                .align(Alignment.TopEnd)
-                                                .padding(4.dp)
-                                                .size(6.dp)
-                                                .background(theme.primary, CircleShape)
-                                        )
-                                    }
-                                }
-                                Spacer(modifier = Modifier.height(4.dp))
-                                Text(
-                                    feature.label,
-                                    fontSize = 9.sp,
-                                    color = theme.onSurface.copy(alpha = 0.85f),
-                                    maxLines = 1
+                    // Four-column shortcut rows are in the same scroll container
+                    // as the mode controls, so no shortcut is lost to clipping.
+                    ALL_FEATURES.chunked(4).forEach { featureRow ->
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            featureRow.forEach { feature ->
+                                val isWideLayoutTile = feature.id == FeatureId.DESKTOP
+                                val tileContainerColor by animateColorAsState(
+                                    targetValue = when {
+                                        isWideLayoutTile && desktopLayoutEnabled -> theme.secondary.copy(alpha = 0.30f)
+                                        isWideLayoutTile -> theme.secondary.copy(alpha = 0.14f)
+                                        else -> theme.surfaceVariant.copy(alpha = 0.7f)
+                                    },
+                                    animationSpec = tween(180),
+                                    label = "featureTileColor"
                                 )
+                                Column(
+                                    horizontalAlignment = Alignment.CenterHorizontally,
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .clickable { onFeature(feature.id) }
+                                ) {
+                                    Box(
+                                        modifier = Modifier
+                                            .size(48.dp)
+                                            .clip(RoundedCornerShape(14.dp))
+                                            .background(tileContainerColor)
+                                            .then(
+                                                if (isWideLayoutTile) {
+                                                    Modifier.border(
+                                                        width = 1.dp,
+                                                        color = theme.secondary.copy(alpha = if (desktopLayoutEnabled) 0.7f else 0.4f),
+                                                        shape = RoundedCornerShape(14.dp)
+                                                    )
+                                                } else Modifier
+                                            ),
+                                        contentAlignment = Alignment.Center
+                                    ) {
+                                        Icon(
+                                            feature.icon,
+                                            contentDescription = if (isWideLayoutTile) {
+                                                if (desktopLayoutEnabled) "Wide layout on" else "Wide layout off"
+                                            } else feature.label,
+                                            tint = if (isWideLayoutTile) theme.primary else accent,
+                                            modifier = Modifier.size(24.dp)
+                                        )
+                                        if (isWideLayoutTile && desktopLayoutEnabled) {
+                                            Box(
+                                                Modifier
+                                                    .align(Alignment.TopEnd)
+                                                    .padding(4.dp)
+                                                    .size(6.dp)
+                                                    .background(theme.primary, CircleShape)
+                                            )
+                                        }
+                                    }
+                                    Spacer(modifier = Modifier.height(4.dp))
+                                    Text(
+                                        feature.label,
+                                        fontSize = 9.sp,
+                                        color = theme.onSurface.copy(alpha = 0.85f),
+                                        maxLines = 1
+                                    )
+                                }
+                            }
+                            repeat(4 - featureRow.size) {
+                                Spacer(modifier = Modifier.weight(1f))
                             }
                         }
                     }
