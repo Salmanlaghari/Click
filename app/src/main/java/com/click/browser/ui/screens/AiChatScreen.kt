@@ -97,10 +97,12 @@ import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
 import com.click.browser.engine.AiChatClient
 import com.click.browser.engine.AiPageContextPolicy
-import com.click.browser.engine.AiSelectedTextPolicy
+import com.click.browser.engine.AiProviderInfo
 import com.click.browser.engine.AiProviders
+import com.click.browser.engine.AiRequestRetryPolicy
 import com.click.browser.engine.AiRolePresets
 import com.click.browser.engine.AiSafetyFilter
+import com.click.browser.engine.AiSelectedTextPolicy
 import com.click.browser.engine.ChatMessage
 import com.click.browser.engine.PrivacyGuards
 import kotlinx.coroutines.CancellationException
@@ -109,6 +111,19 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 import okhttp3.Dns
 import java.util.Locale
+
+private data class AiRequestSnapshot(
+    val provider: AiProviderInfo,
+    val model: String,
+    val history: List<ChatMessage>,
+    val systemInstruction: String,
+    val enableGoogleSearch: Boolean,
+    val includesPageContext: Boolean
+)
+
+private data class FailedAiRequest(
+    val snapshot: AiRequestSnapshot
+)
 
 /**
  * Real AI chat screen supporting Google Gemini (with optional Google Search
@@ -155,6 +170,7 @@ internal fun AiChatScreen(
     var speakingText by remember { mutableStateOf<String?>(null) }
     val listState = rememberLazyListState()
     val pageContextKey = "${provider.id}|$pageContextIdentity|$pageTitle|$pageUrl|$canSharePageContext|$searchGroundingEnabled"
+    val retryScopeKey = "${provider.id}|$pageContextIdentity|$pageTitle|$pageUrl|$canSharePageContext|$selectedTextSessionIdentity|${selectedText?.text}"
     val latestPageContextKey = rememberUpdatedState(pageContextKey)
     var pageContextApproved by remember(pageContextKey) { mutableStateOf(false) }
     var pageContextLoading by remember(pageContextKey) { mutableStateOf(false) }
@@ -169,6 +185,9 @@ internal fun AiChatScreen(
     var screenActive by remember { mutableStateOf(true) }
     var activeRequestId by remember { mutableStateOf(0L) }
     var activeRequestJob by remember { mutableStateOf<Job?>(null) }
+    var failedRequests by remember(retryScopeKey) {
+        mutableStateOf<Map<Int, FailedAiRequest>>(emptyMap())
+    }
 
     val client = remember(secureDns) {
         AiChatClient(dns = if (secureDns) PrivacyGuards.safeSecureDns() else Dns.SYSTEM)
@@ -239,38 +258,29 @@ internal fun AiChatScreen(
         if (messages.isNotEmpty()) listState.animateScrollToItem(messages.size - 1)
     }
 
-    fun sendMessage(prompt: String) {
-        val text = prompt.trim()
-        if (text.isEmpty() || typing || pageContextLoading) return
-        input = ""
-        messages.add(ChatMessage("user", text))
-        if (AiSafetyFilter.isBlocked(text)) {
-            messages.add(ChatMessage("system", "This prompt was blocked by content safety."))
-            return
-        }
-        typing = true
-        val sysInstruction = AiPageContextPolicy.systemInstruction(
-            roleId = selectedRole,
-            consentGranted = pageContextApproved && canSharePageContext,
-            pageTitle = pageTitle,
-            pageUrl = pageUrl,
-            pageExcerpt = pageExcerpt
-        )
+    fun removeRetriedError(errorIndex: Int?) {
+        if (errorIndex == null || messages.getOrNull(errorIndex)?.role != "error") return
+        messages.removeAt(errorIndex)
+        failedRequests = AiRequestRetryPolicy.afterErrorRemoved(failedRequests, errorIndex)
+    }
+
+    fun launchRequest(snapshot: AiRequestSnapshot, retryErrorIndex: Int? = null) {
         val requestId = activeRequestId + 1L
         activeRequestId = requestId
         val requestJob = scope.launch(start = CoroutineStart.LAZY) {
             try {
                 val result = client.sendRich(
                     apiKey = apiKey,
-                    provider = provider,
-                    model = model,
-                    history = messages.toList(),
-                    systemInstruction = sysInstruction,
-                    enableGoogleSearch = isGemini && searchGroundingEnabled && !selectedTextOnlySession
+                    provider = snapshot.provider,
+                    model = snapshot.model,
+                    history = snapshot.history,
+                    systemInstruction = snapshot.systemInstruction,
+                    enableGoogleSearch = snapshot.enableGoogleSearch
                 )
                 if (activeRequestId == requestId) {
                     result
                         .onSuccess { reply ->
+                            removeRetriedError(retryErrorIndex)
                             messages.add(
                                 ChatMessage(
                                     role = "assistant",
@@ -280,12 +290,15 @@ internal fun AiChatScreen(
                             )
                         }
                         .onFailure { e ->
+                            removeRetriedError(retryErrorIndex)
+                            val errorIndex = messages.size
                             messages.add(
                                 ChatMessage(
                                     "error",
                                     "Request failed: ${e.message ?: "unknown error"}\nCheck your API key in Settings → AI Assistant."
                                 )
                             )
+                            failedRequests = failedRequests + (errorIndex to FailedAiRequest(snapshot))
                         }
                 }
             } catch (_: CancellationException) {
@@ -300,6 +313,51 @@ internal fun AiChatScreen(
         activeRequestJob = requestJob
         typing = true
         requestJob.start()
+    }
+
+    fun canRetryFailedRequest(errorIndex: Int): Boolean {
+        val failed = failedRequests[errorIndex]
+        return AiRequestRetryPolicy.canRetry(
+                messageRole = messages.getOrNull(errorIndex)?.role,
+                hasSavedRequest = failed != null,
+                requestInProgress = typing,
+                requiresPageContextConsent = failed?.snapshot?.includesPageContext == true,
+                pageContextConsentGranted = pageContextApproved && canSharePageContext
+            )
+    }
+
+    fun retryFailedRequest(errorIndex: Int) {
+        val failed = failedRequests[errorIndex] ?: return
+        if (!canRetryFailedRequest(errorIndex)) return
+        launchRequest(failed.snapshot, retryErrorIndex = errorIndex)
+    }
+
+    fun sendMessage(prompt: String) {
+        val text = prompt.trim()
+        if (text.isEmpty() || typing || pageContextLoading) return
+        input = ""
+        messages.add(ChatMessage("user", text))
+        if (AiSafetyFilter.isBlocked(text)) {
+            messages.add(ChatMessage("system", "This prompt was blocked by content safety."))
+            return
+        }
+        val sysInstruction = AiPageContextPolicy.systemInstruction(
+            roleId = selectedRole,
+            consentGranted = pageContextApproved && canSharePageContext,
+            pageTitle = pageTitle,
+            pageUrl = pageUrl,
+            pageExcerpt = pageExcerpt
+        )
+        launchRequest(
+            AiRequestSnapshot(
+                provider = provider,
+                model = model,
+                history = messages.toList(),
+                systemInstruction = sysInstruction,
+                enableGoogleSearch = isGemini && searchGroundingEnabled && !selectedTextOnlySession,
+                includesPageContext = pageContextApproved && canSharePageContext
+            )
+        )
     }
 
     fun requestPageAwarePrompt(prompt: String) {
@@ -367,6 +425,7 @@ internal fun AiChatScreen(
                             ttsEngine?.stop()
                             speakingText = null
                             messages.clear()
+                            failedRequests = emptyMap()
                         }) {
                             Icon(Icons.Default.DeleteOutline, contentDescription = "Clear conversation")
                         }
@@ -561,7 +620,9 @@ internal fun AiChatScreen(
                                 onSpeakClick = { toggleSpeak(msg.content) },
                                 onCopyClick = { copyReply(msg.content) },
                                 onSourceClick = { uri -> onOpenUrl(uri) },
-                                onFlagClick = { reportTarget = it }
+                                onFlagClick = { reportTarget = it },
+                                canRetry = canRetryFailedRequest(index),
+                                onRetryClick = { retryFailedRequest(index) }
                             )
                         }
                     }
@@ -732,7 +793,9 @@ private fun ChatBubble(
     onSpeakClick: () -> Unit,
     onCopyClick: () -> Unit,
     onSourceClick: (String) -> Unit,
-    onFlagClick: (String) -> Unit
+    onFlagClick: (String) -> Unit,
+    canRetry: Boolean,
+    onRetryClick: () -> Unit
 ) {
     val isUser = msg.role == "user"
     val isError = msg.role == "error"
@@ -783,6 +846,16 @@ private fun ChatBubble(
                         fontSize = 14.sp,
                         color = if (isUser || isError || isSystem) Color.White else MaterialTheme.colorScheme.onSurfaceVariant
                     )
+                }
+
+                if (isError && canRetry) {
+                    Spacer(modifier = Modifier.height(4.dp))
+                    TextButton(
+                        onClick = onRetryClick,
+                        modifier = Modifier.align(Alignment.End)
+                    ) {
+                        Text("Retry", color = Color.White)
+                    }
                 }
 
                 if (isAssistant && msg.sources.isNotEmpty()) {
