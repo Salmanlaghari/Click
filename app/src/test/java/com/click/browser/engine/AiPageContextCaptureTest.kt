@@ -26,8 +26,8 @@ class AiPageContextCaptureTest {
             lateCallback = onCaptured
         }
 
-        assertNull(result)
         lateCallback?.invoke("late page text")
+        assertNull(result)
     }
 
     @Test
