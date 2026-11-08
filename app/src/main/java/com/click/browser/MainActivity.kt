@@ -214,6 +214,15 @@ private data class PendingGeckoPasswordSaveOffer(
     val credential: SavedPassword
 )
 
+private data class PendingAiSelectedTextOffer(
+    val selectionId: String,
+    val tabId: String,
+    val pageUrl: String,
+    val selection: AiSelectedTextPolicy.PreparedSelection
+)
+
+private const val WEBVIEW_ACTION_EXPLAIN_SELECTED_TEXT = 0x434C494B
+
 /**
  * Page transition wrapper — subtle fade + slide on every navigation start.
  * Extracted to a top-level composable because [androidx.compose.animation.AnimatedVisibility]
@@ -1826,6 +1835,7 @@ class MainActivity : FragmentActivity() {
 
             // AI chat + privacy guards
             var showAiChat by remember { mutableStateOf(false) }
+            var pendingAiSelectedText by remember { mutableStateOf<PendingAiSelectedTextOffer?>(null) }
             var showPrivacyGuards by remember { mutableStateOf(false) }
             // click:// internal pages (chrome://-style). Holds the page key or null.
             var showClickPage by remember { mutableStateOf<String?>(null) }
@@ -1921,6 +1931,74 @@ class MainActivity : FragmentActivity() {
             LaunchedEffect(Unit) {
                 tamperBlocked = !TamperCheck.isReleaseSignatureValid(this@MainActivity)
                 if (tamperBlocked) showTamperDialog = true
+            }
+            fun selectedTextPageUrl(tab: TabItem): String = when (tab.engine) {
+                BrowserTabEngine.WEBVIEW -> tab.webView?.url?.takeIf { it.isNotBlank() } ?: tab.url
+                BrowserTabEngine.GECKOVIEW -> tab.url
+            }
+            fun activeSelectedTextSource(
+                sourceTabId: String,
+                sourceEngine: BrowserTabEngine,
+                sourcePageUrl: String
+            ): TabItem? {
+                val activeTab = tabs.getOrNull(activeTabIndex) ?: return null
+                if (activeTab.id != sourceTabId || activeTab.engine != sourceEngine || activeTab.isIncognito ||
+                    selectedTextPageUrl(activeTab) != sourcePageUrl ||
+                    !(sourcePageUrl.startsWith("http://", ignoreCase = true) ||
+                        sourcePageUrl.startsWith("https://", ignoreCase = true))
+                ) return null
+                return activeTab
+            }
+            fun openSelectedTextForAi(
+                selection: AiSelectedTextPolicy.PreparedSelection,
+                sourceTabId: String,
+                sourcePageUrl: String
+            ) {
+                if (tamperBlocked) {
+                    showTamperDialog = true
+                    return
+                }
+                val sourceTab = activeSelectedTextSource(
+                    sourceTabId = sourceTabId,
+                    sourceEngine = selection.sourceEngine,
+                    sourcePageUrl = sourcePageUrl
+                ) ?: return
+                val verifiedSelection = AiSelectedTextPolicy.prepareSelection(
+                    rawText = selection.text,
+                    engine = sourceTab.engine,
+                    isPrivateTab = sourceTab.isIncognito,
+                    webViewJavaScriptEnabled = javaScriptEnabledGlobal
+                ) ?: return
+                pendingAiSelectedText = PendingAiSelectedTextOffer(
+                    selectionId = java.util.UUID.randomUUID().toString(),
+                    tabId = sourceTabId,
+                    pageUrl = sourcePageUrl,
+                    selection = verifiedSelection.copy(
+                        wasTruncated = selection.wasTruncated || verifiedSelection.wasTruncated
+                    )
+                )
+                showAiChat = true
+            }
+            LaunchedEffect(
+                pendingAiSelectedText?.selectionId,
+                currentTab.id,
+                currentTab.url,
+                currentTab.engine,
+                currentTab.isIncognito,
+                javaScriptEnabledGlobal
+            ) {
+                val pending = pendingAiSelectedText ?: return@LaunchedEffect
+                val stillEligible = AiSelectedTextPolicy.canOfferSelection(
+                    engine = currentTab.engine,
+                    isPrivateTab = currentTab.isIncognito,
+                    webViewJavaScriptEnabled = javaScriptEnabledGlobal
+                )
+                if (pending.tabId != currentTab.id || pending.selection.sourceEngine != currentTab.engine ||
+                    pending.pageUrl != selectedTextPageUrl(currentTab) || !stillEligible
+                ) {
+                    pendingAiSelectedText = null
+                    showAiChat = false
+                }
             }
             var aiApiKey by remember { mutableStateOf("") }
             var aiProvider by remember { mutableStateOf("groq") }
@@ -3671,6 +3749,7 @@ class MainActivity : FragmentActivity() {
                                                             var createdGeckoSession: GeckoBrowserTabSession? = null
                                                             val geckoSession = GeckoBrowserTabSession(
                                                                 context = ctx,
+                                                                selectionActivity = this@MainActivity,
                                                                 runtime = ExtensionBrowserRuntime.get(applicationContext),
                                                                 tabId = tabId,
                                                                 mode = activeMode,
@@ -3927,6 +4006,13 @@ class MainActivity : FragmentActivity() {
                                                                             )
                                                                         }
                                                                     }
+                                                                },
+                                                                onSelectedText = { selection, pageUrl ->
+                                                                    openSelectedTextForAi(
+                                                                        selection = selection,
+                                                                        sourceTabId = tabId,
+                                                                        sourcePageUrl = pageUrl
+                                                                    )
                                                                 },
                                                                 onLoginSavePrompt = { promptTabId, promptSession, request ->
                                                                     val completion = org.mozilla.geckoview.GeckoResult<org.mozilla.geckoview.GeckoSession.PromptDelegate.PromptResponse>()
@@ -4610,6 +4696,102 @@ class MainActivity : FragmentActivity() {
                                                                         }
                                                                     }
                                                                 }
+
+                                                                // Native WebView selection toolbar: only regular tabs with JavaScript
+                                                                // enabled may offer the selected-range handoff. Empty/stale results are
+                                                                // discarded; this script never reads the document or falls back to a page capture.
+                                                                val selectionTabId = currentTab.id
+                                                                val selectionWebView = this
+                                                                setCustomSelectionActionModeCallback(object : android.view.ActionMode.Callback {
+                                                                    override fun onCreateActionMode(
+                                                                        mode: android.view.ActionMode,
+                                                                        menu: android.view.Menu
+                                                                    ): Boolean {
+                                                                        if (activeSelectedTextSource(
+                                                                                sourceTabId = selectionTabId,
+                                                                                sourceEngine = BrowserTabEngine.WEBVIEW,
+                                                                                sourcePageUrl = selectionWebView.url.orEmpty()
+                                                                            ) != null &&
+                                                                            AiSelectedTextPolicy.canOfferSelection(
+                                                                                engine = BrowserTabEngine.WEBVIEW,
+                                                                                isPrivateTab = false,
+                                                                                webViewJavaScriptEnabled = javaScriptEnabledGlobal &&
+                                                                                    selectionWebView.settings.javaScriptEnabled
+                                                                            )
+                                                                        ) {
+                                                                            menu.add(
+                                                                                android.view.Menu.NONE,
+                                                                                WEBVIEW_ACTION_EXPLAIN_SELECTED_TEXT,
+                                                                                android.view.Menu.NONE,
+                                                                                "Explain selection"
+                                                                            ).setShowAsAction(android.view.MenuItem.SHOW_AS_ACTION_IF_ROOM)
+                                                                        }
+                                                                        return true
+                                                                    }
+
+                                                                    override fun onPrepareActionMode(
+                                                                        mode: android.view.ActionMode,
+                                                                        menu: android.view.Menu
+                                                                    ): Boolean = false
+
+                                                                    override fun onActionItemClicked(
+                                                                        mode: android.view.ActionMode,
+                                                                        item: android.view.MenuItem
+                                                                    ): Boolean {
+                                                                        if (item.itemId != WEBVIEW_ACTION_EXPLAIN_SELECTED_TEXT) return false
+                                                                        val expectedUrl = selectionWebView.url.orEmpty()
+                                                                        val activeSource = activeSelectedTextSource(
+                                                                            sourceTabId = selectionTabId,
+                                                                            sourceEngine = BrowserTabEngine.WEBVIEW,
+                                                                            sourcePageUrl = expectedUrl
+                                                                        )
+                                                                        val isStillEligible = activeSource != null &&
+                                                                            javaScriptEnabledGlobal &&
+                                                                            selectionWebView.settings.javaScriptEnabled
+                                                                        if (!isStillEligible) {
+                                                                            mode.finish()
+                                                                            return true
+                                                                        }
+                                                                        runCatching {
+                                                                            selectionWebView.evaluateJavascript(
+                                                                                AiSelectedTextPolicy.WEBVIEW_SELECTION_SCRIPT
+                                                                            ) { raw ->
+                                                                                mode.finish()
+                                                                                val selectedText = try {
+                                                                                    if (raw.isNullOrBlank() || raw == "null") null
+                                                                                    else org.json.JSONTokener(raw).nextValue() as? String
+                                                                                } catch (_: Exception) {
+                                                                                    null
+                                                                                } ?: return@evaluateJavascript
+                                                                                val sourceTabAfterRead = activeSelectedTextSource(
+                                                                                    sourceTabId = selectionTabId,
+                                                                                    sourceEngine = BrowserTabEngine.WEBVIEW,
+                                                                                    sourcePageUrl = expectedUrl
+                                                                                ) ?: return@evaluateJavascript
+                                                                                val prepared = AiSelectedTextPolicy.prepareSelection(
+                                                                                    rawText = selectedText,
+                                                                                    engine = BrowserTabEngine.WEBVIEW,
+                                                                                    isPrivateTab = sourceTabAfterRead.isIncognito,
+                                                                                    webViewJavaScriptEnabled = javaScriptEnabledGlobal &&
+                                                                                        selectionWebView.settings.javaScriptEnabled
+                                                                                ) ?: return@evaluateJavascript
+                                                                                if (selectionWebView.url.orEmpty() != expectedUrl) {
+                                                                                    return@evaluateJavascript
+                                                                                }
+                                                                                openSelectedTextForAi(
+                                                                                    selection = prepared,
+                                                                                    sourceTabId = selectionTabId,
+                                                                                    sourcePageUrl = expectedUrl
+                                                                                )
+                                                                            }
+                                                                        }.onFailure {
+                                                                            mode.finish()
+                                                                        }
+                                                                        return true
+                                                                    }
+
+                                                                    override fun onDestroyActionMode(mode: android.view.ActionMode) = Unit
+                                                                })
 
                                                                 // Long-press context menu (links + images).
                                                                 // Attached once at WebView creation, so it works in
@@ -6740,16 +6922,24 @@ class MainActivity : FragmentActivity() {
                                     pageTitle = currentTab.title,
                                     pageUrl = currentTab.url,
                                     pageContextIdentity = currentTab.id,
-                                    canSharePageContext = com.click.browser.engine.AiPageContextPolicy.canOfferPageContext(
+                                    selectedText = pendingAiSelectedText?.selection,
+                                    selectedTextSessionIdentity = pendingAiSelectedText?.selectionId.orEmpty(),
+                                    canSharePageContext = pendingAiSelectedText == null &&
+                                        com.click.browser.engine.AiPageContextPolicy.canOfferPageContext(
                                         isPrivateTab = currentTab.isIncognito,
                                         isWebViewSupported = currentTab.engine == BrowserTabEngine.WEBVIEW && currentTab.webView != null,
                                         pageUrl = currentTab.url
                                     ),
+                                    onCancelSelectedText = {
+                                        pendingAiSelectedText = null
+                                        showAiChat = false
+                                    },
                                     onRequestPageContext = { onCaptured ->
                                         val requestedTabId = currentTab.id
                                         val requestedUrl = currentTab.url
                                         val requestedWebView = currentTab.webView
-                                        val mayCapture = com.click.browser.engine.AiPageContextPolicy.canOfferPageContext(
+                                        val mayCapture = pendingAiSelectedText == null &&
+                                            com.click.browser.engine.AiPageContextPolicy.canOfferPageContext(
                                             isPrivateTab = currentTab.isIncognito,
                                             isWebViewSupported = currentTab.engine == BrowserTabEngine.WEBVIEW && requestedWebView != null,
                                             pageUrl = requestedUrl
@@ -6762,6 +6952,7 @@ class MainActivity : FragmentActivity() {
                                             ) { raw ->
                                                 val samePageStillActive = currentTab.id == requestedTabId &&
                                                     currentTab.url == requestedUrl &&
+                                                    pendingAiSelectedText == null &&
                                                     !currentTab.isIncognito &&
                                                     currentTab.engine == BrowserTabEngine.WEBVIEW
                                                 if (!samePageStillActive) {
@@ -6782,6 +6973,7 @@ class MainActivity : FragmentActivity() {
                                         }
                                     },
                                     onOpenUrl = { targetUri ->
+                                        pendingAiSelectedText = null
                                         showAiChat = false
                                         val destination = cleanTrackingUrl(formatUrl(targetUri, currentSearchEngineSetting))
                                         currentTab.url = destination
@@ -6802,8 +6994,15 @@ class MainActivity : FragmentActivity() {
                                             Toast.LENGTH_SHORT
                                         ).show()
                                     },
-                                    onOpenSettings = { showAiChat = false; showSettings = true },
-                                    onClose = { showAiChat = false }
+                                    onOpenSettings = {
+                                        pendingAiSelectedText = null
+                                        showAiChat = false
+                                        showSettings = true
+                                    },
+                                    onClose = {
+                                        pendingAiSelectedText = null
+                                        showAiChat = false
+                                    }
                                 )
                             }
                             } // AnimatedVisibility (AI chat slide/spring)
