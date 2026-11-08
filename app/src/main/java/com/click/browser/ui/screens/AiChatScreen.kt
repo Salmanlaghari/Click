@@ -107,6 +107,7 @@ import com.click.browser.engine.AiSelectedTextPolicy
 import com.click.browser.engine.AiTabComparisonExcerpt
 import com.click.browser.engine.AiTabComparisonOption
 import com.click.browser.engine.AiTabComparisonPolicy
+import com.click.browser.engine.capturePageContextWithTimeout
 import com.click.browser.engine.ChatMessage
 import com.click.browser.engine.PrivacyGuards
 import kotlinx.coroutines.CancellationException
@@ -185,6 +186,7 @@ internal fun AiChatScreen(
     val latestPageContextKey = rememberUpdatedState(pageContextKey)
     var pageContextApproved by remember(pageContextKey) { mutableStateOf(false) }
     var pageContextLoading by remember(pageContextKey) { mutableStateOf(false) }
+    var pageContextCaptureError by remember(pageContextKey) { mutableStateOf<String?>(null) }
     var pageExcerpt by remember(pageContextKey) { mutableStateOf("") }
     var showPageContextConsent by remember(pageContextKey) { mutableStateOf(false) }
     var pendingPagePrompt by remember(pageContextKey) { mutableStateOf<String?>(null) }
@@ -207,6 +209,7 @@ internal fun AiChatScreen(
     var screenActive by remember { mutableStateOf(true) }
     var activeRequestId by remember { mutableStateOf(0L) }
     var activeRequestJob by remember { mutableStateOf<Job?>(null) }
+    var pageContextCaptureJob by remember { mutableStateOf<Job?>(null) }
     var failedRequests by remember(retryScopeKey) {
         mutableStateOf<Map<Int, FailedAiRequest>>(emptyMap())
     }
@@ -216,7 +219,18 @@ internal fun AiChatScreen(
     }
 
     DisposableEffect(Unit) {
-        onDispose { screenActive = false }
+        onDispose {
+            screenActive = false
+            pageContextCaptureJob?.cancel()
+            pageContextCaptureJob = null
+        }
+    }
+
+    DisposableEffect(pageContextKey) {
+        onDispose {
+            pageContextCaptureJob?.cancel()
+            pageContextCaptureJob = null
+        }
     }
 
     DisposableEffect(client) {
@@ -410,17 +424,41 @@ internal fun AiChatScreen(
         }
     }
 
+    fun cancelPageContextCapture() {
+        if (!pageContextLoading) return
+        pageContextCaptureJob?.cancel()
+        pageContextCaptureJob = null
+        pageContextLoading = false
+        pageContextApproved = false
+        pageExcerpt = ""
+        pendingPagePrompt?.let { input = it }
+        pendingPagePrompt = null
+        pageContextCaptureError = "Page reading cancelled. Nothing from this page was sent."
+    }
+
     fun capturePageAfterConsent() {
         val requestKey = pageContextKey
+        pageContextCaptureJob?.cancel()
+        pageContextCaptureError = null
         pageContextApproved = true
         pageContextLoading = true
-        onRequestPageContext { captured ->
-            if (!screenActive || latestPageContextKey.value != requestKey) return@onRequestPageContext
-            pageExcerpt = captured.take(AiPageContextPolicy.MAX_EXCERPT_CHARS)
+        val captureJob = scope.launch(start = CoroutineStart.LAZY) {
+            val captured = capturePageContextWithTimeout(request = onRequestPageContext)
+            if (!screenActive || latestPageContextKey.value != requestKey) return@launch
+            pageContextCaptureJob = null
             pageContextLoading = false
             pendingPagePrompt?.let { input = it }
             pendingPagePrompt = null
+            if (captured.isNullOrBlank()) {
+                pageContextApproved = false
+                pageExcerpt = ""
+                pageContextCaptureError = "Couldn't read this page. Nothing from this page was sent."
+            } else {
+                pageExcerpt = captured.take(AiPageContextPolicy.MAX_EXCERPT_CHARS)
+            }
         }
+        pageContextCaptureJob = captureJob
+        captureJob.start()
     }
 
     fun captureSelectedTabsAfterConsent(selectedTabs: List<AiTabComparisonOption>, scopeKey: String) {
@@ -618,28 +656,41 @@ internal fun AiChatScreen(
                         ) {
                             Column(modifier = Modifier.weight(1f)) {
                                 Text(
-                                    if (pageContextApproved) {
-                                        if (pageContextLoading) "Reading page for $externalProviderName…" else "Page sharing is ON with $externalProviderName."
-                                    } else {
-                                        "Page context is OFF. Nothing from this page is sent."
+                                    when {
+                                        pageContextLoading -> "Reading page for $externalProviderName…"
+                                        pageContextApproved -> "Page sharing is ON with $externalProviderName."
+                                        else -> "Page context is OFF. Nothing from this page is sent."
                                     },
                                     fontSize = 11.sp,
                                     fontWeight = FontWeight.SemiBold,
-                                    color = MaterialTheme.colorScheme.onSurface
+                                    color = if (pageContextCaptureError != null) {
+                                        MaterialTheme.colorScheme.error
+                                    } else {
+                                        MaterialTheme.colorScheme.onSurface
+                                    }
                                 )
                                 Text(
-                                    if (pageContextApproved) {
-                                        "Title, URL and up to 3,000 visible characters accompany AI requests until this chat closes."
-                                    } else {
-                                        "Click will not read page text unless you allow sharing."
+                                    when {
+                                        pageContextLoading -> "Nothing is sent to the AI provider until you send a message."
+                                        pageContextCaptureError != null -> "${pageContextCaptureError} You can ask without page context or try again."
+                                        pageContextApproved -> "Title, URL and up to 3,000 visible characters accompany AI requests until this chat closes."
+                                        else -> "Click will not read page text unless you allow sharing."
                                     },
                                     fontSize = 10.sp,
-                                    color = Color.Gray
+                                    color = if (pageContextCaptureError != null) {
+                                        MaterialTheme.colorScheme.error
+                                    } else {
+                                        Color.Gray
+                                    }
                                 )
                             }
-                            if (!pageContextApproved && !pageContextLoading) {
+                            if (pageContextLoading) {
+                                TextButton(onClick = { cancelPageContextCapture() }) {
+                                    Text("Cancel")
+                                }
+                            } else if (!pageContextApproved) {
                                 TextButton(onClick = { showPageContextConsent = true }) {
-                                    Text("Share page")
+                                    Text(if (pageContextCaptureError != null) "Retry" else "Share page")
                                 }
                             }
                         }
