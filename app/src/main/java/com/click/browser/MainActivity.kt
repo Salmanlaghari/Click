@@ -161,6 +161,7 @@ class TabItem(
         }
 
     var url by mutableStateOf(url)
+    var connectionSecurity by mutableStateOf(ConnectionSecurityPolicy.unknown(url))
     var title by mutableStateOf(title)
     var isIncognito by mutableStateOf(isIncognito)
     /** Gecko's serialized history/scroll/form snapshot; never written for private tabs. */
@@ -3607,6 +3608,9 @@ class MainActivity : FragmentActivity() {
                                                     theme = themed,
                                                     activeMode = activeMode,
                                                     currentUrl = if (showOverlays) "" else currentTab.url,
+                                                    connectionSecurity = ConnectionSecurityPolicy.forPage(
+                                                        currentTab.url, currentTab.connectionSecurity
+                                                    ),
                                                     searchEngine = currentSearchEngineSetting,
                                                     canGoBack = !showOverlays && if (currentTab.engine == BrowserTabEngine.GECKOVIEW) {
                                                         currentTab.canGoBack
@@ -3623,6 +3627,7 @@ class MainActivity : FragmentActivity() {
                                                         dismissBrowserKeyboard()
                                                         val destination = cleanTrackingUrl(formatUrl(input, currentSearchEngineSetting))
                                                         currentTab.url = destination
+                                                        currentTab.connectionSecurity = ConnectionSecurityPolicy.checking(destination)
                                                         currentTab.browserSession?.loadUrl(destination)
                                                     },
                                                     onReload = { currentTab.browserSession?.reload() },
@@ -3850,6 +3855,14 @@ class MainActivity : FragmentActivity() {
                                                                 },
                                                                 onUrlChanged = { url ->
                                                                     tabs.firstOrNull { it.id == tabId }?.url = url
+                                                                },
+                                                                onConnectionSecurityChanged = { info ->
+                                                                    val update = {
+                                                                        tabs.firstOrNull { it.id == tabId }
+                                                                            ?.connectionSecurity = info
+                                                                    }
+                                                                    if (android.os.Looper.myLooper() == android.os.Looper.getMainLooper()) update()
+                                                                    else runOnUiThread { update() }
                                                                 },
                                                                 onTitleChanged = { title ->
                                                                     tabs.firstOrNull { it.id == tabId }?.title = title
@@ -4260,6 +4273,7 @@ class MainActivity : FragmentActivity() {
                                                                 super.onPageStarted(view, url, favicon)
                                                                 val loadingTab = view?.let { target -> tabs.firstOrNull { it.webView === target } } ?: return
                                                                 loadingTab.url = url ?: ""
+                                                                loadingTab.connectionSecurity = ConnectionSecurityPolicy.checking(loadingTab.url)
                                                                 loadingTab.isPageLoading = true
                                                                 loadingTab.hasCommittedContent = false
                                                                 loadingTab.loadProgress = 0
@@ -4283,6 +4297,20 @@ class MainActivity : FragmentActivity() {
                                                                 super.onPageFinished(view, url)
                                                                 val finishedTab = view?.let { target -> tabs.firstOrNull { it.webView === target } } ?: return
                                                                 finishedTab.url = url ?: finishedTab.url
+                                                                if (finishedTab.connectionSecurity.status == ConnectionSecurityStatus.CHECKING) {
+                                                                    @Suppress("DEPRECATION")
+                                                                    val certificate = view?.certificate
+                                                                    finishedTab.connectionSecurity = ConnectionSecurityPolicy.fromWebView(
+                                                                        url = view?.url ?: url ?: finishedTab.url,
+                                                                        pageFinished = true,
+                                                                        certificatePresent = certificate != null,
+                                                                        sslErrorObserved = false,
+                                                                        certificateSubject = certificate?.issuedTo?.cName
+                                                                            ?: certificate?.issuedTo?.dName,
+                                                                        certificateIssuer = certificate?.issuedBy?.cName
+                                                                            ?: certificate?.issuedBy?.dName
+                                                                    )
+                                                                }
                                                                 finishedTab.title = view.title ?: "Page"
                                                                 finishedTab.isPageLoading = false
                                                                 finishedTab.hasCommittedContent = true
@@ -4436,11 +4464,36 @@ class MainActivity : FragmentActivity() {
                                                                 recordDevToolsLoadError(view, request, error)
                                                                 if (request?.isForMainFrame != true) return
                                                                 val failedTab = view?.let { target -> tabs.firstOrNull { it.webView === target } } ?: return
+                                                                failedTab.connectionSecurity = ConnectionSecurityPolicy.afterWebViewLoadError(
+                                                                    failedTab.url, failedTab.connectionSecurity
+                                                                )
                                                                 failedTab.isPageLoading = false
                                                                 failedTab.hasCommittedContent = true
                                                                 failedTab.loadProgress = 0
                                                                 val retryUrl = request?.let { browserRetryUrl(it.method, it.url.toString()) }
                                                                 this@MainActivity.showBrowserErrorPage(view, error?.description?.toString(), retryUrl)
+                                                            }
+
+                                                            override fun onReceivedSslError(
+                                                                view: WebView?,
+                                                                handler: android.webkit.SslErrorHandler?,
+                                                                error: android.net.http.SslError?
+                                                            ) {
+                                                                val affectedTab = view?.let { target ->
+                                                                    tabs.firstOrNull { it.webView === target }
+                                                                }
+                                                                if (affectedTab != null) {
+                                                                    affectedTab.connectionSecurity = ConnectionSecurityPolicy.fromWebView(
+                                                                        url = affectedTab.url.takeIf { it.isNotBlank() }
+                                                                            ?: view?.url ?: error?.url ?: "",
+                                                                        pageFinished = false,
+                                                                        certificatePresent = false,
+                                                                        sslErrorObserved = true
+                                                                    )
+                                                                }
+                                                                // Never bypass an invalid certificate. The default WebView behavior
+                                                                // is to cancel; keep that explicit while surfacing the warning.
+                                                                handler?.cancel()
                                                             }
 
                                                             override fun onReceivedHttpError(
@@ -6298,7 +6351,9 @@ class MainActivity : FragmentActivity() {
                                     com.click.browser.ui.screens.SiteSettingsSheet(
                                         theme = theme,
                                         host = siteHost,
-                                        isHttps = currentTab.url.startsWith("https://"),
+                                        connectionSecurity = ConnectionSecurityPolicy.forPage(
+                                            currentTab.url, currentTab.connectionSecurity
+                                        ),
                                         current = siteCurrent,
                                         desktopMode = siteDesktop,
                                         globalJavaScript = javaScriptEnabledGlobal,
@@ -7730,6 +7785,7 @@ fun BrowserTopBar(
     activeMode: BrowserMode,
     theme: ModeTheme,
     currentUrl: String,
+    connectionSecurity: ConnectionSecurityInfo = ConnectionSecurityPolicy.unknown(currentUrl),
     canGoBack: Boolean,
     canGoForward: Boolean,
     isBookmarked: Boolean,
@@ -7844,14 +7900,16 @@ fun BrowserTopBar(
                 keyboardOptions = KeyboardOptions(imeAction = ImeAction.Go),
                 keyboardActions = KeyboardActions(onGo = { onNavigate(textInput) }),
                 leadingIcon = {
-                    // Shield icon opens Site Settings. The tint reflects only
-                    // the current URL scheme, not a broad site-safety verdict.
-                    val isHttps = currentUrl.startsWith("https://")
-                    val isHttp = currentUrl.startsWith("http://")
-                    val shieldTint = when {
-                        isHttps -> Color(0xFF22C55E)
-                        isHttp -> Color(0xFFF59E0B)
-                        else -> theme.onSurface.copy(alpha = 0.5f)
+                    // The indicator reflects matching engine evidence, never HTTPS text alone.
+                    val securityStatus = ConnectionSecurityPolicy
+                        .forPage(currentUrl, connectionSecurity).status
+                    val shieldTint = when (securityStatus) {
+                        ConnectionSecurityStatus.SECURE_HTTPS -> Color(0xFF22C55E)
+                        ConnectionSecurityStatus.SECURE_WITH_MIXED_CONTENT,
+                        ConnectionSecurityStatus.UNENCRYPTED_HTTP -> Color(0xFFF59E0B)
+                        ConnectionSecurityStatus.CERTIFICATE_WARNING -> MaterialTheme.colorScheme.error
+                        ConnectionSecurityStatus.CHECKING,
+                        ConnectionSecurityStatus.UNKNOWN -> theme.onSurface.copy(alpha = 0.5f)
                     }
                     androidx.compose.material3.IconButton(
                         onClick = onShieldClick,
@@ -7859,9 +7917,7 @@ fun BrowserTopBar(
                     ) {
                         Icon(
                             Icons.Default.Shield,
-                            contentDescription = if (isHttps) "HTTPS URL — tap for site settings"
-                                else if (isHttp) "HTTP URL (not encrypted) — tap for site settings"
-                                else "Site settings",
+                            contentDescription = "${ConnectionSecurityPolicy.title(securityStatus)} — tap for site settings",
                             tint = shieldTint,
                             modifier = Modifier.size(18.dp)
                         )

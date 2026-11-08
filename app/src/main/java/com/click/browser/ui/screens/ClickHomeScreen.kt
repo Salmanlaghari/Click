@@ -75,6 +75,7 @@ import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Surface
@@ -112,6 +113,9 @@ import androidx.compose.ui.unit.sp
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
 import com.click.browser.engine.BrowserMode
+import com.click.browser.engine.ConnectionSecurityInfo
+import com.click.browser.engine.ConnectionSecurityPolicy
+import com.click.browser.engine.ConnectionSecurityStatus
 import com.click.browser.engine.LocationGuard
 import com.click.browser.engine.SearchEngineBrands
 import com.click.browser.engine.ModePersonalization
@@ -1427,6 +1431,7 @@ fun CompactBrowseBar(
     theme: ModeTheme,
     activeMode: BrowserMode,
     currentUrl: String,
+    connectionSecurity: ConnectionSecurityInfo,
     searchEngine: String,
     onNavigate: (String) -> Unit,
     onReload: () -> Unit,
@@ -1462,7 +1467,15 @@ fun CompactBrowseBar(
             onNavigate(submittedText)
         }
     }
-    val isHttps = currentUrl.startsWith("https://")
+    val securityStatus = ConnectionSecurityPolicy.forPage(currentUrl, connectionSecurity).status
+    val securityTint = when (securityStatus) {
+        ConnectionSecurityStatus.SECURE_HTTPS -> Color(0xFF22C55E)
+        ConnectionSecurityStatus.SECURE_WITH_MIXED_CONTENT,
+        ConnectionSecurityStatus.UNENCRYPTED_HTTP -> Color(0xFFF59E0B)
+        ConnectionSecurityStatus.CERTIFICATE_WARNING -> MaterialTheme.colorScheme.error
+        ConnectionSecurityStatus.CHECKING,
+        ConnectionSecurityStatus.UNKNOWN -> theme.onSurface.copy(alpha = 0.58f)
+    }
     // Keep toolbar actions on their own row so the address field can use the
     // full available width and a generous touch target.
     Surface(
@@ -1630,7 +1643,7 @@ fun CompactBrowseBar(
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     // On a new tab this is a neutral search affordance;
-                    // on real pages it opens site settings and reflects URL scheme only.
+                    // on real pages it opens site settings and reflects engine-reported status.
                     if (currentUrl.isBlank()) {
                         Icon(
                             Icons.Default.Search,
@@ -1645,8 +1658,8 @@ fun CompactBrowseBar(
                         ) {
                             Icon(
                                 Icons.Default.Shield,
-                                contentDescription = if (isHttps) "HTTPS URL — tap for site settings" else "HTTP URL (not encrypted) — tap for site settings",
-                                tint = if (isHttps) Color(0xFF22C55E) else Color(0xFFF59E0B),
+                                contentDescription = "${ConnectionSecurityPolicy.title(securityStatus)} — tap for site settings",
+                                tint = securityTint,
                                 modifier = Modifier.size(18.dp)
                             )
                         }

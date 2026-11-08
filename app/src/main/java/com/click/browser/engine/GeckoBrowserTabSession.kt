@@ -72,6 +72,7 @@ internal class GeckoBrowserTabSession(
     private val onNavigationBlocked: (String) -> Unit,
     private val onNewSession: (String, GeckoSession) -> GeckoResult<GeckoSession>?,
     private val onUrlChanged: (String) -> Unit,
+    private val onConnectionSecurityChanged: (ConnectionSecurityInfo) -> Unit,
     private val onTitleChanged: (String) -> Unit,
     private val onProgressChanged: (Int, Boolean) -> Unit,
     private val onPageLoaded: (String) -> Unit,
@@ -107,6 +108,7 @@ internal class GeckoBrowserTabSession(
     private var extensionAttached = false
     private var historyCandidateUrl: String? = initialUrl
     @Volatile private var lastKnownPageUrl: String = initialUrl.ifBlank { "about:blank" }
+    @Volatile private var latestConnectionSecurityInfo = ConnectionSecurityPolicy.unknown(initialUrl)
     @Volatile private var latestSessionState: String? = initialSessionState
     @Volatile private var rendererRecoveryRequired = false
     @Volatile private var rendererRecoveryInProgress = false
@@ -265,17 +267,51 @@ internal class GeckoBrowserTabSession(
                 updateActiveState()
                 historyCandidateUrl = url
                 lastKnownPageUrl = url
+                latestConnectionSecurityInfo = ConnectionSecurityPolicy.checking(url)
+                onConnectionSecurityChanged(latestConnectionSecurityInfo)
                 onProgressChanged(0, true)
                 onUrlChanged(url)
             }
 
             override fun onPageStop(session: GeckoSession, success: Boolean) {
+                if (latestConnectionSecurityInfo.status == ConnectionSecurityStatus.CHECKING) {
+                    latestConnectionSecurityInfo = ConnectionSecurityPolicy.unknown(
+                        lastKnownPageUrl,
+                        "GeckoView did not provide connection-security details for this page."
+                    )
+                    onConnectionSecurityChanged(latestConnectionSecurityInfo)
+                }
                 onProgressChanged(100, false)
                 if (success) {
                     historyCandidateUrl
                         ?.takeIf { it.startsWith("http://") || it.startsWith("https://") }
                         ?.let(onPageLoaded)
                 }
+            }
+
+            override fun onSecurityChange(
+                session: GeckoSession,
+                securityInfo: GeckoSession.ProgressDelegate.SecurityInformation
+            ) {
+                val activePageUrl = lastKnownPageUrl
+                if (!ConnectionSecurityPolicy.originMatchesPage(activePageUrl, securityInfo.origin)) return
+                val certificate = securityInfo.certificate
+                latestConnectionSecurityInfo = ConnectionSecurityPolicy.fromGeckoView(
+                    url = activePageUrl,
+                    isSecure = securityInfo.isSecure,
+                    isException = securityInfo.isException,
+                    mixedActiveContentLoaded = securityInfo.mixedModeActive ==
+                        GeckoSession.ProgressDelegate.SecurityInformation.CONTENT_LOADED,
+                    mixedPassiveContentLoaded = securityInfo.mixedModePassive ==
+                        GeckoSession.ProgressDelegate.SecurityInformation.CONTENT_LOADED,
+                    certificateSubject = runCatching {
+                        certificate?.subjectX500Principal?.name
+                    }.getOrNull(),
+                    certificateIssuer = runCatching {
+                        certificate?.issuerX500Principal?.name
+                    }.getOrNull()
+                )
+                onConnectionSecurityChanged(latestConnectionSecurityInfo)
             }
 
             override fun onProgressChange(session: GeckoSession, progress: Int) {
