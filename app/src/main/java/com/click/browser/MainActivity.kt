@@ -6376,6 +6376,11 @@ class MainActivity : FragmentActivity() {
                                         siteHost, desktopOverrides, activeMode,
                                         forceDesktopMode, liveFlags.desktopDefault
                                     )
+                                    val siteAdBlockCapability = ModeCapabilityRegistry.availability(
+                                        feature = FeatureId.ADBLOCK,
+                                        mode = activeMode,
+                                        engine = currentTab.engine
+                                    )
                                     com.click.browser.ui.screens.SiteSettingsSheet(
                                         theme = theme,
                                         host = siteHost,
@@ -6386,6 +6391,9 @@ class MainActivity : FragmentActivity() {
                                         desktopMode = siteDesktop,
                                         globalJavaScript = javaScriptEnabledGlobal,
                                         globalAdBlock = adBlockerEnabled,
+                                        siteAdBlockOverrideVisible = siteAdBlockCapability.visible,
+                                        siteAdBlockOverrideEnabled = siteAdBlockCapability.enabled,
+                                        siteAdBlockUnavailableExplanation = siteAdBlockCapability.explanation,
                                         globalThirdPartyCookies = !liveFlags.blockThirdPartyCookies,
                                         onSettingsChange = { next ->
                                             scope.launch {
