@@ -1,5 +1,6 @@
 package com.click.browser.engine
 
+import androidx.compose.ui.graphics.Color
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotEquals
@@ -64,24 +65,38 @@ class LightThemeVariantTest {
     }
 
     @Test
-    fun everyModeHasItsOwnLightIdentityAndHonorsTheSelectedPalette() {
+    fun everyModeSharesTheSelectedLightPaletteAndKeepsDistinctLabels() {
         val variants = LightThemeVariant.values().toList()
+        val modes = BrowserMode.values().toList()
 
         variants.forEach { variant ->
-            val themes = BrowserMode.values().map { mode ->
+            val themes = modes.map { mode ->
                 ModeThemes.forMode(mode, dark = false, lightVariant = variant)
             }
-            assertEquals("Each mode needs a distinct background for ${variant.label}", themes.size, themes.map { it.background }.distinct().size)
-            assertEquals("Each mode needs a distinct accent for ${variant.label}", themes.size, themes.map { it.modeAccent }.distinct().size)
-            assertEquals("Each mode needs a distinct label for ${variant.label}", themes.size, themes.map { it.modePillText }.distinct().size)
-            themes.forEach { theme -> assertFalse("${theme.mode} stays light", theme.dark) }
+            val selectedPalette = themes.first()
+            themes.forEach { theme ->
+                assertEquals("${theme.mode} shares ${variant.label} background", selectedPalette.background, theme.background)
+                assertEquals("${theme.mode} shares ${variant.label} surface", selectedPalette.surface, theme.surface)
+                assertEquals("${theme.mode} shares ${variant.label} surface variant", selectedPalette.surfaceVariant, theme.surfaceVariant)
+                assertEquals("${theme.mode} shares ${variant.label} primary", selectedPalette.primary, theme.primary)
+                assertEquals("${theme.mode} shares ${variant.label} secondary", selectedPalette.secondary, theme.secondary)
+                assertEquals("${theme.mode} shares ${variant.label} background text", selectedPalette.onBackground, theme.onBackground)
+                assertEquals("${theme.mode} shares ${variant.label} surface text", selectedPalette.onSurface, theme.onSurface)
+                assertEquals("${theme.mode} shares ${variant.label} toolbar", selectedPalette.topBarBg, theme.topBarBg)
+                assertEquals("${theme.mode} shares ${variant.label} toolbar text", selectedPalette.onTopBar, theme.onTopBar)
+                assertEquals("${theme.mode} shares ${variant.label} glow", selectedPalette.glow, theme.glow)
+                assertEquals("${theme.mode} accent uses the selected palette", theme.primary, theme.modeAccent)
+                assertFalse("${theme.mode} stays light", theme.dark)
+            }
+            assertEquals("Mode labels remain distinct for ${variant.label}", modes.size, themes.map { it.modePillText }.distinct().size)
         }
 
-        BrowserMode.values().forEach { mode ->
-            val backgrounds = variants.map {
-                ModeThemes.forMode(mode, dark = false, lightVariant = it).background
-            }.distinct()
-            assertEquals("${mode} should still reflect the user's selected palette", variants.size, backgrounds.size)
+        modes.forEach { mode ->
+            val cream = ModeThemes.forMode(mode, dark = false, lightVariant = LightThemeVariant.CREAM)
+            assertEquals("$mode keeps the warm cream background", Color(0xFFFBF8F1), cream.background)
+            assertEquals("$mode keeps the bronze primary accent", Color(0xFF66533F), cream.primary)
+            assertEquals("$mode keeps charcoal body text", Color(0xFF302A22), cream.onBackground)
+            assertEquals("$mode uses bronze rather than a mode tint", cream.primary, cream.modeAccent)
         }
     }
 }

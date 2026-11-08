@@ -3,8 +3,8 @@ package com.click.browser.engine
 import androidx.compose.ui.graphics.Color
 
 /**
- * Mode-aware light appearance. The selected light palette remains the user's base;
- * each browser profile adds a restrained identity tint and its own readable accent.
+ * Mode-aware light appearance. The selected light palette stays consistent across all modes;
+ * labels and capabilities provide mode identity without changing the color system.
  */
 data class ModeTheme(
     val mode: BrowserMode,
@@ -50,14 +50,14 @@ private data class LightPalette(
 )
 
 object ModeThemes {
-    /** Dark mode remains unsupported; each mode keeps the chosen light palette as its base. */
+    /** Dark mode remains unsupported; every mode uses the selected light palette without a mode tint. */
     @Suppress("UNUSED_PARAMETER")
     fun forMode(
         mode: BrowserMode,
         dark: Boolean,
         lightVariant: LightThemeVariant = LightThemeVariant.CREAM
     ): ModeTheme {
-        val selectedPalette = when (lightVariant) {
+        val palette = when (lightVariant) {
             LightThemeVariant.CREAM -> LightPalette(
                 background = Color(0xFFFBF8F1),
                 surface = Color(0xFFFFFEFB),
@@ -107,13 +107,7 @@ object ModeThemes {
                 glow = Color(0xFFDAB3BC)
             )
         }
-        val palette = paletteForMode(selectedPalette, mode)
-        val accent = when (mode) {
-            BrowserMode.SIMPLE -> palette.primary
-            BrowserMode.DEVELOPER -> Color(0xFF365F87)
-            BrowserMode.HACK -> Color(0xFFB76F21)
-            BrowserMode.ADVANCED -> Color(0xFF2F705B)
-        }
+
         return ModeTheme(
             mode = mode,
             dark = false,
@@ -126,7 +120,7 @@ object ModeThemes {
             onSurface = palette.onSurface,
             topBarBg = palette.topBarBg,
             onTopBar = palette.onTopBar,
-            modeAccent = accent,
+            modeAccent = palette.primary,
             glow = palette.glow,
             modePillText = when (mode) {
                 BrowserMode.SIMPLE -> "SIMPLE MODE"
@@ -134,57 +128,6 @@ object ModeThemes {
                 BrowserMode.HACK -> "POWER MODE • ACTIVE"
                 BrowserMode.ADVANCED -> "ADVANCE MODE"
             }
-        )
-    }
-
-    private fun paletteForMode(base: LightPalette, mode: BrowserMode): LightPalette = when (mode) {
-        BrowserMode.SIMPLE -> base
-        BrowserMode.DEVELOPER -> base.copy(
-            background = blend(base.background, Color(0xFFE1ECF7), 0.68f),
-            surface = blend(base.surface, Color(0xFFF5FAFF), 0.26f),
-            surfaceVariant = blend(base.surfaceVariant, Color(0xFFD7E6F4), 0.46f),
-            primary = Color(0xFF365F87),
-            secondary = Color(0xFF638AB2),
-            onBackground = Color(0xFF243647),
-            onSurface = Color(0xFF2B3D50),
-            topBarBg = blend(base.topBarBg, Color(0xFFEAF2FB), 0.24f),
-            onTopBar = Color(0xFF355675),
-            glow = Color(0xFFB3CDE4)
-        )
-        BrowserMode.HACK -> base.copy(
-            background = blend(base.background, Color(0xFFF7E7D0), 0.68f),
-            surface = blend(base.surface, Color(0xFFFFF8EB), 0.26f),
-            surfaceVariant = blend(base.surfaceVariant, Color(0xFFEED9BC), 0.46f),
-            primary = Color(0xFF8D5A22),
-            secondary = Color(0xFFB77D3B),
-            onBackground = Color(0xFF3B2B1A),
-            onSurface = Color(0xFF45331F),
-            topBarBg = blend(base.topBarBg, Color(0xFFFFF3DF), 0.24f),
-            onTopBar = Color(0xFF67461F),
-            glow = Color(0xFFDFC29B)
-        )
-        BrowserMode.ADVANCED -> base.copy(
-            background = blend(base.background, Color(0xFFDFECE4), 0.68f),
-            surface = blend(base.surface, Color(0xFFF3FAF5), 0.26f),
-            surfaceVariant = blend(base.surfaceVariant, Color(0xFFD1E4D8), 0.46f),
-            primary = Color(0xFF2F705B),
-            secondary = Color(0xFF60977D),
-            onBackground = Color(0xFF263A30),
-            onSurface = Color(0xFF2D4337),
-            topBarBg = blend(base.topBarBg, Color(0xFFEEF7F1), 0.24f),
-            onTopBar = Color(0xFF315E4E),
-            glow = Color(0xFFB2D0BE)
-        )
-    }
-
-    private fun blend(from: Color, to: Color, amount: Float): Color {
-        val fraction = amount.coerceIn(0f, 1f)
-        val inverse = 1f - fraction
-        return Color(
-            red = from.red * inverse + to.red * fraction,
-            green = from.green * inverse + to.green * fraction,
-            blue = from.blue * inverse + to.blue * fraction,
-            alpha = from.alpha * inverse + to.alpha * fraction
         )
     }
 }
