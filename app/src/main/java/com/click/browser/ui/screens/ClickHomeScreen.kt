@@ -203,7 +203,10 @@ fun ClickHomeScreen(
         modifier = Modifier
             .fillMaxSize()
             .verticalScroll(rememberScrollState())
-            .padding(horizontal = 16.dp),
+            .padding(horizontal = 16.dp)
+            // The home bottom bar overlays this viewport; keep the final cards
+            // in the scrollable content area above its tap targets.
+            .padding(bottom = 96.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
         Spacer(modifier = Modifier.height(6.dp))

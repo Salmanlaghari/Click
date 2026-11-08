@@ -45,6 +45,8 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import com.click.browser.engine.BrowserTabEngine
+import com.click.browser.engine.QuickTogglesAvailabilityPolicy
 
 // ---------------------------------------------------------------------------
 // Runtime media-permission helper: MediaStore audio reads need a runtime
@@ -667,17 +669,26 @@ fun InteractiveImageGalleryDialog(onClose: () -> Unit) {
 }
 
 // ---------------------------------------------------------------------------
-// Built-in quick toggle plus the policy-gated Firefox/AMO add-on manager.
+// Engine-aware page controls and Firefox/AMO add-on manager.
 // ---------------------------------------------------------------------------
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun InteractiveExtensionsDialog(
+fun QuickTogglesDialog(
+    engine: BrowserTabEngine,
+    isPrivate: Boolean,
     adblock: Boolean,
     onToggleAdblock: (Boolean) -> Unit,
+    javaScriptEnabled: Boolean,
+    onToggleJavaScript: (Boolean) -> Unit,
+    dataSaverEnabled: Boolean,
+    onToggleDataSaver: (Boolean) -> Unit,
+    httpsMode: String,
+    onCycleHttpsMode: () -> Unit,
     onOpenExtensionBrowser: () -> Unit,
     onClose: () -> Unit
 ) {
+    val capabilities = QuickTogglesAvailabilityPolicy.forTab(engine, isPrivate)
     AlertDialog(
         onDismissRequest = onClose,
         title = { Text("Quick Toggles", fontWeight = FontWeight.Bold) },
@@ -685,32 +696,79 @@ fun InteractiveExtensionsDialog(
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(8.dp),
-                verticalArrangement = Arrangement.spacedBy(12.dp)
+                    .heightIn(max = 420.dp)
+                    .verticalScroll(rememberScrollState())
+                    .padding(horizontal = 8.dp, vertical = 4.dp),
+                verticalArrangement = Arrangement.spacedBy(10.dp)
             ) {
+                Text("Page controls", fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                QuickToggleSwitchRow(
+                    title = "Click Ad & Tracker Filter",
+                    description = "Blocks matched requests in WebView; the open page reloads after a change.",
+                    checked = adblock,
+                    enabled = capabilities.webViewPageActions,
+                    onCheckedChange = onToggleAdblock
+                )
+                QuickToggleSwitchRow(
+                    title = "JavaScript",
+                    description = "Controls JavaScript in WebView tabs and reloads this page to apply.",
+                    checked = javaScriptEnabled,
+                    enabled = capabilities.webViewPageActions,
+                    onCheckedChange = onToggleJavaScript
+                )
+                QuickToggleSwitchRow(
+                    title = "Data Saver",
+                    description = "Blocks image requests in WebView and reloads this page to apply.",
+                    checked = dataSaverEnabled,
+                    enabled = capabilities.webViewPageActions,
+                    onCheckedChange = onToggleDataSaver
+                )
+                if (!capabilities.webViewPageActions) {
+                    Text(
+                        "Disabled on this GeckoView tab: these three controls change Android System WebView settings and will not affect this page. GeckoView's own tracking protection remains active.",
+                        fontSize = 12.sp,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+                HorizontalDivider()
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Text("Built-in AdBlocker", fontWeight = FontWeight.Bold, fontSize = 13.sp)
-                    Switch(checked = adblock, onCheckedChange = onToggleAdblock)
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text("HTTPS mode", fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                        Text(
+                            "Applies to future HTTP navigations.",
+                            fontSize = 11.sp,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                    TextButton(onClick = onCycleHttpsMode) {
+                        Text(httpsMode.replaceFirstChar { it.uppercase() })
+                    }
                 }
                 Text(
-                    "Add-ons work only in GeckoView. Extensions in the sidebar can switch this normal tab and reload it; WebView sign-ins, cookies and page history do not transfer. Private tabs stay on WebView.",
-                    fontSize = 12.sp
-                )
-                Button(onClick = onOpenExtensionBrowser, modifier = Modifier.fillMaxWidth()) {
-                    Icon(Icons.Default.Extension, contentDescription = null, modifier = Modifier.padding(end = 6.dp))
-                    Text("Manage compatible add-ons for this tab")
-                }
-                Text(
-                    "The catalog opens in the manager, not another browser tab. Before adding, Click shows requested browser permissions and site access for your review. Add-ons run only in regular GeckoView tabs—not WebView or private tabs.",
+                    "Cycle through Off, Standard (upgrade HTTP), and Strict (block plain HTTP). This works for both tab engines.",
                     fontSize = 11.sp,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
+                HorizontalDivider()
+                Text("Add-ons", fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                Button(
+                    onClick = onOpenExtensionBrowser,
+                    enabled = capabilities.addOnManager,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Icon(Icons.Default.Extension, contentDescription = null, modifier = Modifier.padding(end = 6.dp))
+                    Text("Manage compatible add-ons")
+                }
                 Text(
-                    "More toggles (HTTPS-Only, Data Saver, JavaScript) live in the home screen Settings module.",
+                    if (isPrivate) {
+                        "Unavailable in Private tabs. Add-ons are limited to regular tabs."
+                    } else {
+                        "The catalog opens in Click's manager. Add-ons run only in regular GeckoView tabs. On a GeckoView-supported page, installing one in a WebView tab asks before reloading that same tab; WebView sign-ins, cookies, back history and page state are not transferred."
+                    },
                     fontSize = 11.sp,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
@@ -720,6 +778,35 @@ fun InteractiveExtensionsDialog(
             Button(onClick = onClose) { Text("Close") }
         }
     )
+}
+
+@Composable
+private fun QuickToggleSwitchRow(
+    title: String,
+    description: String,
+    checked: Boolean,
+    enabled: Boolean,
+    onCheckedChange: (Boolean) -> Unit
+) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(12.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Column(modifier = Modifier.weight(1f)) {
+            Text(title, fontWeight = FontWeight.SemiBold, fontSize = 13.sp)
+            Text(
+                description,
+                fontSize = 11.sp,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+        Switch(
+            checked = checked,
+            enabled = enabled,
+            onCheckedChange = onCheckedChange
+        )
+    }
 }
 
 @OptIn(ExperimentalMaterial3Api::class)

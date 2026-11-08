@@ -2004,13 +2004,11 @@ class MainActivity : FragmentActivity() {
                 exitFullscreenVideo = null
             }
 
-            // These screens/actions are still backed by android.webkit.WebView.
-            // If any secondary entry point requests one for Gecko, close it and
-            // explain the gap rather than silently showing stale/empty controls.
+            // These page tools are backed by android.webkit.WebView. Quick Toggles
+            // remains open on GeckoView and disables only the WebView-only actions.
             LaunchedEffect(
                 currentTab.engine,
                 showCookieManager,
-                showQuickTogglesDialog,
                 showTextScaleSheet,
                 showDevToolsSheet,
                 activeMode,
@@ -2029,7 +2027,6 @@ class MainActivity : FragmentActivity() {
                     }
                     val unavailable = when {
                         showCookieManager -> { showCookieManager = false; "Cookie manager" }
-                        showQuickTogglesDialog -> { showQuickTogglesDialog = false; "Page quick toggles" }
                         showTextScaleSheet -> { showTextScaleSheet = false; "Page text zoom" }
                         showDevToolsSheet -> { showDevToolsSheet = false; "DevTools" }
                         else -> null
@@ -2076,7 +2073,6 @@ class MainActivity : FragmentActivity() {
                         FeatureId.READER -> "Reader mode"
                         FeatureId.SCREENSHOT -> "Page screenshot"
                         FeatureId.TEXT_SIZE -> "Page text zoom"
-                        FeatureId.TOOLS -> "WebView page quick toggles"
                         else -> null
                     }
                     if (unavailable != null) {
@@ -3484,7 +3480,7 @@ class MainActivity : FragmentActivity() {
                             }
 
                             @Composable
-                            fun BrowseTopBarBlock() {
+                            fun BrowseTopBarBlock(showAddressBar: Boolean = true) {
                                 val showExtensionButton = currentTab.engine == BrowserTabEngine.GECKOVIEW &&
                                     !currentTab.isIncognito && !showOverlays
                                 Column {
@@ -3503,7 +3499,7 @@ class MainActivity : FragmentActivity() {
                                         )
                                     }
                                     AnimatedVisibility(
-                                        visible = !immersiveMode && toolbarVisible,
+                                        visible = showAddressBar && !immersiveMode && toolbarVisible,
                                         enter = expandVertically() + fadeIn(),
                                         exit = shrinkVertically() + fadeOut()
                                     ) {
@@ -3574,13 +3570,12 @@ class MainActivity : FragmentActivity() {
 
                             Column(modifier = Modifier.fillMaxSize()) {
 
-                                // Premium browser chrome: web pages use the full-width address
-                                // box and visual tab switcher; the tab strip stays on the
-                                // new-tab surface. Simple keeps its bottom navigation compact.
-                                // SURFACE 2 — Browsing: full-width address box + privacy strip.
-                                // Home keeps the same tab/address chrome, plus its own
-                                // prominent search field below the greeting.
-                                if (!videoFullscreenActive && (!flagsUi.bottomAddressBar || showOverlays)) BrowseTopBarBlock()
+                                // The home screen owns its primary search field. Keep the tab
+                                // strip there, but show the browser omnibox only on open pages
+                                // (or at the bottom when that setting is selected).
+                                if (!videoFullscreenActive && (!flagsUi.bottomAddressBar || showOverlays)) {
+                                    BrowseTopBarBlock(showAddressBar = !showOverlays)
+                                }
 
                                 // 4. MAIN CONTENT CONTAINER (WIDGET-STYLE DASHBOARD OR WEBVIEW)
                                 // Nested-scroll: drives the toolbar auto-hide on page scroll.
@@ -5824,9 +5819,53 @@ class MainActivity : FragmentActivity() {
                                 InteractiveImageGalleryDialog(onClose = { showImageDetails = false })
                             }
                             if (showQuickTogglesDialog) {
-                                InteractiveExtensionsDialog(
+                                QuickTogglesDialog(
+                                    engine = currentTab.engine,
+                                    isPrivate = currentTab.isIncognito,
                                     adblock = adBlockerEnabled,
-                                    onToggleAdblock = { adBlockerEnabled = it },
+                                    onToggleAdblock = { enabled ->
+                                        adBlockerEnabled = enabled
+                                        liveAdBlockerEnabled = enabled
+                                        if (currentTab.url.isNotBlank() && currentTab.url != "about:blank") {
+                                            currentTab.browserSession?.reload()
+                                        }
+                                    },
+                                    javaScriptEnabled = javaScriptEnabledGlobal,
+                                    onToggleJavaScript = { enabled ->
+                                        javaScriptEnabledGlobal = enabled
+                                        (liveWebViews + listOfNotNull(currentTab.webView)).distinct().forEach { webView ->
+                                            runCatching { webView.settings.javaScriptEnabled = enabled }
+                                        }
+                                        if (currentTab.url.isNotBlank() && currentTab.url != "about:blank") {
+                                            currentTab.browserSession?.reload()
+                                        }
+                                    },
+                                    dataSaverEnabled = dataSaverEnabled,
+                                    onToggleDataSaver = { enabled ->
+                                        dataSaverEnabled = enabled
+                                        liveDataSaver = enabled
+                                        (liveWebViews + listOfNotNull(currentTab.webView)).distinct().forEach { webView ->
+                                            runCatching {
+                                                applyPrivacyToggles(webView, liveHttpsMode, liveNightMode, enabled)
+                                            }
+                                        }
+                                        if (currentTab.url.isNotBlank() && currentTab.url != "about:blank") {
+                                            currentTab.browserSession?.reload()
+                                        }
+                                    },
+                                    httpsMode = httpsMode,
+                                    onCycleHttpsMode = {
+                                        val nextMode = when (httpsMode) {
+                                            "off" -> "standard"
+                                            "standard" -> "strict"
+                                            else -> "off"
+                                        }
+                                        httpsMode = nextMode
+                                        liveHttpsMode = nextMode
+                                        scope.launch {
+                                            dataStore.edit { prefs -> prefs[AppSettings.HTTPS_MODE] = nextMode }
+                                        }
+                                    },
                                     onOpenExtensionBrowser = {
                                         showQuickTogglesDialog = false
                                         requestExtensionsForTab(currentTab)
