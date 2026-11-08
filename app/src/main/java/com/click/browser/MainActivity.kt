@@ -6901,6 +6901,22 @@ class MainActivity : FragmentActivity() {
                                 }
                                 val usingBuiltInKey = aiApiKey.isBlank() &&
                                     BuildConfig.GROQ_API_KEY_OBF.isNotBlank()
+                                val aiComparisonTabOptions = tabs.mapNotNull { tab ->
+                                    val webView = tab.webView ?: return@mapNotNull null
+                                    val tabUrl = webView.url?.takeIf { it.isNotBlank() } ?: tab.url
+                                    if (
+                                        AiTabComparisonPolicy.isEligible(
+                                            isPrivateTab = tab.isIncognito,
+                                            engine = tab.engine,
+                                            hasLoadedContent = tab.hasCommittedContent && !tab.isPageLoading && webView.progress >= 100,
+                                            pageUrl = tabUrl
+                                        )
+                                    ) {
+                                        AiTabComparisonOption(id = tab.id, title = tab.title, url = tabUrl)
+                                    } else {
+                                        null
+                                    }
+                                }
                                 AiChatScreen(
                                     apiKey = effectiveAiKey,
                                     providerId = if (usingBuiltInKey) "groq" else aiProvider,
@@ -6956,6 +6972,102 @@ class MainActivity : FragmentActivity() {
                                                         ""
                                                     }
                                                     onCaptured(excerpt.take(com.click.browser.engine.AiPageContextPolicy.MAX_EXCERPT_CHARS))
+                                                }
+                                            }
+                                        }
+                                    },
+                                    comparisonTabs = aiComparisonTabOptions,
+                                    onRequestTabComparisonContext = { requestedTabs, onCaptured ->
+                                        if (pendingAiSelectedText != null) {
+                                            onCaptured(null)
+                                        } else {
+                                            val captureTargets = requestedTabs.mapNotNull { option ->
+                                                val tab = tabs.firstOrNull { it.id == option.id }
+                                                val webView = tab?.webView
+                                                val actualUrl = webView?.url?.takeIf { it.isNotBlank() } ?: tab?.url.orEmpty()
+                                                if (
+                                                    tab != null && webView != null &&
+                                                    tab.title == option.title && actualUrl == option.url &&
+                                                    AiTabComparisonPolicy.isEligible(
+                                                        isPrivateTab = tab.isIncognito,
+                                                        engine = tab.engine,
+                                                        hasLoadedContent = tab.hasCommittedContent && !tab.isPageLoading && webView.progress >= 100,
+                                                        pageUrl = actualUrl
+                                                    )
+                                                ) {
+                                                    Triple(option, tab, webView)
+                                                } else {
+                                                    null
+                                                }
+                                            }
+                                            if (captureTargets.size != requestedTabs.size) {
+                                                onCaptured(null)
+                                            } else {
+                                                val handler = android.os.Handler(android.os.Looper.getMainLooper())
+                                                val capturedTextById = mutableMapOf<String, String>()
+                                                var remaining = captureTargets.size
+                                                var finished = false
+                                                val timeout = Runnable {
+                                                    if (!finished) {
+                                                        finished = true
+                                                        onCaptured(null)
+                                                    }
+                                                }
+                                                fun finishCapture(result: Map<String, String>?) {
+                                                    if (finished) return
+                                                    finished = true
+                                                    handler.removeCallbacks(timeout)
+                                                    onCaptured(result)
+                                                }
+                                                handler.postDelayed(timeout, 12_000L)
+                                                captureTargets.forEach { (option, expectedTab, expectedWebView) ->
+                                                    runCatching {
+                                                        expectedWebView.evaluateJavascript(
+                                                            AiTabComparisonPolicy.VISIBLE_TEXT_SCRIPT
+                                                        ) response@{ raw ->
+                                                            if (finished) return@response
+                                                            val liveTab = tabs.firstOrNull { it.id == option.id }
+                                                            val liveWebView = liveTab?.webView
+                                                            val liveUrl = liveWebView?.url?.takeIf { it.isNotBlank() }
+                                                                ?: liveTab?.url.orEmpty()
+                                                            val stillMatches = liveTab === expectedTab &&
+                                                                liveWebView === expectedWebView &&
+                                                                pendingAiSelectedText == null &&
+                                                                liveTab?.title == option.title && liveUrl == option.url &&
+                                                                liveTab?.let {
+                                                                    AiTabComparisonPolicy.isEligible(
+                                                                        isPrivateTab = it.isIncognito,
+                                                                        engine = it.engine,
+                                                                        hasLoadedContent = it.hasCommittedContent && !it.isPageLoading && expectedWebView.progress >= 100,
+                                                                        pageUrl = liveUrl
+                                                                    )
+                                                                } == true
+                                                            if (!stillMatches) {
+                                                                finishCapture(null)
+                                                                return@response
+                                                            }
+                                                            val visibleText = try {
+                                                                if (raw != null && raw != "null") {
+                                                                    org.json.JSONTokener(raw).nextValue().toString()
+                                                                } else {
+                                                                    ""
+                                                                }
+                                                            } catch (_: Exception) {
+                                                                ""
+                                                            }
+                                                            if (visibleText.isBlank()) {
+                                                                finishCapture(null)
+                                                            } else {
+                                                                capturedTextById[option.id] = visibleText.take(
+                                                                    AiTabComparisonPolicy.MAX_EXCERPT_CHARS_PER_TAB
+                                                                )
+                                                                remaining -= 1
+                                                                if (remaining == 0) finishCapture(capturedTextById.toMap())
+                                                            }
+                                                        }
+                                                    }.onFailure {
+                                                        finishCapture(null)
+                                                    }
                                                 }
                                             }
                                         }
