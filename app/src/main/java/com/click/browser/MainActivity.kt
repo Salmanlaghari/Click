@@ -496,14 +496,15 @@ class MainActivity : FragmentActivity() {
         eventDetails: String,
         error: Throwable? = null
     ) {
-        val availableMemoryMb = runCatching {
+        val memoryInfo = runCatching {
             getSystemService(android.app.ActivityManager::class.java)?.let { manager ->
-                android.app.ActivityManager.MemoryInfo().let { info ->
+                android.app.ActivityManager.MemoryInfo().also { info ->
                     manager.getMemoryInfo(info)
-                    info.availMem / (1024L * 1024L)
                 }
             }
         }.getOrNull()
+        val availableMemoryMb = memoryInfo?.availMem?.div(1024L * 1024L)
+        val memoryThresholdMb = memoryInfo?.threshold?.div(1024L * 1024L)
         com.click.browser.engine.ClickDiagnosticsLog.record(
             context = this,
             code = code,
@@ -515,7 +516,11 @@ class MainActivity : FragmentActivity() {
                 androidVersion = "${android.os.Build.VERSION.RELEASE} (API ${android.os.Build.VERSION.SDK_INT})",
                 availableMemoryMb = availableMemoryMb,
                 eventDetails = eventDetails,
-                exceptionType = error?.javaClass?.name
+                exceptionType = error?.javaClass?.name,
+                deviceModel = "${android.os.Build.MANUFACTURER} ${android.os.Build.MODEL}".trim(),
+                systemLowMemory = memoryInfo?.lowMemory,
+                memoryThresholdMb = memoryThresholdMb,
+                exceptionDetails = com.click.browser.engine.safeRendererExceptionDetails(error)
             )
         )
     }
@@ -4024,7 +4029,7 @@ class MainActivity : FragmentActivity() {
                                                                                 GeckoRenderEvent.PROCESS_KILLED ->
                                                                                     "GeckoSession.ContentDelegate.onKill; session is closed; retry will reopen and restore saved state."
                                                                                 else ->
-                                                                                    "Session reopen, state restore, or reload failed; exception message and stack omitted."
+                                                                                    "Session reopen, state restore, or reload failed; bounded exception class/cause and stack frames captured, messages omitted."
                                                                             }
                                                                             recordGeckoRendererDiagnostic(
                                                                                 tabId = tabId,

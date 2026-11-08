@@ -34,7 +34,11 @@ internal data class ClickRendererDiagnosticDetails(
     val androidVersion: String,
     val availableMemoryMb: Long?,
     val eventDetails: String,
-    val exceptionType: String? = null
+    val exceptionType: String? = null,
+    val deviceModel: String = "unknown",
+    val systemLowMemory: Boolean? = null,
+    val memoryThresholdMb: Long? = null,
+    val exceptionDetails: String? = null
 )
 
 internal data class ClickCatLogEntry(
@@ -52,6 +56,8 @@ internal data class PendingClickModeSwitch(
 
 internal const val CLICK_CAT_LOG_MAX_ENTRIES = 120
 internal const val CLICK_CAT_LOG_URL_MAX_CHARS = 512
+internal const val CLICK_DIAGNOSTIC_EXCEPTION_DETAILS_MAX_CHARS = 6000
+internal const val CLICK_DIAGNOSTIC_EXPORT_MAX_CHARS = 64000
 
 /** Keep renderer diagnostics useful while dropping credentials, query strings, and fragments. */
 internal fun sanitizeClickRendererUrl(rawUrl: String?): String? {
@@ -79,8 +85,75 @@ internal fun boundedClickRendererDetails(
     androidVersion = details.androidVersion.take(80),
     availableMemoryMb = details.availableMemoryMb?.coerceAtLeast(0),
     eventDetails = details.eventDetails.take(160),
-    exceptionType = details.exceptionType?.take(100)
+    exceptionType = details.exceptionType?.take(100),
+    deviceModel = details.deviceModel.take(100),
+    memoryThresholdMb = details.memoryThresholdMb?.coerceAtLeast(0),
+    exceptionDetails = details.exceptionDetails?.take(CLICK_DIAGNOSTIC_EXCEPTION_DETAILS_MAX_CHARS)
 )
+
+/** Store frame names and cause classes, but never exception messages that may contain page data. */
+internal fun safeRendererExceptionDetails(error: Throwable?): String? {
+    if (error == null) return null
+    val output = StringBuilder()
+    val seen = mutableSetOf<Throwable>()
+    var current: Throwable? = error
+    var causeDepth = 0
+    while (current != null && causeDepth < 4 && seen.add(current) &&
+        output.length < CLICK_DIAGNOSTIC_EXCEPTION_DETAILS_MAX_CHARS
+    ) {
+        if (causeDepth > 0) output.append("\nCaused by: ")
+        output.append(current.javaClass.name.take(120))
+        current.stackTrace.take(32).forEach { frame ->
+            if (output.length >= CLICK_DIAGNOSTIC_EXCEPTION_DETAILS_MAX_CHARS) return@forEach
+            output.append("\n  at ")
+                .append(frame.className.take(160))
+                .append('.')
+                .append(frame.methodName.take(100))
+            val source = frame.fileName
+                ?.substringAfterLast('/')
+                ?.substringAfterLast('\\')
+                ?.take(80)
+            if (!source.isNullOrBlank()) {
+                output.append('(').append(source)
+                if (frame.lineNumber >= 0) output.append(':').append(frame.lineNumber)
+                output.append(')')
+            } else if (frame.lineNumber >= 0) {
+                output.append("(:").append(frame.lineNumber).append(')')
+            }
+        }
+        current = current.cause
+        causeDepth++
+    }
+    val summary = output.toString().take(CLICK_DIAGNOSTIC_EXCEPTION_DETAILS_MAX_CHARS)
+    return summary.takeIf { it.isNotBlank() }
+}
+
+/** Plain-text diagnostics for the Android share sheet; callers share only after an explicit tap. */
+internal fun formatClickDiagnosticsForSharing(events: List<ClickCatLogEntry>): String = buildString {
+    appendLine("Click Browser diagnostics")
+    appendLine("Local troubleshooting events. Page contents and exception messages are not included.")
+    events.takeLast(CLICK_CAT_LOG_MAX_ENTRIES).forEach { event ->
+        appendLine()
+        appendLine("${event.timestampMillis} · ${event.code.label}")
+        event.fromMode?.let { appendLine("From profile: $it") }
+        event.toMode?.let { appendLine("To profile: $it") }
+        event.rendererDetails?.let { rawDetails ->
+            val details = boundedClickRendererDetails(rawDetails)
+            appendLine("Tab: ${details.tabId}")
+            appendLine("URL: ${details.url ?: "unavailable"}")
+            appendLine("Device: ${details.deviceModel}")
+            appendLine("GeckoView: ${details.geckoViewVersion}; Android: ${details.androidVersion}")
+            appendLine(
+                "Memory: ${details.availableMemoryMb?.let { "$it MB available" } ?: "unavailable"}; " +
+                    "system low memory: ${details.systemLowMemory ?: "unknown"}; " +
+                    "threshold: ${details.memoryThresholdMb?.let { "$it MB" } ?: "unknown"}"
+            )
+            appendLine("Event: ${details.eventDetails}")
+            details.exceptionType?.let { appendLine("Exception type: $it") }
+            details.exceptionDetails?.let { appendLine("Exception frames (messages omitted):\n$it") }
+        }
+    }
+}.take(CLICK_DIAGNOSTIC_EXPORT_MAX_CHARS)
 
 internal fun appendClickCatLogEntry(
     existing: List<ClickCatLogEntry>,
@@ -101,9 +174,10 @@ internal fun resolveClickModeSwitchOutcome(
 
 /**
  * Local Click-authored troubleshooting events only. This is not Android logcat:
- * renderer events may store a sanitized URL and tab ID, but never page contents,
- * passwords, cookies, crash stacks, or free-form exception messages. Storage is
- * a bounded private SharedPreferences ring and requires no new permissions.
+ * renderer events may store a sanitized URL, tab ID, device/runtime context,
+ * and bounded exception class/cause/stack-frame names. Messages, page contents,
+ * passwords, cookies, and logs from other apps are excluded. Sharing is opt-in.
+ * Storage is a bounded private SharedPreferences ring and requires no permissions.
  */
 internal object ClickDiagnosticsLog {
     private const val PREFS_NAME = "click_local_catlog_v1"
@@ -206,9 +280,13 @@ internal object ClickDiagnosticsLog {
                         .put("url", details.url ?: JSONObject.NULL)
                         .put("engine", details.geckoViewVersion)
                         .put("android", details.androidVersion)
+                        .put("device", details.deviceModel)
                         .put("memoryMb", details.availableMemoryMb ?: JSONObject.NULL)
+                        .put("lowMemory", details.systemLowMemory ?: JSONObject.NULL)
+                        .put("memoryThresholdMb", details.memoryThresholdMb ?: JSONObject.NULL)
                         .put("event", details.eventDetails)
                         .put("exception", details.exceptionType ?: JSONObject.NULL)
+                        .put("exceptionDetails", details.exceptionDetails ?: JSONObject.NULL)
                 )
             }
             array.put(value)
@@ -235,7 +313,11 @@ internal object ClickDiagnosticsLog {
                                 androidVersion = renderer.optString("android"),
                                 availableMemoryMb = nullableLong(renderer, "memoryMb"),
                                 eventDetails = renderer.optString("event"),
-                                exceptionType = nullableString(renderer, "exception")
+                                exceptionType = nullableString(renderer, "exception"),
+                                deviceModel = renderer.optString("device", "unknown"),
+                                systemLowMemory = nullableBoolean(renderer, "lowMemory"),
+                                memoryThresholdMb = nullableLong(renderer, "memoryThresholdMb"),
+                                exceptionDetails = nullableString(renderer, "exceptionDetails")
                             )
                         )
                     }
@@ -255,4 +337,7 @@ internal object ClickDiagnosticsLog {
 
     private fun nullableLong(value: JSONObject, key: String): Long? =
         value.opt(key)?.takeUnless { it == JSONObject.NULL }?.toString()?.toLongOrNull()
+
+    private fun nullableBoolean(value: JSONObject, key: String): Boolean? =
+        value.opt(key)?.takeUnless { it == JSONObject.NULL } as? Boolean
 }
