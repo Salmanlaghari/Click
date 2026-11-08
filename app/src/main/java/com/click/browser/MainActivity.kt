@@ -472,6 +472,37 @@ class MainActivity : FragmentActivity() {
         geckoTabActionsState.value = emptyMap()
     }
 
+    private fun recordGeckoRendererDiagnostic(
+        tabId: String,
+        url: String?,
+        code: com.click.browser.engine.ClickCatLogCode,
+        eventDetails: String,
+        error: Throwable? = null
+    ) {
+        val availableMemoryMb = runCatching {
+            getSystemService(android.app.ActivityManager::class.java)?.let { manager ->
+                android.app.ActivityManager.MemoryInfo().let { info ->
+                    manager.getMemoryInfo(info)
+                    info.availMem / (1024L * 1024L)
+                }
+            }
+        }.getOrNull()
+        com.click.browser.engine.ClickDiagnosticsLog.record(
+            context = this,
+            code = code,
+            toMode = liveMode,
+            rendererDetails = com.click.browser.engine.ClickRendererDiagnosticDetails(
+                tabId = tabId,
+                url = url,
+                geckoViewVersion = BuildConfig.GECKOVIEW_VERSION,
+                androidVersion = "${android.os.Build.VERSION.RELEASE} (API ${android.os.Build.VERSION.SDK_INT})",
+                availableMemoryMb = availableMemoryMb,
+                eventDetails = eventDetails,
+                exceptionType = error?.javaClass?.name
+            )
+        )
+    }
+
     private fun requestGeckoModeDataClear(mode: BrowserMode) {
         requestGeckoContextDataClear(geckoContextIdFor(mode))
     }
@@ -3775,28 +3806,80 @@ class MainActivity : FragmentActivity() {
                                                                         } else null
                                                                     }
                                                                 },
-                                                                onRendererFailure = { event ->
+                                                                onRendererFailure = { event, error ->
                                                                     runOnUiThread {
-                                                                        tabs.firstOrNull { it.id == tabId }?.rendererRecoveryRequired =
-                                                                            geckoRendererRecoveryRequired(event)
+                                                                        val failedTab = tabs.firstOrNull { it.id == tabId }
+                                                                        if (failedTab != null) {
+                                                                            failedTab.rendererRecoveryRequired =
+                                                                                geckoRendererRecoveryRequired(
+                                                                                    failedTab.rendererRecoveryRequired,
+                                                                                    event
+                                                                                )
+                                                                            failedTab.isPageLoading = false
+                                                                            failedTab.loadProgress = 0
+                                                                        }
                                                                         val code = when (event) {
                                                                             GeckoRenderEvent.PROCESS_CRASHED ->
                                                                                 com.click.browser.engine.ClickCatLogCode.GECKO_RENDERER_CRASHED
                                                                             GeckoRenderEvent.PROCESS_KILLED ->
                                                                                 com.click.browser.engine.ClickCatLogCode.GECKO_RENDERER_KILLED
+                                                                            GeckoRenderEvent.RECOVERY_FAILED ->
+                                                                                com.click.browser.engine.ClickCatLogCode.GECKO_RECOVERY_FAILED
                                                                             else -> null
                                                                         }
                                                                         if (code != null) {
-                                                                            com.click.browser.engine.ClickDiagnosticsLog.record(
-                                                                                this@MainActivity, code, toMode = activeMode
+                                                                            val details = when (event) {
+                                                                                GeckoRenderEvent.PROCESS_CRASHED ->
+                                                                                    "GeckoSession.ContentDelegate.onCrash; session is closed; retry will reopen and restore saved state."
+                                                                                GeckoRenderEvent.PROCESS_KILLED ->
+                                                                                    "GeckoSession.ContentDelegate.onKill; session is closed; retry will reopen and restore saved state."
+                                                                                else ->
+                                                                                    "Session reopen, state restore, or reload failed; exception message and stack omitted."
+                                                                            }
+                                                                            recordGeckoRendererDiagnostic(
+                                                                                tabId = tabId,
+                                                                                url = failedTab?.url,
+                                                                                code = code,
+                                                                                eventDetails = details,
+                                                                                error = error
                                                                             )
                                                                         }
                                                                     }
                                                                 },
                                                                 onRendererRecovery = { event ->
                                                                     runOnUiThread {
-                                                                        tabs.firstOrNull { it.id == tabId }?.rendererRecoveryRequired =
-                                                                            geckoRendererRecoveryRequired(event)
+                                                                        val recoveringTab = tabs.firstOrNull { it.id == tabId }
+                                                                        val wasRecoveryRequired =
+                                                                            recoveringTab?.rendererRecoveryRequired == true
+                                                                        if (recoveringTab != null) {
+                                                                            recoveringTab.rendererRecoveryRequired =
+                                                                                geckoRendererRecoveryRequired(
+                                                                                    wasRecoveryRequired,
+                                                                                    event
+                                                                                )
+                                                                            if (event == GeckoRenderEvent.FIRST_COMPOSITE && wasRecoveryRequired) {
+                                                                                recoveringTab.hasCommittedContent = true
+                                                                                recoveringTab.isPageLoading = false
+                                                                            }
+                                                                        }
+                                                                        val diagnostic = when (event) {
+                                                                            GeckoRenderEvent.RECOVERY_STARTED ->
+                                                                                com.click.browser.engine.ClickCatLogCode.GECKO_RECOVERY_STARTED to
+                                                                                    "Retry requested; reopen the closed GeckoSession, restore saved state, or load the remembered URL."
+                                                                            GeckoRenderEvent.FIRST_COMPOSITE -> if (wasRecoveryRequired) {
+                                                                                com.click.browser.engine.ClickCatLogCode.GECKO_RECOVERY_SUCCEEDED to
+                                                                                    "GeckoSession.ContentDelegate.onFirstComposite; recovery frame confirmed and overlay cleared."
+                                                                            } else null
+                                                                            else -> null
+                                                                        }
+                                                                        if (diagnostic != null) {
+                                                                            recordGeckoRendererDiagnostic(
+                                                                                tabId = tabId,
+                                                                                url = recoveringTab?.url,
+                                                                                code = diagnostic.first,
+                                                                                eventDetails = diagnostic.second
+                                                                            )
+                                                                        }
                                                                     }
                                                                 },
                                                                 onExternalResponse = { response ->
@@ -4643,10 +4726,8 @@ class MainActivity : FragmentActivity() {
                                                             )
                                                             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                                                                 if (currentTab.canGoBack) {
-                                                                    TextButton(onClick = {
-                                                                        if (currentTab.browserSession.goBackIfPossible()) {
-                                                                            currentTab.rendererRecoveryRequired = false
-                                                                        }
+                                                                TextButton(onClick = {
+                                                                        currentTab.browserSession.goBackIfPossible()
                                                                     }) {
                                                                         Text("Back")
                                                                     }
