@@ -3658,6 +3658,7 @@ class MainActivity : FragmentActivity() {
                                                     theme = themed,
                                                     activeMode = activeMode,
                                                     currentUrl = if (showOverlays) "" else currentTab.url,
+                                                    isPageLoading = !showOverlays && currentTab.isPageLoading,
                                                     connectionSecurity = ConnectionSecurityPolicy.forPage(
                                                         currentTab.url, currentTab.connectionSecurity
                                                     ),
@@ -3681,6 +3682,29 @@ class MainActivity : FragmentActivity() {
                                                         currentTab.browserSession?.loadUrl(destination)
                                                     },
                                                     onReload = { currentTab.browserSession?.reload() },
+                                                    onStopLoading = {
+                                                        val stopResult = runCatching {
+                                                            currentTab.browserSession?.stopLoading()
+                                                        }
+                                                        if (stopResult.isSuccess) {
+                                                            currentTab.isPageLoading = false
+                                                            currentTab.hasCommittedContent = true
+                                                            currentTab.loadProgress = 0
+                                                        } else {
+                                                            stopResult.exceptionOrNull()?.let { error ->
+                                                                android.util.Log.w(
+                                                                    "BrowserNavigation",
+                                                                    "Toolbar stop-loading request failed",
+                                                                    error
+                                                                )
+                                                                Toast.makeText(
+                                                                    this@MainActivity,
+                                                                    "Couldn't stop loading. Try again or close the tab.",
+                                                                    Toast.LENGTH_SHORT
+                                                                ).show()
+                                                            }
+                                                        }
+                                                    },
                                                     onNewTab = {
                                                         tabs.add(TabItem(url = homeUrl(), title = "New Tab"))
                                                         activeTabIndex = tabs.lastIndex
