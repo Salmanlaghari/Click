@@ -3683,10 +3683,27 @@ class MainActivity : FragmentActivity() {
                                                     },
                                                     onReload = { currentTab.browserSession?.reload() },
                                                     onStopLoading = {
-                                                        runCatching { currentTab.browserSession?.stopLoading() }
-                                                        currentTab.isPageLoading = false
-                                                        currentTab.hasCommittedContent = true
-                                                        currentTab.loadProgress = 0
+                                                        val stopResult = runCatching {
+                                                            currentTab.browserSession?.stopLoading()
+                                                        }
+                                                        if (stopResult.isSuccess) {
+                                                            currentTab.isPageLoading = false
+                                                            currentTab.hasCommittedContent = true
+                                                            currentTab.loadProgress = 0
+                                                        } else {
+                                                            stopResult.exceptionOrNull()?.let { error ->
+                                                                android.util.Log.w(
+                                                                    "BrowserNavigation",
+                                                                    "Toolbar stop-loading request failed",
+                                                                    error
+                                                                )
+                                                                Toast.makeText(
+                                                                    this@MainActivity,
+                                                                    "Couldn't stop loading. Try again or close the tab.",
+                                                                    Toast.LENGTH_SHORT
+                                                                ).show()
+                                                            }
+                                                        }
                                                     },
                                                     onNewTab = {
                                                         tabs.add(TabItem(url = homeUrl(), title = "New Tab"))
