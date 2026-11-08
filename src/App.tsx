@@ -235,18 +235,6 @@ export const App: React.FC = () => {
       stats: 'Auto-detect foreign language'
     },
     {
-      id: 'ext-tampermonkey',
-      name: 'ScriptRunner Userscripts',
-      description: 'Client-side userscript engine: auto skip video ads, bypass anti-adblockers.',
-      version: '5.1.0',
-      author: 'Jan Biniok (Safe Sandbox)',
-      icon: 'Code',
-      category: 'developer',
-      enabled: true,
-      permissions: ['userScripts'],
-      stats: '3 active scripts running'
-    },
-    {
       id: 'ext-privacybadger',
       name: 'Privacy Badger & Anti-Fingerprint',
       description: 'Spoofs Canvas, WebRTC, and AudioContext fingerprinting signatures.',
