@@ -207,6 +207,9 @@ jobs:
           GROQ_API_KEY: ci-placeholder-no-secret
         run: ./gradlew :app:testDebugUnitTest
 
+      - name: Compile navigation touch-target instrumentation test
+        run: ./gradlew :app:compileDebugAndroidTestKotlin
+
       - name: Build Debug APK
         env:
           GROQ_API_KEY: ${{ github.ref == 'refs/heads/main' && secrets.GROQ_API_KEY || 'ci-placeholder-no-secret' }}
