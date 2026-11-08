@@ -172,6 +172,8 @@ class TabItem(
     var loadProgress by mutableStateOf(0)
     var isPageLoading by mutableStateOf(false)
     var hasCommittedContent by mutableStateOf(false)
+    internal val passwordAutofillPromptGuard =
+        com.click.browser.engine.PasswordAccessPolicy.AutofillPromptGuard()
     var rendererRecoveryRequired by mutableStateOf(false)
 }
 
@@ -320,6 +322,8 @@ class MainActivity : FragmentActivity() {
     private var liveBiometricLockEnabled = false
     private var liveHasIncognitoTabs = false
     private val privateLockedFlow = kotlinx.coroutines.flow.MutableStateFlow(false)
+    private val passwordManagerAuthenticatedFlow = MutableStateFlow(false)
+    private var passwordAuthenticationInFlight = false
     // Default-browser flow: pending external link from an ACTION_VIEW intent
     // (drained into a new tab by the composable) + the current
     // default-browser status shown in Settings and used for the one-time
@@ -548,6 +552,7 @@ class MainActivity : FragmentActivity() {
 
     override fun onPause() {
         super.onPause()
+        passwordManagerAuthenticatedFlow.value = false
         normalTabExtensionRouter?.deactivateActiveSession()
         // Standard browser behavior: pause live tab sessions when the app is
         // backgrounded, so page audio/video stops — UNLESS the user
@@ -1085,6 +1090,53 @@ class MainActivity : FragmentActivity() {
             Toast.makeText(this, "Reading page aloud…", Toast.LENGTH_SHORT).show()
         } catch (e: Exception) {
             Toast.makeText(this, "TTS not available: ${e.message}", Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    /** Starts a device-credential/strong-biometric gate for a sensitive password action. */
+    private fun promptPasswordAction(
+        title: String,
+        subtitle: String,
+        onCancelled: () -> Unit = {},
+        onAuthenticated: () -> Unit
+    ): Boolean {
+        if (!com.click.browser.engine.PrivateTabLock.canLock(this) || passwordAuthenticationInFlight) {
+            return false
+        }
+        passwordAuthenticationInFlight = true
+        val executor = ContextCompat.getMainExecutor(this)
+        val prompt = BiometricPrompt(
+            this,
+            executor,
+            object : BiometricPrompt.AuthenticationCallback() {
+                override fun onAuthenticationSucceeded(result: BiometricPrompt.AuthenticationResult) {
+                    super.onAuthenticationSucceeded(result)
+                    passwordAuthenticationInFlight = false
+                    onAuthenticated()
+                }
+
+                override fun onAuthenticationError(errorCode: Int, errString: CharSequence) {
+                    super.onAuthenticationError(errorCode, errString)
+                    passwordAuthenticationInFlight = false
+                    onCancelled()
+                }
+            }
+        )
+        val infoBuilder = BiometricPrompt.PromptInfo.Builder()
+            .setTitle(title)
+            .setSubtitle(subtitle)
+        if (android.os.Build.VERSION.SDK_INT >= 30) {
+            infoBuilder.setAllowedAuthenticators(com.click.browser.engine.PrivateTabLock.AUTHENTICATORS)
+        } else {
+            @Suppress("DEPRECATION")
+            infoBuilder.setDeviceCredentialAllowed(true)
+        }
+        return try {
+            prompt.authenticate(infoBuilder.build())
+            true
+        } catch (_: Exception) {
+            passwordAuthenticationInFlight = false
+            false
         }
     }
 
@@ -1953,6 +2005,43 @@ class MainActivity : FragmentActivity() {
             }
             // Password manager: saved-logins management screen.
             var showPasswordManager by remember { mutableStateOf(false) }
+            val passwordManagerAuthenticated by passwordManagerAuthenticatedFlow.collectAsState(initial = false)
+            fun requestPasswordManagerAccess(onAuthenticated: () -> Unit = {}) {
+                val authAvailable = com.click.browser.engine.PrivateTabLock.canLock(this@MainActivity)
+                if (!authAvailable) {
+                    val reason = com.click.browser.engine.PrivateTabLock.unavailableReason(this@MainActivity)
+                    Toast.makeText(
+                        this@MainActivity,
+                        "Set up a device lock to access saved passwords. $reason",
+                        Toast.LENGTH_LONG
+                    ).show()
+                    return
+                }
+                val started = promptPasswordAction(
+                    title = "Unlock saved passwords",
+                    subtitle = "Authenticate to view or use logins stored in Click"
+                ) {
+                    val canOpen = com.click.browser.engine.PasswordAccessPolicy.canOpenVault(
+                        deviceAuthenticationAvailable =
+                            com.click.browser.engine.PrivateTabLock.canLock(this@MainActivity),
+                        deviceAuthenticated = true
+                    )
+                    if (canOpen) {
+                        passwordManagerAuthenticatedFlow.value = true
+                        showPasswordManager = true
+                        onAuthenticated()
+                    } else {
+                        passwordManagerAuthenticatedFlow.value = false
+                    }
+                }
+                if (!started) {
+                    Toast.makeText(
+                        this@MainActivity,
+                        "Authentication could not be started. Try again.",
+                        Toast.LENGTH_SHORT
+                    ).show()
+                }
+            }
             // Cookie manager: per-site cookie viewer.
             var showCookieManager by remember { mutableStateOf(false) }
             // All-sites settings list (Settings -> Site settings).
@@ -2260,13 +2349,14 @@ class MainActivity : FragmentActivity() {
                     FeatureId.SETTINGS -> showSettings = true
                     FeatureId.STORAGE, FeatureId.CLEAR_DATA -> showDeleteBrowsingConfirm = true
                     FeatureId.PASSWORDS -> {
-                        showPasswordManager = true
-                        if (currentTab.engine == BrowserTabEngine.GECKOVIEW) {
-                            Toast.makeText(
-                                this@MainActivity,
-                                "Saved logins are available; page autofill/save capture is not wired to GeckoView yet.",
-                                Toast.LENGTH_LONG
-                            ).show()
+                        requestPasswordManagerAccess {
+                            if (currentTab.engine == BrowserTabEngine.GECKOVIEW) {
+                                Toast.makeText(
+                                    this@MainActivity,
+                                    "Saved logins are available; page autofill/save capture is not wired to GeckoView yet.",
+                                    Toast.LENGTH_LONG
+                                ).show()
+                            }
                         }
                     }
                     FeatureId.COOKIES -> showCookieManager = true
@@ -3940,7 +4030,10 @@ class MainActivity : FragmentActivity() {
                                                                     }
                                                                 },
                                                                 onUrlChanged = { url ->
-                                                                    tabs.firstOrNull { it.id == tabId }?.url = url
+                                                                    tabs.firstOrNull { it.id == tabId }?.let { changedTab ->
+                                                                        changedTab.passwordAutofillPromptGuard.onNavigationStarted()
+                                                                        changedTab.url = url
+                                                                    }
                                                                 },
                                                                 onConnectionSecurityChanged = { info ->
                                                                     val update = {
@@ -4370,6 +4463,7 @@ class MainActivity : FragmentActivity() {
                                                                     override fun onPageStarted(view: WebView?, url: String?, favicon: Bitmap?) {
                                                                 super.onPageStarted(view, url, favicon)
                                                                 val loadingTab = view?.let { target -> tabs.firstOrNull { it.webView === target } } ?: return
+                                                                loadingTab.passwordAutofillPromptGuard.onNavigationStarted()
                                                                 loadingTab.url = url ?: ""
                                                                 loadingTab.connectionSecurity = ConnectionSecurityPolicy.checking(loadingTab.url)
                                                                 loadingTab.isPageLoading = true
@@ -4427,8 +4521,8 @@ class MainActivity : FragmentActivity() {
                                                                     }
                                                                 }
 
-                                                                // Password manager: inspect only secure pages. Detection and
-                                                                // autofill are both disabled on HTTP and in private tabs.
+                                                                // Password manager: inspect only secure pages; authenticate
+                                                                // before displaying or sending a saved login to the page.
                                                                 view?.let { wv ->
                                                                     val pageUrl = wv.url.orEmpty()
                                                                     val pageOrigin = com.click.browser.engine.PasswordOriginPolicy.securePageOrigin(pageUrl)
@@ -4446,27 +4540,204 @@ class MainActivity : FragmentActivity() {
                                                                                 com.click.browser.engine.PasswordManager.isEnabled(this@MainActivity)
                                                                             } catch (_: Exception) { false }
                                                                             if (!managerEnabled) return@launch
-                                                                            val saved = com.click.browser.engine.PasswordManager.getForOrigin(
+                                                                            val hasCredential = com.click.browser.engine.PasswordManager.hasForOrigin(
                                                                                 this@MainActivity, pageOrigin
                                                                             )
-                                                                            if (saved != null) {
-                                                                                val js = "window.__clickFillLogin(" +
-                                                                                    "${org.json.JSONObject.quote(saved.username)}, " +
-                                                                                    "${org.json.JSONObject.quote(saved.password)})"
-                                                                                // Fill immediately, then retry after a
-                                                                                // delay — SPA login forms often render
-                                                                                // after onPageFinished.
-                                                                                wv.post {
-                                                                                    if (!finishedTab.isIncognito &&
-                                                                                        com.click.browser.engine.PasswordOriginPolicy.isSameSecureOrigin(pageUrl, wv.url.orEmpty())
-                                                                                    ) wv.evaluateJavascript(js, null)
-                                                                                }
-                                                                                wv.postDelayed({
-                                                                                    if (!finishedTab.isIncognito &&
-                                                                                        com.click.browser.engine.PasswordOriginPolicy.isSameSecureOrigin(pageUrl, wv.url.orEmpty())
-                                                                                    ) wv.evaluateJavascript(js, null)
-                                                                                }, 1500)
+                                                                            if (!hasCredential) return@launch
+                                                                            val isActiveTarget =
+                                                                                finishedTab.webView === wv &&
+                                                                                    finishedTab === currentTab &&
+                                                                                    tabs.indexOf(finishedTab) == activeTabIndex &&
+                                                                                    hasWindowFocus()
+                                                                            val requestContext =
+                                                                                com.click.browser.engine.PasswordAccessPolicy.AutofillContext(
+                                                                                    passwordManagerEnabled = managerEnabled,
+                                                                                    hasSavedCredential = hasCredential,
+                                                                                    isPrivateTab = finishedTab.isIncognito,
+                                                                                    isActiveTab = isActiveTarget,
+                                                                                    isSecurePage = pageOrigin != null,
+                                                                                    isSameOrigin = com.click.browser.engine.PasswordOriginPolicy.isSameSecureOrigin(
+                                                                                        pageUrl, wv.url.orEmpty()
+                                                                                    ),
+                                                                                    deviceAuthenticationAvailable =
+                                                                                        com.click.browser.engine.PrivateTabLock.canLock(this@MainActivity),
+                                                                                    deviceAuthenticated = false
+                                                                                )
+                                                                            if (!com.click.browser.engine.PasswordAccessPolicy
+                                                                                    .shouldRequestAutofillAuthentication(requestContext)
+                                                                            ) return@launch
+                                                                            if (!finishedTab.passwordAutofillPromptGuard.markIfNewOrigin(pageOrigin)) {
+                                                                                return@launch
                                                                             }
+
+                                                                            fun launchAutofillPrompt(manualRetry: Boolean = false) {
+                                                                            val promptStarted = promptPasswordAction(
+                                                                                title = "Use saved password?",
+                                                                                subtitle = "Authenticate to fill the login for ${pageOrigin.removePrefix("https://")}",
+                                                                                onCancelled = {
+                                                                                    scope.launch {
+                                                                                        val result = snackbarHostState.showSnackbar(
+                                                                                            message = "Authentication canceled; no password was filled.",
+                                                                                            actionLabel = "Retry",
+                                                                                            duration = SnackbarDuration.Long
+                                                                                        )
+                                                                                        if (result != SnackbarResult.ActionPerformed) return@launch
+                                                                                        if (finishedTab.webView !== wv || finishedTab !== currentTab ||
+                                                                                            tabs.indexOf(finishedTab) != activeTabIndex || !hasWindowFocus()
+                                                                                        ) {
+                                                                                            Toast.makeText(
+                                                                                                this@MainActivity,
+                                                                                                "Switch back to the login tab to retry.",
+                                                                                                Toast.LENGTH_SHORT
+                                                                                            ).show()
+                                                                                            return@launch
+                                                                                        }
+                                                                                        val retryManagerEnabled = try {
+                                                                                            com.click.browser.engine.PasswordManager.isEnabled(this@MainActivity)
+                                                                                        } catch (_: Exception) { false }
+                                                                                        val retryHasCredential = if (retryManagerEnabled) {
+                                                                                            try {
+                                                                                                com.click.browser.engine.PasswordManager.hasForOrigin(
+                                                                                                    this@MainActivity, pageOrigin
+                                                                                                )
+                                                                                            } catch (_: Exception) { false }
+                                                                                        } else false
+                                                                                        if (finishedTab.webView !== wv || finishedTab !== currentTab ||
+                                                                                            tabs.indexOf(finishedTab) != activeTabIndex || !hasWindowFocus()
+                                                                                        ) return@launch
+                                                                                        val retryUrl = wv.url.orEmpty()
+                                                                                        val retryContext = requestContext.copy(
+                                                                                            passwordManagerEnabled = retryManagerEnabled,
+                                                                                            hasSavedCredential = retryHasCredential,
+                                                                                            isPrivateTab = finishedTab.isIncognito,
+                                                                                            isActiveTab =
+                                                                                                finishedTab.webView === wv &&
+                                                                                                    finishedTab === currentTab &&
+                                                                                                    tabs.indexOf(finishedTab) == activeTabIndex &&
+                                                                                                    hasWindowFocus(),
+                                                                                            isSecurePage =
+                                                                                                com.click.browser.engine.PasswordOriginPolicy.securePageOrigin(retryUrl) != null,
+                                                                                            isSameOrigin =
+                                                                                                com.click.browser.engine.PasswordOriginPolicy.isSameSecureOrigin(
+                                                                                                    pageUrl, retryUrl
+                                                                                                ),
+                                                                                            deviceAuthenticationAvailable =
+                                                                                                com.click.browser.engine.PrivateTabLock.canLock(this@MainActivity)
+                                                                                        )
+                                                                                        if (com.click.browser.engine.PasswordAccessPolicy
+                                                                                                .shouldRequestAutofillAuthentication(retryContext)
+                                                                                        ) {
+                                                                                            launchAutofillPrompt(manualRetry = true)
+                                                                                        } else {
+                                                                                            Toast.makeText(
+                                                                                                this@MainActivity,
+                                                                                                "Page changed or saved login is unavailable.",
+                                                                                                Toast.LENGTH_SHORT
+                                                                                            ).show()
+                                                                                        }
+                                                                                    }
+                                                                                }
+                                                                            ) {
+                                                                                scope.launch {
+                                                                                    val enabledAfterAuth = try {
+                                                                                        com.click.browser.engine.PasswordManager.isEnabled(this@MainActivity)
+                                                                                    } catch (_: Exception) { false }
+                                                                                    if (!enabledAfterAuth) return@launch
+                                                                                    if (finishedTab.webView !== wv) return@launch
+                                                                                    val saved = try {
+                                                                                        com.click.browser.engine.PasswordManager.getForOrigin(
+                                                                                            this@MainActivity, pageOrigin
+                                                                                        )
+                                                                                    } catch (_: Exception) { null } ?: return@launch
+                                                                                    if (finishedTab.webView !== wv) return@launch
+                                                                                    val authContext =
+                                                                                        com.click.browser.engine.PasswordAccessPolicy.AutofillContext(
+                                                                                            passwordManagerEnabled = enabledAfterAuth,
+                                                                                            hasSavedCredential = true,
+                                                                                            isPrivateTab = finishedTab.isIncognito,
+                                                                                            isActiveTab =
+                                                                                                finishedTab.webView === wv &&
+                                                                                                    finishedTab === currentTab &&
+                                                                                                    tabs.indexOf(finishedTab) == activeTabIndex &&
+                                                                                                    hasWindowFocus(),
+                                                                                            isSecurePage =
+                                                                                                com.click.browser.engine.PasswordOriginPolicy.securePageOrigin(
+                                                                                                    wv.url.orEmpty()
+                                                                                                ) != null,
+                                                                                            isSameOrigin =
+                                                                                                com.click.browser.engine.PasswordOriginPolicy.isSameSecureOrigin(
+                                                                                                    pageUrl, wv.url.orEmpty()
+                                                                                                ),
+                                                                                            deviceAuthenticationAvailable =
+                                                                                                com.click.browser.engine.PrivateTabLock.canLock(this@MainActivity),
+                                                                                            deviceAuthenticated = true
+                                                                                        )
+                                                                                        if (!com.click.browser.engine.PasswordAccessPolicy.mayAutofill(authContext)) {
+                                                                                            return@launch
+                                                                                        }
+                                                                                    val js = "(function(expectedOrigin, username, password) {" +
+                                                                                        "if (window.location.origin !== expectedOrigin || window.top !== window) return;" +
+                                                                                        "if (typeof window.__clickFillLogin !== 'function') return;" +
+                                                                                        "window.__clickFillLogin(username, password);" +
+                                                                                        "})(${org.json.JSONObject.quote(pageOrigin)}, " +
+                                                                                        "${org.json.JSONObject.quote(saved.username)}, " +
+                                                                                        "${org.json.JSONObject.quote(saved.password)});"
+                                                                                    fun fillIfStillEligible(managerIsEnabled: Boolean) {
+                                                                                        if (finishedTab.webView !== wv) return
+                                                                                        val latestUrl = wv.url.orEmpty()
+                                                                                        val latestContext =
+                                                                                            com.click.browser.engine.PasswordAccessPolicy.AutofillContext(
+                                                                                                passwordManagerEnabled = managerIsEnabled,
+                                                                                                hasSavedCredential = true,
+                                                                                                isPrivateTab = finishedTab.isIncognito,
+                                                                                                isActiveTab =
+                                                                                                    finishedTab.webView === wv &&
+                                                                                                        finishedTab === currentTab &&
+                                                                                                        tabs.indexOf(finishedTab) == activeTabIndex &&
+                                                                                                        hasWindowFocus(),
+                                                                                                isSecurePage =
+                                                                                                    com.click.browser.engine.PasswordOriginPolicy.securePageOrigin(latestUrl) != null,
+                                                                                                isSameOrigin =
+                                                                                                    com.click.browser.engine.PasswordOriginPolicy.isSameSecureOrigin(
+                                                                                                        pageUrl, latestUrl
+                                                                                                    ),
+                                                                                                deviceAuthenticationAvailable =
+                                                                                                    com.click.browser.engine.PrivateTabLock.canLock(this@MainActivity),
+                                                                                                deviceAuthenticated = true
+                                                                                            )
+                                                                                        if (finishedTab.webView === wv &&
+                                                                                            com.click.browser.engine.PasswordAccessPolicy.mayAutofill(latestContext)
+                                                                                        ) {
+                                                                                            wv.evaluateJavascript(js, null)
+                                                                                        }
+                                                                                    }
+                                                                                    // Fill now, then retry after a delay for SPA login forms.
+                                                                                    wv.post { fillIfStillEligible(enabledAfterAuth) }
+                                                                                    wv.postDelayed({
+                                                                                        scope.launch {
+                                                                                            val enabledLater = try {
+                                                                                                com.click.browser.engine.PasswordManager.isEnabled(this@MainActivity)
+                                                                                            } catch (_: Exception) { false }
+                                                                                            if (enabledLater) {
+                                                                                                wv.post { fillIfStillEligible(enabledLater) }
+                                                                                            }
+                                                                                        }
+                                                                                    }, 1500)
+                                                                                }
+                                                                            }
+                                                                            if (!promptStarted) {
+                                                                                if (manualRetry) {
+                                                                                    Toast.makeText(
+                                                                                        this@MainActivity,
+                                                                                        "Could not start authentication; no password was filled.",
+                                                                                        Toast.LENGTH_SHORT
+                                                                                    ).show()
+                                                                                } else {
+                                                                                    finishedTab.passwordAutofillPromptGuard.clearIfNotStarted(pageOrigin)
+                                                                                }
+                                                                            }
+                                                                            }
+                                                                            launchAutofillPrompt()
                                                                         }
                                                                     }
                                                                 }
@@ -6275,10 +6546,18 @@ class MainActivity : FragmentActivity() {
                                 )
                             }
                             // Password manager: saved-logins list.
-                            if (showPasswordManager) {
+                            if (showPasswordManager && com.click.browser.engine.PasswordAccessPolicy.canOpenVault(
+                                    deviceAuthenticationAvailable =
+                                        com.click.browser.engine.PrivateTabLock.canLock(this@MainActivity),
+                                    deviceAuthenticated = passwordManagerAuthenticated
+                                )
+                            ) {
                                 com.click.browser.ui.screens.PasswordManagerScreen(
                                     theme = theme,
-                                    onClose = { showPasswordManager = false }
+                                    onClose = {
+                                        showPasswordManager = false
+                                        passwordManagerAuthenticatedFlow.value = false
+                                    }
                                 )
                             }
                             // Privacy & Security suite: account, passwords, Safety Check, autofill, cards.
@@ -6286,7 +6565,7 @@ class MainActivity : FragmentActivity() {
                                 com.click.browser.ui.screens.PrivacySecurityScreen(
                                     theme = theme,
                                     onOpenPaymentMethods = { showPaymentMethods = true },
-                                    onOpenPasswords = { showPasswordManager = true },
+                                    onOpenPasswords = { requestPasswordManagerAccess() },
                                     onClose = { showPrivacySecurity = false }
                                 )
                             }
@@ -6877,7 +7156,7 @@ class MainActivity : FragmentActivity() {
                                         Text(
                                             "Save the login for ${pwSave.origin.removePrefix("https://")} " +
                                                 (if (pwSave.username.isNotBlank()) "(${pwSave.username}) " else "") +
-                                                "in Click's encrypted password manager?"
+                                                "in Click's encrypted password manager? Authenticate to confirm; device authentication is also required to view or fill saved logins."
                                         )
                                     },
                                     confirmButton = {
@@ -6894,64 +7173,101 @@ class MainActivity : FragmentActivity() {
                                                     Toast.makeText(this@MainActivity, "Password manager is off; password not saved.", Toast.LENGTH_SHORT).show()
                                                     return@launch
                                                 }
-                                                if (pwOffer != null) {
-                                                    val saveTab = tabs.firstOrNull { it.id == pwOffer.tabId }
-                                                    val offerStillValid = saveTab != null &&
-                                                        currentTab.id == pwOffer.tabId &&
-                                                        tabs.indexOf(saveTab) == activeTabIndex &&
-                                                        !saveTab.isIncognito &&
-                                                        com.click.browser.engine.PasswordOriginPolicy.isSameSecureOrigin(
-                                                            pwOffer.sourceOrigin,
-                                                            saveTab.webView?.url.orEmpty()
-                                                        )
-                                                    val saved = if (offerStillValid) {
-                                                        try {
-                                                            com.click.browser.engine.PasswordManager.saveForOrigin(
-                                                                this@MainActivity,
-                                                                pwSave.origin,
-                                                                pwSave.username,
-                                                                pwSave.password
-                                                            )
-                                                            true
+                                                if (!com.click.browser.engine.PrivateTabLock.canLock(this@MainActivity)) {
+                                                    dismissGeckoOffer()
+                                                    Toast.makeText(
+                                                        this@MainActivity,
+                                                        "Set up a device lock before saving passwords in Click's vault.",
+                                                        Toast.LENGTH_LONG
+                                                    ).show()
+                                                    return@launch
+                                                }
+                                                val promptStarted = promptPasswordAction(
+                                                    title = "Confirm password save",
+                                                    subtitle = "Authenticate before updating Click's saved-password vault",
+                                                    onCancelled = { dismissGeckoOffer() }
+                                                ) {
+                                                    scope.launch {
+                                                        val stillEnabled = try {
+                                                            com.click.browser.engine.PasswordManager.isEnabled(this@MainActivity)
                                                         } catch (_: Exception) { false }
-                                                    } else false
-                                                    val notice = when {
-                                                        !offerStillValid -> "Page changed; password not saved."
-                                                        saved -> "Password saved (encrypted)."
-                                                        else -> "Could not save password."
-                                                    }
-                                                    Toast.makeText(this@MainActivity, notice, Toast.LENGTH_SHORT).show()
-                                                } else if (geckoPwOffer != null) {
-                                                    val saveTab = tabs.firstOrNull { it.id == geckoPwOffer.tabId }
-                                                    val liveSession = saveTab?.browserSession as? GeckoBrowserTabSession
-                                                    val originValid = com.click.browser.engine.PasswordOriginPolicy.secureOrigin(
-                                                        pwSave.origin, isMainFrame = true
-                                                    ) == pwSave.origin
-                                                    val offerStillValid = saveTab != null && originValid &&
-                                                        currentTab.id == geckoPwOffer.tabId &&
-                                                        tabs.indexOf(saveTab) == activeTabIndex &&
-                                                        saveTab.engine == BrowserTabEngine.GECKOVIEW &&
-                                                        !saveTab.isIncognito && liveSession?.session === geckoPwOffer.session
-                                                    if (!offerStillValid) {
-                                                        dismissGeckoOffer()
-                                                        Toast.makeText(this@MainActivity, "Page changed; password not saved.", Toast.LENGTH_SHORT).show()
-                                                    } else {
-                                                        try {
-                                                            com.click.browser.engine.PasswordManager.saveForOrigin(
-                                                                this@MainActivity,
-                                                                pwSave.origin,
-                                                                pwSave.username,
-                                                                pwSave.password
-                                                            )
-                                                            geckoPwOffer.completion.complete(
-                                                                geckoPwOffer.request.confirm(geckoPwOffer.option)
-                                                            )
-                                                            Toast.makeText(this@MainActivity, "Password saved (encrypted).", Toast.LENGTH_SHORT).show()
-                                                        } catch (_: Exception) {
+                                                        if (!stillEnabled) {
                                                             dismissGeckoOffer()
-                                                            Toast.makeText(this@MainActivity, "Could not save password.", Toast.LENGTH_SHORT).show()
+                                                            Toast.makeText(this@MainActivity, "Password manager is off; password not saved.", Toast.LENGTH_SHORT).show()
+                                                            return@launch
+                                                        }
+                                                        if (pwOffer != null) {
+                                                            val saveTab = tabs.firstOrNull { it.id == pwOffer.tabId }
+                                                            val offerStillValid = saveTab != null &&
+                                                                currentTab.id == pwOffer.tabId &&
+                                                                tabs.indexOf(saveTab) == activeTabIndex &&
+                                                                !saveTab.isIncognito &&
+                                                                com.click.browser.engine.PasswordOriginPolicy.isSameSecureOrigin(
+                                                                    pwOffer.sourceOrigin,
+                                                                    saveTab.webView?.url.orEmpty()
+                                                                )
+                                                            val saved = if (offerStillValid) {
+                                                                try {
+                                                                    com.click.browser.engine.PasswordManager.saveForOrigin(
+                                                                        this@MainActivity,
+                                                                        pwSave.origin,
+                                                                        pwSave.username,
+                                                                        pwSave.password
+                                                                    )
+                                                                    true
+                                                                } catch (_: Exception) { false }
+                                                            } else false
+                                                            val notice = when {
+                                                                !offerStillValid -> "Page changed; password not saved."
+                                                                saved -> "Password saved (encrypted)."
+                                                                else -> "Could not save password."
+                                                            }
+                                                            Toast.makeText(this@MainActivity, notice, Toast.LENGTH_SHORT).show()
+                                                        } else if (geckoPwOffer != null) {
+                                                            val saveTab = tabs.firstOrNull { it.id == geckoPwOffer.tabId }
+                                                            val liveSession = saveTab?.browserSession as? GeckoBrowserTabSession
+                                                            val originValid = com.click.browser.engine.PasswordOriginPolicy.secureOrigin(
+                                                                pwSave.origin, isMainFrame = true
+                                                            ) == pwSave.origin
+                                                            val pageStillMatches = saveTab != null &&
+                                                                com.click.browser.engine.PasswordOriginPolicy.isSameSecureOrigin(
+                                                                    pwSave.origin, saveTab.url
+                                                                )
+                                                            val offerStillValid = saveTab != null && originValid && pageStillMatches &&
+                                                                currentTab.id == geckoPwOffer.tabId &&
+                                                                tabs.indexOf(saveTab) == activeTabIndex &&
+                                                                saveTab.engine == BrowserTabEngine.GECKOVIEW &&
+                                                                !saveTab.isIncognito && liveSession?.session === geckoPwOffer.session
+                                                            if (!offerStillValid) {
+                                                                dismissGeckoOffer()
+                                                                Toast.makeText(this@MainActivity, "Page changed; password not saved.", Toast.LENGTH_SHORT).show()
+                                                            } else {
+                                                                try {
+                                                                    com.click.browser.engine.PasswordManager.saveForOrigin(
+                                                                        this@MainActivity,
+                                                                        pwSave.origin,
+                                                                        pwSave.username,
+                                                                        pwSave.password
+                                                                    )
+                                                                    geckoPwOffer.completion.complete(
+                                                                        geckoPwOffer.request.confirm(geckoPwOffer.option)
+                                                                    )
+                                                                    Toast.makeText(this@MainActivity, "Password saved (encrypted).", Toast.LENGTH_SHORT).show()
+                                                                } catch (_: Exception) {
+                                                                    dismissGeckoOffer()
+                                                                    Toast.makeText(this@MainActivity, "Could not save password.", Toast.LENGTH_SHORT).show()
+                                                                }
+                                                            }
                                                         }
                                                     }
+                                                }
+                                                if (!promptStarted) {
+                                                    dismissGeckoOffer()
+                                                    Toast.makeText(
+                                                        this@MainActivity,
+                                                        "Authentication could not be started; password not saved.",
+                                                        Toast.LENGTH_SHORT
+                                                    ).show()
                                                 }
                                             }
                                         }) {

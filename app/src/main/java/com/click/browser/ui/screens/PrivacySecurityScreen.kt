@@ -194,8 +194,8 @@ fun PrivacySecurityScreen(
             PrivCard(theme) {
                 PrivCardTitle("Passwords", Icons.Default.Key, theme)
                 Text(
-                    "Google Password Manager (synced with your Google account) via " +
-                        "Android Credential Manager — plus Click's own on-device encrypted vault.",
+                    "Google Password Manager is synced with your Google account via Android Credential Manager. " +
+                        "Its entries are system-managed and separate from Click's on-device, site-scoped vault.",
                     fontSize = 12.sp, color = theme.onSurface.copy(alpha = 0.65f)
                 )
                 Spacer(Modifier.height(10.dp))
