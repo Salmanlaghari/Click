@@ -99,8 +99,8 @@ internal class GeckoBrowserTabSession(
     private var historyCandidateUrl: String? = initialUrl
     @Volatile private var lastKnownPageUrl: String = initialUrl.ifBlank { "about:blank" }
     @Volatile private var latestSessionState: String? = initialSessionState
-    private var rendererRecoveryRequired = false
-    private var rendererRecoveryInProgress = false
+    @Volatile private var rendererRecoveryRequired = false
+    @Volatile private var rendererRecoveryInProgress = false
     private val adoptedChildSession = initialGeckoSession != null
 
     override val view: View get() = geckoView
@@ -316,9 +316,13 @@ internal class GeckoBrowserTabSession(
             hasSavedState = !latestSessionState.isNullOrBlank(),
             hasCurrentUrl = lastKnownPageUrl.isNotBlank() && lastKnownPageUrl != "about:blank"
         )
-        if (action == GeckoSessionRecoveryAction.RELOAD_OPEN_SESSION && !rendererRecoveryRequired) {
+        if (action == GeckoSessionRecoveryAction.RELOAD_OPEN_SESSION) {
+            if (rendererRecoveryRequired) {
+                beginRendererRecovery(GeckoRenderEvent.RECOVERY_RELOAD_STARTED)
+            }
             try {
                 session.reload()
+                updateActiveState()
             } catch (error: Exception) {
                 reportRecoveryFailure(error)
             }
@@ -382,11 +386,11 @@ internal class GeckoBrowserTabSession(
         extensionRouter?.setSelected(tabId, active)
     }
 
-    private fun beginRendererRecovery() {
+    private fun beginRendererRecovery(event: GeckoRenderEvent = GeckoRenderEvent.RECOVERY_STARTED) {
         if (rendererRecoveryInProgress) return
         rendererRecoveryRequired = true
         rendererRecoveryInProgress = true
-        onRendererRecovery(GeckoRenderEvent.RECOVERY_STARTED)
+        onRendererRecovery(event)
     }
 
     /** Reopen the same session object, preserving its profile and saved history. */

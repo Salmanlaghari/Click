@@ -3866,6 +3866,9 @@ class MainActivity : FragmentActivity() {
                                                                             GeckoRenderEvent.RECOVERY_STARTED ->
                                                                                 com.click.browser.engine.ClickCatLogCode.GECKO_RECOVERY_STARTED to
                                                                                     "Retry requested; reopen the closed GeckoSession, restore saved state, or load the remembered URL."
+                                                                            GeckoRenderEvent.RECOVERY_RELOAD_STARTED ->
+                                                                                com.click.browser.engine.ClickCatLogCode.GECKO_RECOVERY_RELOAD_STARTED to
+                                                                                    "Retry requested on the already-open GeckoSession; a close/open recovery cycle was not needed."
                                                                             GeckoRenderEvent.FIRST_COMPOSITE -> if (wasRecoveryRequired) {
                                                                                 com.click.browser.engine.ClickCatLogCode.GECKO_RECOVERY_SUCCEEDED to
                                                                                     "GeckoSession.ContentDelegate.onFirstComposite; recovery frame confirmed and overlay cleared."

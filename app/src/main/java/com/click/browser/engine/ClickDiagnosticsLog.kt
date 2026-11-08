@@ -22,6 +22,7 @@ internal enum class ClickCatLogCode(val label: String) {
     GECKO_RENDERER_CRASHED("GeckoView renderer crashed"),
     GECKO_RENDERER_KILLED("GeckoView renderer was killed by the system"),
     GECKO_RECOVERY_STARTED("GeckoView session recovery started"),
+    GECKO_RECOVERY_RELOAD_STARTED("Open GeckoView session reload started"),
     GECKO_RECOVERY_SUCCEEDED("GeckoView renderer produced a recovery frame"),
     GECKO_RECOVERY_FAILED("GeckoView session recovery failed")
 }

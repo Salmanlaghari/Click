@@ -16,6 +16,7 @@ class GeckoRenderRecoveryPolicyTest {
         assertTrue(geckoRendererRecoveryRequired(false, GeckoRenderEvent.PROCESS_KILLED))
         assertTrue(geckoRendererRecoveryRequired(false, GeckoRenderEvent.RECOVERY_FAILED))
         assertTrue(geckoRendererRecoveryRequired(false, GeckoRenderEvent.RECOVERY_STARTED))
+        assertTrue(geckoRendererRecoveryRequired(false, GeckoRenderEvent.RECOVERY_RELOAD_STARTED))
         assertFalse(geckoRendererRecoveryRequired(false, GeckoRenderEvent.LOAD_STARTED))
     }
 

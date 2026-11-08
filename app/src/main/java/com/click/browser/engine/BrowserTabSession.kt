@@ -19,6 +19,7 @@ internal enum class GeckoRenderEvent {
     PROCESS_CRASHED,
     PROCESS_KILLED,
     RECOVERY_STARTED,
+    RECOVERY_RELOAD_STARTED,
     RECOVERY_FAILED
 }
 
@@ -29,8 +30,9 @@ internal fun geckoRendererRecoveryRequired(
     GeckoRenderEvent.FIRST_COMPOSITE -> false
     GeckoRenderEvent.PROCESS_CRASHED,
     GeckoRenderEvent.PROCESS_KILLED,
+    GeckoRenderEvent.RECOVERY_STARTED,
+    GeckoRenderEvent.RECOVERY_RELOAD_STARTED,
     GeckoRenderEvent.RECOVERY_FAILED -> true
-    GeckoRenderEvent.RECOVERY_STARTED -> true
     GeckoRenderEvent.LOAD_STARTED -> currentlyRequired
 }
 
