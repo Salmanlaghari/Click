@@ -5,7 +5,9 @@ import android.content.ClipData
 import android.content.Context
 import android.content.Intent
 import android.database.Cursor
+import android.net.Uri
 import android.widget.Toast
+import android.webkit.MimeTypeMap
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -16,7 +18,9 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.core.content.FileProvider
 import com.click.browser.data.BrowserRepository
 import com.click.browser.data.DownloadItem
 import com.click.browser.engine.DownloadHelper
@@ -26,14 +30,15 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import java.io.File
 import java.text.DateFormat
 import java.util.Date
 
 /**
  * Downloads screen: live DownloadManager state for Click-started downloads plus
  * saved Click download records. Successful and failed system downloads remain
- * visible after they leave the active state. The system manager continues to
- * own transfer notifications and file access.
+ * visible after they leave the active state. Files copied to a custom SAF folder
+ * are retained as saved-file records with their provider URI.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -201,7 +206,17 @@ fun DownloadsScreen(
                         item = item,
                         onRetry = {
                             scope.launch {
-                                DownloadHelper.enqueue(context, item.sourceUrl, item.label)
+                                val saved = DownloadHelper.enqueue(context, item.sourceUrl, item.label)
+                                if (saved != null) {
+                                    repository.addDownloadItem(
+                                        DownloadItem(
+                                            saved.fileName,
+                                            item.sourceUrl,
+                                            saved.location,
+                                            System.currentTimeMillis()
+                                        )
+                                    )
+                                }
                             }
                         }
                     )
@@ -216,7 +231,7 @@ fun DownloadsScreen(
                         modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)
                     )
                 }
-                items(downloads) { item -> SavedDownloadRow(item) }
+                items(downloads) { item -> SavedDownloadRow(context, item) }
             }
 
             if (queryState.shouldShowEmptyState(savedFileCount = downloads.size)) {
@@ -332,13 +347,108 @@ private fun FailedDownloadRow(item: ManagedDownload, onRetry: () -> Unit) {
 }
 
 @Composable
-private fun SavedDownloadRow(item: DownloadItem) {
+private fun SavedDownloadRow(context: Context, item: DownloadItem) {
     val dateStr = DateFormat.getDateTimeInstance().format(Date(item.timestamp))
-    ListItem(
-        headlineContent = { Text(item.fileName) },
-        supportingContent = { Text("URL: ${item.url}\nSaved: ${item.path}\nDate: $dateStr") },
-        modifier = Modifier.padding(4.dp)
-    )
+    val location = parseSavedDownloadLocation(item.path)
+    val available = when (location) {
+        is SavedDownloadLocation.ContentUri -> true
+        is SavedDownloadLocation.FilePath -> File(location.absolutePath).isFile
+        null -> false
+    }
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp, vertical = 8.dp)
+    ) {
+        Text(item.fileName, style = MaterialTheme.typography.bodyMedium)
+        if (item.url.isNotBlank()) {
+            Text(
+                "URL: ${item.url}",
+                style = MaterialTheme.typography.bodySmall,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis
+            )
+        }
+        Text(
+            "Saved: ${item.path}",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            maxLines = 2,
+            overflow = TextOverflow.Ellipsis
+        )
+        Text("Date: $dateStr", style = MaterialTheme.typography.bodySmall)
+        Row {
+            TextButton(onClick = { openSavedDownload(context, item) }, enabled = available) {
+                Text("Open")
+            }
+            TextButton(onClick = { shareSavedDownload(context, item) }, enabled = available) {
+                Text("Share")
+            }
+        }
+        if (!available) {
+            Text(
+                "This saved file is no longer available.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+    }
+}
+
+private fun savedDownloadUri(context: Context, item: DownloadItem): Uri? {
+    return when (val location = parseSavedDownloadLocation(item.path)) {
+        is SavedDownloadLocation.ContentUri -> Uri.parse(location.value)
+        is SavedDownloadLocation.FilePath -> {
+            val file = File(location.absolutePath)
+            if (!file.isFile) null else runCatching {
+                FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", file)
+            }.getOrNull()
+        }
+        null -> null
+    }
+}
+
+private fun savedDownloadMimeType(context: Context, item: DownloadItem, uri: Uri): String =
+    runCatching { context.contentResolver.getType(uri) }.getOrNull()?.takeIf { it.isNotBlank() }
+        ?: MimeTypeMap.getSingleton()
+            .getMimeTypeFromExtension(item.fileName.substringAfterLast('.', "").lowercase())
+        ?: "*/*"
+
+private fun openSavedDownload(context: Context, item: DownloadItem) {
+    val uri = savedDownloadUri(context, item)
+    if (uri == null) {
+        Toast.makeText(context, "This saved file is no longer available.", Toast.LENGTH_SHORT).show()
+        return
+    }
+    val intent = Intent(Intent.ACTION_VIEW).apply {
+        setDataAndType(uri, savedDownloadMimeType(context, item, uri))
+        addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+    }
+    try {
+        context.startActivity(intent)
+    } catch (_: Exception) {
+        Toast.makeText(context, "No app can open this file.", Toast.LENGTH_SHORT).show()
+    }
+}
+
+private fun shareSavedDownload(context: Context, item: DownloadItem) {
+    val uri = savedDownloadUri(context, item)
+    if (uri == null) {
+        Toast.makeText(context, "This saved file is no longer available.", Toast.LENGTH_SHORT).show()
+        return
+    }
+    val mimeType = savedDownloadMimeType(context, item, uri)
+    val sendIntent = Intent(Intent.ACTION_SEND).apply {
+        type = mimeType
+        putExtra(Intent.EXTRA_STREAM, uri)
+        clipData = ClipData.newUri(context.contentResolver, item.fileName, uri)
+        addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+    }
+    try {
+        context.startActivity(Intent.createChooser(sendIntent, "Share ${item.fileName}"))
+    } catch (_: Exception) {
+        Toast.makeText(context, "Could not share this file.", Toast.LENGTH_SHORT).show()
+    }
 }
 
 private fun openManagedDownload(context: Context, id: Long) {

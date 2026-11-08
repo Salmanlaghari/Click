@@ -706,8 +706,32 @@ class MainActivity : FragmentActivity() {
         }
         // Honors the user's download-location setting (phone / app-private / custom).
         kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.Main).launch {
-            com.click.browser.engine.DownloadHelper.enqueue(this@MainActivity, url, fileName)
+            enqueueAndRecordDownload(url, fileName)
         }
+    }
+
+    /** Records synchronous custom-folder saves; DownloadManager tracks other destinations. */
+    private suspend fun enqueueAndRecordDownload(
+        url: String,
+        fileName: String,
+        locationOverride: String? = null,
+        userAgent: String? = null
+    ) {
+        val saved = DownloadHelper.enqueue(
+            context = this,
+            url = url,
+            fileName = fileName,
+            locationOverride = locationOverride,
+            userAgent = userAgent
+        ) ?: return
+        repository.addDownloadItem(
+            DownloadItem(
+                fileName = saved.fileName,
+                url = url,
+                path = saved.location,
+                timestamp = System.currentTimeMillis()
+            )
+        )
     }
 
     /**
@@ -6627,9 +6651,7 @@ class MainActivity : FragmentActivity() {
                                         // download-location setting (phone / app-private / custom).
                                         val fileName = offerUrl.substringAfterLast("/").take(64).ifBlank { "document.pdf" }
                                         scope.launch {
-                                            com.click.browser.engine.DownloadHelper.enqueue(
-                                                this@MainActivity, offerUrl, fileName
-                                            )
+                                            enqueueAndRecordDownload(offerUrl, fileName)
                                         }
                                         pdfOfferUrl = null
                                     },
@@ -6751,8 +6773,7 @@ class MainActivity : FragmentActivity() {
                                                         )
                                                     }
                                                 } else {
-                                                    DownloadHelper.enqueue(
-                                                        this@MainActivity,
+                                                    enqueueAndRecordDownload(
                                                         accepted.url,
                                                         accepted.fileName,
                                                         locationOverride = downloadDestination,

@@ -26,7 +26,7 @@ import java.io.InputStream
  *   OkHttp into the tree (DownloadManager can't write to SAF URIs).
  *   Falls back to public Downloads if the tree is gone.
  */
-data class SavedAuthenticatedDownload(val fileName: String, val location: String)
+data class SavedDownload(val fileName: String, val location: String)
 
 object DownloadHelper {
 
@@ -44,13 +44,13 @@ object DownloadHelper {
         fileName: String,
         locationOverride: String? = null,
         userAgent: String? = null
-    ) {
+    ): SavedDownload? {
         val scheme = try { Uri.parse(url).scheme?.lowercase() } catch (_: Exception) { null }
         if (scheme != "http" && scheme != "https") {
             withContext(Dispatchers.Main) {
                 Toast.makeText(context, "Only HTTP and HTTPS downloads are supported.", Toast.LENGTH_SHORT).show()
             }
-            return
+            return null
         }
         val safeName = fileName.replace(Regex("[\\\\/:*?\"<>|]"), "_").trim().take(180).ifBlank { "download" }
         val location = locationOverride?.let(DownloadSettings::normalize) ?: try {
@@ -58,14 +58,24 @@ object DownloadHelper {
         } catch (_: Exception) {
             DownloadSettings.LOCATION_PHONE
         }
-        when (location) {
-            DownloadSettings.LOCATION_APP ->
+        return when (location) {
+            DownloadSettings.LOCATION_APP -> {
                 enqueueViaDownloadManager(context, url, safeName, appPrivate = true, userAgent = userAgent)
-            DownloadSettings.LOCATION_CUSTOM -> {
-                val ok = downloadToCustomFolder(context, url, safeName, userAgent)
-                if (!ok) enqueueViaDownloadManager(context, url, safeName, appPrivate = false, userAgent = userAgent)
+                null
             }
-            else -> enqueueViaDownloadManager(context, url, safeName, appPrivate = false, userAgent = userAgent)
+            DownloadSettings.LOCATION_CUSTOM -> {
+                val savedLocation = downloadToCustomFolder(context, url, safeName, userAgent)
+                if (savedLocation != null) {
+                    SavedDownload(safeName, savedLocation)
+                } else {
+                    enqueueViaDownloadManager(context, url, safeName, appPrivate = false, userAgent = userAgent)
+                    null
+                }
+            }
+            else -> {
+                enqueueViaDownloadManager(context, url, safeName, appPrivate = false, userAgent = userAgent)
+                null
+            }
         }
     }
 
@@ -80,7 +90,7 @@ object DownloadHelper {
         fileName: String,
         mimeType: String?,
         locationOverride: String? = null
-    ): SavedAuthenticatedDownload? {
+    ): SavedDownload? {
         val safeName = fileName.replace(Regex("[\\\\/:*?\"<>|]"), "_")
             .trim().take(180).ifBlank { "download" }
         val location = locationOverride?.let(DownloadSettings::normalize) ?: try {
@@ -125,7 +135,7 @@ object DownloadHelper {
                 Toast.LENGTH_LONG
             ).show()
         }
-        return savedLocation?.let { SavedAuthenticatedDownload(safeName, it) }
+        return savedLocation?.let { SavedDownload(safeName, it) }
     }
 
     private suspend fun copyToCustomFolder(
@@ -239,14 +249,16 @@ object DownloadHelper {
         url: String,
         fileName: String,
         userAgent: String?
-    ): Boolean = withContext(Dispatchers.IO) {
+    ): String? = withContext(Dispatchers.IO) {
+        var createdDocument: DocumentFile? = null
         try {
             val treeUri = try { DownloadSettings.customUri(context) } catch (_: Exception) { null }
-                ?: return@withContext false
-            val tree = DocumentFile.fromTreeUri(context, treeUri) ?: return@withContext false
-            if (!tree.canWrite()) return@withContext false
+                ?: return@withContext null
+            val tree = DocumentFile.fromTreeUri(context, treeUri) ?: return@withContext null
+            if (!tree.canWrite()) return@withContext null
             tree.findFile(fileName)?.delete()
-            val doc = tree.createFile(guessMime(fileName), fileName) ?: return@withContext false
+            val doc = tree.createFile(guessMime(fileName), fileName) ?: return@withContext null
+            createdDocument = doc
             val requestBuilder = okhttp3.Request.Builder().url(url).get()
                 .header(
                     "User-Agent",
@@ -256,27 +268,43 @@ object DownloadHelper {
             val cookie = try { android.webkit.CookieManager.getInstance().getCookie(url) } catch (_: Exception) { null }
             if (!cookie.isNullOrBlank()) requestBuilder.header("Cookie", cookie)
             val req = requestBuilder.build()
-            httpClient.newCall(req).execute().use { resp ->
-                if (!resp.isSuccessful) return@withContext false
-                val body = resp.body ?: return@withContext false
-                context.contentResolver.openOutputStream(doc.uri)?.use { out ->
-                    body.byteStream().copyTo(out)
-                } ?: return@withContext false
+            val savedLocation = httpClient.newCall(req).execute().use { resp ->
+                val body = resp.body
+                if (!resp.isSuccessful || body == null) {
+                    null
+                } else {
+                    val output = context.contentResolver.openOutputStream(doc.uri)
+                    if (output == null) {
+                        null
+                    } else {
+                        output.use { out -> body.byteStream().use { input -> input.copyTo(out) } }
+                        doc.uri.toString()
+                    }
+                }
             }
-            withContext(Dispatchers.Main) {
-                Toast.makeText(
-                    context, "Saved to your folder: $fileName", Toast.LENGTH_LONG
-                ).show()
+            if (savedLocation == null) {
+                runCatching { doc.delete() }
+                withContext(Dispatchers.Main) {
+                    Toast.makeText(
+                        context, "Could not save to custom folder — using Downloads instead.",
+                        Toast.LENGTH_LONG
+                    ).show()
+                }
+            } else {
+                withContext(Dispatchers.Main) {
+                    Toast.makeText(context, "Saved to your folder: $fileName", Toast.LENGTH_LONG).show()
+                }
             }
-            true
+            savedLocation
         } catch (_: Exception) {
+            runCatching { createdDocument?.delete() }
             withContext(Dispatchers.Main) {
                 Toast.makeText(
-                    context, "Custom folder unavailable — using Downloads instead.",
+                    context, "Could not save to custom folder — using Downloads instead.",
                     Toast.LENGTH_LONG
                 ).show()
             }
-            false
+            null
         }
     }
 
