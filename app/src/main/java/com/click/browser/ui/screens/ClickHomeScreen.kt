@@ -113,6 +113,7 @@ import androidx.compose.ui.unit.sp
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
 import com.click.browser.engine.BrowserMode
+import com.click.browser.engine.ClosedTab
 import com.click.browser.engine.ConnectionSecurityInfo
 import com.click.browser.engine.ConnectionSecurityPolicy
 import com.click.browser.engine.ConnectionSecurityStatus
@@ -155,6 +156,8 @@ fun ClickHomeScreen(
     onTranslate: () -> Unit,
     onReaderMode: () -> Unit,
     onProfileClick: () -> Unit,
+    recentlyClosedTabs: List<ClosedTab> = emptyList(),
+    onReopenRecentTab: (ClosedTab) -> Unit = {},
     onV9ShieldClick: () -> Unit = {},
     onShieldToggle: () -> Unit = {},
     onGamesClick: () -> Unit = {},
@@ -283,6 +286,14 @@ fun ClickHomeScreen(
             cardBorder = cardBorder,
             onSurface = theme.onSurface,
             onNavigate = onNavigate
+        )
+
+        ContinueBrowsingSection(
+            theme = theme,
+            cardBg = cardBg,
+            cardBorder = cardBorder,
+            recentlyClosedTabs = recentlyClosedTabs.take(3),
+            onReopen = onReopenRecentTab
         )
 
         TodayUpdateCard(
@@ -756,6 +767,115 @@ private fun VoiceMicButton(
             tint = if (listening) Color(0xFFEF4444) else theme.primary,
             modifier = Modifier.size(22.dp)
         )
+    }
+}
+
+@Composable
+private fun ContinueBrowsingSection(
+    theme: ModeTheme,
+    cardBg: Color,
+    cardBorder: Color,
+    recentlyClosedTabs: List<ClosedTab>,
+    onReopen: (ClosedTab) -> Unit
+) {
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(
+                "Continue browsing",
+                color = theme.onSurface,
+                fontWeight = FontWeight.Bold,
+                fontSize = 16.sp
+            )
+            Spacer(Modifier.weight(1f))
+            Text(
+                "Recently closed",
+                color = theme.onSurface.copy(alpha = 0.58f),
+                fontSize = 10.sp
+            )
+        }
+
+        if (recentlyClosedTabs.isEmpty()) {
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(16.dp),
+                colors = CardDefaults.cardColors(containerColor = cardBg),
+                border = androidx.compose.foundation.BorderStroke(1.dp, cardBorder)
+            ) {
+                Column(
+                    modifier = Modifier.padding(14.dp),
+                    verticalArrangement = Arrangement.spacedBy(2.dp)
+                ) {
+                    Text(
+                        "No recent tabs yet",
+                        color = theme.onSurface,
+                        fontWeight = FontWeight.SemiBold,
+                        fontSize = 13.sp
+                    )
+                    Text(
+                        "Pages you close in this mode will appear here.",
+                        color = theme.onSurface.copy(alpha = 0.62f),
+                        fontSize = 11.sp
+                    )
+                }
+            }
+        }
+
+        LazyRow(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+            items(recentlyClosedTabs, key = { it.url }) { closedTab ->
+                val host = remember(closedTab.url) {
+                    android.net.Uri.parse(closedTab.url).host?.removePrefix("www.") ?: closedTab.url
+                }
+                Card(
+                    modifier = Modifier
+                        .widthIn(min = 200.dp, max = 260.dp)
+                        .clickable(onClick = { onReopen(closedTab) }),
+                    shape = RoundedCornerShape(16.dp),
+                    colors = CardDefaults.cardColors(containerColor = cardBg),
+                    border = androidx.compose.foundation.BorderStroke(1.dp, cardBorder)
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth().padding(12.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .size(36.dp)
+                                .clip(RoundedCornerShape(11.dp))
+                                .background(theme.primary.copy(alpha = 0.09f)),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Tab,
+                                contentDescription = null,
+                                tint = theme.primary,
+                                modifier = Modifier.size(18.dp)
+                            )
+                        }
+                        Spacer(Modifier.width(10.dp))
+                        Column(
+                            modifier = Modifier.weight(1f),
+                            verticalArrangement = Arrangement.spacedBy(2.dp)
+                        ) {
+                            Text(
+                                text = closedTab.title,
+                                color = theme.onSurface,
+                                fontWeight = FontWeight.SemiBold,
+                                fontSize = 13.sp,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                            Text(
+                                text = host,
+                                color = theme.onSurface.copy(alpha = 0.62f),
+                                fontSize = 11.sp,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                        }
+                    }
+                }
+            }
+        }
     }
 }
 

@@ -189,7 +189,8 @@ private data class ClosedTabUndo(
     val title: String,
     val url: String,
     val index: Int,
-    val engine: BrowserTabEngine
+    val engine: BrowserTabEngine,
+    val mode: BrowserMode
 )
 
 private data class PendingBrowserDownload(
@@ -1316,6 +1317,20 @@ class MainActivity : FragmentActivity() {
                 androidx.compose.runtime.mutableStateMapOf<String, String>()
             }
 
+            fun reopenClosedTab(closedTab: ClosedTab) {
+                if (closedTab.mode != activeMode) return
+                val pendingUndo = lastClosedTab
+                if (pendingUndo?.url == closedTab.url && pendingUndo.mode == closedTab.mode) {
+                    lastClosedTab = null
+                    snackbarHostState.currentSnackbarData?.dismiss()
+                }
+                tabs.add(
+                    TabItem(url = closedTab.url, title = closedTab.title, initialEngine = closedTab.engine)
+                )
+                activeTabIndex = tabs.size - 1
+                RecentlyClosedTabs.remove(closedTab)
+            }
+
             /**
              * Single close-tab path used by the top tab strip AND the visual
              * switcher: remembers the tab for "Recent tabs" (never private
@@ -1327,7 +1342,11 @@ class MainActivity : FragmentActivity() {
                 val closed = tabs[idx]
                 approvedExtensionOptionsBasesByTab.remove(closed.id)
                 RecentlyClosedTabs.push(
-                    closed.title, closed.url, closed.isIncognito, closed.engine
+                    title = closed.title,
+                    url = closed.url,
+                    isIncognito = closed.isIncognito,
+                    mode = activeMode,
+                    engine = closed.engine
                 )
                 TabThumbnailStore.remove(closed.id)
                 // Drop the closed tab from live registries so cleanup doesn't
@@ -1345,7 +1364,7 @@ class MainActivity : FragmentActivity() {
                 val undoInfo: ClosedTabUndo? =
                     if (closed.isIncognito) null
                     else ClosedTabUndo(
-                        closed.title, closed.url, idx.coerceAtMost(tabs.size - 1), closed.engine
+                        closed.title, closed.url, idx.coerceAtMost(tabs.size - 1), closed.engine, activeMode
                     )
                 if (tabs.size > 1) {
                     tabs.removeAt(idx)
@@ -1384,11 +1403,18 @@ class MainActivity : FragmentActivity() {
                                 val insertAt = closedTab.index.coerceIn(0, tabs.size)
                                 tabs.add(insertAt, restored)
                                 activeTabIndex = insertAt
+                                RecentlyClosedTabs.removeForMode(closedTab.url, closedTab.mode)
                             }
                             lastClosedTab = null
-                        } else if (forgetCandidate && closedHost != null) {
+                        } else if (
+                            lastClosedTab == undoInfo &&
+                            activeMode == undoInfo.mode &&
+                            forgetCandidate &&
+                            closedHost != null
+                        ) {
                             // Snackbar dismissed / timed out without UNDO:
                             // the site is truly gone — forget it now.
+                            lastClosedTab = null
                             ForgetfulBrowsing.forgetHost(closedHost)
                         }
                     }
@@ -3714,7 +3740,9 @@ class MainActivity : FragmentActivity() {
                                             },
                                             onTranslate = { handleFeature(FeatureId.TRANSLATE) },
                                             onReaderMode = { handleFeature(FeatureId.READER) },
-                                            onProfileClick = { showSettings = true }
+                                            onProfileClick = { showSettings = true },
+                                            recentlyClosedTabs = RecentlyClosedTabs.list(activeMode),
+                                            onReopenRecentTab = { reopenClosedTab(it) }
                                         )
                                     } else {
                                         // Pull-to-refresh flag: when off, the page renders
@@ -7370,18 +7398,14 @@ class MainActivity : FragmentActivity() {
                             // Recent tabs (recently closed, re-openable)
                             if (showRecentTabs) {
                                 RecentTabsScreen(
-                                    closedTabs = RecentlyClosedTabs.list(),
+                                    closedTabs = RecentlyClosedTabs.list(activeMode),
                                     theme = theme,
                                     onReopen = { ct ->
-                                        tabs.add(
-                                            TabItem(url = ct.url, title = ct.title, initialEngine = ct.engine)
-                                        )
-                                        activeTabIndex = tabs.size - 1
-                                        RecentlyClosedTabs.remove(ct)
+                                        reopenClosedTab(ct)
                                         showRecentTabs = false
                                     },
                                     onRemove = { ct -> RecentlyClosedTabs.remove(ct) },
-                                    onClearAll = { RecentlyClosedTabs.clear() },
+                                    onClearAll = { RecentlyClosedTabs.clear(activeMode) },
                                     onClose = { showRecentTabs = false }
                                 )
                             }
