@@ -824,14 +824,14 @@ fun PrivacyPolicyDialog(onClose: () -> Unit) {
             ) {
                 Text(
                     text = "Click Browser Privacy Policy\n\n" +
-                        "• Bookmarks, history, download records, settings and Click's on-device credential vault are kept in app-private storage. Credentials saved to Google Password Manager are handled by Google. Android may include some app data in device backups when backups are enabled; private tabs skip local history recording but are not anonymous.\n\n" +
-                        "• Regular tabs use Android System WebView by default. A user may opt a non-private tab into GeckoView for add-ons; Click reloads that same tab in a Gecko storage context, and WebView cookies, sign-ins, back history and page state are not transferred. Private tabs remain on WebView and do not run add-ons. Click denies website geolocation, camera, microphone and notification requests in GeckoView.\n\n" +
+                        "• Bookmarks, regular-tab history, download records, settings and Click's on-device credential vault are kept in app-private storage. Credentials saved to Google Password Manager are handled by Google. Android may include some app data in device backups when backups are enabled.\n\n" +
+                        "• ${PrivateBrowsingDisclosurePolicy.engineDefaultsDescription()} Switching a regular tab between engines reloads it; cookies, sign-ins, back history and page state are not transferred. ${PrivateBrowsingDisclosurePolicy.privateTabStorageDescription} Private tabs do not run add-ons. Click denies website geolocation, camera, microphone and notification requests in GeckoView.\n\n" +
                         "• Add-ons must be public on Mozilla AMO, compatible with Click's pinned GeckoView Android version, Mozilla-signed and not blocklisted. GeckoView validates signatures and Click shows requested permission names and exact site patterns before Add; optional requests appear separately when the add-on asks. Add-ons can read or change the sites shown and may process or send data under their own code and privacy terms. Native messaging, GeckoView add-on-install privileges and extension geolocation remain blocked. Mozilla signing is not blanket Google Play or AdSense approval; review each publisher's disclosures.\n\n" +
                         "• HTTPS mode upgrades or blocks navigation URLs according to your setting. HTTPS describes the connection scheme; it does not guarantee that a site is trustworthy. Optional DNT/GPC signals are voluntary and sites may ignore them.\n\n" +
                         "• If you use AI chat, the prompt and recent conversation sent with it go over HTTPS to the selected provider (Groq or OpenRouter). The provider's own privacy terms apply.\n\n" +
                         "• Google sign-in is handled by Google Play services. Click caches the selected profile name, email and photo in app storage and does not operate its own account backend.\n\n" +
                         "• Feedback and crash/bug reports open an email draft with app/device details. Nothing is emailed until you review and send it. Opt-in news alerts periodically fetch selected topics.\n\n" +
-                        "• Click does not run app analytics. Regular tabs default to Android System WebView; opted-in non-private tabs use GeckoView, while private tabs stay on WebView. Gecko storage follows Click's profile-group separation. Click does not substitute device identity.",
+                        "• Click does not run app analytics. Gecko storage follows Click's profile-group separation. Click does not substitute device identity.",
                     fontSize = 12.sp,
                     lineHeight = 18.sp
                 )
@@ -860,7 +860,7 @@ fun AboutAppDialog(onClose: () -> Unit) {
                 Text("UI Design Built By: Prince Laghari", fontSize = 13.sp, fontWeight = FontWeight.ExtraBold)
                 Spacer(modifier = Modifier.height(12.dp))
                 Text(
-                    "Click Browser is an Android browser with four profiles: Simple, Developer, Power and Advance. Normal tabs use Android System WebView by default; add-ons use Click's GeckoView runtime, separate from WebView storage. A tab switches only after the user approves a same-tab reload.",
+                    "Click Browser is an Android browser with four profiles: Simple, Developer, Power and Advance. ${PrivateBrowsingDisclosurePolicy.engineDefaultsDescription()} Switching a regular tab between engines reloads it without transferring cookies, sign-ins, back history or page state.",
                     fontSize = 11.sp,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
@@ -874,7 +874,7 @@ fun AboutAppDialog(onClose: () -> Unit) {
                 )
                 Spacer(modifier = Modifier.height(4.dp))
                 Text(
-                    "The four main profiles use Android System WebView by default. GeckoView-backed tabs share Click's add-on runtime; private tabs remain on WebView. Click does not substitute device identity.",
+                    "${PrivateBrowsingDisclosurePolicy.aboutPrivateTabStorageDescription} Click does not substitute device identity.",
                     fontSize = 11.sp,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )

@@ -427,7 +427,7 @@ fun SiteSettingsSheet(
                 text = {
                     Text(
                         "This removes cookies and site storage (logins, preferences) " +
-                            "for this site in the current engine mode. The page will reload."
+                            "for this site in ${PrivateBrowsingDisclosurePolicy.profileWebViewStorageScopeDescription}. The page will reload."
                     )
                 },
                 confirmButton = {
