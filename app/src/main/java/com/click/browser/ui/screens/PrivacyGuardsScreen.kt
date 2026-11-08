@@ -105,9 +105,7 @@ fun PrivacyGuardsScreen(
             item {
                 GuardToggleRow(
                     title = "Secure DNS (app traffic)",
-                    subtitle = "Resolves AI chat requests " +
-                        "over DNS-over-HTTPS via Cloudflare. WebView page loads still use " +
-                        "your system's DNS — Android WebView has no DoH setting.",
+                    subtitle = PrivacyDisclosurePolicy.aiChatDnsDescription(secureDns),
                     checked = secureDns,
                     onCheckedChange = onToggleSecureDns
                 )

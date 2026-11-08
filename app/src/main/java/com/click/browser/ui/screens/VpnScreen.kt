@@ -226,9 +226,7 @@ fun VpnScreen(onClose: () -> Unit) {
                 Text("DNS Leak Test (ipleak.net)")
             }
             Text(
-                "After connecting, run the test: the DNS servers shown must " +
-                "belong to Cloudflare/Google — never your ISP. That proves " +
-                "there is no DNS leak.",
+                PrivacyDisclosurePolicy.VPN_DNS_LEAK_TEST_GUIDANCE,
                 fontSize = 12.sp,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )

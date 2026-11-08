@@ -36,9 +36,9 @@ import kotlinx.coroutines.launch
  * V9 Shield — DNS-only protection and DNS provider settings, plus an overview
  * of the browser-data profiles. It does not tunnel general web traffic.
  *
- * Includes the responsible-use notice: V9 Shield is a privacy tool, not a
- * tool for illegal activity. Click Browser applies no political censorship —
- * protection covers only malware, phishing and (where enabled) adult content.
+ * Includes state-aware DNS fallback disclosure and a responsible-use notice.
+ * The built-in DNS blocklist covers a limited set of advertising, tracker and
+ * malware domains; the screen does not claim full phishing or web protection.
  */
 @Composable
 fun V9ShieldScreen(onClose: () -> Unit) {
@@ -192,7 +192,7 @@ fun V9ShieldScreen(onClose: () -> Unit) {
             // Stats row
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                 StatCard("DNS queries", queries.toString(), Modifier.weight(1f))
-                StatCard("Threats blocked", blocked.toString(), Modifier.weight(1f))
+                StatCard(PrivacyDisclosurePolicy.V9_BLOCK_COUNT_LABEL, blocked.toString(), Modifier.weight(1f))
             }
             Spacer(Modifier.height(16.dp))
 
@@ -336,12 +336,13 @@ fun V9ShieldScreen(onClose: () -> Unit) {
                     )
                     Spacer(Modifier.height(6.dp))
                     Text(
-                        "V9 Shield is a privacy tool: it encrypts your DNS and blocks " +
-                            "trackers, malware and phishing. It is not intended for " +
-                            "illegal activity, and it does not hide wrongdoing from " +
-                            "the law. Click Browser applies no political censorship — " +
-                            "protection covers only malware, phishing and adult " +
-                            "content where you enable it.",
+                        PrivacyDisclosurePolicy.v9ShieldDnsDisclosure(vpnOn, strictDns),
+                        fontSize = 11.5.sp, color = Color(0xFF574B33), lineHeight = 16.sp
+                    )
+                    Spacer(Modifier.height(6.dp))
+                    Text(
+                        PrivacyDisclosurePolicy.V9_SHIELD_BLOCKLIST_SCOPE + "\n\n" +
+                            PrivacyDisclosurePolicy.V9_SHIELD_RESPONSIBLE_USE,
                         fontSize = 11.5.sp, color = Color(0xFF574B33), lineHeight = 16.sp
                     )
                 }
