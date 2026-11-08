@@ -14,6 +14,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.Share
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
@@ -75,6 +76,21 @@ fun ClickDiagnosticsScreen(
                         Icon(Icons.Default.Refresh, contentDescription = "Refresh diagnostics")
                     }
                     if (entries.isNotEmpty()) {
+                        IconButton(onClick = {
+                            val sendIntent = android.content.Intent(android.content.Intent.ACTION_SEND).apply {
+                                type = "text/plain"
+                                putExtra(android.content.Intent.EXTRA_SUBJECT, "Click diagnostics")
+                                putExtra(
+                                    android.content.Intent.EXTRA_TEXT,
+                                    com.click.browser.engine.formatClickDiagnosticsForSharing(entries)
+                                )
+                            }
+                            context.startActivity(
+                                android.content.Intent.createChooser(sendIntent, "Share diagnostics")
+                            )
+                        }) {
+                            Icon(Icons.Default.Share, contentDescription = "Share diagnostics")
+                        }
                         IconButton(onClick = { showClearConfirm = true }) {
                             Icon(Icons.Default.Delete, contentDescription = "Clear diagnostics")
                         }
@@ -93,7 +109,7 @@ fun ClickDiagnosticsScreen(
         ) {
             Card(colors = CardDefaults.cardColors(containerColor = theme.surface)) {
                 Text(
-                    "Local Click events only—not Android logcat. Renderer events store the tab ID, sanitized URL origin/path (credentials, query, and fragment removed), GeckoView/Android versions, available memory, event details, and exception class. No page contents, passwords, cookies, exception messages/stacks, or logs from other apps are stored; events stay on this device and are limited to the newest 120.",
+                    "Local Click events only—not Android logcat. Renderer events store the tab ID, sanitized URL, device model, GeckoView/Android versions, available memory and low-memory state, event details, and bounded exception class/cause/stack-frame names. Exception messages, page contents, passwords, cookies, and logs from other apps are excluded. Events stay in app-private storage and are limited to the newest 120. Share opens Android's chooser only after you tap it; nothing is sent automatically.",
                     modifier = Modifier.padding(14.dp),
                     color = theme.onSurface,
                     fontSize = 13.sp
@@ -151,8 +167,16 @@ fun ClickDiagnosticsScreen(
                                         overflow = TextOverflow.Ellipsis
                                     )
                                     Text(
-                                        "GeckoView ${details.geckoViewVersion} · Android ${details.androidVersion} · " +
-                                            (details.availableMemoryMb?.let { "$it MB available" } ?: "memory unavailable"),
+                                        "${details.deviceModel} · GeckoView ${details.geckoViewVersion} · Android ${details.androidVersion}",
+                                        color = theme.onSurface.copy(alpha = 0.65f),
+                                        fontSize = 11.sp,
+                                        maxLines = 2,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
+                                    Text(
+                                        "Memory: ${details.availableMemoryMb?.let { "$it MB available" } ?: "unavailable"} · " +
+                                            "low memory: ${details.systemLowMemory ?: "unknown"} · " +
+                                            "threshold: ${details.memoryThresholdMb?.let { "$it MB" } ?: "unknown"}",
                                         color = theme.onSurface.copy(alpha = 0.65f),
                                         fontSize = 11.sp,
                                         maxLines = 2,
@@ -168,6 +192,21 @@ fun ClickDiagnosticsScreen(
                                         maxLines = 3,
                                         overflow = TextOverflow.Ellipsis
                                     )
+                                    details.exceptionDetails?.let { stackDetails ->
+                                        var showStackDetails by remember(entry.timestampMillis) { mutableStateOf(false) }
+                                        TextButton(onClick = { showStackDetails = !showStackDetails }) {
+                                            Text(if (showStackDetails) "Hide exception frames" else "Show exception frames")
+                                        }
+                                        if (showStackDetails) {
+                                            Text(
+                                                stackDetails,
+                                                color = theme.onSurface.copy(alpha = 0.62f),
+                                                fontSize = 10.sp,
+                                                maxLines = 40,
+                                                overflow = TextOverflow.Ellipsis
+                                            )
+                                        }
+                                    }
                                 }
                             }
                         }
