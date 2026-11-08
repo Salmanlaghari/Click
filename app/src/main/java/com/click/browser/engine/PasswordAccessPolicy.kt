@@ -13,6 +13,22 @@ internal object PasswordAccessPolicy {
         val deviceAuthenticated: Boolean
     )
 
+    /** Deduplicates auth offers for each secure origin until a new navigation starts. */
+    class AutofillPromptGuard {
+        private val promptedOrigins = mutableSetOf<String>()
+
+        fun markIfNewOrigin(origin: String): Boolean =
+            origin.isNotBlank() && promptedOrigins.add(origin)
+
+        fun clearIfNotStarted(origin: String) {
+            promptedOrigins.remove(origin)
+        }
+
+        fun onNavigationStarted() {
+            promptedOrigins.clear()
+        }
+    }
+
     fun canOpenVault(deviceAuthenticationAvailable: Boolean, deviceAuthenticated: Boolean): Boolean =
         deviceAuthenticationAvailable && deviceAuthenticated
 

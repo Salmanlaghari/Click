@@ -172,6 +172,8 @@ class TabItem(
     var loadProgress by mutableStateOf(0)
     var isPageLoading by mutableStateOf(false)
     var hasCommittedContent by mutableStateOf(false)
+    internal val passwordAutofillPromptGuard =
+        com.click.browser.engine.PasswordAccessPolicy.AutofillPromptGuard()
     var rendererRecoveryRequired by mutableStateOf(false)
 }
 
@@ -4458,6 +4460,7 @@ class MainActivity : FragmentActivity() {
                                                                     override fun onPageStarted(view: WebView?, url: String?, favicon: Bitmap?) {
                                                                 super.onPageStarted(view, url, favicon)
                                                                 val loadingTab = view?.let { target -> tabs.firstOrNull { it.webView === target } } ?: return
+                                                                loadingTab.passwordAutofillPromptGuard.onNavigationStarted()
                                                                 loadingTab.url = url ?: ""
                                                                 loadingTab.connectionSecurity = ConnectionSecurityPolicy.checking(loadingTab.url)
                                                                 loadingTab.isPageLoading = true
@@ -4559,8 +4562,11 @@ class MainActivity : FragmentActivity() {
                                                                             if (!com.click.browser.engine.PasswordAccessPolicy
                                                                                     .shouldRequestAutofillAuthentication(requestContext)
                                                                             ) return@launch
+                                                                            if (!finishedTab.passwordAutofillPromptGuard.markIfNewOrigin(pageOrigin)) {
+                                                                                return@launch
+                                                                            }
 
-                                                                            promptPasswordAction(
+                                                                            val promptStarted = promptPasswordAction(
                                                                                 title = "Use saved password?",
                                                                                 subtitle = "Authenticate to fill the login for ${pageOrigin.removePrefix("https://")}"
                                                                             ) {
@@ -4643,6 +4649,9 @@ class MainActivity : FragmentActivity() {
                                                                                         }
                                                                                     }, 1500)
                                                                                 }
+                                                                            }
+                                                                            if (!promptStarted) {
+                                                                                finishedTab.passwordAutofillPromptGuard.clearIfNotStarted(pageOrigin)
                                                                             }
                                                                         }
                                                                     }

@@ -33,6 +33,30 @@ class PasswordAccessPolicyTest {
         assertFalse(PasswordAccessPolicy.mayAutofill(unauthenticated.copy(deviceAuthenticated = true, isSameOrigin = false)))
     }
 
+    @Test
+    fun autofillPromptGuardSuppressesDuplicatesUntilNavigationStarts() {
+        val guard = PasswordAccessPolicy.AutofillPromptGuard()
+        val origin = "https://example.com"
+
+        assertTrue(guard.markIfNewOrigin(origin))
+        assertFalse(guard.markIfNewOrigin(origin))
+        assertTrue(guard.markIfNewOrigin("https://other.example"))
+        assertFalse(guard.markIfNewOrigin(origin))
+
+        guard.onNavigationStarted()
+        assertTrue(guard.markIfNewOrigin(origin))
+    }
+
+    @Test
+    fun autofillPromptGuardCanRetryIfNativePromptDidNotStart() {
+        val guard = PasswordAccessPolicy.AutofillPromptGuard()
+        val origin = "https://example.com"
+
+        assertTrue(guard.markIfNewOrigin(origin))
+        guard.clearIfNotStarted(origin)
+        assertTrue(guard.markIfNewOrigin(origin))
+    }
+
     private fun validContext() = PasswordAccessPolicy.AutofillContext(
         passwordManagerEnabled = true,
         hasSavedCredential = true,
