@@ -1,5 +1,7 @@
 package com.click.browser.engine
 
+import androidx.compose.runtime.mutableStateListOf
+
 /** A regular web tab the user closed; kept so Recent tabs can re-open it in its original mode. */
 data class ClosedTab(
     val title: String,
@@ -15,7 +17,8 @@ data class ClosedTab(
  */
 object RecentlyClosedTabs {
     private const val MAX_PER_MODE = 10
-    private val stack = ArrayDeque<ClosedTab>()
+    // Snapshot state makes list(mode) reads observable to Compose callers.
+    private val stack = mutableStateListOf<ClosedTab>()
 
     @Synchronized
     fun push(
@@ -28,10 +31,11 @@ object RecentlyClosedTabs {
         if (isIncognito) return
         if (url.isBlank() || url == "about:blank" || !isHttpOrHttps(url)) return
         stack.removeAll { it.url == url && it.mode == mode }
-        stack.addFirst(ClosedTab(title.ifBlank { url }, url, engine, mode))
+        stack.add(0, ClosedTab(title.ifBlank { url }, url, engine, mode))
         while (stack.count { it.mode == mode } > MAX_PER_MODE) {
-            val oldestInMode = stack.lastOrNull { it.mode == mode } ?: break
-            stack.remove(oldestInMode)
+            val oldestIndexInMode = stack.indexOfLast { it.mode == mode }
+            if (oldestIndexInMode < 0) break
+            stack.removeAt(oldestIndexInMode)
         }
     }
 
