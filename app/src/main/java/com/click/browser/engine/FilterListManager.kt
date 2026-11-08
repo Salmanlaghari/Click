@@ -16,6 +16,15 @@ import org.json.JSONObject
 import java.io.File
 import java.util.concurrent.TimeUnit
 
+/** A cached list is trusted only when its parsed version is positive and current. */
+internal fun isUsableCachedFilterList(
+    cachedVersion: Int,
+    bundledVersion: Int,
+    cachedDomains: Set<String>?
+): Boolean = cachedVersion > 0 &&
+    cachedVersion >= bundledVersion &&
+    !cachedDomains.isNullOrEmpty()
+
 /**
  * Bundled + updatable ad/tracker filter lists.
  *
@@ -119,7 +128,8 @@ object FilterListManager {
         var loaded = false
         // 1) Cached remote copy (newer) wins if present and valid.
         val cached = filesDir?.let { File(it, CACHED_FILE) }
-        val cachedDomains = cached?.takeIf { it.exists() }?.let { parseFile(it) }
+        val cachedList = cached?.takeIf { it.exists() }?.let { parseFile(it) }
+        val cachedDomains = cachedList?.second
         // 2) Bundled asset always exists as fallback.
         val bundled = try {
             app.assets.open(ASSET_PATH).use { ins ->
@@ -128,12 +138,13 @@ object FilterListManager {
         } catch (e: Exception) {
             null
         }
-        val cachedVersion = prefs?.getInt(KEY_VERSION, 0) ?: 0
+        val cachedVersion = cachedList?.first ?: 0
         val bundledVersion = bundled?.first ?: 0
-        if (cachedDomains != null && cachedVersion >= bundledVersion && cachedDomains.isNotEmpty()) {
-            domains = cachedDomains
+        if (isUsableCachedFilterList(cachedVersion, bundledVersion, cachedDomains)) {
+            domains = cachedDomains.orEmpty()
             listVersion = cachedVersion
-            loaded = true
+            prefs?.edit()?.putInt(KEY_VERSION, cachedVersion)?.apply()
+            loaded = domains.isNotEmpty() && listVersion > 0
         } else if (bundled != null) {
             domains = bundled.second
             listVersion = bundledVersion
@@ -176,8 +187,8 @@ object FilterListManager {
         }
     }
 
-    private fun parseFile(f: File): Set<String>? = try {
-        parseJson(f.readText())?.second
+    private fun parseFile(f: File): Pair<Int, Set<String>>? = try {
+        parseJson(f.readText())
     } catch (e: Exception) {
         null
     }
