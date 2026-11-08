@@ -1938,8 +1938,8 @@ class MainActivity : FragmentActivity() {
             var sheetScale by remember { mutableStateOf(com.click.browser.engine.TextScaleStore.DEFAULT) }
             val privateLocked by privateLockedFlow.collectAsState()
             var webrtcTestRunning by remember { mutableStateOf(false) }
-            var webrtcTested by remember { mutableStateOf(false) }
-            var webrtcIps by remember { mutableStateOf<List<String>?>(null) }
+            var webrtcResult by remember { mutableStateOf<WebRtcTestResult?>(null) }
+            var webrtcRunId by remember { mutableStateOf<String?>(null) }
 
 
             // Dev tools states
@@ -2357,15 +2357,19 @@ class MainActivity : FragmentActivity() {
                     ).show()
                     return
                 }
+                val runId = java.util.UUID.randomUUID().toString()
                 webrtcTestRunning = true
-                webrtcTested = false
-                webrtcIps = null
-                wv.evaluateJavascript(PrivacyGuards.WEBRTC_LEAK_TEST_JS, null)
+                webrtcResult = null
+                webrtcRunId = runId
+                WebRtcTestRunGate.begin(runId)
+                wv.evaluateJavascript(PrivacyGuards.webRtcLeakTestScript(runId), null)
                 scope.launch {
                     delay(9000)
-                    if (webrtcTestRunning) {
+                    if (webrtcRunId == runId) {
+                        WebRtcTestRunGate.cancel(runId)
+                        webrtcRunId = null
                         webrtcTestRunning = false
-                        webrtcTested = true
+                        webrtcResult = WebRtcTestResult(WebRtcTestOutcome.TIMED_OUT)
                     }
                 }
             }
@@ -4472,11 +4476,13 @@ class MainActivity : FragmentActivity() {
                                                         // This separate legacy bridge is limited to the built-in WebRTC check.
                                                         addJavascriptInterface(
                                                             WebRtcTestBridge(
-                                                                onResult = { ips ->
+                                                                onResultCallback = { runId, result ->
                                                                     scope.launch {
-                                                                        webrtcIps = ips
-                                                                        webrtcTestRunning = false
-                                                                        webrtcTested = true
+                                                                        if (webrtcRunId == runId) {
+                                                                            webrtcResult = result
+                                                                            webrtcRunId = null
+                                                                            webrtcTestRunning = false
+                                                                        }
                                                                     }
                                                                 }
                                                             ),
@@ -6825,8 +6831,7 @@ class MainActivity : FragmentActivity() {
                                         scope.launch { dataStore.edit { prefs -> prefs[AppSettings.SECURE_DNS_ENABLED] = value } }
                                     },
                                     webrtcRunning = webrtcTestRunning,
-                                    webrtcIps = webrtcIps,
-                                    webrtcTested = webrtcTested,
+                                    webrtcResult = webrtcResult,
                                     onRunWebrtcTest = { runWebrtcLeakTest() },
                                     onClose = { showPrivacyGuards = false }
                                 )
