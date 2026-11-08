@@ -9,6 +9,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.FileUpload
 import androidx.compose.material.icons.filled.History
 import androidx.compose.material3.*
@@ -21,7 +22,10 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.click.browser.data.Bookmark
+import com.click.browser.data.BookmarkEditResult
+import com.click.browser.data.BookmarkEditValidationError
 import com.click.browser.data.BookmarkImporter
+import com.click.browser.data.validateBookmarkEdit
 import com.click.browser.data.BrowserRepository
 import com.click.browser.data.HistoryItem
 import com.click.browser.engine.ModeTheme
@@ -42,6 +46,7 @@ fun BookmarksScreen(
     val context = LocalContext.current
     val snackbarHostState = remember { SnackbarHostState() }
     var isImporting by remember { mutableStateOf(false) }
+    var bookmarkBeingEdited by remember { mutableStateOf<Bookmark?>(null) }
 
     val importLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.GetContent()
@@ -133,12 +138,17 @@ fun BookmarksScreen(
                         headlineContent = { Text(bookmark.title) },
                         supportingContent = { Text(bookmark.url) },
                         trailingContent = {
-                            IconButton(onClick = {
-                                coroutineScope.launch {
-                                    repository.deleteBookmark(bookmark.url)
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                IconButton(onClick = { bookmarkBeingEdited = bookmark }) {
+                                    Icon(Icons.Default.Edit, contentDescription = "Edit bookmark ${bookmark.title}")
                                 }
-                            }) {
-                                Icon(Icons.Default.Delete, contentDescription = "Delete")
+                                IconButton(onClick = {
+                                    coroutineScope.launch {
+                                        repository.deleteBookmark(bookmark.url)
+                                    }
+                                }) {
+                                    Icon(Icons.Default.Delete, contentDescription = "Delete bookmark ${bookmark.title}")
+                                }
                             }
                         },
                         modifier = Modifier.clickable {
@@ -150,6 +160,101 @@ fun BookmarksScreen(
             }
         }
     }
+
+    bookmarkBeingEdited?.let { bookmark ->
+        BookmarkEditorDialog(
+            bookmark = bookmark,
+            onDismiss = { bookmarkBeingEdited = null },
+            onSave = { replacement -> repository.updateBookmark(bookmark.url, replacement) },
+            onSaved = {
+                bookmarkBeingEdited = null
+                coroutineScope.launch { snackbarHostState.showSnackbar("Bookmark updated.") }
+            }
+        )
+    }
+}
+
+@Composable
+private fun BookmarkEditorDialog(
+    bookmark: Bookmark,
+    onDismiss: () -> Unit,
+    onSave: suspend (Bookmark) -> BookmarkEditResult,
+    onSaved: () -> Unit
+) {
+    var title by remember(bookmark.url) { mutableStateOf(bookmark.title) }
+    var url by remember(bookmark.url) { mutableStateOf(bookmark.url) }
+    var validationMessage by remember(bookmark.url) { mutableStateOf<String?>(null) }
+    var isSaving by remember(bookmark.url) { mutableStateOf(false) }
+    val scope = rememberCoroutineScope()
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Edit bookmark") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedTextField(
+                    value = title,
+                    onValueChange = {
+                        title = it
+                        validationMessage = null
+                    },
+                    label = { Text("Title") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth()
+                )
+                OutlinedTextField(
+                    value = url,
+                    onValueChange = {
+                        url = it
+                        validationMessage = null
+                    },
+                    label = { Text("Website URL") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth()
+                )
+                validationMessage?.let { message ->
+                    Text(message, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(
+                enabled = !isSaving,
+                onClick = {
+                    val validation = validateBookmarkEdit(title, url)
+                    if (validation != null) {
+                        validationMessage = when (validation) {
+                            BookmarkEditValidationError.EMPTY_TITLE -> "Enter a title for this bookmark."
+                            BookmarkEditValidationError.INVALID_URL -> "Enter a complete HTTP or HTTPS URL."
+                        }
+                    } else {
+                        isSaving = true
+                        scope.launch {
+                            val result = try {
+                                onSave(Bookmark(title.trim(), url.trim()))
+                            } catch (_: Exception) {
+                                validationMessage = "Could not save this bookmark. Try again."
+                                isSaving = false
+                                return@launch
+                            }
+                            when (result) {
+                                BookmarkEditResult.UPDATED -> onSaved()
+                                BookmarkEditResult.DUPLICATE_URL -> validationMessage = "A bookmark with this URL already exists."
+                                BookmarkEditResult.NOT_FOUND -> validationMessage = "This bookmark was removed. Close the editor and try again."
+                                BookmarkEditResult.INVALID_INPUT -> validationMessage = "Enter a title and a complete HTTP or HTTPS URL."
+                            }
+                            isSaving = false
+                        }
+                    }
+                }
+            ) {
+                Text(if (isSaving) "Saving…" else "Save")
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss, enabled = !isSaving) { Text("Cancel") }
+        }
+    )
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
