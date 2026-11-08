@@ -6679,26 +6679,6 @@ class MainActivity : FragmentActivity() {
                                 }
                                 val usingBuiltInKey = aiApiKey.isBlank() &&
                                     BuildConfig.GROQ_API_KEY_OBF.isNotBlank()
-                                var activePageExcerpt by remember(currentTab.id, currentTab.url) {
-                                    mutableStateOf("")
-                                }
-                                LaunchedEffect(currentTab.id, currentTab.url) {
-                                    val wv = currentTab.webView
-                                    if (wv != null && !currentTab.isIncognito &&
-                                        (currentTab.url.startsWith("https://") || currentTab.url.startsWith("http://"))
-                                    ) {
-                                        wv.evaluateJavascript(
-                                            "(function(){try{return (document.body&&document.body.innerText||'').replace(/\\s+/g,' ').trim().slice(0,3000);}catch(e){return '';}})()"
-                                        ) { raw ->
-                                            activePageExcerpt = try {
-                                                if (raw != null && raw != "null") org.json.JSONTokener(raw).nextValue().toString()
-                                                else ""
-                                            } catch (_: Exception) {
-                                                ""
-                                            }
-                                        }
-                                    }
-                                }
                                 AiChatScreen(
                                     apiKey = effectiveAiKey,
                                     providerId = if (usingBuiltInKey) "groq" else aiProvider,
@@ -6707,7 +6687,48 @@ class MainActivity : FragmentActivity() {
                                     usingBuiltInKey = usingBuiltInKey,
                                     pageTitle = currentTab.title,
                                     pageUrl = currentTab.url,
-                                    pageExcerpt = activePageExcerpt,
+                                    pageContextIdentity = currentTab.id,
+                                    canSharePageContext = com.click.browser.engine.AiPageContextPolicy.canOfferPageContext(
+                                        isPrivateTab = currentTab.isIncognito,
+                                        isWebViewSupported = currentTab.engine == BrowserTabEngine.WEBVIEW && currentTab.webView != null,
+                                        pageUrl = currentTab.url
+                                    ),
+                                    onRequestPageContext = { onCaptured ->
+                                        val requestedTabId = currentTab.id
+                                        val requestedUrl = currentTab.url
+                                        val requestedWebView = currentTab.webView
+                                        val mayCapture = com.click.browser.engine.AiPageContextPolicy.canOfferPageContext(
+                                            isPrivateTab = currentTab.isIncognito,
+                                            isWebViewSupported = currentTab.engine == BrowserTabEngine.WEBVIEW && requestedWebView != null,
+                                            pageUrl = requestedUrl
+                                        )
+                                        if (!mayCapture || requestedWebView == null) {
+                                            onCaptured("")
+                                        } else {
+                                            requestedWebView.evaluateJavascript(
+                                                "(function(){try{return (document.body&&document.body.innerText||'').replace(/\\s+/g,' ').trim().slice(0,3000);}catch(e){return '';}})()"
+                                            ) { raw ->
+                                                val samePageStillActive = currentTab.id == requestedTabId &&
+                                                    currentTab.url == requestedUrl &&
+                                                    !currentTab.isIncognito &&
+                                                    currentTab.engine == BrowserTabEngine.WEBVIEW
+                                                if (!samePageStillActive) {
+                                                    onCaptured("")
+                                                } else {
+                                                    val excerpt = try {
+                                                        if (raw != null && raw != "null") {
+                                                            org.json.JSONTokener(raw).nextValue().toString()
+                                                        } else {
+                                                            ""
+                                                        }
+                                                    } catch (_: Exception) {
+                                                        ""
+                                                    }
+                                                    onCaptured(excerpt.take(com.click.browser.engine.AiPageContextPolicy.MAX_EXCERPT_CHARS))
+                                                }
+                                            }
+                                        }
+                                    },
                                     onOpenUrl = { targetUri ->
                                         showAiChat = false
                                         val destination = cleanTrackingUrl(formatUrl(targetUri, currentSearchEngineSetting))
