@@ -1564,10 +1564,12 @@ fun CompactBrowseBar(
     theme: ModeTheme,
     activeMode: BrowserMode,
     currentUrl: String,
+    isPageLoading: Boolean,
     connectionSecurity: ConnectionSecurityInfo,
     searchEngine: String,
     onNavigate: (String) -> Unit,
     onReload: () -> Unit,
+    onStopLoading: () -> Unit,
     onNewTab: () -> Unit,
     onMenuClick: () -> Unit,
     onSiteSettingsClick: () -> Unit = {},
@@ -1675,25 +1677,29 @@ fun CompactBrowseBar(
                     )
                 }
                 Spacer(modifier = Modifier.weight(1f))
-                // Simple mode consistently offers New tab; reload remains in the browser drawer.
-                if (activeMode == BrowserMode.SIMPLE) {
-                    IconButton(onClick = onNewTab, modifier = Modifier.size(40.dp)) {
-                        Icon(
-                            Icons.Default.Add,
-                            contentDescription = "New tab",
-                            tint = theme.onTopBar,
-                            modifier = Modifier.size(22.dp)
-                        )
-                    }
-                } else {
-                    IconButton(onClick = onReload, modifier = Modifier.size(40.dp)) {
-                        Icon(
-                            Icons.Default.Refresh,
-                            contentDescription = "Reload",
-                            tint = theme.onTopBar,
-                            modifier = Modifier.size(22.dp)
-                        )
-                    }
+                val primaryAction = compactBrowsePrimaryAction(activeMode, isPageLoading)
+                IconButton(
+                    onClick = when (primaryAction) {
+                        CompactBrowsePrimaryAction.NEW_TAB -> onNewTab
+                        CompactBrowsePrimaryAction.RELOAD -> onReload
+                        CompactBrowsePrimaryAction.STOP -> onStopLoading
+                    },
+                    modifier = Modifier.size(40.dp)
+                ) {
+                    Icon(
+                        imageVector = when (primaryAction) {
+                            CompactBrowsePrimaryAction.NEW_TAB -> Icons.Default.Add
+                            CompactBrowsePrimaryAction.RELOAD -> Icons.Default.Refresh
+                            CompactBrowsePrimaryAction.STOP -> Icons.Default.Close
+                        },
+                        contentDescription = when (primaryAction) {
+                            CompactBrowsePrimaryAction.NEW_TAB -> "New tab"
+                            CompactBrowsePrimaryAction.RELOAD -> "Reload"
+                            CompactBrowsePrimaryAction.STOP -> "Stop loading"
+                        },
+                        tint = theme.onTopBar,
+                        modifier = Modifier.size(22.dp)
+                    )
                 }
                 IconButton(onClick = onTabsClick, modifier = Modifier.size(40.dp)) {
                     BadgedBox(

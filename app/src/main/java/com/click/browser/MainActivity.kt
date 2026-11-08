@@ -3658,6 +3658,7 @@ class MainActivity : FragmentActivity() {
                                                     theme = themed,
                                                     activeMode = activeMode,
                                                     currentUrl = if (showOverlays) "" else currentTab.url,
+                                                    isPageLoading = !showOverlays && currentTab.isPageLoading,
                                                     connectionSecurity = ConnectionSecurityPolicy.forPage(
                                                         currentTab.url, currentTab.connectionSecurity
                                                     ),
@@ -3681,6 +3682,12 @@ class MainActivity : FragmentActivity() {
                                                         currentTab.browserSession?.loadUrl(destination)
                                                     },
                                                     onReload = { currentTab.browserSession?.reload() },
+                                                    onStopLoading = {
+                                                        runCatching { currentTab.browserSession?.stopLoading() }
+                                                        currentTab.isPageLoading = false
+                                                        currentTab.hasCommittedContent = true
+                                                        currentTab.loadProgress = 0
+                                                    },
                                                     onNewTab = {
                                                         tabs.add(TabItem(url = homeUrl(), title = "New Tab"))
                                                         activeTabIndex = tabs.lastIndex
