@@ -6813,25 +6813,40 @@ class MainActivity : FragmentActivity() {
 
                             // Find in Page overlay
                             if (showFindInPageDialog) {
+                                val clearFindMatches: () -> Unit = {
+                                    val geckoSession = currentTab.browserSession as? GeckoBrowserTabSession
+                                    if (geckoSession != null) geckoSession.session.finder.clear()
+                                    else currentTab.webView?.clearMatches()
+                                }
+                                val dismissFindInPage: () -> Unit = {
+                                    FindInPagePolicy.dismiss(
+                                        clearMatches = clearFindMatches,
+                                        hideDialog = { showFindInPageDialog = false }
+                                    )
+                                }
                                 AlertDialog(
-                                    onDismissRequest = { showFindInPageDialog = false },
+                                    onDismissRequest = dismissFindInPage,
                                     title = { Text("Find in Page") },
                                     text = {
                                         OutlinedTextField(
                                             value = findQuery,
                                             onValueChange = { query ->
                                                 findQuery = query
-                                                val geckoSession = currentTab.browserSession as? GeckoBrowserTabSession
-                                                if (geckoSession != null) {
-                                                    geckoSession.session.finder.setDisplayFlags(
-                                                        org.mozilla.geckoview.GeckoSession.FINDER_DISPLAY_HIGHLIGHT_ALL
-                                                    )
-                                                    if (query.isNotBlank()) {
-                                                        geckoSession.session.finder.find(
-                                                            query, org.mozilla.geckoview.GeckoSession.FINDER_FIND_FORWARD
-                                                        )
-                                                    } else geckoSession.session.finder.clear()
-                                                } else currentTab.webView?.findAllAsync(query)
+                                                when (val action = FindInPagePolicy.actionForQuery(query)) {
+                                                    FindInPageAction.Clear -> clearFindMatches()
+                                                    is FindInPageAction.Search -> {
+                                                        val geckoSession = currentTab.browserSession as? GeckoBrowserTabSession
+                                                        if (geckoSession != null) {
+                                                            geckoSession.session.finder.setDisplayFlags(
+                                                                org.mozilla.geckoview.GeckoSession.FINDER_DISPLAY_HIGHLIGHT_ALL
+                                                            )
+                                                            geckoSession.session.finder.find(
+                                                                action.query,
+                                                                org.mozilla.geckoview.GeckoSession.FINDER_FIND_FORWARD
+                                                            )
+                                                        } else currentTab.webView?.findAllAsync(action.query)
+                                                    }
+                                                }
                                             },
                                             modifier = Modifier.fillMaxWidth(),
                                             label = { Text("Find text...") }
@@ -6857,12 +6872,7 @@ class MainActivity : FragmentActivity() {
                                             }) {
                                                 Text("Next")
                                             }
-                                            TextButton(onClick = {
-                                                val geckoSession = currentTab.browserSession as? GeckoBrowserTabSession
-                                                if (geckoSession != null) geckoSession.session.finder.clear()
-                                                else currentTab.webView?.clearMatches()
-                                                showFindInPageDialog = false
-                                            }) {
+                                            TextButton(onClick = dismissFindInPage) {
                                                 Text("Close")
                                             }
                                         }
