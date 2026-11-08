@@ -60,12 +60,17 @@ import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.click.browser.engine.BrowserTabEngine
 import com.click.browser.engine.BrowserMode
+import com.click.browser.engine.FeatureId
+import com.click.browser.engine.ModeCapabilityRegistry
 import com.click.browser.engine.ModeTheme
 
 /**
@@ -82,15 +87,6 @@ import com.click.browser.engine.ModeTheme
 // ---------------------------------------------------------------------------
 // Feature catalogue
 // ---------------------------------------------------------------------------
-
-enum class FeatureId {
-    HISTORY, SETTINGS, STORAGE, PASSWORDS, COOKIES, TOOLS, DEVTOOLS,
-    DOWNLOADS, BOOKMARKS, AI_CHAT, TRANSLATE, DESKTOP, NEW_TAB,
-    PRIVATE_TAB, TABS, RECENT_TABS, SHARE, FIND_IN_PAGE,
-    ADBLOCK, READER, SCREENSHOT, SAVE_PDF, ADD_HOME, SITE_INFO,
-    PRIVACY_GUARDS, FULLSCREEN, TEXT_SIZE,
-    CLEAR_DATA, ABOUT, V9_SHIELD, FLAGS, VERSION, HELP_FEEDBACK, GAMES
-}
 
 data class FeatureDef(
     val id: FeatureId,
@@ -252,6 +248,8 @@ fun FeatureMenuFabOverlay(
     theme: ModeTheme,
     expanded: Boolean,
     activeMode: BrowserMode,
+    activeEngine: BrowserTabEngine,
+    hasLoadedPage: Boolean,
     desktopLayoutEnabled: Boolean,
     onToggle: () -> Unit,
     onDismiss: () -> Unit,
@@ -349,15 +347,25 @@ fun FeatureMenuFabOverlay(
                     )
                     // Four-column shortcut rows are in the same scroll container
                     // as the mode controls, so no shortcut is lost to clipping.
-                    ALL_FEATURES.chunked(4).forEach { featureRow ->
+                    val modeFeatures = remember(activeMode) {
+                        ALL_FEATURES.filter { ModeCapabilityRegistry.supportsMode(it.id, activeMode) }
+                    }
+                    modeFeatures.chunked(4).forEach { featureRow ->
                         Row(
                             modifier = Modifier.fillMaxWidth(),
                             horizontalArrangement = Arrangement.spacedBy(8.dp)
                         ) {
                             featureRow.forEach { feature ->
                                 val isWideLayoutTile = feature.id == FeatureId.DESKTOP
+                                val availability = ModeCapabilityRegistry.availability(
+                                    feature = feature.id,
+                                    mode = activeMode,
+                                    engine = activeEngine,
+                                    hasLoadedPage = hasLoadedPage
+                                )
                                 val tileContainerColor by animateColorAsState(
                                     targetValue = when {
+                                        !availability.enabled -> theme.surfaceVariant.copy(alpha = 0.35f)
                                         isWideLayoutTile && desktopLayoutEnabled -> theme.secondary.copy(alpha = 0.30f)
                                         isWideLayoutTile -> theme.secondary.copy(alpha = 0.14f)
                                         else -> theme.surfaceVariant.copy(alpha = 0.7f)
@@ -369,7 +377,12 @@ fun FeatureMenuFabOverlay(
                                     horizontalAlignment = Alignment.CenterHorizontally,
                                     modifier = Modifier
                                         .weight(1f)
-                                        .clickable { onFeature(feature.id) }
+                                        .semantics {
+                                            contentDescription = availability.explanation?.let {
+                                                "${feature.label}. Unavailable: $it"
+                                            } ?: feature.label
+                                        }
+                                        .clickable(enabled = availability.enabled) { onFeature(feature.id) }
                                 ) {
                                     Box(
                                         modifier = Modifier
@@ -389,10 +402,14 @@ fun FeatureMenuFabOverlay(
                                     ) {
                                         Icon(
                                             feature.icon,
-                                            contentDescription = if (isWideLayoutTile) {
+                                            contentDescription = if (availability.explanation != null) {
+                                                "${feature.label}. Unavailable: ${availability.explanation}"
+                                            } else if (isWideLayoutTile) {
                                                 if (desktopLayoutEnabled) "Wide layout on" else "Wide layout off"
                                             } else feature.label,
-                                            tint = if (isWideLayoutTile) theme.primary else accent,
+                                            tint = if (!availability.enabled) {
+                                                theme.onSurface.copy(alpha = 0.38f)
+                                            } else if (isWideLayoutTile) theme.primary else accent,
                                             modifier = Modifier.size(24.dp)
                                         )
                                         if (isWideLayoutTile && desktopLayoutEnabled) {
@@ -409,9 +426,17 @@ fun FeatureMenuFabOverlay(
                                     Text(
                                         feature.label,
                                         fontSize = 9.sp,
-                                        color = theme.onSurface.copy(alpha = 0.85f),
+                                        color = theme.onSurface.copy(alpha = if (availability.enabled) 0.85f else 0.48f),
                                         maxLines = 1
                                     )
+                                    availability.explanation?.let { explanation ->
+                                        Text(
+                                            explanation,
+                                            fontSize = 8.sp,
+                                            color = theme.onSurface.copy(alpha = 0.62f),
+                                            maxLines = 3
+                                        )
+                                    }
                                 }
                             }
                             repeat(4 - featureRow.size) {
