@@ -4,7 +4,6 @@ import {
   ShieldCheck, 
   Moon, 
   Languages, 
-  Code, 
   EyeOff, 
   Lock, 
   X, 
@@ -12,11 +11,10 @@ import {
   ToggleLeft, 
   ToggleRight, 
   Settings, 
-  Play, 
-  Plus, 
-  FileCode2
+  Play
 } from 'lucide-react';
 import { BrowserExtension } from '../types/browser';
+import { EXTENSION_TABS, isApplyExtensionActionAvailable } from './extensionUiPolicy.js';
 
 interface ClickExtensionsModalProps {
   isOpen: boolean;
@@ -27,15 +25,6 @@ interface ClickExtensionsModalProps {
   onApplyExtensionAction?: (extId: string, actionPayload?: Record<string, unknown>) => void;
 }
 
-interface UserScript {
-  id: string;
-  title: string;
-  author: string;
-  enabled: boolean;
-  code: string;
-  matches: string;
-}
-
 export const ClickExtensionsModal: React.FC<ClickExtensionsModalProps> = ({
   isOpen,
   onClose,
@@ -44,9 +33,10 @@ export const ClickExtensionsModal: React.FC<ClickExtensionsModalProps> = ({
   currentUrl = '',
   onApplyExtensionAction,
 }) => {
-  const [activeTab, setActiveTab] = useState<'extensions' | 'userscripts' | 'trackers'>('extensions');
+  const [activeTab, setActiveTab] = useState<(typeof EXTENSION_TABS)[number]>(EXTENSION_TABS[0]);
   const [filterCategory, setFilterCategory] = useState<string>('all');
   const [expandedExtId, setExpandedExtId] = useState<string | null>(null);
+  const extensionActionAvailable = isApplyExtensionActionAvailable(onApplyExtensionAction);
 
   // Dark Reader settings
   const [darkIntensity, setDarkIntensity] = useState<number>(90);
@@ -60,42 +50,6 @@ export const ClickExtensionsModal: React.FC<ClickExtensionsModalProps> = ({
   const [aggressiveMode, setAggressiveMode] = useState<boolean>(true);
   const [whitelisted, setWhitelisted] = useState<boolean>(false);
 
-  // Tampermonkey Userscripts library
-  const [userScripts, setUserScripts] = useState<UserScript[]>([
-    {
-      id: 'us-yt-skip',
-      title: 'YouTube Ad Auto-Skipper & SponsorBlock',
-      author: 'Click Community',
-      enabled: true,
-      matches: '*://*.youtube.com/*',
-      code: '// Auto-clicks skip ad button and fast-forwards promotional slots\nconst skip = document.querySelector(".ytp-ad-skip-button"); if (skip) skip.click();',
-    },
-    {
-      id: 'us-pw-bypass',
-      title: 'Clean Article & Paywall Overlay Remover',
-      author: 'PrivacyLab',
-      enabled: true,
-      matches: '*://*/*',
-      code: '// Removes anti-scroll and blocking backdrop modals\ndocument.querySelectorAll("[class*=\'paywall\'], [class*=\'overlay\']").forEach(e => e.remove());',
-    },
-    {
-      id: 'us-show-pass',
-      title: 'Unhide Masked Password on Double-Click',
-      author: 'SecurityTools',
-      enabled: false,
-      matches: '*://*/*',
-      code: '// Changes input type password to text on double click\ndocument.querySelectorAll("input[type=password]").forEach(e => e.ondblclick = () => e.type = "text");',
-    },
-    {
-      id: 'us-dark-inject',
-      title: 'Dynamic AMOLED Dark Canvas Shader',
-      author: 'StyleDev',
-      enabled: true,
-      matches: '*://*/*',
-      code: '// Applies deep pure black background to elements\ndocument.body.style.backgroundColor = "#000000";',
-    }
-  ]);
-
   // Detected Trackers (Privacy Badger Radar)
   const [detectedTrackers, setDetectedTrackers] = useState([
     { domain: 'google-analytics.com', type: 'Telemetry & Analytics', blocked: true, hits: 14 },
@@ -104,11 +58,6 @@ export const ClickExtensionsModal: React.FC<ClickExtensionsModalProps> = ({
     { domain: 'criteo.com', type: 'Retargeting Pixel', blocked: true, hits: 9 },
     { domain: 'hotjar.com', type: 'Heatmap Session Recorder', blocked: true, hits: 3 },
   ]);
-
-  // Custom script input state
-  const [showAddScript, setShowAddScript] = useState(false);
-  const [newScriptTitle, setNewScriptTitle] = useState('');
-  const [newScriptCode, setNewScriptCode] = useState('');
 
   if (!isOpen) return null;
 
@@ -120,8 +69,6 @@ export const ClickExtensionsModal: React.FC<ClickExtensionsModalProps> = ({
         return Moon;
       case 'ext-translate':
         return Languages;
-      case 'ext-tampermonkey':
-        return Code;
       case 'ext-privacybadger':
         return EyeOff;
       case 'ext-https':
@@ -129,29 +76,6 @@ export const ClickExtensionsModal: React.FC<ClickExtensionsModalProps> = ({
       default:
         return Puzzle;
     }
-  };
-
-  const handleToggleUserScript = (id: string) => {
-    setUserScripts((prev) =>
-      prev.map((s) => (s.id === id ? { ...s, enabled: !s.enabled } : s))
-    );
-  };
-
-  const handleAddUserScript = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!newScriptTitle.trim()) return;
-    const newScript: UserScript = {
-      id: `us-custom-${Date.now()}`,
-      title: newScriptTitle.trim(),
-      author: 'User Script',
-      enabled: true,
-      matches: '*://*/*',
-      code: newScriptCode || '// Custom user script executed in safe sandbox',
-    };
-    setUserScripts([newScript, ...userScripts]);
-    setNewScriptTitle('');
-    setNewScriptCode('');
-    setShowAddScript(false);
   };
 
   const handleToggleTracker = (domain: string) => {
@@ -164,8 +88,6 @@ export const ClickExtensionsModal: React.FC<ClickExtensionsModalProps> = ({
     ? extensions 
     : extensions.filter((e) => e.category === filterCategory);
 
-  const activeCount = extensions.filter((e) => e.enabled).length;
-
   return (
     <div className="absolute inset-0 z-50 bg-black/80 backdrop-blur-xs flex flex-col justify-end animate-in fade-in select-none">
       <div className="w-full bg-neutral-900 border-t border-neutral-800 rounded-t-3xl p-4 max-h-[90%] flex flex-col space-y-3 animate-in slide-in-from-bottom duration-200">
@@ -177,12 +99,12 @@ export const ClickExtensionsModal: React.FC<ClickExtensionsModalProps> = ({
             </div>
             <div>
               <h3 className="text-sm font-bold text-neutral-100 flex items-center gap-1.5">
-                Extensions Hub & Tools
-                <span className="px-1.5 py-0.2 rounded-full bg-emerald-500/20 text-emerald-300 text-[10px] font-semibold border border-emerald-500/30">
-                  {activeCount} active
+                Extensions preview
+                <span className="px-1.5 py-0.2 rounded-full bg-neutral-800 text-neutral-300 text-[10px] font-semibold border border-neutral-700">
+                  Preview only
                 </span>
               </h3>
-              <p className="text-[10px] text-neutral-400">Play Store Safe Policy · Android WebView Content Scripts</p>
+              <p className="text-[10px] text-neutral-400">No browser extension runtime is connected in this preview.</p>
             </div>
           </div>
           <button 
@@ -193,49 +115,37 @@ export const ClickExtensionsModal: React.FC<ClickExtensionsModalProps> = ({
           </button>
         </div>
 
-        {/* Tab Navigation: Extensions Hub / Userscripts / Privacy Trackers */}
-        <div className="grid grid-cols-3 gap-1 p-1 bg-neutral-950 rounded-xl border border-neutral-800 text-[11px] font-semibold">
-          <button
-            onClick={() => setActiveTab('extensions')}
-            className={`py-1.5 rounded-lg transition ${
-              activeTab === 'extensions'
-                ? 'bg-amber-500/20 text-amber-300 border border-amber-500/40 shadow-xs'
-                : 'text-neutral-400 hover:text-neutral-200'
-            }`}
-          >
-            Extensions ({extensions.length})
-          </button>
-          <button
-            onClick={() => setActiveTab('userscripts')}
-            className={`py-1.5 rounded-lg transition ${
-              activeTab === 'userscripts'
-                ? 'bg-amber-500/20 text-amber-300 border border-amber-500/40 shadow-xs'
-                : 'text-neutral-400 hover:text-neutral-200'
-            }`}
-          >
-            Userscripts ({userScripts.length})
-          </button>
-          <button
-            onClick={() => setActiveTab('trackers')}
-            className={`py-1.5 rounded-lg transition ${
-              activeTab === 'trackers'
-                ? 'bg-amber-500/20 text-amber-300 border border-amber-500/40 shadow-xs'
-                : 'text-neutral-400 hover:text-neutral-200'
-            }`}
-          >
-            Radar ({detectedTrackers.filter((t) => t.blocked).length} Blocked)
-          </button>
+        {/* Only preview panels are offered; user-supplied script injection is not supported. */}
+        <div className="grid grid-cols-2 gap-1 p-1 bg-neutral-950 rounded-xl border border-neutral-800 text-[11px] font-semibold">
+          {EXTENSION_TABS.map((tab) => {
+            const label = tab === 'extensions'
+              ? `Example extensions (${extensions.length})`
+              : `Radar (${detectedTrackers.length} sample)`;
+            return (
+              <button
+                key={tab}
+                onClick={() => setActiveTab(tab)}
+                className={`py-1.5 rounded-lg transition ${
+                  activeTab === tab
+                    ? 'bg-amber-500/20 text-amber-300 border border-amber-500/40 shadow-xs'
+                    : 'text-neutral-400 hover:text-neutral-200'
+                }`}
+              >
+                {label}
+              </button>
+            );
+          })}
         </div>
 
         {/* 1. EXTENSIONS TAB CONTENT */}
         {activeTab === 'extensions' && (
           <div className="space-y-2.5 overflow-hidden flex flex-col flex-1">
-            {/* Play Store Policy Safe notice */}
+            {/* This React preview is not connected to the Android extension runtime. */}
             <div className="p-2.5 rounded-xl bg-neutral-950/80 border border-neutral-800 flex items-start gap-2 text-[10px] text-neutral-400">
-              <ShieldCheck className="w-3.5 h-3.5 text-emerald-400 flex-shrink-0 mt-0.5" />
+              <ShieldCheck className="w-3.5 h-3.5 text-neutral-400 flex-shrink-0 mt-0.5" />
               <div className="leading-tight">
-                <span className="font-semibold text-neutral-200">Play Store Safe Policy: </span>
-                <span>Content scripts execute safely inside the sandboxed tab DOM without remote binary execution.</span>
+                <span className="font-semibold text-neutral-200">Preview only: </span>
+                <span>These example entries do not install add-ons, modify pages, block requests, or inject scripts.</span>
               </div>
             </div>
 
@@ -289,9 +199,9 @@ export const ClickExtensionsModal: React.FC<ClickExtensionsModalProps> = ({
                             {ext.description}
                           </p>
                           {ext.stats && ext.enabled && (
-                            <div className="mt-1 inline-flex items-center gap-1 text-[9px] text-emerald-400 font-medium">
-                              <Check className="w-2.5 h-2.5" />
-                              <span>{ext.stats}</span>
+                            <div className="mt-1 inline-flex items-center gap-1 text-[9px] text-neutral-400 font-medium">
+                              <Check className="w-2.5 h-2.5 text-neutral-500" />
+                              <span>Example only: {ext.stats}</span>
                             </div>
                           )}
                         </div>
@@ -302,14 +212,14 @@ export const ClickExtensionsModal: React.FC<ClickExtensionsModalProps> = ({
                         <button
                           onClick={() => setExpandedExtId(isExpanded ? null : ext.id)}
                           className="p-1 rounded-lg text-neutral-400 hover:text-white hover:bg-neutral-700 transition"
-                          title="Extension Settings & Actions"
+                          title="Example extension settings"
                         >
                           <Settings className="w-3.5 h-3.5" />
                         </button>
                         <button
                           onClick={() => onToggleExtension(ext.id)}
                           className="p-1 text-neutral-300 hover:text-white transition active:scale-90"
-                          title={ext.enabled ? 'Disable' : 'Enable'}
+                          title="Toggle example state only"
                         >
                           {ext.enabled ? (
                             <ToggleRight className="w-6 h-6 text-amber-400" />
@@ -340,7 +250,7 @@ export const ClickExtensionsModal: React.FC<ClickExtensionsModalProps> = ({
                             />
                             <div className="flex items-center justify-between pt-1">
                               <span className="text-neutral-400">Smart Image Invert Guard:</span>
-                              <span className="text-emerald-400 font-semibold">Active</span>
+                              <span className="text-neutral-400 font-semibold">Example active</span>
                             </div>
                           </div>
                         )}
@@ -394,7 +304,7 @@ export const ClickExtensionsModal: React.FC<ClickExtensionsModalProps> = ({
                                     : 'bg-emerald-500/20 text-emerald-300 border-emerald-500/40'
                                 }`}
                               >
-                                {whitelisted ? 'Paused (Whitelisted)' : 'Active (Blocking)'}
+                                {whitelisted ? 'Example paused' : 'Example enabled'}
                               </button>
                             </div>
                           </div>
@@ -405,11 +315,11 @@ export const ClickExtensionsModal: React.FC<ClickExtensionsModalProps> = ({
                           <div className="space-y-1">
                             <div className="flex items-center justify-between text-neutral-300">
                               <span>Canvas Fingerprint Noise:</span>
-                              <span className="text-emerald-400 font-semibold">Enabled</span>
+                              <span className="text-neutral-400 font-semibold">Example enabled</span>
                             </div>
                             <div className="flex items-center justify-between text-neutral-300">
                               <span>AudioContext Salt:</span>
-                              <span className="text-emerald-400 font-semibold">Enabled</span>
+                              <span className="text-neutral-400 font-semibold">Example enabled</span>
                             </div>
                           </div>
                         )}
@@ -418,12 +328,12 @@ export const ClickExtensionsModal: React.FC<ClickExtensionsModalProps> = ({
                         {ext.id === 'ext-https' && (
                           <div className="space-y-1">
                             <div className="flex items-center justify-between text-neutral-300">
-                              <span>Strict TLS 1.3 Cipher Suite:</span>
-                              <span className="text-emerald-400 font-semibold">Enforced</span>
+                              <span>TLS status:</span>
+                              <span className="text-neutral-400 font-semibold">Example only · not enforced</span>
                             </div>
                             <div className="flex items-center justify-between text-neutral-300">
-                              <span>HSTS Preload Verification:</span>
-                              <span className="text-emerald-400 font-semibold">Enabled</span>
+                              <span>HSTS status:</span>
+                              <span className="text-neutral-400 font-semibold">Example only · not verified</span>
                             </div>
                           </div>
                         )}
@@ -431,19 +341,30 @@ export const ClickExtensionsModal: React.FC<ClickExtensionsModalProps> = ({
                         {/* Direct action button */}
                         <div className="pt-1 flex items-center justify-between">
                           <span className="text-[10px] text-neutral-400 font-mono">
-                            Permissions: {ext.permissions.join(', ')}
+                            Example permissions: {ext.permissions.join(', ')}
                           </span>
                           <button
+                            disabled={!extensionActionAvailable}
+                            aria-disabled={!extensionActionAvailable}
+                            title={extensionActionAvailable ? 'Apply to Tab' : 'Unavailable: no extension runtime is connected'}
                             onClick={() => {
-                              onApplyExtensionAction && onApplyExtensionAction(ext.id, { darkIntensity, targetLang, aggressiveMode });
+                              if (!onApplyExtensionAction) return;
+                              onApplyExtensionAction(ext.id, { darkIntensity, targetLang, aggressiveMode });
                               onClose();
                             }}
-                            className="px-2.5 py-1 rounded-lg bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 border border-amber-500/40 text-[10px] font-semibold flex items-center gap-1 transition active:scale-95"
+                            className={`px-2.5 py-1 rounded-lg border text-[10px] font-semibold flex items-center gap-1 transition ${
+                              extensionActionAvailable
+                                ? 'bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 border-amber-500/40 active:scale-95'
+                                : 'bg-neutral-800 text-neutral-500 border-neutral-700 cursor-not-allowed'
+                            }`}
                           >
                             <Play className="w-2.5 h-2.5" />
-                            <span>Apply to Tab</span>
+                            <span>{extensionActionAvailable ? 'Apply to Tab' : 'Unavailable'}</span>
                           </button>
                         </div>
+                        {!extensionActionAvailable && (
+                          <p className="text-[9px] text-neutral-500">No extension runtime is connected; this preview does not modify the page.</p>
+                        )}
                       </div>
                     )}
                   </div>
@@ -453,103 +374,12 @@ export const ClickExtensionsModal: React.FC<ClickExtensionsModalProps> = ({
           </div>
         )}
 
-        {/* 2. USERSCRIPTS (TAMPERMONKEY ENGINE) TAB */}
-        {activeTab === 'userscripts' && (
-          <div className="space-y-2 overflow-hidden flex flex-col flex-1">
-            <div className="flex items-center justify-between">
-              <span className="text-[11px] font-bold text-neutral-300">Tampermonkey Userscript Engine</span>
-              <button
-                onClick={() => setShowAddScript(!showAddScript)}
-                className="px-2 py-0.5 rounded-lg bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 text-[10px] font-semibold flex items-center gap-1 active:scale-95 transition"
-              >
-                <Plus className="w-3 h-3" />
-                <span>New Script</span>
-              </button>
-            </div>
-
-            {/* Add Custom Script Form */}
-            {showAddScript && (
-              <form onSubmit={handleAddUserScript} className="p-3 rounded-2xl bg-neutral-950 border border-amber-500/40 space-y-2 animate-in fade-in">
-                <input
-                  type="text"
-                  value={newScriptTitle}
-                  onChange={(e) => setNewScriptTitle(e.target.value)}
-                  placeholder="Script Title (e.g. Skip Video Intros)"
-                  className="w-full px-2.5 py-1.5 rounded-xl bg-neutral-900 border border-neutral-700 text-xs text-neutral-200 focus:outline-none focus:border-amber-500"
-                />
-                <textarea
-                  value={newScriptCode}
-                  onChange={(e) => setNewScriptCode(e.target.value)}
-                  placeholder="// Enter JavaScript snippet to inject..."
-                  rows={3}
-                  className="w-full px-2.5 py-1.5 rounded-xl bg-neutral-900 border border-neutral-700 font-mono text-[10px] text-neutral-200 focus:outline-none focus:border-amber-500"
-                />
-                <div className="flex justify-end gap-1.5">
-                  <button
-                    type="button"
-                    onClick={() => setShowAddScript(false)}
-                    className="px-2.5 py-1 rounded-lg text-neutral-400 hover:text-white text-[10px]"
-                  >
-                    Cancel
-                  </button>
-                  <button
-                    type="submit"
-                    className="px-3 py-1 rounded-lg bg-amber-500 text-black font-bold text-[10px] hover:bg-amber-400"
-                  >
-                    Save & Inject
-                  </button>
-                </div>
-              </form>
-            )}
-
-            {/* List of Scripts */}
-            <div className="overflow-y-auto space-y-2 max-h-[300px] pr-0.5">
-              {userScripts.map((script) => (
-                <div
-                  key={script.id}
-                  className={`p-3 rounded-2xl border transition ${
-                    script.enabled
-                      ? 'bg-neutral-850/90 border-emerald-500/30 shadow-xs'
-                      : 'bg-neutral-950/50 border-neutral-850 opacity-60'
-                  }`}
-                >
-                  <div className="flex items-start justify-between gap-2">
-                    <div className="flex-1 min-w-0">
-                      <div className="flex items-center gap-1.5">
-                        <FileCode2 className="w-3.5 h-3.5 text-emerald-400 flex-shrink-0" />
-                        <span className="text-xs font-bold text-neutral-200 truncate">{script.title}</span>
-                      </div>
-                      <div className="text-[9px] text-neutral-400 font-mono mt-0.5">
-                        Match: {script.matches} · by {script.author}
-                      </div>
-                      <div className="p-1.5 rounded-lg bg-neutral-950 border border-neutral-800 font-mono text-[9px] text-neutral-300 mt-1.5 truncate">
-                        {script.code}
-                      </div>
-                    </div>
-                    <button
-                      onClick={() => handleToggleUserScript(script.id)}
-                      className="p-1 text-neutral-300 hover:text-white"
-                      title={script.enabled ? 'Disable' : 'Enable'}
-                    >
-                      {script.enabled ? (
-                        <ToggleRight className="w-6 h-6 text-emerald-400" />
-                      ) : (
-                        <ToggleLeft className="w-6 h-6 text-neutral-600" />
-                      )}
-                    </button>
-                  </div>
-                </div>
-              ))}
-            </div>
-          </div>
-        )}
-
         {/* 3. TRACKER RADAR TAB */}
         {activeTab === 'trackers' && (
           <div className="space-y-2 overflow-hidden flex flex-col flex-1">
             <div className="p-2.5 rounded-xl bg-neutral-950 border border-neutral-800 text-[10px] text-neutral-400 flex items-center justify-between">
               <span>Host: <strong className="text-neutral-200">{currentUrl || 'Current Tab'}</strong></span>
-              <span className="text-emerald-400 font-mono font-bold">5 Beacons Trapped</span>
+              <span className="text-amber-300 font-mono font-bold">Sample data · no live blocking</span>
             </div>
 
             <div className="overflow-y-auto space-y-1.5 max-h-[300px] pr-0.5">
@@ -570,7 +400,7 @@ export const ClickExtensionsModal: React.FC<ClickExtensionsModalProps> = ({
                         : 'bg-neutral-800 text-neutral-400 border-neutral-700'
                     }`}
                   >
-                    {tracker.blocked ? 'Blocked' : 'Allowed'}
+                    {tracker.blocked ? 'Example blocked' : 'Example allowed'}
                   </button>
                 </div>
               ))}
@@ -580,7 +410,7 @@ export const ClickExtensionsModal: React.FC<ClickExtensionsModalProps> = ({
 
         {/* Footer */}
         <div className="pt-2 flex items-center justify-between text-[10px] text-neutral-400 border-t border-neutral-800/80">
-          <span>Targeting: <code className="text-neutral-300 font-mono">{currentUrl || 'Active Tab'}</code></span>
+          <span>Preview target (unchanged): <code className="text-neutral-300 font-mono">{currentUrl || 'Active Tab'}</code></span>
           <button 
             onClick={onClose}
             className="px-4 py-1.5 rounded-xl bg-amber-500 text-black font-bold hover:bg-amber-400 transition active:scale-95 text-xs"
