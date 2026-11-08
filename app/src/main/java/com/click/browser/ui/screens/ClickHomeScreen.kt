@@ -21,6 +21,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -100,6 +101,7 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.text.font.FontWeight
@@ -107,6 +109,7 @@ import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -896,63 +899,73 @@ private fun QuickSitesGrid(
     var showAddDialog by remember(mode) { mutableStateOf(false) }
     var manageSite by remember(mode) { mutableStateOf<QuickSiteDef?>(null) }
 
-    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-        // null entry = the trailing "Add" tile.
-        val tiles: List<QuickSiteDef?> = sites + listOf(null)
-        tiles.chunked(5).forEach { row ->
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceEvenly
-            ) {
-                row.forEach { site ->
-                    Column(
-                        horizontalAlignment = Alignment.CenterHorizontally,
-                        modifier = Modifier
-                            .weight(1f)
-                            .combinedClickable(
-                                interactionSource = remember { MutableInteractionSource() },
-                                indication = null,
-                                onClick = {
-                                    if (site == null) showAddDialog = true
-                                    else onNavigate(site.url)
-                                },
-                                onLongClick = { if (site != null) manageSite = site }
-                            )
-                    ) {
-                        val isAdd = site == null
-                        Box(
+    BoxWithConstraints(modifier = Modifier.fillMaxWidth()) {
+        val columns = QuickSitesGridPolicy.columnsFor(
+            availableWidthDp = maxWidth.value,
+            fontScale = LocalDensity.current.fontScale
+        )
+
+        Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            // null entry = the trailing "Add" tile.
+            val tiles: List<QuickSiteDef?> = sites + listOf(null)
+            tiles.chunked(columns).forEach { row ->
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceEvenly
+                ) {
+                    row.forEach { site ->
+                        Column(
+                            horizontalAlignment = Alignment.CenterHorizontally,
                             modifier = Modifier
-                                .size(52.dp)
-                                .clip(RoundedCornerShape(14.dp))
-                                .then(
-                                    if (isAdd) Modifier.border(1.5.dp, onSurface.copy(alpha = 0.25f), RoundedCornerShape(14.dp))
-                                    else Modifier.background(Color(site!!.bgArgb))
+                                .weight(1f)
+                                .combinedClickable(
+                                    interactionSource = remember { MutableInteractionSource() },
+                                    indication = null,
+                                    onClick = {
+                                        if (site == null) showAddDialog = true
+                                        else onNavigate(site.url)
+                                    },
+                                    onLongClick = { if (site != null) manageSite = site }
                                 )
-                                .then(
-                                    if (!isAdd && site!!.label == "Instagram") Modifier.background(
-                                        Brush.linearGradient(listOf(Color(0xFFFEDA75), Color(0xFFD62976), Color(0xFF962FBF)))
-                                    ) else Modifier
-                                ),
-                            contentAlignment = Alignment.Center
                         ) {
+                            val isAdd = site == null
+                            Box(
+                                modifier = Modifier
+                                    .size(52.dp)
+                                    .clip(RoundedCornerShape(14.dp))
+                                    .then(
+                                        if (isAdd) Modifier.border(1.5.dp, onSurface.copy(alpha = 0.25f), RoundedCornerShape(14.dp))
+                                        else Modifier.background(Color(site!!.bgArgb))
+                                    )
+                                    .then(
+                                        if (!isAdd && site!!.label == "Instagram") Modifier.background(
+                                            Brush.linearGradient(listOf(Color(0xFFFEDA75), Color(0xFFD62976), Color(0xFF962FBF)))
+                                        ) else Modifier
+                                    ),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Text(
+                                    site?.glyph ?: "+",
+                                    color = if (site == null) onSurface else Color(site.glyphColorArgb),
+                                    fontWeight = FontWeight.Black,
+                                    fontSize = if (isAdd) 24.sp else 20.sp
+                                )
+                            }
+                            Spacer(modifier = Modifier.height(4.dp))
                             Text(
-                                site?.glyph ?: "+",
-                                color = if (site == null) onSurface else Color(site.glyphColorArgb),
-                                fontWeight = FontWeight.Black,
-                                fontSize = if (isAdd) 24.sp else 20.sp
+                                site?.label ?: "Add",
+                                modifier = Modifier.fillMaxWidth(),
+                                fontSize = 10.5.sp,
+                                color = onSurface.copy(alpha = 0.75f),
+                                maxLines = 2,
+                                overflow = TextOverflow.Ellipsis,
+                                textAlign = TextAlign.Center
                             )
                         }
-                        Spacer(modifier = Modifier.height(4.dp))
-                        Text(
-                            site?.label ?: "Add",
-                            fontSize = 10.5.sp,
-                            color = onSurface.copy(alpha = 0.75f),
-                            maxLines = 1
-                        )
                     }
+                    // Pad short rows so tiles keep even spacing.
+                    repeat(columns - row.size) { Spacer(modifier = Modifier.weight(1f)) }
                 }
-                // Pad short rows so tiles keep even spacing.
-                repeat(5 - row.size) { Spacer(modifier = Modifier.weight(1f)) }
             }
         }
     }
