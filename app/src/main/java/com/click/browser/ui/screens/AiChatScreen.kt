@@ -62,6 +62,7 @@ import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.Checkbox
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
@@ -103,6 +104,9 @@ import com.click.browser.engine.AiRequestRetryPolicy
 import com.click.browser.engine.AiRolePresets
 import com.click.browser.engine.AiSafetyFilter
 import com.click.browser.engine.AiSelectedTextPolicy
+import com.click.browser.engine.AiTabComparisonExcerpt
+import com.click.browser.engine.AiTabComparisonOption
+import com.click.browser.engine.AiTabComparisonPolicy
 import com.click.browser.engine.ChatMessage
 import com.click.browser.engine.PrivacyGuards
 import kotlinx.coroutines.CancellationException
@@ -118,7 +122,8 @@ private data class AiRequestSnapshot(
     val history: List<ChatMessage>,
     val systemInstruction: String,
     val enableGoogleSearch: Boolean,
-    val includesPageContext: Boolean
+    val includesPageContext: Boolean,
+    val consentScopeKey: String? = null
 )
 
 private data class FailedAiRequest(
@@ -149,6 +154,11 @@ internal fun AiChatScreen(
     selectedText: AiSelectedTextPolicy.PreparedSelection? = null,
     selectedTextSessionIdentity: String = "",
     onRequestPageContext: (onCaptured: (String) -> Unit) -> Unit = { onCaptured -> onCaptured("") },
+    comparisonTabs: List<AiTabComparisonOption> = emptyList(),
+    onRequestTabComparisonContext: (
+        List<AiTabComparisonOption>,
+        (Map<String, String>?) -> Unit
+    ) -> Unit = { _, onCaptured -> onCaptured(null) },
     onCancelSelectedText: () -> Unit = {},
     onOpenUrl: (String) -> Unit = {},
     onReportMessage: (String) -> Unit = {},
@@ -170,13 +180,21 @@ internal fun AiChatScreen(
     var speakingText by remember { mutableStateOf<String?>(null) }
     val listState = rememberLazyListState()
     val pageContextKey = "${provider.id}|$pageContextIdentity|$pageTitle|$pageUrl|$canSharePageContext|$searchGroundingEnabled"
-    val retryScopeKey = "${provider.id}|$pageContextIdentity|$pageTitle|$pageUrl|$canSharePageContext|$selectedTextSessionIdentity|${selectedText?.text}"
+    var approvedComparisonConsentKey by remember(provider.id) { mutableStateOf<String?>(null) }
+    val retryScopeKey = "${provider.id}|$pageContextIdentity|$pageTitle|$pageUrl|$canSharePageContext|$selectedTextSessionIdentity|${selectedText?.text}|$approvedComparisonConsentKey"
     val latestPageContextKey = rememberUpdatedState(pageContextKey)
     var pageContextApproved by remember(pageContextKey) { mutableStateOf(false) }
     var pageContextLoading by remember(pageContextKey) { mutableStateOf(false) }
     var pageExcerpt by remember(pageContextKey) { mutableStateOf("") }
     var showPageContextConsent by remember(pageContextKey) { mutableStateOf(false) }
     var pendingPagePrompt by remember(pageContextKey) { mutableStateOf<String?>(null) }
+    var comparisonLoading by remember(provider.id) { mutableStateOf(false) }
+    var showComparisonPicker by remember(provider.id) { mutableStateOf(false) }
+    var showComparisonConsent by remember(provider.id) { mutableStateOf(false) }
+    var selectedComparisonTabIds by remember(provider.id) { mutableStateOf<Set<String>>(emptySet()) }
+    var pendingComparisonTabs by remember(provider.id) {
+        mutableStateOf<List<AiTabComparisonOption>>(emptyList())
+    }
     val selectedTextOnlySession = selectedText != null
     val selectedTextConsentKey = "${provider.id}|$selectedTextSessionIdentity|${apiKey.isNotBlank()}"
     var showSelectedTextConsent by remember(selectedTextConsentKey) {
@@ -317,12 +335,19 @@ internal fun AiChatScreen(
 
     fun canRetryFailedRequest(errorIndex: Int): Boolean {
         val failed = failedRequests[errorIndex]
+        val snapshot = failed?.snapshot
+        val scopeKey = snapshot?.consentScopeKey
+        val contextConsentGranted = when {
+            snapshot?.includesPageContext != true -> true
+            scopeKey == pageContextKey -> pageContextApproved && canSharePageContext
+            else -> scopeKey != null && scopeKey == approvedComparisonConsentKey
+        }
         return AiRequestRetryPolicy.canRetry(
                 messageRole = messages.getOrNull(errorIndex)?.role,
                 hasSavedRequest = failed != null,
                 requestInProgress = typing,
-                requiresPageContextConsent = failed?.snapshot?.includesPageContext == true,
-                pageContextConsentGranted = pageContextApproved && canSharePageContext
+                requiresPageContextConsent = snapshot?.includesPageContext == true,
+                pageContextConsentGranted = contextConsentGranted
             )
     }
 
@@ -332,30 +357,41 @@ internal fun AiChatScreen(
         launchRequest(failed.snapshot, retryErrorIndex = errorIndex)
     }
 
-    fun sendMessage(prompt: String) {
+    fun sendMessage(
+        prompt: String,
+        systemInstructionOverride: String? = null,
+        enableGoogleSearchOverride: Boolean? = null,
+        includesPageContextOverride: Boolean? = null,
+        consentScopeKeyOverride: String? = null
+    ) {
         val text = prompt.trim()
-        if (text.isEmpty() || typing || pageContextLoading) return
+        if (text.isEmpty() || typing || pageContextLoading || comparisonLoading) return
         input = ""
         messages.add(ChatMessage("user", text))
         if (AiSafetyFilter.isBlocked(text)) {
             messages.add(ChatMessage("system", "This prompt was blocked by content safety."))
             return
         }
-        val sysInstruction = AiPageContextPolicy.systemInstruction(
+        val pageContextIsApproved = pageContextApproved && canSharePageContext
+        val sysInstruction = systemInstructionOverride ?: AiPageContextPolicy.systemInstruction(
             roleId = selectedRole,
-            consentGranted = pageContextApproved && canSharePageContext,
+            consentGranted = pageContextIsApproved,
             pageTitle = pageTitle,
             pageUrl = pageUrl,
             pageExcerpt = pageExcerpt
         )
+        val includesPageContext = includesPageContextOverride ?: pageContextIsApproved
         launchRequest(
             AiRequestSnapshot(
                 provider = provider,
                 model = model,
                 history = messages.toList(),
                 systemInstruction = sysInstruction,
-                enableGoogleSearch = isGemini && searchGroundingEnabled && !selectedTextOnlySession,
-                includesPageContext = pageContextApproved && canSharePageContext
+                enableGoogleSearch = enableGoogleSearchOverride
+                    ?: (isGemini && searchGroundingEnabled && !selectedTextOnlySession),
+                includesPageContext = includesPageContext,
+                consentScopeKey = consentScopeKeyOverride
+                    ?: pageContextKey.takeIf { pageContextIsApproved }
             )
         )
     }
@@ -380,6 +416,53 @@ internal fun AiChatScreen(
             pageContextLoading = false
             pendingPagePrompt?.let { input = it }
             pendingPagePrompt = null
+        }
+    }
+
+    fun captureSelectedTabsAfterConsent(selectedTabs: List<AiTabComparisonOption>, scopeKey: String) {
+        if (!screenActive || apiKey.isBlank() || selectedTextOnlySession || typing || pageContextLoading) return
+        if (scopeKey != AiTabComparisonPolicy.consentScopeKey(provider.id, selectedTabs)) return
+        approvedComparisonConsentKey = scopeKey
+        comparisonLoading = true
+        onRequestTabComparisonContext(selectedTabs) { capturedTextById ->
+            if (!screenActive || approvedComparisonConsentKey != scopeKey) return@onRequestTabComparisonContext
+            comparisonLoading = false
+            val excerpts = capturedTextById?.let {
+                AiTabComparisonPolicy.prepareExcerpts(selectedTabs, it)
+            }
+            val systemInstruction = excerpts?.let {
+                AiTabComparisonPolicy.systemInstructionAfterConsent(
+                    consentGranted = approvedComparisonConsentKey == scopeKey,
+                    roleInstruction = AiRolePresets.instructionFor("browser"),
+                    excerpts = it
+                )
+            }
+            if (systemInstruction == null) {
+                approvedComparisonConsentKey = null
+                messages.add(ChatMessage("system", "Couldn't read all selected pages. Nothing was sent; choose two loaded regular WebView tabs and try again."))
+                return@onRequestTabComparisonContext
+            }
+            sendMessage(
+                prompt = AiTabComparisonPolicy.comparisonPrompt(),
+                systemInstructionOverride = systemInstruction,
+                enableGoogleSearchOverride = false,
+                includesPageContextOverride = true,
+                consentScopeKeyOverride = scopeKey
+            )
+        }
+    }
+
+    fun continueSelectedTabComparison() {
+        if (apiKey.isBlank() || selectedTextOnlySession || typing || pageContextLoading || comparisonLoading) return
+        val selectedTabs = AiTabComparisonPolicy.resolveSelection(comparisonTabs, selectedComparisonTabIds)
+            ?: return
+        pendingComparisonTabs = selectedTabs
+        showComparisonPicker = false
+        val scopeKey = AiTabComparisonPolicy.consentScopeKey(provider.id, selectedTabs)
+        if (approvedComparisonConsentKey == scopeKey) {
+            captureSelectedTabsAfterConsent(selectedTabs, scopeKey)
+        } else {
+            showComparisonConsent = true
         }
     }
 
@@ -570,6 +653,33 @@ internal fun AiChatScreen(
                     }
                 }
 
+                if (!selectedTextOnlySession && apiKey.isNotBlank()) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 14.dp, vertical = 2.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        if (comparisonTabs.size >= AiTabComparisonPolicy.MIN_SELECTED_TABS) {
+                            TextButton(
+                                enabled = !typing && !pageContextLoading && !comparisonLoading,
+                                onClick = {
+                                    selectedComparisonTabIds = emptySet()
+                                    showComparisonPicker = true
+                                }
+                            ) {
+                                Text(if (comparisonLoading) "Reading selected tabs…" else "Compare open tabs")
+                            }
+                        } else {
+                            Text(
+                                "Tab comparison needs 2+ loaded regular WebView tabs; Private and GeckoView tabs aren't read.",
+                                fontSize = 10.sp,
+                                color = Color.Gray
+                            )
+                        }
+                    }
+                }
+
                 LazyColumn(
                     state = listState,
                     modifier = Modifier
@@ -605,6 +715,15 @@ internal fun AiChatScreen(
                                     color = Color.Gray
                                 )
                             }
+                        }
+                    }
+                    if (comparisonLoading) {
+                        item {
+                            Text(
+                                "Reading only the selected pages…",
+                                fontSize = 12.sp,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
                         }
                     }
                     items(messages.size, key = { it }) { index ->
@@ -666,7 +785,7 @@ internal fun AiChatScreen(
                         }
                     } else {
                         MicButton(
-                            enabled = !pageContextLoading,
+                            enabled = !pageContextLoading && !comparisonLoading,
                             onHeard = { heard ->
                                 input = (input.trim() + " " + heard).trim()
                             }
@@ -674,7 +793,7 @@ internal fun AiChatScreen(
                         Spacer(modifier = Modifier.width(8.dp))
                         IconButton(
                             onClick = { send() },
-                            enabled = !pageContextLoading,
+                            enabled = !pageContextLoading && !comparisonLoading,
                             modifier = Modifier
                                 .size(48.dp)
                                 .background(MaterialTheme.colorScheme.primary, CircleShape)
@@ -727,6 +846,124 @@ internal fun AiChatScreen(
                     TextButton(onClick = {
                         showPageContextConsent = false
                         pendingPagePrompt = null
+                    }) { Text("Not now") }
+                }
+            )
+        }
+
+        if (showComparisonPicker && !selectedTextOnlySession && apiKey.isNotBlank()) {
+            AlertDialog(
+                onDismissRequest = {
+                    showComparisonPicker = false
+                    selectedComparisonTabIds = emptySet()
+                },
+                title = { Text("Choose tabs to compare") },
+                text = {
+                    Column(
+                        modifier = Modifier
+                            .heightIn(max = 420.dp)
+                            .verticalScroll(rememberScrollState())
+                    ) {
+                        Text(
+                            "Choose 2–${AiTabComparisonPolicy.MAX_SELECTED_TABS} loaded regular WebView tabs. Private and GeckoView tabs are excluded. Page text is not read until you approve sharing.",
+                            fontSize = 13.sp
+                        )
+                        Spacer(modifier = Modifier.height(8.dp))
+                        comparisonTabs.forEach { tab ->
+                            val checked = tab.id in selectedComparisonTabIds
+                            val canSelect = checked || selectedComparisonTabIds.size < AiTabComparisonPolicy.MAX_SELECTED_TABS
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(vertical = 4.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Checkbox(
+                                    checked = checked,
+                                    enabled = canSelect,
+                                    onCheckedChange = { selected ->
+                                        selectedComparisonTabIds = if (selected) {
+                                            selectedComparisonTabIds + tab.id
+                                        } else {
+                                            selectedComparisonTabIds - tab.id
+                                        }
+                                    }
+                                )
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text(
+                                        tab.title.take(AiTabComparisonPolicy.MAX_TITLE_CHARS).ifBlank { "(untitled tab)" },
+                                        fontWeight = FontWeight.SemiBold,
+                                        fontSize = 13.sp
+                                    )
+                                    Text(
+                                        tab.url.take(AiTabComparisonPolicy.MAX_URL_CHARS),
+                                        fontSize = 10.sp,
+                                        color = Color.Gray,
+                                        maxLines = 2,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
+                                }
+                            }
+                        }
+                    }
+                },
+                confirmButton = {
+                    TextButton(
+                        enabled = selectedComparisonTabIds.size in
+                            AiTabComparisonPolicy.MIN_SELECTED_TABS..AiTabComparisonPolicy.MAX_SELECTED_TABS,
+                        onClick = { continueSelectedTabComparison() }
+                    ) { Text("Continue") }
+                },
+                dismissButton = {
+                    TextButton(onClick = {
+                        showComparisonPicker = false
+                        selectedComparisonTabIds = emptySet()
+                    }) { Text("Cancel") }
+                }
+            )
+        }
+
+        if (showComparisonConsent && pendingComparisonTabs.isNotEmpty() && apiKey.isNotBlank()) {
+            AlertDialog(
+                onDismissRequest = {
+                    showComparisonConsent = false
+                    pendingComparisonTabs = emptyList()
+                },
+                title = { Text("Share selected tabs with $externalProviderName?") },
+                text = {
+                    Column(
+                        modifier = Modifier
+                            .heightIn(max = 380.dp)
+                            .verticalScroll(rememberScrollState())
+                    ) {
+                        Text(
+                            AiTabComparisonPolicy.consentDisclosure(
+                                providerName = externalProviderName,
+                                selectedTabs = pendingComparisonTabs,
+                                includeGoogleSearchGrounding = isGemini && searchGroundingEnabled
+                            ),
+                            fontSize = 13.sp
+                        )
+                        pendingComparisonTabs.forEachIndexed { index, tab ->
+                            Spacer(modifier = Modifier.height(10.dp))
+                            Text("Tab ${index + 1}: ${tab.title.take(AiTabComparisonPolicy.MAX_TITLE_CHARS).ifBlank { "(untitled)" }}", fontWeight = FontWeight.SemiBold, fontSize = 12.sp)
+                            Text(tab.url.take(AiTabComparisonPolicy.MAX_URL_CHARS), fontSize = 11.sp)
+                        }
+                    }
+                },
+                confirmButton = {
+                    TextButton(onClick = {
+                        val tabsToCompare = pendingComparisonTabs
+                        pendingComparisonTabs = emptyList()
+                        showComparisonConsent = false
+                        val scopeKey = AiTabComparisonPolicy.consentScopeKey(provider.id, tabsToCompare)
+                        captureSelectedTabsAfterConsent(tabsToCompare, scopeKey)
+                    }) { Text("Compare now") }
+                },
+                dismissButton = {
+                    TextButton(onClick = {
+                        showComparisonConsent = false
+                        pendingComparisonTabs = emptyList()
                     }) { Text("Not now") }
                 }
             )
