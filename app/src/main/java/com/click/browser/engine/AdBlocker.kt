@@ -47,7 +47,7 @@ object AdBlocker {
         return h == p || h.endsWith(".$p")
     }
 
-    /** Real count of blocked tracker/ad requests this session (for the home privacy pill). */
+    /** Combined count of ad/tracker blocks and Safe Browsing threats this app session. */
     private val _blockedCount = AtomicInteger(0)
     private val _blockedCountFlow = MutableStateFlow(0)
     val blockedCountFlow: StateFlow<Int> = _blockedCountFlow.asStateFlow()

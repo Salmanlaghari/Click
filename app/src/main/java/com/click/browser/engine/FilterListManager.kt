@@ -6,6 +6,9 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -23,6 +26,9 @@ import java.util.concurrent.TimeUnit
  * - Matching is suffix-based on a HashSet: O(segments) per request.
  */
 object FilterListManager {
+
+    private val _readinessFlow = MutableStateFlow(FilterListReadiness.LOADING)
+    internal val readinessFlow: StateFlow<FilterListReadiness> = _readinessFlow.asStateFlow()
 
     private const val PREFS = "click_filter_lists"
     private const val KEY_VERSION = "list_version"
@@ -83,6 +89,9 @@ object FilterListManager {
         try { http.connectionPool.evictAll() } catch (e: Exception) { }
         prefs = null
         filesDir = null
+        domains = emptySet()
+        listVersion = 0
+        _readinessFlow.value = FilterListReadiness.LOADING
         initialized = false
     }
 
@@ -107,6 +116,7 @@ object FilterListManager {
     }
 
     private fun loadBestAvailable(app: Context) {
+        var loaded = false
         // 1) Cached remote copy (newer) wins if present and valid.
         val cached = filesDir?.let { File(it, CACHED_FILE) }
         val cachedDomains = cached?.takeIf { it.exists() }?.let { parseFile(it) }
@@ -123,10 +133,17 @@ object FilterListManager {
         if (cachedDomains != null && cachedVersion >= bundledVersion && cachedDomains.isNotEmpty()) {
             domains = cachedDomains
             listVersion = cachedVersion
+            loaded = true
         } else if (bundled != null) {
             domains = bundled.second
             listVersion = bundledVersion
             prefs?.edit()?.putInt(KEY_VERSION, bundledVersion)?.apply()
+            loaded = domains.isNotEmpty() && listVersion > 0
+        }
+        _readinessFlow.value = if (loaded) {
+            FilterListReadiness.READY
+        } else {
+            FilterListReadiness.BUILTIN_ONLY
         }
     }
 
@@ -147,6 +164,7 @@ object FilterListManager {
                         ?.apply()
                     domains = set
                     listVersion = version
+                    _readinessFlow.value = FilterListReadiness.READY
                 } else {
                     // Still fresh — don't hammer the server next launch.
                     prefs?.edit()?.putLong(KEY_UPDATED_AT, System.currentTimeMillis())?.apply()
