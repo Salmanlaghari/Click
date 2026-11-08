@@ -34,6 +34,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.click.browser.engine.BrowserMode
@@ -92,7 +93,7 @@ fun ClickDiagnosticsScreen(
         ) {
             Card(colors = CardDefaults.cardColors(containerColor = theme.surface)) {
                 Text(
-                    "Local Click events only—not Android logcat. This log contains profile-switch and Gecko renderer milestones, but no URLs, page contents, passwords, cookies, crash stacks, or logs from other apps. It stays on this device and is limited to the newest 120 events.",
+                    "Local Click events only—not Android logcat. Renderer events store the tab ID, sanitized URL origin/path (credentials, query, and fragment removed), GeckoView/Android versions, available memory, event details, and exception class. No page contents, passwords, cookies, exception messages/stacks, or logs from other apps are stored; events stay on this device and are limited to the newest 120.",
                     modifier = Modifier.padding(14.dp),
                     color = theme.onSurface,
                     fontSize = 13.sp
@@ -140,6 +141,34 @@ fun ClickDiagnosticsScreen(
                                     color = theme.onSurface.copy(alpha = 0.65f),
                                     fontSize = 12.sp
                                 )
+                                entry.rendererDetails?.let { details ->
+                                    Spacer(Modifier.height(6.dp))
+                                    Text(
+                                        "Tab ${details.tabId} · ${details.url ?: "URL unavailable"}",
+                                        color = theme.onSurface.copy(alpha = 0.8f),
+                                        fontSize = 12.sp,
+                                        maxLines = 2,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
+                                    Text(
+                                        "GeckoView ${details.geckoViewVersion} · Android ${details.androidVersion} · " +
+                                            (details.availableMemoryMb?.let { "$it MB available" } ?: "memory unavailable"),
+                                        color = theme.onSurface.copy(alpha = 0.65f),
+                                        fontSize = 11.sp,
+                                        maxLines = 2,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
+                                    Text(
+                                        buildString {
+                                            append(details.eventDetails)
+                                            details.exceptionType?.let { append(" · Exception: ").append(it) }
+                                        },
+                                        color = theme.onSurface.copy(alpha = 0.65f),
+                                        fontSize = 11.sp,
+                                        maxLines = 3,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
+                                }
                             }
                         }
                     }

@@ -160,6 +160,17 @@ internal class NormalTabExtensionRouter(
         onActionsChanged(tabId, emptyList())
     }
 
+    /** Forget a renderer-dead session without calling controller methods on a closed GeckoSession. */
+    fun detachCrashedSession(tabId: String, session: GeckoSession) {
+        if (sessions[tabId] !== session) return
+        if (popup?.ownerTabId == tabId) closePopup()
+        if (activeTabId == tabId) activeTabId = null
+        sessions.remove(tabId, session)
+        sessionIds.remove(session)
+        sessionOverrides.remove(session)
+        onActionsChanged(tabId, emptyList())
+    }
+
     fun closePopup(expected: GeckoSession? = null) {
         val current = popup
         if (current == null) {

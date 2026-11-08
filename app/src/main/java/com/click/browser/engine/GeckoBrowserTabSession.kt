@@ -72,7 +72,7 @@ internal class GeckoBrowserTabSession(
     private val onCanGoBackChanged: (Boolean) -> Unit,
     private val onCanGoForwardChanged: (Boolean) -> Unit,
     private val onFullscreenChanged: (Boolean) -> Unit,
-    private val onRendererFailure: (GeckoRenderEvent) -> Unit,
+    private val onRendererFailure: (GeckoRenderEvent, Throwable?) -> Unit,
     private val onRendererRecovery: (GeckoRenderEvent) -> Unit,
     private val onExternalResponse: (WebResponse) -> Unit,
     private val onLoginSavePrompt: (
@@ -97,6 +97,10 @@ internal class GeckoBrowserTabSession(
     private var destroyed = false
     private var extensionAttached = false
     private var historyCandidateUrl: String? = initialUrl
+    @Volatile private var lastKnownPageUrl: String = initialUrl.ifBlank { "about:blank" }
+    @Volatile private var latestSessionState: String? = initialSessionState
+    @Volatile private var rendererRecoveryRequired = false
+    @Volatile private var rendererRecoveryInProgress = false
     private val adoptedChildSession = initialGeckoSession != null
 
     override val view: View get() = geckoView
@@ -124,6 +128,7 @@ internal class GeckoBrowserTabSession(
             ) {
                 url?.let {
                     historyCandidateUrl = it
+                    lastKnownPageUrl = it
                     onUrlChanged(it)
                 }
             }
@@ -175,7 +180,10 @@ internal class GeckoBrowserTabSession(
                 session: GeckoSession,
                 state: GeckoSession.SessionState
             ) {
-                state.toString()?.let(onSessionStateChanged)
+                state.toString().let { encoded ->
+                    latestSessionState = encoded
+                    onSessionStateChanged(encoded)
+                }
             }
 
             override fun onPageStart(session: GeckoSession, url: String) {
@@ -183,6 +191,7 @@ internal class GeckoBrowserTabSession(
                 attachExtensionRouterIfOpen()
                 updateActiveState()
                 historyCandidateUrl = url
+                lastKnownPageUrl = url
                 onProgressChanged(0, true)
                 onUrlChanged(url)
             }
@@ -214,14 +223,22 @@ internal class GeckoBrowserTabSession(
             }
 
             override fun onCrash(session: GeckoSession) {
-                onRendererFailure(GeckoRenderEvent.PROCESS_CRASHED)
+                rendererRecoveryRequired = true
+                rendererRecoveryInProgress = false
+                detachExtensionRouterAfterRendererFailure()
+                onRendererFailure(GeckoRenderEvent.PROCESS_CRASHED, null)
             }
 
             override fun onKill(session: GeckoSession) {
-                onRendererFailure(GeckoRenderEvent.PROCESS_KILLED)
+                rendererRecoveryRequired = true
+                rendererRecoveryInProgress = false
+                detachExtensionRouterAfterRendererFailure()
+                onRendererFailure(GeckoRenderEvent.PROCESS_KILLED, null)
             }
 
             override fun onFirstComposite(session: GeckoSession) {
+                rendererRecoveryRequired = false
+                rendererRecoveryInProgress = false
                 onRendererRecovery(GeckoRenderEvent.FIRST_COMPOSITE)
             }
         })
@@ -245,13 +262,45 @@ internal class GeckoBrowserTabSession(
     }
 
     override fun canGoBack(): Boolean = canBack
-    override fun goBack() { if (canBack) session.goBack() }
+    override fun goBack() {
+        if (destroyed || !canBack) return
+        try {
+            if (!session.isOpen) {
+                beginRendererRecovery()
+                reopenAndRestore(lastKnownPageUrl)
+            }
+            session.goBack()
+        } catch (error: Exception) {
+            reportRecoveryFailure(error)
+        }
+    }
     override fun canGoForward(): Boolean = canForward
-    override fun goForward() { if (canForward) session.goForward() }
+    override fun goForward() {
+        if (destroyed || !canForward) return
+        try {
+            if (!session.isOpen) {
+                beginRendererRecovery()
+                reopenAndRestore(lastKnownPageUrl)
+            }
+            session.goForward()
+        } catch (error: Exception) {
+            reportRecoveryFailure(error)
+        }
+    }
     override fun loadUrl(url: String) {
-        if (!destroyed) {
+        if (destroyed) return
+        try {
             setWideLayout(wideLayoutForUrl(url))
+            if (!session.isOpen) {
+                beginRendererRecovery()
+                session.open(runtime)
+                val restored = restoreLatestStateOrLoad(url)
+                updateActiveState()
+                if (!restored) return
+            }
             session.loadUri(url)
+        } catch (error: Exception) {
+            reportRecoveryFailure(error)
         }
     }
     override fun setWideLayout(enabled: Boolean) {
@@ -259,7 +308,51 @@ internal class GeckoBrowserTabSession(
             session.settings.setViewportMode(DesktopLayoutPolicy.geckoViewportMode(enabled))
         }
     }
-    override fun reload() { if (!destroyed) session.reload() }
+    override fun reload() {
+        if (destroyed || rendererRecoveryInProgress) return
+        val action = geckoSessionRecoveryAction(
+            sessionIsOpen = session.isOpen,
+            recoveryInProgress = rendererRecoveryInProgress,
+            hasSavedState = !latestSessionState.isNullOrBlank(),
+            hasCurrentUrl = lastKnownPageUrl.isNotBlank() && lastKnownPageUrl != "about:blank"
+        )
+        if (action == GeckoSessionRecoveryAction.RELOAD_OPEN_SESSION) {
+            if (rendererRecoveryRequired) {
+                beginRendererRecovery(GeckoRenderEvent.RECOVERY_RELOAD_STARTED)
+            }
+            try {
+                session.reload()
+                updateActiveState()
+            } catch (error: Exception) {
+                reportRecoveryFailure(error)
+            }
+            return
+        }
+        if (action == GeckoSessionRecoveryAction.IGNORE_IN_PROGRESS) return
+
+        beginRendererRecovery()
+        try {
+            when (action) {
+                GeckoSessionRecoveryAction.IGNORE_IN_PROGRESS -> return
+                GeckoSessionRecoveryAction.RELOAD_OPEN_SESSION -> session.reload()
+                GeckoSessionRecoveryAction.REOPEN_AND_RESTORE_STATE -> {
+                    session.open(runtime)
+                    restoreLatestStateOrLoad(lastKnownPageUrl)
+                }
+                GeckoSessionRecoveryAction.REOPEN_AND_LOAD_CURRENT_URL -> {
+                    session.open(runtime)
+                    session.loadUri(lastKnownPageUrl)
+                }
+                GeckoSessionRecoveryAction.REOPEN_BLANK_SESSION -> {
+                    session.open(runtime)
+                    session.loadUri("about:blank")
+                }
+            }
+            updateActiveState()
+        } catch (error: Exception) {
+            reportRecoveryFailure(error)
+        }
+    }
     override fun stopLoading() { if (!destroyed) session.stop() }
 
     override fun onPause() {
@@ -293,11 +386,50 @@ internal class GeckoBrowserTabSession(
         extensionRouter?.setSelected(tabId, active)
     }
 
+    private fun beginRendererRecovery(event: GeckoRenderEvent = GeckoRenderEvent.RECOVERY_STARTED) {
+        if (rendererRecoveryInProgress) return
+        rendererRecoveryRequired = true
+        rendererRecoveryInProgress = true
+        onRendererRecovery(event)
+    }
+
+    /** Reopen the same session object, preserving its profile and saved history. */
+    private fun reopenAndRestore(fallbackUrl: String): Boolean {
+        session.open(runtime)
+        val restored = restoreLatestStateOrLoad(fallbackUrl)
+        updateActiveState()
+        return restored
+    }
+
+    private fun restoreLatestStateOrLoad(fallbackUrl: String): Boolean {
+        val restoredState = latestSessionState
+            ?.takeIf { it.isNotBlank() }
+            ?.let { encoded -> runCatching { GeckoSession.SessionState.fromString(encoded) }.getOrNull() }
+        if (restoredState != null) {
+            session.restoreState(restoredState)
+            return true
+        }
+        session.loadUri(fallbackUrl.ifBlank { "about:blank" })
+        return false
+    }
+
+    private fun reportRecoveryFailure(error: Exception) {
+        rendererRecoveryRequired = true
+        rendererRecoveryInProgress = false
+        onRendererFailure(GeckoRenderEvent.RECOVERY_FAILED, error)
+    }
+
     private fun attachExtensionRouterIfOpen() {
         if (!extensionAttached && session.isOpen && extensionRouter != null) {
             extensionRouter.attach(tabId, session)
             extensionAttached = true
         }
+    }
+
+    private fun detachExtensionRouterAfterRendererFailure() {
+        if (!extensionAttached) return
+        extensionRouter?.detachCrashedSession(tabId, session)
+        extensionAttached = false
     }
 
     override fun detachFromParent() {

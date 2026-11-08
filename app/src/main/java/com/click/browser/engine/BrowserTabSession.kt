@@ -13,11 +13,48 @@ enum class BrowserTabEngine {
 internal fun defaultBrowserTabEngine(isIncognito: Boolean): BrowserTabEngine =
     if (isIncognito) BrowserTabEngine.WEBVIEW else BrowserTabEngine.GECKOVIEW
 
-internal enum class GeckoRenderEvent { LOAD_STARTED, FIRST_COMPOSITE, PROCESS_CRASHED, PROCESS_KILLED }
+internal enum class GeckoRenderEvent {
+    LOAD_STARTED,
+    FIRST_COMPOSITE,
+    PROCESS_CRASHED,
+    PROCESS_KILLED,
+    RECOVERY_STARTED,
+    RECOVERY_RELOAD_STARTED,
+    RECOVERY_FAILED
+}
 
-internal fun geckoRendererRecoveryRequired(event: GeckoRenderEvent): Boolean = when (event) {
-    GeckoRenderEvent.LOAD_STARTED, GeckoRenderEvent.FIRST_COMPOSITE -> false
-    GeckoRenderEvent.PROCESS_CRASHED, GeckoRenderEvent.PROCESS_KILLED -> true
+internal fun geckoRendererRecoveryRequired(
+    currentlyRequired: Boolean,
+    event: GeckoRenderEvent
+): Boolean = when (event) {
+    GeckoRenderEvent.FIRST_COMPOSITE -> false
+    GeckoRenderEvent.PROCESS_CRASHED,
+    GeckoRenderEvent.PROCESS_KILLED,
+    GeckoRenderEvent.RECOVERY_STARTED,
+    GeckoRenderEvent.RECOVERY_RELOAD_STARTED,
+    GeckoRenderEvent.RECOVERY_FAILED -> true
+    GeckoRenderEvent.LOAD_STARTED -> currentlyRequired
+}
+
+internal enum class GeckoSessionRecoveryAction {
+    IGNORE_IN_PROGRESS,
+    RELOAD_OPEN_SESSION,
+    REOPEN_AND_RESTORE_STATE,
+    REOPEN_AND_LOAD_CURRENT_URL,
+    REOPEN_BLANK_SESSION
+}
+
+internal fun geckoSessionRecoveryAction(
+    sessionIsOpen: Boolean,
+    recoveryInProgress: Boolean,
+    hasSavedState: Boolean,
+    hasCurrentUrl: Boolean
+): GeckoSessionRecoveryAction = when {
+    recoveryInProgress -> GeckoSessionRecoveryAction.IGNORE_IN_PROGRESS
+    sessionIsOpen -> GeckoSessionRecoveryAction.RELOAD_OPEN_SESSION
+    hasSavedState -> GeckoSessionRecoveryAction.REOPEN_AND_RESTORE_STATE
+    hasCurrentUrl -> GeckoSessionRecoveryAction.REOPEN_AND_LOAD_CURRENT_URL
+    else -> GeckoSessionRecoveryAction.REOPEN_BLANK_SESSION
 }
 
 /**

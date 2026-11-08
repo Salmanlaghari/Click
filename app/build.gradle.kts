@@ -78,6 +78,7 @@ android {
         }
         buildConfigField("String", "GROQ_API_KEY_OBF", "\"$groqKeyObf\"")
         buildConfigField("String", "GROQ_OBF_PAD", "\"$groqObfPad\"")
+        buildConfigField("String", "GECKOVIEW_VERSION", "\"${libs.versions.geckoview.get()}\"")
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables {

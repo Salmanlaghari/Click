@@ -20,14 +20,29 @@ internal enum class ClickCatLogCode(val label: String) {
     MODE_SWITCH_CANCELLED("Profile switch was cancelled"),
     MODE_CHANGED_WITHOUT_RESTART("Browser mode changed without a profile restart"),
     GECKO_RENDERER_CRASHED("GeckoView renderer crashed"),
-    GECKO_RENDERER_KILLED("GeckoView renderer was killed by the system")
+    GECKO_RENDERER_KILLED("GeckoView renderer was killed by the system"),
+    GECKO_RECOVERY_STARTED("GeckoView session recovery started"),
+    GECKO_RECOVERY_RELOAD_STARTED("Open GeckoView session reload started"),
+    GECKO_RECOVERY_SUCCEEDED("GeckoView renderer produced a recovery frame"),
+    GECKO_RECOVERY_FAILED("GeckoView session recovery failed")
 }
+
+internal data class ClickRendererDiagnosticDetails(
+    val tabId: String,
+    val url: String?,
+    val geckoViewVersion: String,
+    val androidVersion: String,
+    val availableMemoryMb: Long?,
+    val eventDetails: String,
+    val exceptionType: String? = null
+)
 
 internal data class ClickCatLogEntry(
     val timestampMillis: Long,
     val code: ClickCatLogCode,
     val fromMode: BrowserMode? = null,
-    val toMode: BrowserMode? = null
+    val toMode: BrowserMode? = null,
+    val rendererDetails: ClickRendererDiagnosticDetails? = null
 )
 
 internal data class PendingClickModeSwitch(
@@ -36,6 +51,36 @@ internal data class PendingClickModeSwitch(
 )
 
 internal const val CLICK_CAT_LOG_MAX_ENTRIES = 120
+internal const val CLICK_CAT_LOG_URL_MAX_CHARS = 512
+
+/** Keep renderer diagnostics useful while dropping credentials, query strings, and fragments. */
+internal fun sanitizeClickRendererUrl(rawUrl: String?): String? {
+    val raw = rawUrl?.trim()?.takeIf { it.isNotEmpty() } ?: return null
+    val parsed = runCatching { java.net.URI(raw) }.getOrNull() ?: return "unparseable-url"
+    val scheme = parsed.scheme?.lowercase() ?: return null
+    val safe = when (scheme) {
+        "http", "https", "moz-extension" -> {
+            val authority = parsed.rawAuthority?.substringAfterLast('@').orEmpty()
+            if (authority.isBlank()) return "$scheme:"
+            "$scheme://$authority${parsed.rawPath.orEmpty()}"
+        }
+        "about" -> "about:${parsed.rawSchemeSpecificPart.orEmpty().substringBefore('?')}"
+        else -> "$scheme:"
+    }
+    return safe.take(CLICK_CAT_LOG_URL_MAX_CHARS)
+}
+
+internal fun boundedClickRendererDetails(
+    details: ClickRendererDiagnosticDetails
+): ClickRendererDiagnosticDetails = details.copy(
+    tabId = details.tabId.take(64),
+    url = sanitizeClickRendererUrl(details.url),
+    geckoViewVersion = details.geckoViewVersion.take(80),
+    androidVersion = details.androidVersion.take(80),
+    availableMemoryMb = details.availableMemoryMb?.coerceAtLeast(0),
+    eventDetails = details.eventDetails.take(160),
+    exceptionType = details.exceptionType?.take(100)
+)
 
 internal fun appendClickCatLogEntry(
     existing: List<ClickCatLogEntry>,
@@ -56,9 +101,9 @@ internal fun resolveClickModeSwitchOutcome(
 
 /**
  * Local Click-authored troubleshooting events only. This is not Android logcat:
- * it does not read other apps/system logs, browser URLs, page contents, passwords,
- * cookies, crash stacks, or free-form exception messages. Storage is a bounded
- * private SharedPreferences ring and requires no new permissions.
+ * renderer events may store a sanitized URL and tab ID, but never page contents,
+ * passwords, cookies, crash stacks, or free-form exception messages. Storage is
+ * a bounded private SharedPreferences ring and requires no new permissions.
  */
 internal object ClickDiagnosticsLog {
     private const val PREFS_NAME = "click_local_catlog_v1"
@@ -70,14 +115,21 @@ internal object ClickDiagnosticsLog {
         context: Context,
         code: ClickCatLogCode,
         fromMode: BrowserMode? = null,
-        toMode: BrowserMode? = null
+        toMode: BrowserMode? = null,
+        rendererDetails: ClickRendererDiagnosticDetails? = null
     ) {
         runCatching {
             val prefs = prefs(context)
             val current = decodeEvents(prefs.getString(EVENTS_KEY, null))
             val next = appendClickCatLogEntry(
                 current,
-                ClickCatLogEntry(System.currentTimeMillis(), code, fromMode, toMode)
+                ClickCatLogEntry(
+                    System.currentTimeMillis(),
+                    code,
+                    fromMode,
+                    toMode,
+                    rendererDetails?.let(::boundedClickRendererDetails)
+                )
             )
             prefs.edit().putString(EVENTS_KEY, encodeEvents(next)).commit()
         }
@@ -138,19 +190,32 @@ internal object ClickDiagnosticsLog {
         Context.MODE_PRIVATE
     )
 
-    private fun encodeEvents(events: List<ClickCatLogEntry>): String = JSONArray().also { array ->
+    internal fun encodeEvents(events: List<ClickCatLogEntry>): String = JSONArray().also { array ->
         events.takeLast(CLICK_CAT_LOG_MAX_ENTRIES).forEach { event ->
-            array.put(
-                JSONObject()
+            val value = JSONObject()
                     .put("t", event.timestampMillis)
                     .put("c", event.code.name)
                     .put("f", event.fromMode?.name ?: JSONObject.NULL)
                     .put("to", event.toMode?.name ?: JSONObject.NULL)
-            )
+            event.rendererDetails?.let { rawDetails ->
+                val details = boundedClickRendererDetails(rawDetails)
+                value.put(
+                    "r",
+                    JSONObject()
+                        .put("tab", details.tabId)
+                        .put("url", details.url ?: JSONObject.NULL)
+                        .put("engine", details.geckoViewVersion)
+                        .put("android", details.androidVersion)
+                        .put("memoryMb", details.availableMemoryMb ?: JSONObject.NULL)
+                        .put("event", details.eventDetails)
+                        .put("exception", details.exceptionType ?: JSONObject.NULL)
+                )
+            }
+            array.put(value)
         }
     }.toString()
 
-    private fun decodeEvents(raw: String?): List<ClickCatLogEntry> {
+    internal fun decodeEvents(raw: String?): List<ClickCatLogEntry> {
         if (raw.isNullOrBlank()) return emptyList()
         val array = JSONArray(raw)
         return (0 until array.length()).mapNotNull { index ->
@@ -160,7 +225,20 @@ internal object ClickDiagnosticsLog {
                     timestampMillis = value.optLong("t"),
                     code = ClickCatLogCode.valueOf(value.getString("c")),
                     fromMode = optionalMode(value, "f"),
-                    toMode = optionalMode(value, "to")
+                    toMode = optionalMode(value, "to"),
+                    rendererDetails = value.optJSONObject("r")?.let { renderer ->
+                        boundedClickRendererDetails(
+                            ClickRendererDiagnosticDetails(
+                                tabId = renderer.optString("tab"),
+                                url = nullableString(renderer, "url"),
+                                geckoViewVersion = renderer.optString("engine"),
+                                androidVersion = renderer.optString("android"),
+                                availableMemoryMb = nullableLong(renderer, "memoryMb"),
+                                eventDetails = renderer.optString("event"),
+                                exceptionType = nullableString(renderer, "exception")
+                            )
+                        )
+                    }
                 )
             }.getOrNull()
         }.takeLast(CLICK_CAT_LOG_MAX_ENTRIES)
@@ -171,4 +249,10 @@ internal object ClickDiagnosticsLog {
         if (raw == null || raw == JSONObject.NULL) return null
         return runCatching { BrowserMode.valueOf(raw.toString()) }.getOrNull()
     }
+
+    private fun nullableString(value: JSONObject, key: String): String? =
+        value.opt(key)?.takeUnless { it == JSONObject.NULL }?.toString()
+
+    private fun nullableLong(value: JSONObject, key: String): Long? =
+        value.opt(key)?.takeUnless { it == JSONObject.NULL }?.toString()?.toLongOrNull()
 }
