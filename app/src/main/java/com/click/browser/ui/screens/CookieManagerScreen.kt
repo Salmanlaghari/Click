@@ -36,7 +36,7 @@ import kotlinx.coroutines.launch
  * with per-cookie delete, per-site clear, and clear-all. Values are shown
  * as-is — they are the user's own cookies.
  *
- * Cookies live in the per-engine WebView data directory, so this screen shows
+ * Cookies live in the per-profile WebView data directory, so this screen shows
  * the CURRENT profile's cookies only (Simple / Developer / Power / Advance).
  */
 @OptIn(ExperimentalMaterial3Api::class)
@@ -126,7 +126,7 @@ fun CookieManagerScreen(
                 shape = RoundedCornerShape(12.dp)
             )
             Text(
-                "🍪 $totalCookies cookies · current engine mode only",
+                "🍪 $totalCookies ${PrivateBrowsingDisclosurePolicy.cookieManagerScopeDescription}",
                 color = theme.onSurface.copy(alpha = 0.6f),
                 fontSize = 12.sp,
                 modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp)

@@ -637,7 +637,7 @@ fun SettingsScreen(
                 CardRow(theme) {
                     Text("Clear Browsing Data", color = theme.onSurface, fontWeight = FontWeight.SemiBold, fontSize = 14.sp)
                     Text(
-                        "Cookies and cache are separate per profile. History is shared by Simple, Developer and Power; Advance has separate app data.",
+                        "WebView cookies and cache are separate per profile. History is shared by Simple, Developer and Power; Advance has separate app data.",
                         fontSize = 11.sp, color = theme.onSurface.copy(alpha = 0.6f)
                     )
                     Spacer(Modifier.height(8.dp))
