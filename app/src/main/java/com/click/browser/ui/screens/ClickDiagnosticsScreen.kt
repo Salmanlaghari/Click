@@ -122,7 +122,7 @@ fun ClickDiagnosticsScreen(
                     modifier = Modifier.fillMaxWidth().weight(1f),
                     verticalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
-                    itemsIndexed(entries, key = { index, entry -> "${entry.timestampMillis}-${entry.code}-$index" }) { _, entry ->
+                    itemsIndexed(entries, key = { index, entry -> "${entry.timestampMillis}-${entry.code}-$index" }) { index, entry ->
                         Card(colors = CardDefaults.cardColors(containerColor = theme.surface)) {
                             Column(modifier = Modifier.fillMaxWidth().padding(12.dp)) {
                                 Text(
@@ -193,7 +193,9 @@ fun ClickDiagnosticsScreen(
                                         overflow = TextOverflow.Ellipsis
                                     )
                                     details.exceptionDetails?.let { stackDetails ->
-                                        var showStackDetails by remember(entry.timestampMillis) { mutableStateOf(false) }
+                                        var showStackDetails by remember("${entry.timestampMillis}-${entry.code}-$index") {
+                                            mutableStateOf(false)
+                                        }
                                         TextButton(onClick = { showStackDetails = !showStackDetails }) {
                                             Text(if (showStackDetails) "Hide exception frames" else "Show exception frames")
                                         }
