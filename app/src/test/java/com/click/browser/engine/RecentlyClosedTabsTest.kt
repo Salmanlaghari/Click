@@ -5,6 +5,7 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
+import kotlinx.coroutines.runBlocking
 
 class RecentlyClosedTabsTest {
     @Before
@@ -64,6 +65,65 @@ class RecentlyClosedTabsTest {
 
         assertEquals(10, RecentlyClosedTabs.list(BrowserMode.SIMPLE).size)
         assertEquals(10, RecentlyClosedTabs.list(BrowserMode.ADVANCED).size)
+    }
+
+    @Test
+    fun sharedHistoryClearRemovesAllSharedRecentlyClosedEntriesAfterStoredHistorySucceeds() = runBlocking {
+        RecentlyClosedTabs.push("Simple", "https://simple.example", false, BrowserMode.SIMPLE)
+        RecentlyClosedTabs.push("Developer", "https://developer.example", false, BrowserMode.DEVELOPER)
+        RecentlyClosedTabs.push("Power", "https://power.example", false, BrowserMode.HACK)
+        RecentlyClosedTabs.push("Advanced", "https://advanced.example", false, BrowserMode.ADVANCED)
+        val clearedModes = mutableListOf<BrowserMode>()
+
+        RecentlyClosedTabs.clearHistoryAndRecentlyClosedForMode(BrowserMode.DEVELOPER) { mode ->
+            assertEquals(4, RecentlyClosedTabs.list().size)
+            clearedModes.add(mode)
+        }
+
+        assertEquals(listOf(BrowserMode.DEVELOPER), clearedModes)
+        assertTrue(RecentlyClosedTabs.list(BrowserMode.SIMPLE).isEmpty())
+        assertTrue(RecentlyClosedTabs.list(BrowserMode.DEVELOPER).isEmpty())
+        assertTrue(RecentlyClosedTabs.list(BrowserMode.HACK).isEmpty())
+        assertEquals(listOf("https://advanced.example"), RecentlyClosedTabs.list(BrowserMode.ADVANCED).map { it.url })
+    }
+
+    @Test
+    fun advanceHistoryClearPreservesSharedProfileRecentlyClosedEntries() = runBlocking {
+        RecentlyClosedTabs.push("Simple", "https://simple.example", false, BrowserMode.SIMPLE)
+        RecentlyClosedTabs.push("Developer", "https://developer.example", false, BrowserMode.DEVELOPER)
+        RecentlyClosedTabs.push("Power", "https://power.example", false, BrowserMode.HACK)
+        RecentlyClosedTabs.push("Advanced", "https://advanced.example", false, BrowserMode.ADVANCED)
+
+        RecentlyClosedTabs.clearHistoryAndRecentlyClosedForMode(BrowserMode.ADVANCED) {
+            assertEquals(4, RecentlyClosedTabs.list().size)
+        }
+
+        assertEquals(listOf("https://simple.example"), RecentlyClosedTabs.list(BrowserMode.SIMPLE).map { it.url })
+        assertEquals(listOf("https://developer.example"), RecentlyClosedTabs.list(BrowserMode.DEVELOPER).map { it.url })
+        assertEquals(listOf("https://power.example"), RecentlyClosedTabs.list(BrowserMode.HACK).map { it.url })
+        assertTrue(RecentlyClosedTabs.list(BrowserMode.ADVANCED).isEmpty())
+    }
+
+    @Test
+    fun failedStoredHistoryClearPreservesRecentlyClosedEntries() {
+        RecentlyClosedTabs.push("Simple", "https://simple.example", false, BrowserMode.SIMPLE)
+        RecentlyClosedTabs.push("Developer", "https://developer.example", false, BrowserMode.DEVELOPER)
+        RecentlyClosedTabs.push("Power", "https://power.example", false, BrowserMode.HACK)
+        RecentlyClosedTabs.push("Advance", "https://advance.example", false, BrowserMode.ADVANCED)
+        var failed = false
+
+        try {
+            runBlocking {
+                RecentlyClosedTabs.clearHistoryAndRecentlyClosedForMode(BrowserMode.DEVELOPER) {
+                    throw IllegalStateException("storage clear failed")
+                }
+            }
+        } catch (_: IllegalStateException) {
+            failed = true
+        }
+
+        assertTrue(failed)
+        assertEquals(4, RecentlyClosedTabs.list().size)
     }
 
     @Test

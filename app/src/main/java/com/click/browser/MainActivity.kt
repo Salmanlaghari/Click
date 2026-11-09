@@ -647,8 +647,14 @@ class MainActivity : FragmentActivity() {
             } catch (_: Exception) { }
         }
         if (liveFlags.clearHistoryOnExit) {
+            val modeToClear = V9Engine.bootMode
             kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.IO).launch {
-                try { repository.clearHistory() } catch (_: Exception) { }
+                try {
+                    repository.clearHistoryFor(modeToClear)
+                    kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) {
+                        RecentlyClosedTabs.clearForHistoryScope(modeToClear)
+                    }
+                } catch (_: Exception) { }
             }
         }
         // Crash-restore: an explicit finish() (Exit menu / back-out) is a
@@ -1408,6 +1414,7 @@ class MainActivity : FragmentActivity() {
             // Tab-close snackbar with UNDO (Premium UI v2).
             val snackbarHostState = remember { SnackbarHostState() }
             var lastClosedTab by remember { mutableStateOf<ClosedTabUndo?>(null) }
+            var tabUndoSnackbarJob by remember { mutableStateOf<kotlinx.coroutines.Job?>(null) }
             var showRecentTabs by remember { mutableStateOf(false) }
             var showDeleteBrowsingConfirm by remember { mutableStateOf(false) }
             // Bumps every time a tab thumbnail is captured → recomposes the
@@ -1417,18 +1424,37 @@ class MainActivity : FragmentActivity() {
                 androidx.compose.runtime.mutableStateMapOf<String, String>()
             }
 
+            fun cancelPendingTabUndoSnackbar() {
+                tabUndoSnackbarJob?.cancel()
+                tabUndoSnackbarJob = null
+                val currentSnackbar = snackbarHostState.currentSnackbarData
+                if (currentSnackbar != null &&
+                    currentSnackbar.message == "Tab closed" &&
+                    currentSnackbar.actionLabel == "UNDO"
+                ) {
+                    currentSnackbar.dismiss()
+                }
+            }
+
             fun reopenClosedTab(closedTab: ClosedTab) {
                 if (closedTab.mode != activeMode) return
                 val pendingUndo = lastClosedTab
                 if (pendingUndo?.url == closedTab.url && pendingUndo.mode == closedTab.mode) {
                     lastClosedTab = null
-                    snackbarHostState.currentSnackbarData?.dismiss()
+                    cancelPendingTabUndoSnackbar()
                 }
                 tabs.add(
                     TabItem(url = closedTab.url, title = closedTab.title, initialEngine = closedTab.engine)
                 )
                 activeTabIndex = tabs.size - 1
                 RecentlyClosedTabs.remove(closedTab)
+            }
+
+            fun discardPendingTabUndoForMode(mode: BrowserMode) {
+                val pendingUndoMode = lastClosedTab?.mode ?: return
+                if (pendingUndoMode !in RecentlyClosedTabs.historyScopeModesFor(mode)) return
+                lastClosedTab = null
+                cancelPendingTabUndoSnackbar()
             }
 
             /**
@@ -1486,8 +1512,9 @@ class MainActivity : FragmentActivity() {
                     )
                 // Premium UI v2: "Tab closed" snackbar with UNDO (4s).
                 if (undoInfo != null) {
+                    cancelPendingTabUndoSnackbar()
                     lastClosedTab = undoInfo
-                    scope.launch {
+                    tabUndoSnackbarJob = scope.launch {
                         val result = snackbarHostState.showSnackbar(
                             message = "Tab closed",
                             actionLabel = "UNDO",
@@ -5593,6 +5620,15 @@ class MainActivity : FragmentActivity() {
                                         currentTab.url = clean
                                         currentTab.browserSession?.loadUrl(clean)
                                     },
+                                    onClearHistory = {
+                                        val modeToClear = activeMode
+                                        discardPendingTabUndoForMode(modeToClear)
+                                        scope.launch {
+                                            RecentlyClosedTabs.clearHistoryAndRecentlyClosedForMode(modeToClear) { historyMode ->
+                                                repository.clearHistoryFor(historyMode)
+                                            }
+                                        }
+                                    },
                                     onClose = { showHistory = false }
                                 )
                             }
@@ -6289,8 +6325,11 @@ class MainActivity : FragmentActivity() {
                                         currentTab.browserSession?.reload()
                                     },
                                     onClearHistoryForMode = { mode ->
+                                        discardPendingTabUndoForMode(mode)
                                         scope.launch {
-                                            repository.clearHistoryFor(mode)
+                                            RecentlyClosedTabs.clearHistoryAndRecentlyClosedForMode(mode) { historyMode ->
+                                                repository.clearHistoryFor(historyMode)
+                                            }
                                             val historyScope = if (mode == BrowserMode.ADVANCED) {
                                                 "Advance"
                                             } else {
@@ -6298,7 +6337,7 @@ class MainActivity : FragmentActivity() {
                                             }
                                             Toast.makeText(
                                                 this@MainActivity,
-                                                "$historyScope history cleared",
+                                                "$historyScope history and recently closed tabs cleared",
                                                 Toast.LENGTH_SHORT
                                             ).show()
                                         }
@@ -6331,20 +6370,26 @@ class MainActivity : FragmentActivity() {
                                         }
                                     },
                                     onClearAllCurrentMode = {
-                                        scope.launch { repository.clearHistory() }
+                                        val modeToClear = activeMode
+                                        discardPendingTabUndoForMode(modeToClear)
                                         CookieStore.clearAll()
                                         currentTab.webView?.clearCache(true)
-                                        requestGeckoModeDataClear(activeMode)
-                                        val historyScope = if (activeMode == BrowserMode.ADVANCED) {
+                                        requestGeckoModeDataClear(modeToClear)
+                                        val historyScope = if (modeToClear == BrowserMode.ADVANCED) {
                                             "Advance"
                                         } else {
                                             "Simple/Developer/Power shared"
                                         }
-                                        Toast.makeText(
-                                            this@MainActivity,
-                                            "WebView cookies/cache and Gecko profile data clear requested for ${activeMode.display().title}; $historyScope history cleared",
-                                            Toast.LENGTH_SHORT
-                                        ).show()
+                                        scope.launch {
+                                            RecentlyClosedTabs.clearHistoryAndRecentlyClosedForMode(modeToClear) { historyMode ->
+                                                repository.clearHistoryFor(historyMode)
+                                            }
+                                            Toast.makeText(
+                                                this@MainActivity,
+                                                "WebView cookies/cache and Gecko profile data clear requested for ${modeToClear.display().title}; $historyScope history and recently closed tabs cleared",
+                                                Toast.LENGTH_SHORT
+                                            ).show()
+                                        }
                                     },
                                     onOpenCookieManager = { showSettings = false; showCookieManager = true },
                                     onOpenSiteSettings = {
@@ -7860,11 +7905,13 @@ class MainActivity : FragmentActivity() {
                                     title = { Text("Delete browsing data?") },
                                     text = {
                                         Text(
-                                            "This closes all open tabs (including private tabs), clears Click history and the current mode's session snapshot, waits for WebView cookie removal and requests WebView cache/DOM-storage deletion. GeckoView's mode-specific purge is requested after its sessions close; GeckoView 153 exposes no completion result for this context-scoped API, so Click cannot verify that backend purge finished. A fresh blank tab will open."
+                                            "This closes all open tabs (including private tabs), clears Click history and recently closed tabs for the current history profile (shared by Simple/Developer/Power, separate in Advance), and clears the current mode's session snapshot. It waits for WebView cookie removal and requests WebView cache/DOM-storage deletion. GeckoView's mode-specific purge is requested after its sessions close; GeckoView 153 exposes no completion result for this context-scoped API, so Click cannot verify that backend purge finished. A fresh blank tab will open."
                                         )
                                     },
                                     confirmButton = {
                                         TextButton(onClick = {
+                                            val modeToClear = activeMode
+                                            discardPendingTabUndoForMode(modeToClear)
                                             scope.launch {
                                                 normalTabExtensionRouter?.closePopup()
                                                 tabs.forEach { tab ->
@@ -7888,9 +7935,11 @@ class MainActivity : FragmentActivity() {
                                                     tab.takePendingGeckoSession()?.let { pending -> runCatching { pending.close() } }
                                                 }
                                                 tabs.clear()
-                                                requestGeckoModeDataClear(activeMode)
-                                                repository.clearHistory()
-                                                com.click.browser.engine.SessionRestore.clearSession(this@MainActivity, activeMode)
+                                                requestGeckoModeDataClear(modeToClear)
+                                                RecentlyClosedTabs.clearHistoryAndRecentlyClosedForMode(modeToClear) { historyMode ->
+                                                    repository.clearHistoryFor(historyMode)
+                                                }
+                                                com.click.browser.engine.SessionRestore.clearSession(this@MainActivity, modeToClear)
                                                 kotlinx.coroutines.suspendCancellableCoroutine<Boolean> { continuation ->
                                                     android.webkit.CookieManager.getInstance().removeAllCookies { removed ->
                                                         if (continuation.isActive) {
@@ -7907,7 +7956,7 @@ class MainActivity : FragmentActivity() {
                                                 showDeleteBrowsingConfirm = false
                                                 Toast.makeText(
                                                     this@MainActivity,
-                                                    "History and WebView cookies cleared; DOM storage/cache deletion requested. Gecko profile purge requested; GeckoView 153 exposes no completion result.",
+                                                    "History and recently closed tabs cleared; WebView cookies cleared; DOM storage/cache deletion requested. Gecko profile purge requested; GeckoView 153 exposes no completion result.",
                                                     Toast.LENGTH_LONG
                                                 ).show()
                                             }
