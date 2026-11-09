@@ -39,6 +39,13 @@ private object GeckoNavigationGenerationIds {
     fun next(): Long = next.incrementAndGet()
 }
 
+/** A first-contentful-paint may reveal the page, but only for the active loading generation. */
+internal fun shouldCommitGeckoContentOnFirstPaint(
+    activeGeneration: Long,
+    paintedGeneration: Long,
+    isLoading: Boolean
+): Boolean = isLoading && activeGeneration == paintedGeneration
+
 /**
  * Gecko's page-stop callback has no URL or load ID. Keep a FIFO of page starts so
  * overlapping callbacks are attributed to the oldest unmatched main-frame load.
@@ -97,6 +104,11 @@ internal class GeckoNavigationTracker {
     /** Raw Gecko progress has no ID; only expose it when exactly one page start is pending. */
     fun progressGeneration(): Long? = synchronized(lock) {
         pending.singleOrNull()?.generation
+    }
+
+    /** Paint callbacks are session-level; use the latest load only for visible-content state. */
+    fun contentPaintGeneration(): Long? = synchronized(lock) {
+        active?.generation
     }
 
     fun complete(success: Boolean): GeckoNavigationCompletion? = synchronized(lock) {
