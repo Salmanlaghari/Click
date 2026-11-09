@@ -2429,8 +2429,8 @@ class MainActivity : FragmentActivity() {
                 }
             }
 
-            // Pull-to-refresh state for web pages.
-            var isRefreshing by remember { mutableStateOf(false) }
+            // Keep pull-to-refresh progress scoped to the tab that initiated it.
+            var refreshingTabIds by remember { mutableStateOf<Set<String>>(emptySet()) }
             // Per-site layout preference (true or false override, persisted per host).
             val desktopOverrides by repository.desktopOverridesFlow.collectAsState(initial = emptyMap())
             // Per-site settings overrides (persisted per host, per engine mode).
@@ -4105,6 +4105,11 @@ class MainActivity : FragmentActivity() {
                                                             currentTab.browserSession?.stopLoading()
                                                         }
                                                         if (stopResult.isSuccess) {
+                                                            refreshingTabIds = refreshingTabIdsAfterNavigationEnd(
+                                                                refreshingTabIds,
+                                                                completedTabId = currentTab.id,
+                                                                isCurrentNavigation = true
+                                                            )
                                                             currentTab.isPageLoading = false
                                                             if (currentTab.engine == BrowserTabEngine.GECKOVIEW) {
                                                                 if (!currentTab.hasCommittedContent) {
@@ -4230,14 +4235,24 @@ class MainActivity : FragmentActivity() {
                                         // without the PullToRefreshBox wrapper at all.
                                         @Composable
                                         fun RefreshablePage(content: @Composable () -> Unit) {
-                                            if (flagsUi.pullToRefreshEnabled) {
-                                                // Pull-to-refresh on web pages (real WebView.reload()).
+                                            val refreshAvailable = currentTab.browserSession != null &&
+                                                pullToRefreshGetUrl(currentTab.url) != null
+                                            if (flagsUi.pullToRefreshEnabled && refreshAvailable) {
+                                                // Start a fresh HTTP(S) GET; do not replay a prior form POST body.
                                                 // Nested-scroll aware: only triggers at the top of the page.
                                                 PullToRefreshBox(
-                                                    isRefreshing = isRefreshing,
+                                                    isRefreshing = currentTab.id in refreshingTabIds,
                                                     onRefresh = {
-                                                        isRefreshing = true
-                                                        currentTab.browserSession?.reload()
+                                                        val refreshTab = tabs.getOrNull(activeTabIndex) ?: currentTab
+                                                        val started = startPullToRefresh(
+                                                            navigation = refreshTab.browserSession,
+                                                            currentUrl = refreshTab.url
+                                                        ) {
+                                                            refreshingTabIds = refreshingTabIds + refreshTab.id
+                                                        }
+                                                        if (!started) {
+                                                            refreshingTabIds = refreshingTabIds - refreshTab.id
+                                                        }
                                                     },
                                                     modifier = Modifier.fillMaxSize()
                                                 ) {
@@ -4471,7 +4486,14 @@ class MainActivity : FragmentActivity() {
                                                                             if (createdGeckoSession != null && tab.browserSession !== createdGeckoSession) {
                                                                                 return@let
                                                                             }
-                                                                            if (!completion.isCurrent || tab.geckoNavigationGeneration != completion.generation) {
+                                                                            val isCurrentCompletion = completion.isCurrent &&
+                                                                                tab.geckoNavigationGeneration == completion.generation
+                                                                            refreshingTabIds = refreshingTabIdsAfterNavigationEnd(
+                                                                                refreshingTabIds,
+                                                                                completedTabId = tab.id,
+                                                                                isCurrentNavigation = isCurrentCompletion
+                                                                            )
+                                                                            if (!isCurrentCompletion) {
                                                                                 return@let
                                                                             }
                                                                             val outcome = completion.outcome
@@ -4507,6 +4529,11 @@ class MainActivity : FragmentActivity() {
                                                                     runOnUiThread {
                                                                         val failedTab = tabs.firstOrNull { it.id == tabId }
                                                                         if (failedTab != null) {
+                                                                            refreshingTabIds = refreshingTabIdsAfterNavigationEnd(
+                                                                                refreshingTabIds,
+                                                                                completedTabId = failedTab.id,
+                                                                                isCurrentNavigation = true
+                                                                            )
                                                                             failedTab.rendererRecoveryRequired =
                                                                                 geckoRendererRecoveryRequired(
                                                                                     failedTab.rendererRecoveryRequired,
@@ -4899,6 +4926,11 @@ class MainActivity : FragmentActivity() {
                                                                 super.onPageFinished(view, url)
                                                                 val finishedTab = view?.let { target -> tabs.firstOrNull { it.webView === target } } ?: return
                                                                 finishedTab.url = url ?: finishedTab.url
+                                                                refreshingTabIds = refreshingTabIdsAfterNavigationEnd(
+                                                                    refreshingTabIds,
+                                                                    completedTabId = finishedTab.id,
+                                                                    isCurrentNavigation = true
+                                                                )
                                                                 if (finishedTab.connectionSecurity.status == ConnectionSecurityStatus.CHECKING) {
                                                                     @Suppress("DEPRECATION")
                                                                     val certificate = view?.certificate
@@ -4919,7 +4951,6 @@ class MainActivity : FragmentActivity() {
                                                                 finishedTab.loadProgress = 100
                                                                 if (finishedTab === currentTab) {
                                                                     pageLoadTime = System.currentTimeMillis() - lastPageStart
-                                                                    if (isRefreshing) isRefreshing = false
                                                                 }
                                                                 if (pendingKeyboardDismissTabId == finishedTab.id) {
                                                                     pendingKeyboardDismissTabId = null
@@ -5243,6 +5274,11 @@ class MainActivity : FragmentActivity() {
                                                                 recordDevToolsLoadError(view, request, error)
                                                                 if (request?.isForMainFrame != true) return
                                                                 val failedTab = view?.let { target -> tabs.firstOrNull { it.webView === target } } ?: return
+                                                                refreshingTabIds = refreshingTabIdsAfterNavigationEnd(
+                                                                    refreshingTabIds,
+                                                                    completedTabId = failedTab.id,
+                                                                    isCurrentNavigation = true
+                                                                )
                                                                 failedTab.connectionSecurity = ConnectionSecurityPolicy.afterWebViewLoadError(
                                                                     failedTab.url, failedTab.connectionSecurity
                                                                 )
@@ -5262,6 +5298,11 @@ class MainActivity : FragmentActivity() {
                                                                     tabs.firstOrNull { it.webView === target }
                                                                 }
                                                                 if (affectedTab != null) {
+                                                                    refreshingTabIds = refreshingTabIdsAfterNavigationEnd(
+                                                                        refreshingTabIds,
+                                                                        completedTabId = affectedTab.id,
+                                                                        isCurrentNavigation = true
+                                                                    )
                                                                     affectedTab.connectionSecurity = ConnectionSecurityPolicy.fromWebView(
                                                                         url = affectedTab.url.takeIf { it.isNotBlank() }
                                                                             ?: view?.url ?: error?.url ?: "",
