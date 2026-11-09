@@ -108,4 +108,44 @@ class NormalTabExtensionSupportTest {
         )
         assertTrue(events.isEmpty())
     }
+
+    @Test
+    fun popupRetryRequiresTheSelectedOwnerAnAvailableActionAndSupportedPage() {
+        assertTrue(
+            canRetryNormalTabExtensionPopup(
+                isOwnerSelected = true,
+                hasAvailableAction = true,
+                currentUrl = "https://example.com/"
+            )
+        )
+        assertFalse(
+            canRetryNormalTabExtensionPopup(
+                isOwnerSelected = true,
+                hasAvailableAction = false,
+                currentUrl = "https://example.com/"
+            )
+        )
+        assertFalse(
+            canRetryNormalTabExtensionPopup(
+                isOwnerSelected = false,
+                hasAvailableAction = true,
+                currentUrl = "https://example.com/"
+            )
+        )
+        assertFalse(
+            canRetryNormalTabExtensionPopup(
+                isOwnerSelected = true,
+                hasAvailableAction = true,
+                currentUrl = "about:blank"
+            )
+        )
+        assertFalse(
+            canRetryNormalTabExtensionPopup(
+                isOwnerSelected = true,
+                hasAvailableAction = true,
+                currentUrl = "https://example.com/",
+                isPopupFailed = false
+            )
+        )
+    }
 }

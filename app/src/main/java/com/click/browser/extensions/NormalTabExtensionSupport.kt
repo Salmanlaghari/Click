@@ -58,6 +58,13 @@ internal fun dispatchNormalTabActionClick(
 internal fun supportsNormalTabExtensionActions(url: String): Boolean =
     runCatching { java.net.URI(url).scheme?.lowercase() in setOf("http", "https") }.getOrDefault(false)
 
+internal fun canRetryNormalTabExtensionPopup(
+    isOwnerSelected: Boolean,
+    hasAvailableAction: Boolean,
+    currentUrl: String,
+    isPopupFailed: Boolean = true
+): Boolean = isPopupFailed && isOwnerSelected && hasAvailableAction && supportsNormalTabExtensionActions(currentUrl)
+
 /**
  * Routes GeckoView's runtime-wide ActionDelegate callbacks to the currently active
  * normal tab. Action.click() does not carry a session ID, so the active-tab state
