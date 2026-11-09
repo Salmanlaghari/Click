@@ -175,6 +175,8 @@ class TabItem(
     internal val passwordAutofillPromptGuard =
         com.click.browser.engine.PasswordAccessPolicy.AutofillPromptGuard()
     var rendererRecoveryRequired by mutableStateOf(false)
+    var geckoNavigationFailure by mutableStateOf<GeckoNavigationFailure?>(null)
+    var geckoNavigationGeneration by mutableStateOf(-1L)
 }
 
 /** Keeps the same logical tab selected after a close, without indexing past the list. */
@@ -3834,14 +3836,38 @@ class MainActivity : FragmentActivity() {
                                                         currentTab.connectionSecurity = ConnectionSecurityPolicy.checking(destination)
                                                         currentTab.browserSession?.loadUrl(destination)
                                                     },
-                                                    onReload = { currentTab.browserSession?.reload() },
+                                                    onReload = {
+                                                        val failure = currentTab.geckoNavigationFailure
+                                                        if (currentTab.engine == BrowserTabEngine.GECKOVIEW && failure != null) {
+                                                            failure.retryUrl?.let { retryUrl ->
+                                                                currentTab.geckoNavigationFailure = null
+                                                                currentTab.browserSession?.loadUrl(retryUrl)
+                                                            }
+                                                        } else {
+                                                            currentTab.browserSession?.reload()
+                                                        }
+                                                    },
+                                                    canReload = currentTab.engine != BrowserTabEngine.GECKOVIEW ||
+                                                        currentTab.geckoNavigationFailure == null ||
+                                                        currentTab.geckoNavigationFailure?.retryUrl != null,
                                                     onStopLoading = {
                                                         val stopResult = runCatching {
                                                             currentTab.browserSession?.stopLoading()
                                                         }
                                                         if (stopResult.isSuccess) {
                                                             currentTab.isPageLoading = false
-                                                            currentTab.hasCommittedContent = true
+                                                            if (currentTab.engine == BrowserTabEngine.GECKOVIEW) {
+                                                                if (!currentTab.hasCommittedContent) {
+                                                                    currentTab.geckoNavigationFailure = geckoNavigationStopOutcome(
+                                                                        success = false,
+                                                                        failedUrl = currentTab.url,
+                                                                        safeRetryUrl = null,
+                                                                        wasCancelled = true
+                                                                    ).failure
+                                                                }
+                                                            } else {
+                                                                currentTab.hasCommittedContent = true
+                                                            }
                                                             currentTab.loadProgress = 0
                                                         } else {
                                                             stopResult.exceptionOrNull()?.let { error ->
@@ -4122,12 +4148,58 @@ class MainActivity : FragmentActivity() {
                                                                     if (android.os.Looper.myLooper() == android.os.Looper.getMainLooper()) update()
                                                                     else runOnUiThread { update() }
                                                                 },
-                                                                onProgressChanged = { progress, loading ->
-                                                                    tabs.firstOrNull { it.id == tabId }?.let { tab ->
-                                                                        tab.loadProgress = progress
-                                                                        tab.isPageLoading = loading
-                                                                        if (!loading) tab.hasCommittedContent = true
+                                                                onNavigationStarted = { url, generation ->
+                                                                    val update = {
+                                                                        tabs.firstOrNull { it.id == tabId }?.let { tab ->
+                                                                            if (createdGeckoSession != null && tab.browserSession !== createdGeckoSession) {
+                                                                                return@let
+                                                                            }
+                                                                            if (generation < tab.geckoNavigationGeneration) return@let
+                                                                            tab.geckoNavigationGeneration = generation
+                                                                            tab.url = url
+                                                                            tab.loadProgress = 0
+                                                                            tab.isPageLoading = true
+                                                                            tab.hasCommittedContent = false
+                                                                            tab.geckoNavigationFailure = null
+                                                                        }
                                                                     }
+                                                                    if (android.os.Looper.myLooper() == android.os.Looper.getMainLooper()) update()
+                                                                    else runOnUiThread { update() }
+                                                                },
+                                                                onProgressChanged = { progress, generation ->
+                                                                    val update = {
+                                                                        tabs.firstOrNull { it.id == tabId }?.let { tab ->
+                                                                            if (createdGeckoSession != null && tab.browserSession !== createdGeckoSession) {
+                                                                                return@let
+                                                                            }
+                                                                            if (tab.geckoNavigationGeneration != generation || !tab.isPageLoading) {
+                                                                                return@let
+                                                                            }
+                                                                            tab.loadProgress = progress
+                                                                        }
+                                                                    }
+                                                                    if (android.os.Looper.myLooper() == android.os.Looper.getMainLooper()) update()
+                                                                    else runOnUiThread { update() }
+                                                                },
+                                                                onNavigationStopped = { completion ->
+                                                                    val update = {
+                                                                        tabs.firstOrNull { it.id == tabId }?.let { tab ->
+                                                                            if (createdGeckoSession != null && tab.browserSession !== createdGeckoSession) {
+                                                                                return@let
+                                                                            }
+                                                                            if (!completion.isCurrent || tab.geckoNavigationGeneration != completion.generation) {
+                                                                                return@let
+                                                                            }
+                                                                            val outcome = completion.outcome
+                                                                            tab.url = completion.url
+                                                                            tab.isPageLoading = false
+                                                                            tab.loadProgress = if (outcome.commitsContent) 100 else 0
+                                                                            tab.hasCommittedContent = outcome.commitsContent
+                                                                            tab.geckoNavigationFailure = outcome.failure
+                                                                        }
+                                                                    }
+                                                                    if (android.os.Looper.myLooper() == android.os.Looper.getMainLooper()) update()
+                                                                    else runOnUiThread { update() }
                                                                 },
                                                                 onCanGoBackChanged = { canGoBack ->
                                                                     tabs.firstOrNull { it.id == tabId }?.canGoBack = canGoBack
@@ -5288,7 +5360,18 @@ class MainActivity : FragmentActivity() {
                                                         onCancel = {
                                                             currentTab.browserSession?.stopLoading()
                                                             currentTab.isPageLoading = false
-                                                            currentTab.hasCommittedContent = true
+                                                            if (currentTab.engine == BrowserTabEngine.GECKOVIEW) {
+                                                                if (!currentTab.hasCommittedContent) {
+                                                                    currentTab.geckoNavigationFailure = geckoNavigationStopOutcome(
+                                                                        success = false,
+                                                                        failedUrl = currentTab.url,
+                                                                        safeRetryUrl = null,
+                                                                        wasCancelled = true
+                                                                    ).failure
+                                                                }
+                                                            } else {
+                                                                currentTab.hasCommittedContent = true
+                                                            }
                                                             currentTab.loadProgress = 0
                                                         }
                                                     )
@@ -5340,6 +5423,62 @@ class MainActivity : FragmentActivity() {
                                                                     currentTab.browserSession?.reload()
                                                                 }) {
                                                                     Text("Reload")
+                                                                }
+                                                            }
+                                                        }
+                                                    }
+                                                }
+                                                val navigationFailure = currentTab.geckoNavigationFailure
+                                                if (currentTab.engine == BrowserTabEngine.GECKOVIEW &&
+                                                    !currentTab.rendererRecoveryRequired && navigationFailure != null
+                                                ) {
+                                                    Surface(
+                                                        modifier = Modifier
+                                                            .align(Alignment.Center)
+                                                            .padding(horizontal = 20.dp)
+                                                            .fillMaxWidth(),
+                                                        shape = RoundedCornerShape(20.dp),
+                                                        color = theme.surface,
+                                                        tonalElevation = 8.dp
+                                                    ) {
+                                                        Column(
+                                                            modifier = Modifier.padding(20.dp),
+                                                            verticalArrangement = Arrangement.spacedBy(10.dp)
+                                                        ) {
+                                                            Text(
+                                                                if (navigationFailure.wasCancelled) "Loading stopped" else "Page couldn't load",
+                                                                color = theme.onSurface,
+                                                                fontWeight = FontWeight.SemiBold
+                                                            )
+                                                            Text(
+                                                                if (navigationFailure.wasCancelled) {
+                                                                    "This page did not finish loading, so Click hasn't marked it as loaded. You can go back, open Home, or enter another address."
+                                                                } else {
+                                                                    "The page did not finish loading. Check your connection or return to the previous page."
+                                                                },
+                                                                color = theme.onSurface.copy(alpha = 0.8f)
+                                                            )
+                                                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                                                if (currentTab.canGoBack) {
+                                                                    TextButton(onClick = {
+                                                                        currentTab.browserSession.goBackIfPossible()
+                                                                    }) {
+                                                                        Text("Back")
+                                                                    }
+                                                                }
+                                                                navigationFailure.retryUrl?.let { retryUrl ->
+                                                                    Button(onClick = {
+                                                                        currentTab.geckoNavigationFailure = null
+                                                                        currentTab.browserSession?.loadUrl(retryUrl)
+                                                                    }) {
+                                                                        Text("Retry")
+                                                                    }
+                                                                }
+                                                                TextButton(onClick = {
+                                                                    currentTab.geckoNavigationFailure = null
+                                                                    currentTab.browserSession?.loadUrl(homeUrl())
+                                                                }) {
+                                                                    Text("Home")
                                                                 }
                                                             }
                                                         }

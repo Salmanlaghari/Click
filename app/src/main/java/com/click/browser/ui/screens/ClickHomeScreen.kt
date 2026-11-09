@@ -1568,6 +1568,7 @@ fun CompactBrowseBar(
     onNavigate: (String) -> Unit,
     onReload: () -> Unit,
     onStopLoading: () -> Unit,
+    canReload: Boolean = true,
     onNewTab: () -> Unit,
     onMenuClick: () -> Unit,
     onSiteSettingsClick: () -> Unit = {},
@@ -1682,6 +1683,7 @@ fun CompactBrowseBar(
                         CompactBrowsePrimaryAction.RELOAD -> onReload
                         CompactBrowsePrimaryAction.STOP -> onStopLoading
                     },
+                    enabled = primaryAction != CompactBrowsePrimaryAction.RELOAD || canReload,
                     modifier = Modifier.size(40.dp)
                 ) {
                     Icon(
@@ -1692,10 +1694,12 @@ fun CompactBrowseBar(
                         },
                         contentDescription = when (primaryAction) {
                             CompactBrowsePrimaryAction.NEW_TAB -> "New tab"
-                            CompactBrowsePrimaryAction.RELOAD -> "Reload"
+                            CompactBrowsePrimaryAction.RELOAD -> if (canReload) "Reload" else "Reload unavailable for this request"
                             CompactBrowsePrimaryAction.STOP -> "Stop loading"
                         },
-                        tint = theme.onTopBar,
+                        tint = if (primaryAction == CompactBrowsePrimaryAction.RELOAD && !canReload) {
+                            theme.onTopBar.copy(alpha = 0.38f)
+                        } else theme.onTopBar,
                         modifier = Modifier.size(22.dp)
                     )
                 }
