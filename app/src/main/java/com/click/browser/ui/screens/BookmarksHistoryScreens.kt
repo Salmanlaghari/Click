@@ -458,10 +458,10 @@ fun HistoryScreen(
     repository: BrowserRepository,
     theme: ModeTheme,
     onNavigate: (String) -> Unit,
+    onClearHistory: () -> Unit,
     onClose: () -> Unit
 ) {
     val history by repository.historyFlow.collectAsState(initial = emptyList())
-    val coroutineScope = rememberCoroutineScope()
 
     Scaffold(
         containerColor = theme.background,
@@ -475,11 +475,7 @@ fun HistoryScreen(
                 },
                 actions = {
                     if (history.isNotEmpty()) {
-                        IconButton(onClick = {
-                            coroutineScope.launch {
-                                repository.clearHistory()
-                            }
-                        }) {
+                        IconButton(onClick = onClearHistory) {
                             Icon(Icons.Default.Delete, contentDescription = "Clear History", tint = theme.primary)
                         }
                     }

@@ -267,10 +267,8 @@ class BrowserRepository(private val context: Context) {
     }
 
     /**
-     * Clears the history of ANY mode's isolated profile store — no mode
-     * switch or app restart needed (history lives in DataStore, not the
-     * WebView data directory). Respects 4-mode isolation: only the chosen
-     * mode's history is touched.
+     * Clears the history store selected for [mode] without a mode switch or app restart.
+     * Simple, Developer, and Power share one store; Advance uses its isolated store.
      */
     suspend fun clearHistoryFor(mode: BrowserMode) {
         context.profileDataStoreFor(mode).edit { preferences ->

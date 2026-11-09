@@ -60,6 +60,27 @@ object RecentlyClosedTabs {
         else stack.removeAll { it.mode == mode }
     }
 
+    /** ProfileData.kt maps Simple, Developer and Power to one history store; Advance is isolated. */
+    internal fun historyScopeModesFor(mode: BrowserMode): List<BrowserMode> = when (mode) {
+        BrowserMode.SIMPLE, BrowserMode.DEVELOPER, BrowserMode.HACK ->
+            listOf(BrowserMode.SIMPLE, BrowserMode.DEVELOPER, BrowserMode.HACK)
+        BrowserMode.ADVANCED -> listOf(BrowserMode.ADVANCED)
+    }
+
+    @Synchronized
+    internal fun clearForHistoryScope(mode: BrowserMode) {
+        historyScopeModesFor(mode).forEach { clear(it) }
+    }
+
+    /** Keep recent URLs if persisted history clearing fails; otherwise clear the same history scope. */
+    internal suspend fun clearHistoryAndRecentlyClosedForMode(
+        mode: BrowserMode,
+        clearStoredHistory: suspend (BrowserMode) -> Unit
+    ) {
+        clearStoredHistory(mode)
+        clearForHistoryScope(mode)
+    }
+
     private fun isHttpOrHttps(url: String): Boolean =
         url.startsWith("http://", ignoreCase = true) || url.startsWith("https://", ignoreCase = true)
 }
