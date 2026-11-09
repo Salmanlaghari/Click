@@ -53,6 +53,11 @@ fun BrowserMenuSheet(
     theme: ModeTheme,
     mode: BrowserMode,
     isDesktopForSite: Boolean,
+    hasCurrentPage: Boolean,
+    isPageLoading: Boolean,
+    canReload: Boolean,
+    onReload: () -> Unit,
+    onStopLoading: () -> Unit,
     visibleItems: List<MenuCustomization.MenuItemId> =
         MenuCustomization.effectiveVisibleItems(
             MenuCustomization.DEFAULT_ORDER,
@@ -119,6 +124,19 @@ fun BrowserMenuSheet(
                             theme = theme, icon = Icons.Default.FilterNone,
                             label = "Tabs", onClick = onOpenTabSwitcher
                         )
+                        MenuCustomization.MenuItemId.RELOAD -> {
+                            if (hasCurrentPage) MenuRow(
+                                theme = theme,
+                                icon = if (isPageLoading) Icons.Default.Close else Icons.Default.Refresh,
+                                label = when {
+                                    isPageLoading -> "Stop loading"
+                                    canReload -> "Reload"
+                                    else -> "Can't safely reload. Go back or enter an address."
+                                },
+                                enabled = isPageLoading || canReload,
+                                onClick = if (isPageLoading) onStopLoading else onReload
+                            )
+                        }
                         MenuCustomization.MenuItemId.HISTORY -> {
                             MenuDivider(theme)
                             MenuRow(
@@ -226,26 +244,27 @@ private fun MenuRow(
     icon: ImageVector,
     label: String,
     trailing: @Composable (() -> Unit)? = null,
+    enabled: Boolean = true,
     onClick: () -> Unit
 ) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .clickable(onClick = onClick)
+            .clickable(enabled = enabled, onClick = onClick)
             .padding(horizontal = 20.dp, vertical = 13.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
         Icon(
             icon,
             contentDescription = null,
-            tint = theme.onSurface.copy(alpha = 0.75f),
+            tint = theme.onSurface.copy(alpha = if (enabled) 0.75f else 0.34f),
             modifier = Modifier.size(22.dp)
         )
         Spacer(modifier = Modifier.width(18.dp))
         Text(
             text = label,
             fontSize = 15.sp,
-            color = theme.onSurface,
+            color = theme.onSurface.copy(alpha = if (enabled) 1f else 0.45f),
             modifier = Modifier.weight(1f)
         )
         trailing?.invoke()

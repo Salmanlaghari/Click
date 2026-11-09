@@ -20,6 +20,7 @@ object MenuCustomization {
         NEW_TAB("New tab"),
         NEW_PRIVATE_TAB("New Private tab"),
         TABS("Tabs"),
+        RELOAD("Reload"),
         HISTORY("History"),
         DELETE_DATA("Delete browsing data"),
         DOWNLOADS("Downloads"),

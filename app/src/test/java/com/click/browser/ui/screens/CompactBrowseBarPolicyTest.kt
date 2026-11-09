@@ -25,6 +25,35 @@ class CompactBrowseBarPolicyTest {
     }
 
     @Test
+    fun idleHomeUsesNewTabInsteadOfReloadInEveryMode() {
+        BrowserMode.values().forEach { mode ->
+            assertEquals(
+                "Home should offer New Tab rather than Reload in $mode",
+                CompactBrowsePrimaryAction.NEW_TAB,
+                compactBrowsePrimaryAction(
+                    activeMode = mode,
+                    isPageLoading = false,
+                    isHomePage = true
+                )
+            )
+        }
+    }
+
+    @Test
+    fun loadingHomeStillOffersStop() {
+        BrowserMode.values().forEach { mode ->
+            assertEquals(
+                CompactBrowsePrimaryAction.STOP,
+                compactBrowsePrimaryAction(
+                    activeMode = mode,
+                    isPageLoading = true,
+                    isHomePage = true
+                )
+            )
+        }
+    }
+
+    @Test
     fun idleOtherModesKeepTheirReloadAction() {
         BrowserMode.values().filterNot { it == BrowserMode.SIMPLE }.forEach { mode ->
             assertEquals(
@@ -33,5 +62,45 @@ class CompactBrowseBarPolicyTest {
                 compactBrowsePrimaryAction(mode, isPageLoading = false)
             )
         }
+    }
+
+    @Test
+    fun bottomAddressBarInsetShrinksWhenToolbarAutoHides() {
+        assertEquals(
+            132,
+            browseBottomChromeInsetDp(
+                showBrowseBottomNav = true,
+                bottomAddressBarEnabled = true,
+                toolbarVisible = true
+            )
+        )
+        assertEquals(
+            64,
+            browseBottomChromeInsetDp(
+                showBrowseBottomNav = true,
+                bottomAddressBarEnabled = true,
+                toolbarVisible = false
+            )
+        )
+    }
+
+    @Test
+    fun bottomChromeInsetIsZeroWithoutBrowseNavigationAndNavOnlyOtherwise() {
+        assertEquals(
+            0,
+            browseBottomChromeInsetDp(
+                showBrowseBottomNav = false,
+                bottomAddressBarEnabled = true,
+                toolbarVisible = true
+            )
+        )
+        assertEquals(
+            64,
+            browseBottomChromeInsetDp(
+                showBrowseBottomNav = true,
+                bottomAddressBarEnabled = false,
+                toolbarVisible = true
+            )
+        )
     }
 }
