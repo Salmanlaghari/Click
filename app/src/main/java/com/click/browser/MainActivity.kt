@@ -4244,14 +4244,18 @@ class MainActivity : FragmentActivity() {
                                                     isRefreshing = currentTab.id in refreshingTabIds,
                                                     onRefresh = {
                                                         val refreshTab = tabs.getOrNull(activeTabIndex) ?: currentTab
-                                                        val started = startPullToRefresh(
-                                                            navigation = refreshTab.browserSession,
-                                                            currentUrl = refreshTab.url
-                                                        ) {
-                                                            refreshingTabIds = refreshingTabIds + refreshTab.id
-                                                        }
-                                                        if (!started) {
-                                                            refreshingTabIds = refreshingTabIds - refreshTab.id
+                                                        var refreshDispatchAccepted = false
+                                                        try {
+                                                            refreshDispatchAccepted = startPullToRefresh(
+                                                                navigation = refreshTab.browserSession,
+                                                                currentUrl = refreshTab.url
+                                                            ) {
+                                                                refreshingTabIds = refreshingTabIds + refreshTab.id
+                                                            }
+                                                        } finally {
+                                                            if (!refreshDispatchAccepted) {
+                                                                refreshingTabIds = refreshingTabIds - refreshTab.id
+                                                            }
                                                         }
                                                     },
                                                     modifier = Modifier.fillMaxSize()

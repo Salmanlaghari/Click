@@ -21,7 +21,11 @@ internal fun startPullToRefresh(
     return try {
         tabNavigation.loadUrl(targetUrl)
         true
-    } catch (_: Exception) {
+    } catch (_: IllegalArgumentException) {
+        // The browser adapter rejected this GET synchronously; let unrelated failures surface.
+        false
+    } catch (_: IllegalStateException) {
+        // A tab session can close between the refresh gesture and dispatch.
         false
     }
 }

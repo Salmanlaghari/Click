@@ -38,6 +38,38 @@ class PullToRefreshPolicyTest {
     }
 
     @Test
+    fun handlesExpectedSynchronousDispatchFailures() {
+        listOf<RuntimeException>(
+            IllegalArgumentException("invalid navigation target"),
+            IllegalStateException("session closed")
+        ).forEach { failure ->
+            var refreshing = false
+            val navigation = RecordingNavigation { refreshing }.apply {
+                loadFailure = failure
+            }
+
+            val started = startPullToRefresh(navigation, "https://example.test/page") {
+                refreshing = true
+            }
+
+            assertFalse(started)
+            assertTrue(navigation.wasRefreshingWhenLoadStarted)
+            assertEquals(1, navigation.loadAttempts)
+            assertNull(navigation.loadedUrl)
+            assertEquals(0, navigation.reloadCalls)
+        }
+    }
+
+    @Test(expected = UnsupportedOperationException::class)
+    fun doesNotSuppressUnexpectedDispatchFailures() {
+        val navigation = RecordingNavigation { false }.apply {
+            loadFailure = UnsupportedOperationException("unexpected navigation failure")
+        }
+
+        startPullToRefresh(navigation, "https://example.test/page") {}
+    }
+
+    @Test
     fun navigationCompletionClearsOnlyItsCurrentRefreshTab() {
         val refreshingTabs = setOf("tab-a", "tab-b")
 
@@ -65,14 +97,18 @@ class PullToRefreshPolicyTest {
         var loadedUrl: String? = null
         var reloadCalls = 0
         var wasRefreshingWhenLoadStarted = false
+        var loadFailure: RuntimeException? = null
+        var loadAttempts = 0
 
         override fun canGoBack(): Boolean = false
         override fun goBack() = Unit
         override fun canGoForward(): Boolean = false
         override fun goForward() = Unit
         override fun loadUrl(url: String) {
-            loadedUrl = url
+            loadAttempts += 1
             wasRefreshingWhenLoadStarted = isRefreshing()
+            loadFailure?.let { throw it }
+            loadedUrl = url
         }
         override fun reload() {
             reloadCalls += 1
