@@ -15,6 +15,22 @@ internal data class AiTabComparisonExcerpt(
     val text: String
 )
 
+/** Invalidates late selected-tab capture results after cancellation or dismissal. */
+internal class AiTabComparisonCaptureGate {
+    private var generation = 0L
+
+    fun begin(): Long {
+        generation += 1L
+        return generation
+    }
+
+    fun isCurrent(token: Long): Boolean = token == generation
+
+    fun invalidate() {
+        generation += 1L
+    }
+}
+
 /** Privacy, eligibility, and prompt rules for explicit selected-open-tab comparisons. */
 internal object AiTabComparisonPolicy {
     const val MIN_SELECTED_TABS = 2
