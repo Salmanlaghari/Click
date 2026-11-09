@@ -3,8 +3,8 @@ package com.click.browser.engine
 import androidx.compose.ui.graphics.Color
 
 /**
- * Mode-aware light appearance. The selected light palette stays consistent across all modes;
- * labels and capabilities provide mode identity without changing the color system.
+ * Mode-aware, light-only appearance. Browser modes keep distinct warm accents while sharing
+ * the selected light surface palette.
  */
 data class ModeTheme(
     val mode: BrowserMode,
@@ -40,8 +40,6 @@ private data class LightPalette(
     val background: Color,
     val surface: Color,
     val surfaceVariant: Color,
-    val primary: Color,
-    val secondary: Color,
     val onBackground: Color,
     val onSurface: Color,
     val topBarBg: Color,
@@ -49,8 +47,13 @@ private data class LightPalette(
     val glow: Color
 )
 
+private data class ModeAccent(
+    val primary: Color,
+    val secondary: Color
+)
+
 object ModeThemes {
-    /** Dark mode remains unsupported; every mode uses the selected light palette without a mode tint. */
+    /** All selectable palettes remain light and warm; mode accents stay in the bronze/brown family. */
     @Suppress("UNUSED_PARAMETER")
     fun forMode(
         mode: BrowserMode,
@@ -62,49 +65,60 @@ object ModeThemes {
                 background = Color(0xFFFBF8F1),
                 surface = Color(0xFFFFFEFB),
                 surfaceVariant = Color(0xFFF2EBDD),
-                primary = Color(0xFF66533F),
-                secondary = Color(0xFFAA865C),
                 onBackground = Color(0xFF302A22),
                 onSurface = Color(0xFF393228),
                 topBarBg = Color(0xFFFFFEFB),
                 onTopBar = Color(0xFF514534),
                 glow = Color(0xFFC7AE8A)
             )
+            // Keep the existing saved IDs/options while bringing their surfaces into the warm-ivory family.
             LightThemeVariant.SAGE -> LightPalette(
-                background = Color(0xFFF2F6EF),
-                surface = Color(0xFFFFFEFC),
-                surfaceVariant = Color(0xFFE3ECDF),
-                primary = Color(0xFF46664B),
-                secondary = Color(0xFF78906B),
-                onBackground = Color(0xFF263329),
-                onSurface = Color(0xFF303A31),
-                topBarBg = Color(0xFFFFFEFC),
-                onTopBar = Color(0xFF3E5A42),
-                glow = Color(0xFFB7CBB1)
+                background = Color(0xFFF8F7F0),
+                surface = Color(0xFFFFFEFA),
+                surfaceVariant = Color(0xFFEFEEE4),
+                onBackground = Color(0xFF302A22),
+                onSurface = Color(0xFF393228),
+                topBarBg = Color(0xFFFFFEFA),
+                onTopBar = Color(0xFF514534),
+                glow = Color(0xFFC5B492)
             )
             LightThemeVariant.SKY -> LightPalette(
-                background = Color(0xFFF0F6FC),
-                surface = Color(0xFFFEFFFF),
-                surfaceVariant = Color(0xFFE0EBF5),
-                primary = Color(0xFF3C6485),
-                secondary = Color(0xFF6E9AB7),
-                onBackground = Color(0xFF243240),
-                onSurface = Color(0xFF2C3D4C),
-                topBarBg = Color(0xFFFEFFFF),
-                onTopBar = Color(0xFF355B79),
-                glow = Color(0xFFB5D2E6)
+                background = Color(0xFFF7F7F2),
+                surface = Color(0xFFFFFEFA),
+                surfaceVariant = Color(0xFFEEEDE5),
+                onBackground = Color(0xFF302A22),
+                onSurface = Color(0xFF393228),
+                topBarBg = Color(0xFFFFFEFA),
+                onTopBar = Color(0xFF514534),
+                glow = Color(0xFFC2B69A)
             )
             LightThemeVariant.ROSE -> LightPalette(
-                background = Color(0xFFFAF1F3),
-                surface = Color(0xFFFFFEFE),
-                surfaceVariant = Color(0xFFF1E1E5),
-                primary = Color(0xFF894D5B),
-                secondary = Color(0xFFB17683),
-                onBackground = Color(0xFF35252A),
-                onSurface = Color(0xFF403036),
-                topBarBg = Color(0xFFFFFEFE),
-                onTopBar = Color(0xFF784450),
-                glow = Color(0xFFDAB3BC)
+                background = Color(0xFFFAF6F0),
+                surface = Color(0xFFFFFEFB),
+                surfaceVariant = Color(0xFFF1E8DE),
+                onBackground = Color(0xFF302A22),
+                onSurface = Color(0xFF393228),
+                topBarBg = Color(0xFFFFFEFB),
+                onTopBar = Color(0xFF514534),
+                glow = Color(0xFFD0B098)
+            )
+        }
+        val accent = when (mode) {
+            BrowserMode.SIMPLE -> ModeAccent(
+                primary = Color(0xFF66533F),
+                secondary = Color(0xFF8B6A46)
+            )
+            BrowserMode.DEVELOPER -> ModeAccent(
+                primary = Color(0xFF70563A),
+                secondary = Color(0xFF8D6B46)
+            )
+            BrowserMode.HACK -> ModeAccent(
+                primary = Color(0xFF81552F),
+                secondary = Color(0xFF935F33)
+            )
+            BrowserMode.ADVANCED -> ModeAccent(
+                primary = Color(0xFF594738),
+                secondary = Color(0xFF80684E)
             )
         }
 
@@ -114,13 +128,13 @@ object ModeThemes {
             background = palette.background,
             surface = palette.surface,
             surfaceVariant = palette.surfaceVariant,
-            primary = palette.primary,
-            secondary = palette.secondary,
+            primary = accent.primary,
+            secondary = accent.secondary,
             onBackground = palette.onBackground,
             onSurface = palette.onSurface,
             topBarBg = palette.topBarBg,
             onTopBar = palette.onTopBar,
-            modeAccent = palette.primary,
+            modeAccent = accent.primary,
             glow = palette.glow,
             modePillText = when (mode) {
                 BrowserMode.SIMPLE -> "SIMPLE MODE"
