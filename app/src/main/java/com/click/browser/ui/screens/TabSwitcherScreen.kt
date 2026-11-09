@@ -74,7 +74,7 @@ import kotlinx.coroutines.launch
  * Visual tab switcher — Mises/Chrome-style card grid.
  *
  * - 2-column grid of cards with scaled page thumbnails (captured once per
- *   page finish into [TabThumbnailStore], max 360px wide — never live).
+ *   rendered page into [TabThumbnailStore], max 360x800 — never live).
  * - Top: tab count badge + "Search tabs" filter (title/URL).
  * - Bottom: + adds a new blank tab to the overview so its card can be selected.
  * - Incognito tabs never have thumbnails: lock placeholder instead.
