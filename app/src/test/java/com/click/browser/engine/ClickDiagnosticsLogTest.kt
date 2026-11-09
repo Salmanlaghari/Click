@@ -1,8 +1,10 @@
 package com.click.browser.engine
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class ClickDiagnosticsLogTest {
@@ -41,6 +43,43 @@ class ClickDiagnosticsLogTest {
                 .map { it.name }
                 .toSet()
         )
+    }
+
+    @Test
+    fun targetProcessStartupRetainsPendingSwitchUntilActivityWindowFocus() {
+        val pending = PendingClickModeSwitch(BrowserMode.SIMPLE, BrowserMode.ADVANCED)
+
+        val startup = resolveClickModeSwitchOutcome(pending, BrowserMode.ADVANCED, bootBlocked = false)
+        assertEquals(ClickCatLogCode.MODE_SWITCH_RELAUNCHED, startup)
+        assertTrue(shouldRetainPendingModeSwitchUntilForeground(startup))
+        assertFalse(
+            shouldRetainPendingModeSwitchUntilForeground(
+                ClickCatLogCode.MODE_SWITCH_BOOT_BLOCKED
+            )
+        )
+        assertFalse(
+            shouldRetainPendingModeSwitchUntilForeground(
+                ClickCatLogCode.MODE_SWITCH_WRONG_PROFILE
+            )
+        )
+
+        assertEquals(
+            ClickCatLogCode.MODE_SWITCH_ACTIVITY_FOCUSED,
+            resolveClickModeSwitchWindowFocusOutcome(
+                pending,
+                focusedMode = BrowserMode.ADVANCED,
+                bootBlocked = false
+            )
+        )
+        assertEquals(
+            ClickCatLogCode.MODE_SWITCH_WRONG_PROFILE,
+            resolveClickModeSwitchWindowFocusOutcome(
+                pending,
+                focusedMode = BrowserMode.SIMPLE,
+                bootBlocked = false
+            )
+        )
+        assertNull(resolveClickModeSwitchWindowFocusOutcome(null, BrowserMode.SIMPLE, bootBlocked = false))
     }
 
     @Test
