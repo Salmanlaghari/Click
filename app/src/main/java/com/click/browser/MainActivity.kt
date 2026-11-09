@@ -5918,20 +5918,28 @@ class MainActivity : FragmentActivity() {
                                         }
                                     },
                                     onOpenPage = { key ->
-                                        when (key) {
-                                            "settings" -> { showClickPage = null; showSettings = true }
-                                            "history" -> { showClickPage = null; showHistory = true }
-                                            "downloads" -> { showClickPage = null; showDownloads = true }
-                                            "bookmarks" -> { showClickPage = null; showBookmarks = true }
-                                            "newtab" -> {
+                                        when (ClickInternalPages.securityPageDestination(key)) {
+                                            ClickInternalPages.SecurityPageDestination.CLICK_VPN -> {
                                                 showClickPage = null
-                                                tabs.add(TabItem(url = homeUrl(), title = "New Tab"))
-                                                activeTabIndex = tabs.size - 1
+                                                showVpn = true
                                             }
-                                            "vpn" -> { showClickPage = null; showV9Shield = true }
-                                            "dns" -> { showClickPage = null; showV9Shield = true }
-                                            "cookies" -> { showClickPage = null; showCookieManager = true }
-                                            else -> showClickPage = key
+                                            ClickInternalPages.SecurityPageDestination.V9_SHIELD -> {
+                                                showClickPage = null
+                                                showV9Shield = true
+                                            }
+                                            null -> when (key) {
+                                                "settings" -> { showClickPage = null; showSettings = true }
+                                                "history" -> { showClickPage = null; showHistory = true }
+                                                "downloads" -> { showClickPage = null; showDownloads = true }
+                                                "bookmarks" -> { showClickPage = null; showBookmarks = true }
+                                                "newtab" -> {
+                                                    showClickPage = null
+                                                    tabs.add(TabItem(url = homeUrl(), title = "New Tab"))
+                                                    activeTabIndex = tabs.size - 1
+                                                }
+                                                "cookies" -> { showClickPage = null; showCookieManager = true }
+                                                else -> showClickPage = key
+                                            }
                                         }
                                     },
                                     onClose = { showClickPage = null },
