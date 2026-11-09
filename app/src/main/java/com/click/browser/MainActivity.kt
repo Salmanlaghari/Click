@@ -164,6 +164,8 @@ class TabItem(
     var connectionSecurity by mutableStateOf(ConnectionSecurityPolicy.unknown(url))
     var title by mutableStateOf(title)
     var isIncognito by mutableStateOf(isIncognito)
+    /** Private-tab website microphone choices are memory-only and disappear with this tab. */
+    internal val privateWebsiteMicrophonePermissions = mutableStateMapOf<String, Boolean>()
     /** Gecko's serialized history/scroll/form snapshot; never written for private tabs. */
     var geckoSessionState by mutableStateOf(initialGeckoSessionState)
     var canGoBack by mutableStateOf(false)
@@ -195,6 +197,29 @@ private data class ClosedTabUndo(
     val index: Int,
     val engine: BrowserTabEngine,
     val mode: BrowserMode
+)
+
+private data class WebsiteMicrophoneConsentUiState(
+    val requestId: String,
+    val tabId: String,
+    val host: String,
+    val privateTab: Boolean,
+    val onAllow: () -> Unit,
+    val onBlock: () -> Unit,
+    val onDismiss: () -> Unit
+)
+
+private data class WebsiteMicrophoneRecoveryUiState(
+    val origin: String,
+    val tabId: String,
+    val privateTab: Boolean
+)
+
+private data class PendingWebsiteMicrophoneAndroidResult(
+    val requestId: String,
+    val tabId: String,
+    val onResult: (Boolean) -> Unit,
+    val onCancel: () -> Unit
 )
 
 private data class PendingBrowserDownload(
@@ -2117,6 +2142,25 @@ class MainActivity : FragmentActivity() {
             var showPaymentMethods by remember { mutableStateOf(false) }
             // Per-site settings sheet (opened from the lock icon in the address bar).
             var showSiteSettings by remember { mutableStateOf(false) }
+            var websiteMicrophoneConsent by remember {
+                mutableStateOf<WebsiteMicrophoneConsentUiState?>(null)
+            }
+            var websiteMicrophoneRecovery by remember {
+                mutableStateOf<WebsiteMicrophoneRecoveryUiState?>(null)
+            }
+            var pendingWebsiteMicrophoneAndroidResult by remember {
+                mutableStateOf<PendingWebsiteMicrophoneAndroidResult?>(null)
+            }
+            val pendingWebViewMicrophoneRequestIds = remember {
+                java.util.WeakHashMap<android.webkit.PermissionRequest, String>()
+            }
+            val websiteMicrophoneAndroidPermissionLauncher = rememberLauncherForActivityResult(
+                ActivityResultContracts.RequestPermission()
+            ) { granted ->
+                val pendingResult = pendingWebsiteMicrophoneAndroidResult
+                pendingWebsiteMicrophoneAndroidResult = null
+                pendingResult?.onResult?.invoke(granted)
+            }
             var showClearSiteDataConfirm by remember { mutableStateOf(false) }
             var clearSiteDataInProgress by remember { mutableStateOf(false) }
             var browserSessionGeneration by remember { mutableStateOf(0) }
@@ -2370,6 +2414,183 @@ class MainActivity : FragmentActivity() {
             val desktopOverrides by repository.desktopOverridesFlow.collectAsState(initial = emptyMap())
             // Per-site settings overrides (persisted per host, per engine mode).
             val siteSettings by repository.siteSettingsFlow.collectAsState(initial = emptyMap())
+            val websiteMicrophonePermissions by repository.websiteMicrophonePermissionsFlow
+                .collectAsState(initial = emptyMap())
+            val latestWebsiteMicrophonePermissions = rememberUpdatedState(websiteMicrophonePermissions)
+
+            LaunchedEffect(
+                tabs.map { it.id },
+                websiteMicrophoneConsent?.requestId,
+                pendingWebsiteMicrophoneAndroidResult?.requestId,
+                websiteMicrophoneRecovery?.tabId
+            ) {
+                val consent = websiteMicrophoneConsent
+                if (consent != null && tabs.none { it.id == consent.tabId }) {
+                    websiteMicrophoneConsent = null
+                    runCatching { consent.onDismiss() }
+                }
+                val pending = pendingWebsiteMicrophoneAndroidResult
+                if (pending != null && tabs.none { it.id == pending.tabId }) {
+                    pendingWebsiteMicrophoneAndroidResult = null
+                    runCatching { pending.onCancel() }
+                }
+                val recovery = websiteMicrophoneRecovery
+                if (recovery != null && tabs.none { it.id == recovery.tabId }) {
+                    websiteMicrophoneRecovery = null
+                }
+            }
+
+            fun handleWebsiteMicrophoneRequest(
+                tab: TabItem?,
+                requestedOrigin: String,
+                grant: () -> Unit,
+                reject: () -> Unit,
+                requestId: String = java.util.UUID.randomUUID().toString()
+            ) {
+                val origin = canonicalWebsiteMicrophoneOrigin(requestedOrigin)
+                if (origin == null || tab == null || !tabs.contains(tab)) {
+                    reject()
+                    return
+                }
+                val privateTab = tab.isIncognito
+                val decision = if (privateTab) {
+                    tab.privateWebsiteMicrophonePermissions[origin]
+                } else {
+                    latestWebsiteMicrophonePermissions.value[origin]
+                }
+
+                fun requestAndroidPermissionAfterConsent() {
+                    if (!tabs.contains(tab)) {
+                        reject()
+                        return
+                    }
+                    val alreadyGranted = ContextCompat.checkSelfPermission(
+                        this@MainActivity,
+                        android.Manifest.permission.RECORD_AUDIO
+                    ) == PackageManager.PERMISSION_GRANTED
+                    if (alreadyGranted) {
+                        runCatching { grant() }.onFailure { runCatching { reject() } }
+                        return
+                    }
+                    if (pendingWebsiteMicrophoneAndroidResult != null) {
+                        reject()
+                        return
+                    }
+                    pendingWebsiteMicrophoneAndroidResult = PendingWebsiteMicrophoneAndroidResult(
+                        requestId = requestId,
+                        tabId = tab.id,
+                        onResult = { granted ->
+                            if (!tabs.contains(tab)) {
+                                runCatching { reject() }
+                            } else if (granted) {
+                                runCatching { grant() }.onFailure { runCatching { reject() } }
+                            } else {
+                                runCatching { reject() }
+                                websiteMicrophoneRecovery = WebsiteMicrophoneRecoveryUiState(
+                                    origin = origin,
+                                    tabId = tab.id,
+                                    privateTab = privateTab
+                                )
+                            }
+                        },
+                        onCancel = { runCatching { reject() } }
+                    )
+                    try {
+                        websiteMicrophoneAndroidPermissionLauncher.launch(
+                            android.Manifest.permission.RECORD_AUDIO
+                        )
+                    } catch (_: Exception) {
+                        if (pendingWebsiteMicrophoneAndroidResult?.requestId == requestId) {
+                            pendingWebsiteMicrophoneAndroidResult = null
+                        }
+                        runCatching { reject() }
+                        websiteMicrophoneRecovery = WebsiteMicrophoneRecoveryUiState(
+                            origin = origin,
+                            tabId = tab.id,
+                            privateTab = privateTab
+                        )
+                    }
+                }
+
+                fun saveDecision(allowed: Boolean) {
+                    if (privateTab) {
+                        tab.privateWebsiteMicrophonePermissions[origin] = allowed
+                    } else {
+                        scope.launch {
+                            repository.setWebsiteMicrophonePermission(origin, allowed)
+                        }
+                    }
+                }
+
+                when (decision) {
+                    false -> reject()
+                    true -> requestAndroidPermissionAfterConsent()
+                    null -> {
+                        if (websiteMicrophoneConsent != null) {
+                            reject()
+                            return
+                        }
+                        val host = android.net.Uri.parse(origin).host ?: origin
+                        websiteMicrophoneConsent = WebsiteMicrophoneConsentUiState(
+                            requestId = requestId,
+                            tabId = tab.id,
+                            host = host,
+                            privateTab = privateTab,
+                            onAllow = {
+                                if (websiteMicrophoneConsent?.requestId == requestId) {
+                                    websiteMicrophoneConsent = null
+                                    if (tabs.contains(tab)) {
+                                        saveDecision(true)
+                                        requestAndroidPermissionAfterConsent()
+                                    } else {
+                                        runCatching { reject() }
+                                    }
+                                }
+                            },
+                            onBlock = {
+                                if (websiteMicrophoneConsent?.requestId == requestId) {
+                                    websiteMicrophoneConsent = null
+                                    saveDecision(false)
+                                }
+                                runCatching { reject() }
+                            },
+                            onDismiss = {
+                                if (websiteMicrophoneConsent?.requestId == requestId) {
+                                    websiteMicrophoneConsent = null
+                                }
+                                runCatching { reject() }
+                            }
+                        )
+                    }
+                }
+            }
+
+            fun cancelWebsiteMicrophoneRequest(requestId: String) {
+                if (websiteMicrophoneConsent?.requestId == requestId) {
+                    websiteMicrophoneConsent = null
+                }
+                val pending = pendingWebsiteMicrophoneAndroidResult
+                if (pending?.requestId == requestId) {
+                    pendingWebsiteMicrophoneAndroidResult = null
+                }
+            }
+
+            fun openWebsiteMicrophoneAndroidSettings() {
+                runCatching {
+                    this@MainActivity.startActivity(
+                        Intent(android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
+                            data = android.net.Uri.fromParts("package", packageName, null)
+                        }
+                    )
+                }.onFailure {
+                    Toast.makeText(
+                        this@MainActivity,
+                        "Open Click's app settings in Android to enable microphone access.",
+                        Toast.LENGTH_LONG
+                    ).show()
+                }
+            }
+
             val adBlockStatus = com.click.browser.engine.AdBlockStatusPolicy.forPage(
                 engine = currentTab.engine,
                 globalEnabled = adBlockerEnabled,
@@ -2868,6 +3089,11 @@ class MainActivity : FragmentActivity() {
                             clearSiteDataInProgress = false
                             showClearSiteDataConfirm = false
                             showSiteSettings = false
+                            scope.launch {
+                                repository.clearWebsiteMicrophonePermissionsForHostAcrossProfiles(
+                                    normalizedHost
+                                )
+                            }
                             Toast.makeText(
                                 this@MainActivity,
                                 "Gecko site data cleared for $normalizedHost. Normal Gecko tabs are reopening; new site data can be created as you browse.",
@@ -4036,6 +4262,16 @@ class MainActivity : FragmentActivity() {
                                                                 initialUrl = currentTab.url,
                                                                 initialSessionState = currentTab.geckoSessionState,
                                                                 extensionRouter = if (currentTab.isIncognito) null else normalTabExtensionRouter(),
+                                                                onWebsiteMicrophoneRequest = { requestTabId, origin, grant, reject ->
+                                                                    runOnUiThread {
+                                                                        handleWebsiteMicrophoneRequest(
+                                                                            tab = tabs.firstOrNull { it.id == requestTabId },
+                                                                            requestedOrigin = origin,
+                                                                            grant = grant,
+                                                                            reject = reject
+                                                                        )
+                                                                    }
+                                                                },
                                                                 initialGeckoSession = currentTab.takePendingGeckoSession(),
                                                                 initiallySelected = true,
                                                                 initiallyResumed = lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED),
@@ -5120,12 +5356,43 @@ class MainActivity : FragmentActivity() {
                                                                 super.onGeolocationPermissionsHidePrompt()
                                                             }
 
-                                                            // Fail closed for website media/resource permission
-                                                            // requests. RECORD_AUDIO is used only by Click's own
-                                                            // optional AI voice input; Click does not grant it to
-                                                            // websites and has no camera-permission flow.
+                                                            // Only audio capture can enter the per-site microphone
+                                                            // consent flow. Every camera or mixed request remains denied.
                                                             override fun onPermissionRequest(request: android.webkit.PermissionRequest?) {
-                                                                request?.deny()
+                                                                val permissionRequest = request ?: return
+                                                                val ownerTab = tabs.firstOrNull {
+                                                                    it.webView === devToolsOwnerWebView
+                                                                }
+                                                                val resources = permissionRequest.resources?.toSet().orEmpty()
+                                                                if (ownerTab == null ||
+                                                                    resources != setOf(android.webkit.PermissionRequest.RESOURCE_AUDIO_CAPTURE)
+                                                                ) {
+                                                                    permissionRequest.deny()
+                                                                    return
+                                                                }
+                                                                val requestId = java.util.UUID.randomUUID().toString()
+                                                                pendingWebViewMicrophoneRequestIds[permissionRequest] = requestId
+                                                                handleWebsiteMicrophoneRequest(
+                                                                    tab = ownerTab,
+                                                                    requestedOrigin = permissionRequest.origin.toString(),
+                                                                    grant = {
+                                                                        permissionRequest.grant(
+                                                                            arrayOf(android.webkit.PermissionRequest.RESOURCE_AUDIO_CAPTURE)
+                                                                        )
+                                                                    },
+                                                                    reject = { permissionRequest.deny() },
+                                                                    requestId = requestId
+                                                                )
+                                                            }
+
+                                                            override fun onPermissionRequestCanceled(
+                                                                request: android.webkit.PermissionRequest?
+                                                            ) {
+                                                                if (request != null) {
+                                                                    pendingWebViewMicrophoneRequestIds
+                                                                        .remove(request)
+                                                                        ?.let(::cancelWebsiteMicrophoneRequest)
+                                                                }
                                                             }
                                                         }
 
@@ -6920,14 +7187,76 @@ class MainActivity : FragmentActivity() {
                                 val siteHost = try {
                                     android.net.Uri.parse(currentTab.url).host?.lowercase().orEmpty()
                                 } catch (_: Exception) { "" }
+                                val siteMicrophoneOrigin = canonicalWebsiteMicrophoneOrigin(currentTab.url)
+                                val siteMicrophoneDecision = siteMicrophoneOrigin?.let { origin ->
+                                    if (currentTab.isIncognito) {
+                                        currentTab.privateWebsiteMicrophonePermissions[origin]
+                                    } else {
+                                        websiteMicrophonePermissions[origin]
+                                    }
+                                }
+                                val androidMicrophoneGranted = ContextCompat.checkSelfPermission(
+                                    this@MainActivity,
+                                    android.Manifest.permission.RECORD_AUDIO
+                                ) == PackageManager.PERMISSION_GRANTED
+                                val siteMicrophoneStatusLabel = when {
+                                    siteMicrophoneOrigin == null -> "Blocked on insecure pages"
+                                    else -> when (websiteMicrophoneStatus(
+                                        siteMicrophoneDecision,
+                                        androidMicrophoneGranted
+                                    )) {
+                                        WebsiteMicrophoneStatus.ASK -> "Ask on request"
+                                        WebsiteMicrophoneStatus.ALLOWED -> "Allowed"
+                                        WebsiteMicrophoneStatus.BLOCKED_FOR_SITE -> "Blocked for this site"
+                                        WebsiteMicrophoneStatus.ANDROID_PERMISSION_REQUIRED ->
+                                            "Android permission required"
+                                    }
+                                }
                                 if (currentTab.engine == BrowserTabEngine.GECKOVIEW) {
                                     AlertDialog(
                                         onDismissRequest = { showSiteSettings = false },
                                         title = { Text(siteHost.ifBlank { "Site information" }) },
                                         text = {
-                                            Text(
-                                                "GeckoView tabs deny camera, microphone, and location requests by default. This screen cannot read individual cookies. Clear site data removes data owned by this exact host across Gecko profiles; data from third-party hosts may remain. Normal Gecko tabs are closed and reopened before clearing so they cannot repopulate data during the operation. Private WebView tabs are unaffected."
-                                            )
+                                            Column(
+                                                modifier = Modifier
+                                                    .heightIn(max = 360.dp)
+                                                    .verticalScroll(rememberScrollState())
+                                            ) {
+                                                Text("Website permissions")
+                                                Spacer(Modifier.height(6.dp))
+                                                Text("Camera: blocked by Click")
+                                                Text("Microphone: $siteMicrophoneStatusLabel")
+                                                Text("Location: blocked by Click")
+                                                Text("Website notifications: blocked / unsupported")
+                                                Spacer(Modifier.height(8.dp))
+                                                Text(
+                                                    if (currentTab.isIncognito) {
+                                                        "A secure site must request the microphone. Click asks first, then Android may ask for RECORD_AUDIO. This choice lasts only in this private tab."
+                                                    } else {
+                                                        "A secure site must request the microphone. Click asks first, then Android may ask for RECORD_AUDIO. The site choice is saved only in this browser profile."
+                                                    }
+                                                )
+                                                Spacer(Modifier.height(8.dp))
+                                                Text(
+                                                    "This screen cannot read individual cookies. Clear site data removes data owned by this exact host across Gecko profiles; data from third-party hosts may remain. Normal Gecko tabs are closed and reopened before clearing so they cannot repopulate data during the operation."
+                                                )
+                                                if (siteMicrophoneOrigin != null && siteMicrophoneDecision != null) {
+                                                    TextButton(onClick = {
+                                                        if (currentTab.isIncognito) {
+                                                            currentTab.privateWebsiteMicrophonePermissions.remove(siteMicrophoneOrigin)
+                                                        } else {
+                                                            scope.launch {
+                                                                repository.clearWebsiteMicrophonePermission(siteMicrophoneOrigin)
+                                                            }
+                                                        }
+                                                    }) { Text("Reset microphone choice") }
+                                                }
+                                                if (siteMicrophoneDecision == true && !androidMicrophoneGranted) {
+                                                    TextButton(onClick = { openWebsiteMicrophoneAndroidSettings() }) {
+                                                        Text("Open Click's Android settings")
+                                                    }
+                                                }
+                                            }
                                         },
                                         confirmButton = {
                                             TextButton(
@@ -7019,11 +7348,87 @@ class MainActivity : FragmentActivity() {
                                         onOpenHistory = {
                                             showSiteSettings = false
                                             showHistory = true
+                                        },
+                                        microphonePermissionStatusLabel = siteMicrophoneStatusLabel,
+                                        microphonePermissionExplanation = if (currentTab.isIncognito) {
+                                            "This choice lasts only in this private tab. Android permission is still required after you allow the site."
+                                        } else {
+                                            "Click asks before a secure site can use the microphone; Android permission is also required."
+                                        },
+                                        canResetMicrophonePermission =
+                                            siteMicrophoneOrigin != null && siteMicrophoneDecision != null,
+                                        showMicrophoneAndroidSettings =
+                                            siteMicrophoneDecision == true && !androidMicrophoneGranted,
+                                        onResetMicrophonePermission = {
+                                            if (siteMicrophoneOrigin != null) {
+                                                if (currentTab.isIncognito) {
+                                                    currentTab.privateWebsiteMicrophonePermissions.remove(siteMicrophoneOrigin)
+                                                } else {
+                                                    scope.launch {
+                                                        repository.clearWebsiteMicrophonePermission(siteMicrophoneOrigin)
+                                                    }
+                                                }
+                                            }
+                                        },
+                                        onOpenMicrophoneAndroidSettings = {
+                                            openWebsiteMicrophoneAndroidSettings()
                                         }
                                     )
                                 } else {
                                     showSiteSettings = false
                                 }
+                            }
+                            websiteMicrophoneConsent?.let { consent ->
+                                AlertDialog(
+                                    onDismissRequest = consent.onDismiss,
+                                    title = { Text("Allow microphone for ${consent.host}?") },
+                                    text = {
+                                        Text(
+                                            "Only this secure site can receive microphone audio after you allow it here and Android grants Click's RECORD_AUDIO permission. " +
+                                                if (consent.privateTab) {
+                                                    "This choice lasts only in this private tab. Camera, location, and website notifications stay blocked."
+                                                } else {
+                                                    "This choice is saved only in the current browser profile. Camera, location, and website notifications stay blocked."
+                                                }
+                                        )
+                                    },
+                                    confirmButton = {
+                                        TextButton(onClick = consent.onAllow) { Text("Allow microphone") }
+                                    },
+                                    dismissButton = {
+                                        Row {
+                                            TextButton(onClick = consent.onBlock) { Text("Block site") }
+                                            TextButton(onClick = consent.onDismiss) { Text("Not now") }
+                                        }
+                                    }
+                                )
+                            }
+                            websiteMicrophoneRecovery?.let { recovery ->
+                                AlertDialog(
+                                    onDismissRequest = { websiteMicrophoneRecovery = null },
+                                    title = { Text("Android microphone permission is off") },
+                                    text = {
+                                        Text(
+                                            "The microphone choice for ${recovery.origin} is saved in " +
+                                                if (recovery.privateTab) {
+                                                    "this private tab, but Android denied Click's RECORD_AUDIO permission. Enable microphone access in Android settings, then return to the site and try again."
+                                                } else {
+                                                    "this browser profile, but Android denied Click's RECORD_AUDIO permission. Enable microphone access in Android settings, then return to the site and try again."
+                                                }
+                                        )
+                                    },
+                                    confirmButton = {
+                                        TextButton(onClick = {
+                                            websiteMicrophoneRecovery = null
+                                            openWebsiteMicrophoneAndroidSettings()
+                                        }) { Text("Open Android settings") }
+                                    },
+                                    dismissButton = {
+                                        TextButton(onClick = { websiteMicrophoneRecovery = null }) {
+                                            Text("Not now")
+                                        }
+                                    }
+                                )
                             }
                             if (showClearSiteDataConfirm) {
                                 AlertDialog(

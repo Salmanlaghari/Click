@@ -2,6 +2,7 @@ package com.click.browser.engine
 
 import android.app.Activity
 import android.content.Context
+import android.util.Log
 import android.view.MenuItem
 import android.view.View
 import android.view.ViewGroup
@@ -15,6 +16,7 @@ import org.mozilla.geckoview.GeckoSessionSettings
 import org.mozilla.geckoview.GeckoView
 import org.mozilla.geckoview.WebResponse
 import com.click.browser.extensions.NormalTabExtensionRouter
+import java.util.ArrayDeque
 
 /** Stable Gecko storage partition identifier matching Click's existing profile groups. */
 internal fun geckoContextIdFor(mode: BrowserMode): String =
@@ -64,6 +66,12 @@ internal class GeckoBrowserTabSession(
     initialUrl: String,
     initialSessionState: String?,
     private val extensionRouter: NormalTabExtensionRouter?,
+    private val onWebsiteMicrophoneRequest: (
+        String,
+        String,
+        () -> Unit,
+        () -> Unit
+    ) -> Unit,
     initialGeckoSession: GeckoSession? = null,
     initiallySelected: Boolean,
     initiallyResumed: Boolean,
@@ -107,6 +115,11 @@ internal class GeckoBrowserTabSession(
     private var canBack = false
     private var canForward = false
     private var destroyed = false
+    private val devicePermissionDelegate = NormalTabDevicePermissionDelegate(
+        tabId = tabId,
+        onWebsiteMicrophoneRequest = onWebsiteMicrophoneRequest,
+        isSessionActive = { !destroyed && session.isOpen }
+    )
     private var extensionAttached = false
     @Volatile private var lastKnownPageUrl: String = initialUrl.ifBlank { "about:blank" }
     @Volatile private var latestConnectionSecurityInfo = ConnectionSecurityPolicy.unknown(initialUrl)
@@ -191,7 +204,7 @@ internal class GeckoBrowserTabSession(
         session.settings.setViewportMode(
             DesktopLayoutPolicy.geckoViewportMode(wideLayoutForUrl(initialUrl))
         )
-        session.setPermissionDelegate(DenyNormalTabDevicePermissions)
+        session.setPermissionDelegate(devicePermissionDelegate)
         session.setPromptDelegate(object : GeckoSession.PromptDelegate {
             override fun onLoginSave(
                 session: GeckoSession,
@@ -628,20 +641,78 @@ internal class GeckoBrowserTabSession(
     override fun destroy() {
         if (destroyed) return
         destroyed = true
+        devicePermissionDelegate.rejectPendingAndroidPermission()
         extensionRouter?.detach(tabId, session)
         runCatching { geckoView.releaseSession() }
         runCatching { session.close() }
     }
 }
 
-/** No website or add-on may obtain Android device permissions from a normal Gecko tab. */
-private object DenyNormalTabDevicePermissions : GeckoSession.PermissionDelegate {
+/** Only an explicit, audio-only microphone request can reach Click's consent flow. */
+private class NormalTabDevicePermissionDelegate(
+    private val tabId: String,
+    private val onWebsiteMicrophoneRequest: (
+        String,
+        String,
+        () -> Unit,
+        () -> Unit
+    ) -> Unit,
+    private val isSessionActive: () -> Boolean
+) : GeckoSession.PermissionDelegate {
+    private data class PendingAndroidAudioCallback(
+        val callback: GeckoSession.PermissionDelegate.Callback,
+        val requestedAtMillis: Long
+    )
+
+    // Gecko supplies no correlation ID here; pair callbacks FIFO with the
+    // session's subsequent origin-aware media requests instead of replacing one.
+    private val pendingAndroidAudioCallbacks = ArrayDeque<PendingAndroidAudioCallback>()
+
+    companion object {
+        // Bound per-session memory against a page flooding callbacks before Gecko's
+        // paired media requests arrive; 32 permits a generous burst and overflow is logged.
+        private const val MAX_PENDING_ANDROID_AUDIO_CALLBACKS = 32
+        private const val PENDING_ANDROID_AUDIO_CALLBACK_TIMEOUT_MS = 30_000L
+        private const val PERMISSION_LOG_TAG = "ClickMicPermissions"
+    }
+
+    fun rejectPendingAndroidPermission() {
+        val callbacks = synchronized(pendingAndroidAudioCallbacks) {
+            buildList {
+                while (pendingAndroidAudioCallbacks.isNotEmpty()) {
+                    add(pendingAndroidAudioCallbacks.removeFirst().callback)
+                }
+            }
+        }
+        callbacks.forEach { runCatching { it.reject() } }
+    }
+
     override fun onAndroidPermissionsRequest(
         session: GeckoSession,
         permissions: Array<out String>?,
         callback: GeckoSession.PermissionDelegate.Callback
     ) {
-        callback.reject()
+        // This callback has no requesting origin. Hold a pure RECORD_AUDIO
+        // callback until the media callback supplies the exact site. Never hold
+        // camera or mixed Android permission requests.
+        if (permissions?.toSet() != setOf(android.Manifest.permission.RECORD_AUDIO)) {
+            callback.reject()
+            return
+        }
+        val accepted = synchronized(pendingAndroidAudioCallbacks) {
+            if (pendingAndroidAudioCallbacks.size >= MAX_PENDING_ANDROID_AUDIO_CALLBACKS) {
+                false
+            } else {
+                pendingAndroidAudioCallbacks.addLast(
+                    PendingAndroidAudioCallback(callback, android.os.SystemClock.elapsedRealtime())
+                )
+                true
+            }
+        }
+        if (!accepted) {
+            Log.w(PERMISSION_LOG_TAG, "Rejecting microphone request: pending callback queue is full")
+            callback.reject()
+        }
     }
 
     override fun onContentPermissionRequest(
@@ -658,6 +729,54 @@ private object DenyNormalTabDevicePermissions : GeckoSession.PermissionDelegate 
         audio: Array<out GeckoSession.PermissionDelegate.MediaSource>?,
         callback: GeckoSession.PermissionDelegate.MediaCallback
     ) {
-        callback.reject()
+        val expiredAndroidCallbacks = mutableListOf<GeckoSession.PermissionDelegate.Callback>()
+        val androidAudioCallback = synchronized(pendingAndroidAudioCallbacks) {
+            val now = android.os.SystemClock.elapsedRealtime()
+            while (true) {
+                val firstPending = pendingAndroidAudioCallbacks.peekFirst() ?: break
+                if (now - firstPending.requestedAtMillis <= PENDING_ANDROID_AUDIO_CALLBACK_TIMEOUT_MS) break
+                expiredAndroidCallbacks += pendingAndroidAudioCallbacks.removeFirst().callback
+            }
+            if (pendingAndroidAudioCallbacks.isEmpty()) null
+            else pendingAndroidAudioCallbacks.removeFirst().callback
+        }
+        expiredAndroidCallbacks.forEach { runCatching { it.reject() } }
+        val microphone = audio?.firstOrNull {
+            it.source == GeckoSession.PermissionDelegate.MediaSource.SOURCE_MICROPHONE
+        }
+        val origin = canonicalWebsiteMicrophoneOrigin(uri)
+        val reject: () -> Unit = {
+            androidAudioCallback?.let { runCatching { it.reject() } }
+            runCatching { callback.reject() }
+            Unit
+        }
+        if (origin == null || !isMicrophoneOnlyMediaRequest(
+                origin = origin,
+                hasVideoRequest = video != null,
+                hasMicrophoneSource = microphone != null
+            )
+        ) {
+            reject()
+            return
+        }
+        onWebsiteMicrophoneRequest(
+            tabId,
+            origin,
+            {
+                if (isSessionActive()) {
+                    val androidGrantSucceeded = androidAudioCallback
+                        ?.let { runCatching { it.grant() }.isSuccess } ?: true
+                    if (androidGrantSucceeded) {
+                        runCatching { callback.grant(null, microphone) }
+                            .onFailure { runCatching { callback.reject() } }
+                    } else {
+                        runCatching { callback.reject() }
+                    }
+                } else {
+                    reject()
+                }
+            },
+            reject
+        )
     }
 }

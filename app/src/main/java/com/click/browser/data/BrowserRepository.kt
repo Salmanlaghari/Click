@@ -1,12 +1,18 @@
 package com.click.browser.data
 
 import android.content.Context
+import android.util.Log
+import androidx.datastore.core.DataStore
+import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.stringPreferencesKey
 import com.click.browser.engine.BrowserMode
 import com.click.browser.engine.SiteSettings
+import com.click.browser.engine.canonicalWebsiteMicrophoneOrigin
 import com.click.browser.engine.profileDataStore
 import com.click.browser.engine.profileDataStoreFor
+import com.click.browser.engine.websiteMicrophoneHostKey
+import com.click.browser.engine.websiteMicrophoneOriginHost
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
@@ -27,12 +33,15 @@ data class DownloadItem(
 class BrowserRepository(private val context: Context) {
 
     companion object {
+        private const val TAG = "BrowserRepository"
         private val BOOKMARKS_KEY = stringPreferencesKey("bookmarks")
         private val HISTORY_KEY = stringPreferencesKey("history")
         private val DOWNLOADS_KEY = stringPreferencesKey("downloads")
         private val CUSTOM_DOWNLOADS_KEY = stringPreferencesKey("custom_downloads_v1")
         private val DESKTOP_HOSTS_KEY = stringPreferencesKey("desktop_hosts")
         private val SITE_SETTINGS_KEY = stringPreferencesKey("site_settings")
+        private val WEBSITE_MICROPHONE_PERMISSIONS_KEY =
+            stringPreferencesKey("website_microphone_permissions")
         private const val MAX_CUSTOM_DOWNLOAD_RECORDS = 100
     }
 
@@ -634,6 +643,85 @@ class BrowserRepository(private val context: Context) {
             SiteSettings.mapFromJson(jsonStr)
         }
 
+    /** Exact-origin microphone choices live in this profile's DataStore, never in private tabs. */
+    val websiteMicrophonePermissionsFlow: Flow<Map<String, Boolean>> =
+        context.profileDataStore.data.map { preferences ->
+            websiteMicrophonePermissionsFromJson(preferences[WEBSITE_MICROPHONE_PERMISSIONS_KEY])
+        }
+
+    suspend fun setWebsiteMicrophonePermission(origin: String, allowed: Boolean) {
+        val canonicalOrigin = canonicalWebsiteMicrophoneOrigin(origin) ?: run {
+            Log.w(TAG, "Ignoring invalid website microphone origin in set request")
+            return
+        }
+        context.profileDataStore.edit { preferences ->
+            val permissions = websiteMicrophonePermissionsFromJson(
+                preferences[WEBSITE_MICROPHONE_PERMISSIONS_KEY]
+            ).toMutableMap()
+            permissions[canonicalOrigin] = allowed
+            preferences[WEBSITE_MICROPHONE_PERMISSIONS_KEY] =
+                websiteMicrophonePermissionsToJson(permissions)
+        }
+    }
+
+    suspend fun clearWebsiteMicrophonePermission(origin: String) {
+        val canonicalOrigin = canonicalWebsiteMicrophoneOrigin(origin) ?: run {
+            Log.w(TAG, "Ignoring invalid website microphone origin in clear request")
+            return
+        }
+        context.profileDataStore.edit { preferences ->
+            val permissions = websiteMicrophonePermissionsFromJson(
+                preferences[WEBSITE_MICROPHONE_PERMISSIONS_KEY]
+            ).toMutableMap()
+            permissions.remove(canonicalOrigin)
+            preferences[WEBSITE_MICROPHONE_PERMISSIONS_KEY] =
+                websiteMicrophonePermissionsToJson(permissions)
+        }
+    }
+
+    suspend fun clearWebsiteMicrophonePermissionsForHost(host: String) {
+        val normalizedHost = websiteMicrophoneHostKey(host) ?: run {
+            Log.w(TAG, "Ignoring invalid website microphone host in clear request")
+            return
+        }
+        clearWebsiteMicrophonePermissionsFromStore(context.profileDataStore, normalizedHost)
+    }
+
+    internal suspend fun clearWebsiteMicrophonePermissionsForHostAcrossProfiles(host: String) {
+        val normalizedHost = websiteMicrophoneHostKey(host) ?: run {
+            Log.w(TAG, "Ignoring invalid website microphone host in cross-profile clear request")
+            return
+        }
+        BrowserMode.values()
+            .map { context.profileDataStoreFor(it) }
+            .distinct()
+            .forEach { store ->
+                clearWebsiteMicrophonePermissionsFromStore(store, normalizedHost)
+            }
+    }
+
+    private suspend fun clearWebsiteMicrophonePermissionsFromStore(
+        store: DataStore<Preferences>,
+        normalizedHost: String
+    ) {
+        store.edit { preferences ->
+            val permissions = websiteMicrophonePermissionsFromJson(
+                preferences[WEBSITE_MICROPHONE_PERMISSIONS_KEY]
+            ).toMutableMap()
+            permissions.keys
+                .filter { websiteMicrophoneOriginHost(it) == normalizedHost }
+                .forEach(permissions::remove)
+            preferences[WEBSITE_MICROPHONE_PERMISSIONS_KEY] =
+                websiteMicrophonePermissionsToJson(permissions)
+        }
+    }
+
+    suspend fun clearAllWebsiteMicrophonePermissions() {
+        context.profileDataStore.edit { preferences ->
+            preferences[WEBSITE_MICROPHONE_PERMISSIONS_KEY] = "{}"
+        }
+    }
+
     suspend fun setSiteSettings(host: String, settings: SiteSettings) {
         context.profileDataStore.edit { preferences ->
             val jsonStr = preferences[SITE_SETTINGS_KEY] ?: "{}"
@@ -644,15 +732,49 @@ class BrowserRepository(private val context: Context) {
     }
 
     suspend fun clearSiteSettings(host: String) {
+        val normalizedHost = websiteMicrophoneHostKey(host)
+        if (normalizedHost == null) {
+            Log.w(TAG, "Could not normalize host while clearing site settings")
+        }
         context.profileDataStore.edit { preferences ->
             val jsonStr = preferences[SITE_SETTINGS_KEY] ?: "{}"
             val map = SiteSettings.mapFromJson(jsonStr).toMutableMap()
             map.remove(host)
             preferences[SITE_SETTINGS_KEY] = SiteSettings.mapToJson(map)
+
+            val microphonePermissions = websiteMicrophonePermissionsFromJson(
+                preferences[WEBSITE_MICROPHONE_PERMISSIONS_KEY]
+            ).toMutableMap()
+            if (normalizedHost != null) {
+                microphonePermissions.keys
+                    .filter { websiteMicrophoneOriginHost(it) == normalizedHost }
+                    .forEach(microphonePermissions::remove)
+            }
+            preferences[WEBSITE_MICROPHONE_PERMISSIONS_KEY] =
+                websiteMicrophonePermissionsToJson(microphonePermissions)
         }
     }
 
 }
+
+private fun websiteMicrophonePermissionsFromJson(json: String?): Map<String, Boolean> {
+    val root = runCatching { JSONObject(json ?: "{}") }.getOrElse { JSONObject() }
+    val permissions = linkedMapOf<String, Boolean>()
+    val keys = root.keys()
+    while (keys.hasNext()) {
+        val origin = keys.next()
+        val allowed = root.opt(origin) as? Boolean ?: continue
+        if (canonicalWebsiteMicrophoneOrigin(origin) == origin) {
+            permissions[origin] = allowed
+        }
+    }
+    return permissions
+}
+
+private fun websiteMicrophonePermissionsToJson(permissions: Map<String, Boolean>): String =
+    JSONObject().apply {
+        permissions.toSortedMap().forEach { (origin, allowed) -> put(origin, allowed) }
+    }.toString()
 
 private fun parseDownloadItems(json: String?): List<DownloadItem> = try {
     val array = JSONArray(json ?: "[]")
