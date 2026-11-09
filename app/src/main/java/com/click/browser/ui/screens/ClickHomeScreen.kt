@@ -136,6 +136,26 @@ import com.click.browser.engine.NewsResult
 import com.click.browser.engine.NewsStatus
 import java.util.Calendar
 
+internal enum class HomeContentSection {
+    PRIVACY_STATUS,
+    QUICK_SITES,
+    CONTINUE_BROWSING,
+    MODE_FOCUS,
+    TODAY_UPDATE,
+    QUICK_ACTIONS,
+    OPTIONAL_NEWS_FEED
+}
+
+internal fun homeContentSections(activeMode: BrowserMode): List<HomeContentSection> = buildList {
+    add(HomeContentSection.PRIVACY_STATUS)
+    add(HomeContentSection.QUICK_SITES)
+    add(HomeContentSection.CONTINUE_BROWSING)
+    if (activeMode != BrowserMode.SIMPLE) add(HomeContentSection.MODE_FOCUS)
+    add(HomeContentSection.TODAY_UPDATE)
+    add(HomeContentSection.QUICK_ACTIONS)
+    add(HomeContentSection.OPTIONAL_NEWS_FEED)
+}
+
 /**
  * Premium home screen — "Click — AI Privacy Browser" identity (Phase 1).
  *
@@ -234,10 +254,6 @@ fun ClickHomeScreen(
             onProfileClick = onProfileClick
         )
 
-        if (activeMode == BrowserMode.HACK) {
-            PowerModeHomeHeader(theme)
-        }
-
         SmartSearchBar(
             theme = theme,
             activeMode = activeMode,
@@ -245,110 +261,87 @@ fun ClickHomeScreen(
             onNavigate = onNavigate
         )
 
-        if (activeMode == BrowserMode.DEVELOPER) {
-            ModeFocusCard(
-                theme = theme,
-                marker = "</>",
-                eyebrow = "DEVELOPER WORKSPACE",
-                headline = "Build, debug, and learn",
-                detail = "Shortcuts for GitHub, MDN, and Stack Overflow.",
-                actionLabel = "Open MDN",
-                onClick = { onNavigate("https://developer.mozilla.org/") }
-            )
-        }
-        if (activeMode == BrowserMode.ADVANCED) {
-            ModeFocusCard(
-                theme = theme,
-                marker = "R",
-                eyebrow = "RESEARCH DESK",
-                headline = "Latest AI/ML papers",
-                detail = "The optional feed below includes recent arXiv research updates.",
-                actionLabel = "Browse recent papers",
-                onClick = { onNavigate("https://arxiv.org/list/cs.AI/recent") }
-            )
-            if (homeNewsFeedEnabled) {
-                NewsSection(
+        for (section in homeContentSections(activeMode)) {
+            when (section) {
+                HomeContentSection.PRIVACY_STATUS -> V9ShieldCard(
                     theme = theme,
-                    activeMode = activeMode,
-                    cardBg = cardBg,
-                    cardBorder = cardBorder,
+                    active = shieldActive,
                     neon = false,
-                    onNavigate = onNavigate,
-                    onDismiss = { onHomeNewsFeedEnabledChange(false) }
+                    cardBg = cardBg,
+                    cardBorder = cardBorder,
+                    onClick = onV9ShieldClick,
+                    onToggle = onShieldToggle
                 )
-            } else {
-                HomeNewsFeedOptInCard(
+                HomeContentSection.QUICK_SITES -> QuickSitesGrid(
+                    mode = activeMode,
+                    cardBg = cardBg,
+                    cardBorder = cardBorder,
+                    onSurface = theme.onSurface,
+                    onNavigate = onNavigate
+                )
+                HomeContentSection.CONTINUE_BROWSING -> ContinueBrowsingSection(
                     theme = theme,
                     cardBg = cardBg,
                     cardBorder = cardBorder,
-                    onEnable = { onHomeNewsFeedEnabledChange(true) }
+                    recentlyClosedTabs = recentlyClosedTabs.take(3),
+                    onReopen = onReopenRecentTab
                 )
+                HomeContentSection.MODE_FOCUS -> when (activeMode) {
+                    BrowserMode.SIMPLE -> Unit
+                    BrowserMode.DEVELOPER -> ModeFocusCard(
+                        theme = theme,
+                        marker = "</>",
+                        eyebrow = "DEVELOPER WORKSPACE",
+                        headline = "Build, debug, and learn",
+                        detail = "Shortcuts for GitHub, MDN, and Stack Overflow.",
+                        actionLabel = "Open MDN",
+                        onClick = { onNavigate("https://developer.mozilla.org/") }
+                    )
+                    BrowserMode.HACK -> PowerModeHomeHeader(theme)
+                    BrowserMode.ADVANCED -> ModeFocusCard(
+                        theme = theme,
+                        marker = "R",
+                        eyebrow = "RESEARCH DESK",
+                        headline = "Latest AI/ML papers",
+                        detail = "The optional feed below includes recent arXiv research updates.",
+                        actionLabel = "Browse recent papers",
+                        onClick = { onNavigate("https://arxiv.org/list/cs.AI/recent") }
+                    )
+                }
+                HomeContentSection.TODAY_UPDATE -> TodayUpdateCard(
+                    theme = theme,
+                    cardBg = cardBg,
+                    cardBorder = cardBorder,
+                    onGamesClick = onGamesClick
+                )
+                HomeContentSection.QUICK_ACTIONS -> QuickActionsGrid(
+                    cardBg = cardBg,
+                    cardBorder = cardBorder,
+                    onSurface = theme.onSurface,
+                    onOpenAiChat = onOpenAiChat,
+                    onTranslate = onTranslate,
+                    onReaderMode = onReaderMode
+                )
+                HomeContentSection.OPTIONAL_NEWS_FEED -> if (homeNewsFeedEnabled) {
+                    NewsSection(
+                        theme = theme,
+                        activeMode = activeMode,
+                        cardBg = cardBg,
+                        cardBorder = cardBorder,
+                        neon = false,
+                        onNavigate = onNavigate,
+                        onDismiss = { onHomeNewsFeedEnabledChange(false) }
+                    )
+                } else {
+                    HomeNewsFeedOptInCard(
+                        theme = theme,
+                        cardBg = cardBg,
+                        cardBorder = cardBorder,
+                        onEnable = { onHomeNewsFeedEnabledChange(true) }
+                    )
+                }
             }
         }
-
-        // V9 Shield is DNS-only; the card retains the existing detail and toggle actions.
-        V9ShieldCard(
-            theme = theme,
-            active = shieldActive,
-            neon = false,
-            cardBg = cardBg,
-            cardBorder = cardBorder,
-            onClick = onV9ShieldClick,
-            onToggle = onShieldToggle
-        )
-
-        QuickSitesGrid(
-            mode = activeMode,
-            cardBg = cardBg,
-            cardBorder = cardBorder,
-            onSurface = theme.onSurface,
-            onNavigate = onNavigate
-        )
-
-        ContinueBrowsingSection(
-            theme = theme,
-            cardBg = cardBg,
-            cardBorder = cardBorder,
-            recentlyClosedTabs = recentlyClosedTabs.take(3),
-            onReopen = onReopenRecentTab
-        )
-
-        TodayUpdateCard(
-            theme = theme,
-            cardBg = cardBg,
-            cardBorder = cardBorder,
-            onGamesClick = onGamesClick
-        )
-
-        if (activeMode != BrowserMode.ADVANCED) {
-            if (homeNewsFeedEnabled) {
-                NewsSection(
-                    theme = theme,
-                    activeMode = activeMode,
-                    cardBg = cardBg,
-                    cardBorder = cardBorder,
-                    neon = false,
-                    onNavigate = onNavigate,
-                    onDismiss = { onHomeNewsFeedEnabledChange(false) }
-                )
-            } else {
-                HomeNewsFeedOptInCard(
-                    theme = theme,
-                    cardBg = cardBg,
-                    cardBorder = cardBorder,
-                    onEnable = { onHomeNewsFeedEnabledChange(true) }
-                )
-            }
-        }
-
-        QuickActionsGrid(
-            cardBg = cardBg,
-            cardBorder = cardBorder,
-            onSurface = theme.onSurface,
-            onOpenAiChat = onOpenAiChat,
-            onTranslate = onTranslate,
-            onReaderMode = onReaderMode
-        )
 
         // Bottom nav overlays the content (aligned BottomCenter) — without this
         // padding the last items hide behind it with nothing to scroll.
@@ -1106,7 +1099,7 @@ private fun QuickSiteEditDialog(
 }
 
 
-/** Category pill tabs: All (selected blue), News, Tech, AI, Sports, trailing ☰. */
+/** Horizontally scrollable category pill tabs for the available news categories. */
 @Composable
 private fun CategoryTabs(
     selected: NewsCategory,
@@ -1135,11 +1128,6 @@ private fun CategoryTabs(
                     fontWeight = if (isSel) FontWeight.Bold else FontWeight.Medium,
                     modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)
                 )
-            }
-        }
-        item {
-            IconButton(onClick = { /* category overflow — reserved */ }) {
-                Icon(Icons.Default.Menu, contentDescription = "More categories", tint = theme.onSurface.copy(alpha = 0.6f))
             }
         }
     }
