@@ -472,7 +472,9 @@ internal class GeckoBrowserTabSession(
             }
             capture.accept(
                 { bitmap ->
-                    if (isCurrentPreviewCapture(captureUrl, captureGeneration)) {
+                    if (bitmap == null) {
+                        if (pendingPreviewGeneration == captureGeneration) pendingPreviewGeneration = null
+                    } else if (isCurrentPreviewCapture(captureUrl, captureGeneration)) {
                         pendingPreviewGeneration = null
                         completedPreviewGeneration = captureGeneration
                         onTabPreviewCaptured(captureUrl, bitmap)
