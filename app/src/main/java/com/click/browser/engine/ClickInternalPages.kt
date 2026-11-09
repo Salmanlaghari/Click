@@ -15,6 +15,17 @@ object ClickInternalPages {
 
     data class Page(val key: String, val title: String, val desc: String)
 
+    enum class SecurityPageDestination {
+        CLICK_VPN,
+        V9_SHIELD,
+    }
+
+    fun securityPageDestination(key: String): SecurityPageDestination? = when (key.trim().lowercase()) {
+        "vpn" -> SecurityPageDestination.CLICK_VPN
+        "dns" -> SecurityPageDestination.V9_SHIELD
+        else -> null
+    }
+
     val PAGES: List<Page> = listOf(
         Page("flags", "Experiments", "Experimental features lab — 20+ real toggles"),
         Page("version", "Version", "Build and browser profile information"),
@@ -22,7 +33,7 @@ object ClickInternalPages {
         Page("history", "History", "Browsing history"),
         Page("downloads", "Downloads", "Downloaded files"),
         Page("bookmarks", "Bookmarks", "Saved bookmarks"),
-        Page("vpn", "VPN", "V9 secure tunnel"),
+        Page("vpn", "Click VPN", "Full-tunnel VPN settings"),
         Page("cookies", "Cookies", "Cookie manager"),
         Page("dns", "DNS", "DNS-over-HTTPS settings"),
         Page("newtab", "New Tab", "Premium home page"),
