@@ -1,5 +1,7 @@
 package com.click.browser.engine
 
+import java.util.concurrent.atomic.AtomicLong
+
 /** Metadata shown in the explicit tab picker; this type never contains page text. */
 internal data class AiTabComparisonOption(
     val id: String,
@@ -14,6 +16,19 @@ internal data class AiTabComparisonExcerpt(
     val url: String,
     val text: String
 )
+
+/** Invalidates late selected-tab capture results after cancellation or dismissal. */
+internal class AiTabComparisonCaptureGate {
+    private val generation = AtomicLong(0L)
+
+    fun begin(): Long = generation.incrementAndGet()
+
+    fun isCurrent(token: Long): Boolean = token == generation.get()
+
+    fun invalidate() {
+        generation.incrementAndGet()
+    }
+}
 
 /** Privacy, eligibility, and prompt rules for explicit selected-open-tab comparisons. */
 internal object AiTabComparisonPolicy {

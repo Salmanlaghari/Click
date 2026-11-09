@@ -6,10 +6,10 @@ import org.json.JSONObject
  * Per-site overrides for content settings that Click currently enforces.
  * Every field is nullable — null means "use the global setting".
  *
- * Website camera, microphone, notification, sound and background-sync
- * preferences are intentionally not represented: this build does not grant
- * those capabilities to websites or apply those content overrides. Legacy
- * JSON keys for those settings are ignored when read.
+ * Website microphone consent is stored separately as an exact-origin profile
+ * permission. Camera, notification, sound and background-sync preferences are
+ * intentionally not represented because those website capabilities remain
+ * blocked or unsupported. Legacy JSON keys are ignored when read.
  */
 data class SiteSettings(
     val javaScript: Boolean? = null,

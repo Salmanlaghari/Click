@@ -75,9 +75,8 @@ import kotlinx.coroutines.launch
  *
  * Sections (mirroring Chrome's site-details page):
  * - Site header: host + the browser's observed connection-security state.
- * - Permissions: a clear explanation of website permissions that Click does
- *   not grant in this build (camera, microphone and location); notifications
- *   are unsupported for websites.
+ * - Permissions: per-site microphone state plus the capabilities that remain
+ *   blocked (camera and location) or unsupported (website notifications).
  * - Content: JavaScript / Images / Pop-ups / Ads / Third-party cookies.
  *   Applied to the current WebView.
  * - Shields: protection status plus cookies and history information.
@@ -111,7 +110,13 @@ fun SiteSettingsSheet(
     onOpenHistory: () -> Unit = {},
     historyScopeDescription: String = "current profile history",
     otherHistoryScopeDescription: String = "other profile history",
-    onClearHistoryForHost: suspend (String) -> Int = { 0 }
+    onClearHistoryForHost: suspend (String) -> Int = { 0 },
+    microphonePermissionStatusLabel: String = "Ask on request",
+    microphonePermissionExplanation: String = "Click asks before allowing this exact site to use the microphone.",
+    canResetMicrophonePermission: Boolean = false,
+    showMicrophoneAndroidSettings: Boolean = false,
+    onResetMicrophonePermission: () -> Unit = {},
+    onOpenMicrophoneAndroidSettings: () -> Unit = {}
 ) {
     val scope = rememberCoroutineScope()
     val context = LocalContext.current
@@ -195,7 +200,7 @@ fun SiteSettingsSheet(
             // ================= WEBSITE PERMISSIONS =================
             SectionTitle(theme, "Website permissions")
             Text(
-                "These statuses apply to all websites. This build has no per-site allow controls for device permissions.",
+                "Microphone consent is limited to this site. Camera, location, and website notifications remain blocked.",
                 fontSize = 12.sp,
                 color = theme.onSurface.copy(alpha = 0.68f),
                 lineHeight = 18.sp
@@ -206,11 +211,14 @@ fun SiteSettingsSheet(
                 title = "Camera",
                 explanation = "Click denies website camera requests."
             )
-            WebsitePermissionStatusRow(
+            WebsiteMicrophonePermissionStatusRow(
                 theme = theme,
-                capability = WebsitePermissionCapability.MICROPHONE,
-                title = "Microphone",
-                explanation = "Website access is denied. Android microphone access is reserved for Click's optional AI voice input."
+                statusLabel = microphonePermissionStatusLabel,
+                explanation = microphonePermissionExplanation,
+                canReset = canResetMicrophonePermission,
+                showAndroidSettings = showMicrophoneAndroidSettings,
+                onReset = onResetMicrophonePermission,
+                onOpenAndroidSettings = onOpenMicrophoneAndroidSettings
             )
             WebsitePermissionStatusRow(
                 theme = theme,
@@ -222,7 +230,7 @@ fun SiteSettingsSheet(
                 theme = theme,
                 capability = WebsitePermissionCapability.NOTIFICATIONS,
                 title = "Notifications",
-                explanation = "Website notifications are not supported; app notifications are separate."
+                explanation = "Website notifications stay blocked and are not supported; app notifications are separate."
             )
 
             // ================= CONTENT =================
@@ -563,7 +571,11 @@ private fun WebsitePermissionStatusRow(
 ) {
     val statusLabel = when (websitePermissionStatus(capability)) {
         WebsitePermissionStatus.BLOCKED_IN_CLICK -> "Blocked by Click"
-        WebsitePermissionStatus.UNSUPPORTED -> "Not supported"
+        WebsitePermissionStatus.UNSUPPORTED -> "Blocked / not supported"
+        WebsitePermissionStatus.ASK -> "Ask on request"
+        WebsitePermissionStatus.ALLOWED -> "Allowed"
+        WebsitePermissionStatus.BLOCKED_FOR_SITE -> "Blocked for this site"
+        WebsitePermissionStatus.ANDROID_PERMISSION_REQUIRED -> "Android permission required"
     }
     Column(modifier = Modifier.fillMaxWidth().padding(vertical = 6.dp)) {
         Row(
@@ -575,6 +587,37 @@ private fun WebsitePermissionStatusRow(
             Text(statusLabel, fontSize = 12.sp, color = theme.onSurface.copy(alpha = 0.7f))
         }
         Text(explanation, fontSize = 11.sp, color = theme.onSurface.copy(alpha = 0.62f))
+    }
+}
+
+@Composable
+private fun WebsiteMicrophonePermissionStatusRow(
+    theme: ModeTheme,
+    statusLabel: String,
+    explanation: String,
+    canReset: Boolean,
+    showAndroidSettings: Boolean,
+    onReset: () -> Unit,
+    onOpenAndroidSettings: () -> Unit
+) {
+    Column(modifier = Modifier.fillMaxWidth().padding(vertical = 6.dp)) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text("Microphone", fontWeight = FontWeight.SemiBold, fontSize = 13.sp, color = theme.onSurface)
+            Text(statusLabel, fontSize = 12.sp, color = theme.onSurface.copy(alpha = 0.7f))
+        }
+        Text(explanation, fontSize = 11.sp, color = theme.onSurface.copy(alpha = 0.62f))
+        Row {
+            if (canReset) {
+                TextButton(onClick = onReset) { Text("Reset site choice") }
+            }
+            if (showAndroidSettings) {
+                TextButton(onClick = onOpenAndroidSettings) { Text("Android settings") }
+            }
+        }
     }
 }
 

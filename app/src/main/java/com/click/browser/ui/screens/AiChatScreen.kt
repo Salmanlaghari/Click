@@ -52,6 +52,8 @@ import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.DeleteOutline
 import androidx.compose.material.icons.filled.ErrorOutline
+import androidx.compose.material.icons.filled.ExpandLess
+import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.Flag
 import androidx.compose.material.icons.filled.Key
 import androidx.compose.material.icons.filled.Mic
@@ -105,6 +107,7 @@ import com.click.browser.engine.AiRolePresets
 import com.click.browser.engine.AiSafetyFilter
 import com.click.browser.engine.AiSelectedTextPolicy
 import com.click.browser.engine.AiTabComparisonExcerpt
+import com.click.browser.engine.AiTabComparisonCaptureGate
 import com.click.browser.engine.AiTabComparisonOption
 import com.click.browser.engine.AiTabComparisonPolicy
 import com.click.browser.engine.capturePageContextWithTimeout
@@ -148,6 +151,8 @@ internal fun AiChatScreen(
     model: String,
     secureDns: Boolean,
     usingBuiltInKey: Boolean = false,
+    isExpanded: Boolean = false,
+    onToggleExpanded: () -> Unit = {},
     pageTitle: String = "",
     pageUrl: String = "",
     pageContextIdentity: String = "",
@@ -159,7 +164,7 @@ internal fun AiChatScreen(
     onRequestTabComparisonContext: (
         List<AiTabComparisonOption>,
         (Map<String, String>?) -> Unit
-    ) -> Unit = { _, onCaptured -> onCaptured(null) },
+    ) -> (() -> Unit)? = { _, onCaptured -> onCaptured(null); null },
     onCancelSelectedText: () -> Unit = {},
     onOpenUrl: (String) -> Unit = {},
     onReportMessage: (String) -> Unit = {},
@@ -193,6 +198,9 @@ internal fun AiChatScreen(
     var comparisonLoading by remember(provider.id) { mutableStateOf(false) }
     var showComparisonPicker by remember(provider.id) { mutableStateOf(false) }
     var showComparisonConsent by remember(provider.id) { mutableStateOf(false) }
+    var comparisonCaptureCancel by remember { mutableStateOf<(() -> Unit)?>(null) }
+    val comparisonCaptureGate = remember { AiTabComparisonCaptureGate() }
+    val latestComparisonCaptureCancel = rememberUpdatedState(comparisonCaptureCancel)
     var selectedComparisonTabIds by remember(provider.id) { mutableStateOf<Set<String>>(emptySet()) }
     var pendingComparisonTabs by remember(provider.id) {
         mutableStateOf<List<AiTabComparisonOption>>(emptyList())
@@ -223,6 +231,13 @@ internal fun AiChatScreen(
             screenActive = false
             pageContextCaptureJob?.cancel()
             pageContextCaptureJob = null
+        }
+    }
+
+    DisposableEffect(provider.id) {
+        onDispose {
+            comparisonCaptureGate.invalidate()
+            latestComparisonCaptureCancel.value?.invoke()
         }
     }
 
@@ -436,6 +451,28 @@ internal fun AiChatScreen(
         pageContextCaptureError = "Page reading cancelled. Nothing from this page was sent."
     }
 
+    fun cancelSelectedTabCapture(showStatus: Boolean = true) {
+        if (!comparisonLoading) return
+        comparisonCaptureGate.invalidate()
+        val cancelCapture = comparisonCaptureCancel
+        comparisonCaptureCancel = null
+        comparisonLoading = false
+        approvedComparisonConsentKey = null
+        cancelCapture?.invoke()
+        if (showStatus) {
+            messages.add(ChatMessage("system", "Selected-tab reading cancelled. Nothing was sent to the AI provider."))
+        }
+    }
+
+    fun closeAiChat() {
+        cancelActiveRequest(showStatus = false)
+        cancelPageContextCapture()
+        cancelSelectedTabCapture(showStatus = false)
+        ttsEngine?.stop()
+        speakingText = null
+        onClose()
+    }
+
     fun capturePageAfterConsent() {
         val requestKey = pageContextKey
         pageContextCaptureJob?.cancel()
@@ -462,12 +499,17 @@ internal fun AiChatScreen(
     }
 
     fun captureSelectedTabsAfterConsent(selectedTabs: List<AiTabComparisonOption>, scopeKey: String) {
-        if (!screenActive || apiKey.isBlank() || selectedTextOnlySession || typing || pageContextLoading) return
+        if (!screenActive || apiKey.isBlank() || selectedTextOnlySession || typing || pageContextLoading || comparisonLoading) return
         if (scopeKey != AiTabComparisonPolicy.consentScopeKey(provider.id, selectedTabs)) return
         approvedComparisonConsentKey = scopeKey
         comparisonLoading = true
-        onRequestTabComparisonContext(selectedTabs) { capturedTextById ->
-            if (!screenActive || approvedComparisonConsentKey != scopeKey) return@onRequestTabComparisonContext
+        val captureToken = comparisonCaptureGate.begin()
+        val cancelCapture = onRequestTabComparisonContext(selectedTabs) { capturedTextById ->
+            if (!screenActive || !comparisonCaptureGate.isCurrent(captureToken) || approvedComparisonConsentKey != scopeKey) {
+                return@onRequestTabComparisonContext
+            }
+            comparisonCaptureGate.invalidate()
+            comparisonCaptureCancel = null
             comparisonLoading = false
             val excerpts = capturedTextById?.let {
                 AiTabComparisonPolicy.prepareExcerpts(selectedTabs, it)
@@ -491,6 +533,9 @@ internal fun AiChatScreen(
                 includesPageContextOverride = true,
                 consentScopeKeyOverride = scopeKey
             )
+        }
+        if (comparisonLoading && comparisonCaptureGate.isCurrent(captureToken)) {
+            comparisonCaptureCancel = cancelCapture
         }
     }
 
@@ -539,11 +584,17 @@ internal fun AiChatScreen(
                     }
                 },
                 navigationIcon = {
-                    IconButton(onClick = onClose) {
+                    IconButton(onClick = { closeAiChat() }) {
                         Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
                     }
                 },
                 actions = {
+                    IconButton(onClick = onToggleExpanded) {
+                        Icon(
+                            imageVector = if (isExpanded) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
+                            contentDescription = if (isExpanded) "Collapse Ask AI panel" else "Expand Ask AI panel"
+                        )
+                    }
                     if (messages.isNotEmpty()) {
                         IconButton(onClick = {
                             cancelActiveRequest(showStatus = false)
@@ -715,15 +766,19 @@ internal fun AiChatScreen(
                             .padding(horizontal = 14.dp, vertical = 2.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        if (comparisonTabs.size >= AiTabComparisonPolicy.MIN_SELECTED_TABS) {
+                        if (comparisonLoading || comparisonTabs.size >= AiTabComparisonPolicy.MIN_SELECTED_TABS) {
                             TextButton(
-                                enabled = !typing && !pageContextLoading && !comparisonLoading,
+                                enabled = comparisonLoading || (!typing && !pageContextLoading),
                                 onClick = {
-                                    selectedComparisonTabIds = emptySet()
-                                    showComparisonPicker = true
+                                    if (comparisonLoading) {
+                                        cancelSelectedTabCapture()
+                                    } else {
+                                        selectedComparisonTabIds = emptySet()
+                                        showComparisonPicker = true
+                                    }
                                 }
                             ) {
-                                Text(if (comparisonLoading) "Reading selected tabs…" else "Compare open tabs")
+                                Text(if (comparisonLoading) "Cancel reading" else "Compare open tabs")
                             }
                         } else {
                             Text(

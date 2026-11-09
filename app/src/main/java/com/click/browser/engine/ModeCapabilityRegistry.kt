@@ -41,7 +41,6 @@ internal object ModeCapabilityRegistry {
     private val webViewOnlyReasons: Map<FeatureId, String> = mapOf(
         FeatureId.DEVTOOLS to "DevTools is only connected to WebView; this regular tab uses GeckoView.",
         FeatureId.COOKIES to "Cookie management is connected to WebView tabs only; this tab uses GeckoView.",
-        FeatureId.DESKTOP to "Wide-layout overrides are not yet connected to GeckoView tabs.",
         FeatureId.ADBLOCK to "The custom filter is WebView-only; GeckoView tracking protection remains enabled.",
         FeatureId.READER to "Reader mode is not yet connected to GeckoView tabs.",
         FeatureId.SCREENSHOT to "Page screenshots currently capture WebView tabs only.",

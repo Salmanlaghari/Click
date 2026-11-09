@@ -152,6 +152,8 @@ fun ClickHomeScreen(
     searchEngine: String,
     adBlockStatusLabel: String,
     adBlockStatusActive: Boolean,
+    homeNewsFeedEnabled: Boolean,
+    onHomeNewsFeedEnabledChange: (Boolean) -> Unit,
     wallpaperUri: String? = null,
     shieldActive: Boolean = false,
     onNavigate: (String) -> Unit,
@@ -258,18 +260,28 @@ fun ClickHomeScreen(
                 marker = "R",
                 eyebrow = "RESEARCH DESK",
                 headline = "Latest AI/ML papers",
-                detail = "Recent arXiv research updates are featured below.",
+                detail = "The optional feed below includes recent arXiv research updates.",
                 actionLabel = "Browse recent papers",
                 onClick = { onNavigate("https://arxiv.org/list/cs.AI/recent") }
             )
-            NewsSection(
-                theme = theme,
-                activeMode = activeMode,
-                cardBg = cardBg,
-                cardBorder = cardBorder,
-                neon = false,
-                onNavigate = onNavigate
-            )
+            if (homeNewsFeedEnabled) {
+                NewsSection(
+                    theme = theme,
+                    activeMode = activeMode,
+                    cardBg = cardBg,
+                    cardBorder = cardBorder,
+                    neon = false,
+                    onNavigate = onNavigate,
+                    onDismiss = { onHomeNewsFeedEnabledChange(false) }
+                )
+            } else {
+                HomeNewsFeedOptInCard(
+                    theme = theme,
+                    cardBg = cardBg,
+                    cardBorder = cardBorder,
+                    onEnable = { onHomeNewsFeedEnabledChange(true) }
+                )
+            }
         }
 
         // V9 Shield is DNS-only; the card retains the existing detail and toggle actions.
@@ -307,14 +319,24 @@ fun ClickHomeScreen(
         )
 
         if (activeMode != BrowserMode.ADVANCED) {
-            NewsSection(
-                theme = theme,
-                activeMode = activeMode,
-                cardBg = cardBg,
-                cardBorder = cardBorder,
-                neon = false,
-                onNavigate = onNavigate
-            )
+            if (homeNewsFeedEnabled) {
+                NewsSection(
+                    theme = theme,
+                    activeMode = activeMode,
+                    cardBg = cardBg,
+                    cardBorder = cardBorder,
+                    neon = false,
+                    onNavigate = onNavigate,
+                    onDismiss = { onHomeNewsFeedEnabledChange(false) }
+                )
+            } else {
+                HomeNewsFeedOptInCard(
+                    theme = theme,
+                    cardBg = cardBg,
+                    cardBorder = cardBorder,
+                    onEnable = { onHomeNewsFeedEnabledChange(true) }
+                )
+            }
         }
 
         QuickActionsGrid(
@@ -1121,6 +1143,41 @@ private fun CategoryTabs(
     }
 }
 
+@Composable
+private fun HomeNewsFeedOptInCard(
+    theme: ModeTheme,
+    cardBg: Color,
+    cardBorder: Color,
+    onEnable: () -> Unit
+) {
+    Card(
+        shape = RoundedCornerShape(14.dp),
+        colors = CardDefaults.cardColors(containerColor = cardBg),
+        border = androidx.compose.foundation.BorderStroke(1.dp, cardBorder),
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Column(modifier = Modifier.fillMaxWidth().padding(16.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    "Optional news & recommendations",
+                    color = theme.onSurface,
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 15.sp,
+                    modifier = Modifier.weight(1f)
+                )
+                TextButton(onClick = onEnable) {
+                    Text("Show feed", color = theme.primary)
+                }
+            }
+            Text(
+                "Show headlines on Home. You can hide the feed any time.",
+                color = theme.onSurface.copy(alpha = 0.68f),
+                fontSize = 12.sp
+            )
+        }
+    }
+}
+
 /** News section: hero 16:9 card + small list cards, RSS-backed. */
 @Composable
 private fun NewsSection(
@@ -1129,7 +1186,8 @@ private fun NewsSection(
     cardBg: Color,
     cardBorder: Color,
     neon: Boolean,
-    onNavigate: (String) -> Unit
+    onNavigate: (String) -> Unit,
+    onDismiss: () -> Unit
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -1154,6 +1212,21 @@ private fun NewsSection(
     }
 
     Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(
+                "News & recommendations",
+                color = theme.onSurface,
+                fontWeight = FontWeight.Bold,
+                fontSize = 15.sp,
+                modifier = Modifier.weight(1f)
+            )
+            TextButton(onClick = onDismiss) {
+                Text("Hide news", color = theme.primary)
+            }
+        }
         if (category == NewsCategory.RESEARCH) {
             Text(
                 "arXiv AI & ML · preprints are not necessarily peer-reviewed",
@@ -1568,6 +1641,7 @@ fun CompactBrowseBar(
     onNavigate: (String) -> Unit,
     onReload: () -> Unit,
     onStopLoading: () -> Unit,
+    canReload: Boolean = true,
     onNewTab: () -> Unit,
     onMenuClick: () -> Unit,
     onSiteSettingsClick: () -> Unit = {},
@@ -1682,6 +1756,7 @@ fun CompactBrowseBar(
                         CompactBrowsePrimaryAction.RELOAD -> onReload
                         CompactBrowsePrimaryAction.STOP -> onStopLoading
                     },
+                    enabled = primaryAction != CompactBrowsePrimaryAction.RELOAD || canReload,
                     modifier = Modifier.size(40.dp)
                 ) {
                     Icon(
@@ -1692,10 +1767,12 @@ fun CompactBrowseBar(
                         },
                         contentDescription = when (primaryAction) {
                             CompactBrowsePrimaryAction.NEW_TAB -> "New tab"
-                            CompactBrowsePrimaryAction.RELOAD -> "Reload"
+                            CompactBrowsePrimaryAction.RELOAD -> if (canReload) "Reload" else "Reload unavailable for this request"
                             CompactBrowsePrimaryAction.STOP -> "Stop loading"
                         },
-                        tint = theme.onTopBar,
+                        tint = if (primaryAction == CompactBrowsePrimaryAction.RELOAD && !canReload) {
+                            theme.onTopBar.copy(alpha = 0.38f)
+                        } else theme.onTopBar,
                         modifier = Modifier.size(22.dp)
                     )
                 }

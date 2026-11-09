@@ -141,6 +141,9 @@ object AppSettings {
     /** True after the first-run feature tour is completed or skipped. */
     val ONBOARDING_COMPLETED = booleanPreferencesKey("onboarding_completed")
 
+    // In-app Home feed is separate from background alerts and stays off until enabled.
+    val HOME_NEWS_FEED_ENABLED = booleanPreferencesKey("home_news_feed_enabled")
+
     // ---- Background news notifications (WhatsApp-style alerts) ----
     // Opt-in, default OFF (Play-policy friendly): the user enables them in
     // Settings → General → News Notifications and picks topics. A

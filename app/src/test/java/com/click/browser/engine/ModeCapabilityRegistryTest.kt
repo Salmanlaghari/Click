@@ -44,6 +44,19 @@ class ModeCapabilityRegistryTest {
     }
 
     @Test
+    fun developerDesktopShortcutIsEnabledOnGeckoView() {
+        val access = ModeCapabilityRegistry.availability(
+            FeatureId.DESKTOP,
+            BrowserMode.DEVELOPER,
+            BrowserTabEngine.GECKOVIEW
+        )
+
+        assertTrue(access.visible)
+        assertTrue(access.enabled)
+        assertEquals(null, access.explanation)
+    }
+
+    @Test
     fun allWebViewOnlyActionsAreDisabledForEveryVisibleGeckoMode() {
         ModeCapabilityRegistry.webViewOnlyFeatures.forEach { feature ->
             BrowserMode.values().forEach { mode ->
