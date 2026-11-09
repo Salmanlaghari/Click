@@ -6278,15 +6278,68 @@ class MainActivity : FragmentActivity() {
                                                     horizontalAlignment = Alignment.CenterHorizontally,
                                                     verticalArrangement = Arrangement.Center
                                                 ) {
+                                                    // Re-read mutable state at click time; the session token only
+                                                    // identifies the popup this button was rendered for.
+                                                    val expectedPopupSession = extensionPopup.session
+                                                    val canRetryPopup = remember(expectedPopupSession) {
+                                                        derivedStateOf {
+                                                            val popupNow = geckoTabPopupState.value
+                                                            val tabNow = tabs.getOrNull(activeTabIndex)
+                                                            val actionNow = if (popupNow != null && tabNow != null) {
+                                                                geckoTabActionsState.value[tabNow.id].orEmpty()
+                                                                    .firstOrNull { it.extensionId == popupNow.extensionId }
+                                                            } else null
+                                                            popupNow != null && tabNow != null &&
+                                                                popupNow.session === expectedPopupSession &&
+                                                                com.click.browser.extensions.canRetryNormalTabExtensionPopup(
+                                                                    isOwnerSelected = popupNow.ownerTabId == tabNow.id,
+                                                                    hasAvailableAction = actionNow != null && normalTabExtensionRouter != null,
+                                                                    currentUrl = tabNow.url,
+                                                                    isPopupFailed = popupNow.renderState ==
+                                                                        com.click.browser.extensions.NormalTabExtensionPopupRenderState.FAILED
+                                                                )
+                                                        }
+                                                    }
                                                     Text("This add-on popup stopped loading or did not render. Your webpage is still open.", color = theme.onSurface)
                                                     androidx.compose.material3.TextButton(
-                                                        enabled = com.click.browser.extensions.supportsNormalTabExtensionActions(currentTab.url),
+                                                        enabled = canRetryPopup.value,
                                                         onClick = {
-                                                            val action = geckoTabActionsState.value[currentTab.id].orEmpty()
-                                                                .firstOrNull { it.extensionId == extensionPopup.extensionId }
-                                                            normalTabExtensionRouter?.closePopup(extensionPopup.session)
-                                                            if (action != null) {
-                                                                normalTabExtensionRouter?.clickAction(currentTab.id, action, currentTab.url)
+                                                            // Read State.value now rather than capturing the last
+                                                            // composition snapshot; the popup may have changed before
+                                                            // this event reaches the handler.
+                                                            val popupAtClick = geckoTabPopupState.value
+                                                            val tabAtClick = tabs.getOrNull(activeTabIndex)
+                                                            val routerAtClick = normalTabExtensionRouter
+                                                            val actionAtClick = if (popupAtClick != null && tabAtClick != null) {
+                                                                geckoTabActionsState.value[tabAtClick.id].orEmpty()
+                                                                    .firstOrNull { it.extensionId == popupAtClick.extensionId }
+                                                            } else null
+                                                            val canRetryNow = popupAtClick != null && tabAtClick != null &&
+                                                                popupAtClick.session === expectedPopupSession &&
+                                                                com.click.browser.extensions.canRetryNormalTabExtensionPopup(
+                                                                    isOwnerSelected = popupAtClick.ownerTabId == tabAtClick.id,
+                                                                    hasAvailableAction = actionAtClick != null && routerAtClick != null,
+                                                                    currentUrl = tabAtClick.url,
+                                                                    isPopupFailed = popupAtClick.renderState ==
+                                                                        com.click.browser.extensions.NormalTabExtensionPopupRenderState.FAILED
+                                                                )
+                                                            if (!canRetryNow || actionAtClick == null || routerAtClick == null || popupAtClick == null || tabAtClick == null) {
+                                                                Toast.makeText(
+                                                                    this@MainActivity,
+                                                                    "This add-on popup can no longer be retried. Your webpage is still open.",
+                                                                    Toast.LENGTH_SHORT
+                                                                ).show()
+                                                            } else if (
+                                                                routerAtClick.clickAction(tabAtClick.id, actionAtClick, tabAtClick.url) ==
+                                                                com.click.browser.extensions.NormalTabActionDispatchResult.REQUESTED
+                                                            ) {
+                                                                routerAtClick.closePopup(popupAtClick.session)
+                                                            } else {
+                                                                Toast.makeText(
+                                                                    this@MainActivity,
+                                                                    "This add-on action could not be retried. Your webpage is still open.",
+                                                                    Toast.LENGTH_SHORT
+                                                                ).show()
                                                             }
                                                         }
                                                     ) { Text("Try again") }
