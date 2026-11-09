@@ -8,7 +8,7 @@ import org.junit.Test
 
 class HomeContentSectionOrderTest {
     @Test
-    fun pdfCoreAndSecondaryContentOrderIsExplicitForEveryMode() {
+    fun homeCoreAndSecondaryContentOrderIsExplicitForEveryMode() {
         val requiredCoreOrder = listOf(
             HomeContentSection.PRIVACY_STATUS,
             HomeContentSection.QUICK_SITES,
