@@ -226,7 +226,7 @@ internal object CustomFolderDownloadTransfer {
                 ?: throw CustomTransferFailure("The custom folder refused the final file.")
             input.use { source -> finalOutput.use { destination -> source.copyTo(destination) } }
             runCatching { part.delete() }
-            CustomTransferResult(
+            return CustomTransferResult(
                 fileName = finalName,
                 location = finalDocument.uri.toString(),
                 bytesDownloaded = downloaded,
