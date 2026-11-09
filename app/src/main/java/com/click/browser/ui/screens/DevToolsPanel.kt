@@ -6,6 +6,7 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -77,7 +78,11 @@ internal fun DevToolsPanel(
     onRunConsoleCommand: (String, (String) -> Unit) -> Unit,
     deviceInfo: DeviceInfo?,
     onRefreshDeviceInfo: () -> Unit,
-    onRefreshSources: () -> Unit
+    onRefreshSources: () -> Unit,
+    renderedDomMarkup: String?,
+    renderedDomLoading: Boolean,
+    onInspectRenderedDom: () -> Unit,
+    onClearRenderedDom: () -> Unit
 ) {
     val tabs = listOf("Elements", "Console", "Network", "Sources", "Device")
 
@@ -138,7 +143,16 @@ internal fun DevToolsPanel(
                     )
                 }
                 2 -> NetworkTab(networkRequests, onClearNetwork)
-                3 -> SourcesTab(sourcesList, onRefreshSources)
+                3 -> key(pageSessionKey) {
+                    SourcesTab(
+                        sources = sourcesList,
+                        renderedDomMarkup = renderedDomMarkup,
+                        renderedDomLoading = renderedDomLoading,
+                        onRefresh = onRefreshSources,
+                        onInspectRenderedDom = onInspectRenderedDom,
+                        onClearRenderedDom = onClearRenderedDom
+                    )
+                }
                 4 -> DeviceTab(deviceInfo, onRefreshDeviceInfo)
             }
         }
@@ -587,30 +601,129 @@ private fun NetworkTab(requests: List<NetworkRequest>, onClearNetwork: () -> Uni
 }
 
 @Composable
-private fun SourcesTab(sources: List<String>, onRefresh: () -> Unit) {
+private fun SourcesTab(
+    sources: List<String>,
+    renderedDomMarkup: String?,
+    renderedDomLoading: Boolean,
+    onRefresh: () -> Unit,
+    onInspectRenderedDom: () -> Unit,
+    onClearRenderedDom: () -> Unit
+) {
+    var showRenderedDomConsent by remember { mutableStateOf(false) }
+    if (showRenderedDomConsent) {
+        AlertDialog(
+            onDismissRequest = { showRenderedDomConsent = false },
+            title = { Text("View rendered DOM?") },
+            text = {
+                Text(
+                    "This shows rendered DOM markup capped at ${DevToolsInspectionPolicy.MAX_RENDERED_DOM_SOURCE_LENGTH} characters; a short truncation note may follow. It can include hidden or off-screen text and selected element attributes such as IDs and classes, which may contain URLs, tokens, or other sensitive information. Form values and editable content, scripts, styles, cookies, and storage are omitted. Link and resource attributes expose only HTTP(S) origins; other URLs are omitted. Linked resources are not fetched; this inspection itself sends nothing to AI or the network. This is rendered markup, not the original response source."
+                )
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        showRenderedDomConsent = false
+                        onInspectRenderedDom()
+                    }
+                ) { Text("Show markup", color = DevToolsPalette.accent) }
+            },
+            dismissButton = {
+                TextButton(onClick = { showRenderedDomConsent = false }) {
+                    Text("Cancel", color = DevToolsPalette.muted)
+                }
+            },
+            containerColor = DevToolsPalette.surface,
+            titleContentColor = DevToolsPalette.ink,
+            textContentColor = DevToolsPalette.muted
+        )
+    }
+
     Column(modifier = Modifier.fillMaxSize()) {
         Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically
         ) {
-            Text("Markup resource references", color = DevToolsPalette.ink, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+            Text("Sources · WebView", color = DevToolsPalette.ink, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
             TextButton(onClick = onRefresh) {
-                Text("Refresh", color = DevToolsPalette.accent, fontSize = 11.sp)
+                Text("Refresh references", color = DevToolsPalette.accent, fontSize = 11.sp, maxLines = 1)
             }
         }
         Text(
-            "Only references from page markup are listed; source contents are not loaded. Query and fragment data are hidden.",
+            "Reference URLs are sanitized; query and fragment data are hidden. Viewing rendered markup requires confirmation.",
             color = DevToolsPalette.muted,
             fontSize = 10.sp,
             modifier = Modifier.padding(bottom = 5.dp)
         )
-        if (sources.isEmpty()) {
-            Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                Text("Tap Refresh to list page references.", color = DevToolsPalette.muted, fontSize = 12.sp)
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            TextButton(
+                onClick = { showRenderedDomConsent = true },
+                enabled = !renderedDomLoading
+            ) {
+                Text(
+                    if (renderedDomMarkup == null) "View rendered DOM" else "Refresh rendered DOM",
+                    color = DevToolsPalette.accent,
+                    fontSize = 11.sp
+                )
             }
-        } else {
-            LazyColumn(modifier = Modifier.fillMaxSize()) {
+            if (renderedDomMarkup != null) {
+                TextButton(onClick = onClearRenderedDom, enabled = !renderedDomLoading) {
+                    Text("Clear preview", color = DevToolsPalette.muted, fontSize = 11.sp)
+                }
+            }
+        }
+        if (renderedDomLoading) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier.padding(bottom = 6.dp)
+            ) {
+                CircularProgressIndicator(
+                    modifier = Modifier.size(16.dp),
+                    color = DevToolsPalette.accent,
+                    strokeWidth = 2.dp
+                )
+                Spacer(Modifier.width(8.dp))
+                Text("Reading the current rendered DOM…", color = DevToolsPalette.muted, fontSize = 10.sp)
+            }
+        }
+        LazyColumn(modifier = Modifier.weight(1f)) {
+            if (renderedDomMarkup != null) {
+                item(key = "rendered-dom-title") {
+                    Text(
+                        "Rendered DOM (not original response source)",
+                        color = DevToolsPalette.ink,
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        modifier = Modifier.padding(top = 4.dp, bottom = 4.dp)
+                    )
+                }
+                item(key = "rendered-dom-markup") {
+                    SelectionContainer {
+                        Text(
+                            renderedDomMarkup,
+                            color = DevToolsPalette.ink,
+                            fontFamily = FontFamily.Monospace,
+                            fontSize = 10.sp,
+                            modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(8.dp))
+                                .background(DevToolsPalette.surface).padding(8.dp)
+                        )
+                    }
+                }
+            }
+            item(key = "source-references-title") {
+                Text(
+                    "Markup resource references",
+                    color = DevToolsPalette.ink,
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    modifier = Modifier.padding(top = 8.dp, bottom = 4.dp)
+                )
+            }
+            if (sources.isEmpty()) {
+                item(key = "source-references-empty") {
+                    Text("Tap Refresh references to list page URLs.", color = DevToolsPalette.muted, fontSize = 12.sp)
+                }
+            } else {
                 items(sources) { source ->
                     Text(
                         text = source,

@@ -51,6 +51,11 @@ internal object DevToolsInspectionPolicy {
     const val MAX_CONSOLE_STRING_LENGTH = 256
     const val MAX_CONSOLE_RESULT_LENGTH = 32_000
     const val MAX_STYLE_RESULT_LENGTH = 24_000
+    const val MAX_RENDERED_DOM_NODES = 500
+    const val MAX_RENDERED_DOM_DEPTH = 24
+    const val MAX_RENDERED_DOM_ATTRIBUTES_PER_NODE = 64
+    const val MAX_RENDERED_DOM_SOURCE_LENGTH = 24_000
+    const val MAX_RENDERED_DOM_RESULT_LENGTH = 128_000
 
     fun canInspectPage(
         mode: BrowserMode,
@@ -110,6 +115,48 @@ internal object DevToolsInspectionPolicy {
         selectedTab = selectedTab,
         requiredTab = 1
     )
+
+    fun shouldCaptureRenderedDom(
+        mode: BrowserMode,
+        engine: BrowserTabEngine,
+        panelVisible: Boolean,
+        pageLoaded: Boolean,
+        targetMatches: Boolean,
+        selectedTab: Int,
+        userConfirmed: Boolean
+    ): Boolean = userConfirmed && shouldCaptureSelectedTabData(
+        mode = mode,
+        engine = engine,
+        panelVisible = panelVisible,
+        pageLoaded = pageLoaded,
+        targetMatches = targetMatches,
+        selectedTab = selectedTab,
+        requiredTab = 3
+    )
+
+    fun acceptsRenderedDomResult(
+        capturedGeneration: Long,
+        currentGeneration: Long,
+        capturedTabIndex: Int,
+        currentTabIndex: Int,
+        capturedTabId: String,
+        currentTabId: String,
+        capturedTabUrl: String,
+        currentTabUrl: String,
+        capturedPageUrl: String,
+        currentPageUrl: String,
+        targetMatches: Boolean,
+        sessionActive: Boolean
+    ): Boolean = capturedTabIndex == currentTabIndex &&
+        capturedTabId == currentTabId &&
+        capturedTabUrl == currentTabUrl &&
+        capturedPageUrl == currentPageUrl &&
+        acceptsSessionResult(
+            capturedGeneration = capturedGeneration,
+            currentGeneration = currentGeneration,
+            targetMatches = targetMatches,
+            sessionActive = sessionActive
+        )
 
     // Fixed read-only allowlist for common layout and presentation values.
     // URL-bearing shorthands like `background` and `background-image` are omitted.
@@ -200,6 +247,101 @@ internal object DevToolsInspectionPolicy {
           }
           return JSON.stringify(refs);
         }catch(_){return '[]';}})()
+    """.trimIndent()
+
+    /** Reads only the current rendered DOM after explicit UI confirmation; never fetches linked resources. */
+    val renderedDomSourceScript: String = """
+        (function(){try{
+          var maxNodes=$MAX_RENDERED_DOM_NODES;
+          var maxDepth=$MAX_RENDERED_DOM_DEPTH;
+          var maxAttributesPerNode=$MAX_RENDERED_DOM_ATTRIBUTES_PER_NODE;
+          var maxChars=$MAX_RENDERED_DOM_SOURCE_LENGTH;
+          var pieces=[],length=0,visited=0,truncated=false;
+          var omitted={script:1,style:1,noscript:1,iframe:1,frame:1,object:1,embed:1,template:1};
+          var voidTags={area:1,base:1,br:1,col:1,hr:1,img:1,input:1,link:1,meta:1,source:1,track:1,wbr:1};
+          function append(value){
+            var text=String(value||'');
+            var remaining=maxChars-length;
+            if(remaining<=0){truncated=true;return;}
+            if(text.length>remaining){text=text.slice(0,remaining);truncated=true;}
+            pieces.push(text);length+=text.length;
+          }
+          function cleanText(value){
+            var text=String(value||'');
+            var clean='';
+            for(var index=0;index<text.length;index++){
+              var code=text.charCodeAt(index);
+              clean+=((code<32&&code!==9&&code!==10&&code!==13)||code===127)?' ':text.charAt(index);
+            }
+            return clean;
+          }
+          function escapeMarkup(value){
+            return cleanText(value).split('&').join('&amp;').split('<').join('&lt;')
+              .split('>').join('&gt;').split('\"').join('&quot;');
+          }
+          function safeLabel(value,limit){
+            var text=cleanText(value).slice(0,limit);
+            var at=text.indexOf('@');
+            if(at>0&&text.indexOf('.',at)>at+1)return '[redacted]';
+            var tokens=text.split(/[^A-Za-z0-9_-]+/);
+            for(var tokenIndex=0;tokenIndex<tokens.length;tokenIndex++){
+              var token=tokens[tokenIndex];
+              var mixedLettersAndDigits=/[A-Za-z]/.test(token)&&/[0-9]/.test(token);
+              if(token.length>=24||(token.length>=16&&mixedLettersAndDigits))return '[redacted]';
+            }
+            return text;
+          }
+          function safeUrl(value){
+            try{
+              var url=new URL(String(value||''),document.baseURI);
+              if(url.protocol!=='http:'&&url.protocol!=='https:')return '[URL omitted]';
+              return url.origin+'/[path omitted]';
+            }catch(_){return '[URL omitted]';}
+          }
+          function walk(node,depth){
+            if(!node||depth>maxDepth||visited>=maxNodes||length>=maxChars){truncated=true;return;}
+            visited++;
+            if(node.nodeType===3){
+              var rawText=String(node.nodeValue||'');
+              var text=rawText.slice(0,maxChars-length);
+              if(text.length<rawText.length)truncated=true;
+              append(escapeMarkup(text));
+              return;
+            }
+            if(node.nodeType!==1)return;
+            var tag=String(node.localName||'').toLowerCase();
+            if(!tag||omitted[tag])return;
+            append('<'+tag);
+            var attributes=node.attributes;
+            if(attributes&&attributes.length>maxAttributesPerNode)truncated=true;
+            for(var i=0;attributes&&i<attributes.length&&i<maxAttributesPerNode&&length<maxChars;i++){
+              var name=String(attributes[i].name||'').toLowerCase();
+              if(name==='id'||name==='class'||name==='role'||name==='type'||name==='href'||name==='src'){
+                var raw=String(attributes[i].value||'').slice(0,512);
+                var value=(name==='href'||name==='src')?safeUrl(raw):safeLabel(raw,128);
+                append(' '+name+'='+String.fromCharCode(34)+escapeMarkup(value)+String.fromCharCode(34));
+              }
+            }
+            append('>');
+            if(voidTags[tag])return;
+            if(tag==='input'||tag==='textarea'||tag==='select'||tag==='option'||tag==='output'){
+              append('[form value omitted]');
+            }else if(node.isContentEditable){
+              append('[editable content omitted]');
+            }else{
+              var children=node.childNodes;
+              for(var childIndex=0;children&&childIndex<children.length;childIndex++){
+                if(visited>=maxNodes||length>=maxChars){truncated=true;break;}
+                walk(children[childIndex],depth+1);
+              }
+            }
+            append('</'+tag+'>');
+          }
+          var root=document.documentElement;
+          if(!root)return JSON.stringify({markup:'',truncated:false});
+          walk(root,0);
+          return JSON.stringify({markup:pieces.join(''),truncated:truncated});
+        }catch(_){return JSON.stringify({markup:'',truncated:false});}})()
     """.trimIndent()
 
     fun buildComputedStylesScript(path: List<Int>): String? {
@@ -374,6 +516,22 @@ internal object DevToolsInspectionPolicy {
                 .filter { it != "URL hidden" }
                 .distinct()
         }.getOrDefault(emptyList())
+    }
+
+    fun parseRenderedDomSource(evaluateJavascriptResult: String?): String? {
+        if (evaluateJavascriptResult.orEmpty().length > MAX_RENDERED_DOM_RESULT_LENGTH) return null
+        val jsonText = decodeEvaluateString(evaluateJavascriptResult)
+        if (jsonText.isBlank() || jsonText.length > MAX_RENDERED_DOM_RESULT_LENGTH) return null
+        return runCatching {
+            val json = JSONObject(jsonText)
+            val markup = json.optString("markup")
+            when {
+                markup.isBlank() || markup.length > MAX_RENDERED_DOM_SOURCE_LENGTH -> null
+                json.optBoolean("truncated") ->
+                    "$markup\n<!-- Rendered DOM preview truncated by safety limits (character, node, depth, or attribute cap) -->"
+                else -> markup
+            }
+        }.getOrNull()
     }
 
     /** Removes URL credentials, query parameters, fragments, and token-like path data. */
