@@ -7951,9 +7951,18 @@ class MainActivity : FragmentActivity() {
                                     }
                                 )
                             }
+                            var aiChatExpanded by remember { mutableStateOf(false) }
+                            val aiChatPanelShape = RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp)
                             // AI chat panel — one-shot slide/spring entrance (battery-safe:
                             // no continuous animation).
                             androidx.compose.animation.AnimatedVisibility(
+                                modifier = Modifier
+                                    .align(Alignment.BottomCenter)
+                                    .fillMaxWidth()
+                                    .animateContentSize()
+                                    .fillMaxHeight(AiChatPanelLayoutPolicy.heightFraction(aiChatExpanded))
+                                    .shadow(12.dp, aiChatPanelShape)
+                                    .clip(aiChatPanelShape),
                                 visible = showAiChat && !tamperBlocked,
                                 enter = androidx.compose.animation.slideInVertically(
                                     initialOffsetY = { it },
@@ -8000,6 +8009,8 @@ class MainActivity : FragmentActivity() {
                                     model = aiModel,
                                     secureDns = secureDnsEnabled,
                                     usingBuiltInKey = usingBuiltInKey,
+                                    isExpanded = aiChatExpanded,
+                                    onToggleExpanded = { aiChatExpanded = !aiChatExpanded },
                                     pageTitle = currentTab.title,
                                     pageUrl = currentTab.url,
                                     pageContextIdentity = currentTab.id,
@@ -8057,6 +8068,7 @@ class MainActivity : FragmentActivity() {
                                     onRequestTabComparisonContext = { requestedTabs, onCaptured ->
                                         if (pendingAiSelectedText != null) {
                                             onCaptured(null)
+                                            null
                                         } else {
                                             val captureTargets = requestedTabs.mapNotNull { option ->
                                                 val tab = tabs.firstOrNull { it.id == option.id }
@@ -8079,10 +8091,10 @@ class MainActivity : FragmentActivity() {
                                             }
                                             if (captureTargets.size != requestedTabs.size) {
                                                 onCaptured(null)
+                                                null
                                             } else {
                                                 val handler = android.os.Handler(android.os.Looper.getMainLooper())
                                                 val capturedTextById = mutableMapOf<String, String>()
-                                                var remaining = captureTargets.size
                                                 var finished = false
                                                 val timeout = Runnable {
                                                     if (!finished) {
@@ -8096,8 +8108,13 @@ class MainActivity : FragmentActivity() {
                                                     handler.removeCallbacks(timeout)
                                                     onCaptured(result)
                                                 }
-                                                handler.postDelayed(timeout, 12_000L)
-                                                captureTargets.forEach { (option, expectedTab, expectedWebView) ->
+                                                fun captureAt(index: Int) {
+                                                    if (finished) return
+                                                    if (index >= captureTargets.size) {
+                                                        finishCapture(capturedTextById.toMap())
+                                                        return
+                                                    }
+                                                    val (option, expectedTab, expectedWebView) = captureTargets[index]
                                                     runCatching {
                                                         expectedWebView.evaluateJavascript(
                                                             AiTabComparisonPolicy.VISIBLE_TEXT_SCRIPT
@@ -8138,14 +8155,22 @@ class MainActivity : FragmentActivity() {
                                                                 capturedTextById[option.id] = visibleText.take(
                                                                     AiTabComparisonPolicy.MAX_EXCERPT_CHARS_PER_TAB
                                                                 )
-                                                                remaining -= 1
-                                                                if (remaining == 0) finishCapture(capturedTextById.toMap())
+                                                                captureAt(index + 1)
                                                             }
                                                         }
                                                     }.onFailure {
                                                         finishCapture(null)
                                                     }
                                                 }
+                                                handler.postDelayed(timeout, 12_000L)
+                                                captureAt(0)
+                                                val cancelCapture: () -> Unit = {
+                                                    if (!finished) {
+                                                        finished = true
+                                                        handler.removeCallbacks(timeout)
+                                                    }
+                                                }
+                                                cancelCapture
                                             }
                                         }
                                     },
