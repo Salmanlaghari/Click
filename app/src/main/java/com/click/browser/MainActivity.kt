@@ -201,6 +201,7 @@ private data class ClosedTabUndo(
 
 private data class WebsiteMicrophoneConsentUiState(
     val requestId: String,
+    val tabId: String,
     val host: String,
     val privateTab: Boolean,
     val onAllow: () -> Unit,
@@ -215,7 +216,9 @@ private data class WebsiteMicrophoneRecoveryUiState(
 
 private data class PendingWebsiteMicrophoneAndroidResult(
     val requestId: String,
-    val onResult: (Boolean) -> Unit
+    val tabId: String,
+    val onResult: (Boolean) -> Unit,
+    val onCancel: () -> Unit
 )
 
 private data class PendingBrowserDownload(
@@ -2414,6 +2417,23 @@ class MainActivity : FragmentActivity() {
                 .collectAsState(initial = emptyMap())
             val latestWebsiteMicrophonePermissions = rememberUpdatedState(websiteMicrophonePermissions)
 
+            LaunchedEffect(
+                tabs.map { it.id },
+                websiteMicrophoneConsent?.requestId,
+                pendingWebsiteMicrophoneAndroidResult?.requestId
+            ) {
+                val consent = websiteMicrophoneConsent
+                if (consent != null && tabs.none { it.id == consent.tabId }) {
+                    websiteMicrophoneConsent = null
+                    runCatching { consent.onDismiss() }
+                }
+                val pending = pendingWebsiteMicrophoneAndroidResult
+                if (pending != null && tabs.none { it.id == pending.tabId }) {
+                    pendingWebsiteMicrophoneAndroidResult = null
+                    runCatching { pending.onCancel() }
+                }
+            }
+
             fun handleWebsiteMicrophoneRequest(
                 tab: TabItem?,
                 requestedOrigin: String,
@@ -2452,6 +2472,7 @@ class MainActivity : FragmentActivity() {
                     }
                     pendingWebsiteMicrophoneAndroidResult = PendingWebsiteMicrophoneAndroidResult(
                         requestId = requestId,
+                        tabId = tab.id,
                         onResult = { granted ->
                             if (!tabs.contains(tab)) {
                                 runCatching { reject() }
@@ -2464,7 +2485,8 @@ class MainActivity : FragmentActivity() {
                                     privateTab = privateTab
                                 )
                             }
-                        }
+                        },
+                        onCancel = { runCatching { reject() } }
                     )
                     try {
                         websiteMicrophoneAndroidPermissionLauncher.launch(
@@ -2503,6 +2525,7 @@ class MainActivity : FragmentActivity() {
                         val host = android.net.Uri.parse(origin).host ?: origin
                         websiteMicrophoneConsent = WebsiteMicrophoneConsentUiState(
                             requestId = requestId,
+                            tabId = tab.id,
                             host = host,
                             privateTab = privateTab,
                             onAllow = {
