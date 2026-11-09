@@ -14,7 +14,8 @@ internal enum class ClickCatLogCode(val label: String) {
     MODE_SWITCH_EXIT_REQUESTED("Old process exit was requested"),
     MODE_SWITCH_FAILED("Profile switch did not reach the relaunch step"),
     MODE_SWITCH_ROLLED_BACK("Profile selection was rolled back after relaunch failure"),
-    MODE_SWITCH_RELAUNCHED("Target profile restarted successfully"),
+    MODE_SWITCH_RELAUNCHED("Target profile process started; Activity window focus unconfirmed"),
+    MODE_SWITCH_ACTIVITY_FOCUSED("Target profile Activity window received focus"),
     MODE_SWITCH_BOOT_BLOCKED("Target profile restarted but browser startup was blocked"),
     MODE_SWITCH_WRONG_PROFILE("Restart did not reach the requested profile"),
     MODE_SWITCH_CANCELLED("Profile switch was cancelled"),
@@ -173,6 +174,20 @@ internal fun resolveClickModeSwitchOutcome(
     else -> ClickCatLogCode.MODE_SWITCH_WRONG_PROFILE
 }
 
+internal fun shouldRetainPendingModeSwitchUntilForeground(outcome: ClickCatLogCode?): Boolean =
+    outcome == ClickCatLogCode.MODE_SWITCH_RELAUNCHED
+
+internal fun resolveClickModeSwitchWindowFocusOutcome(
+    pending: PendingClickModeSwitch?,
+    focusedMode: BrowserMode,
+    bootBlocked: Boolean
+): ClickCatLogCode? = when {
+    pending == null -> null
+    bootBlocked -> ClickCatLogCode.MODE_SWITCH_BOOT_BLOCKED
+    focusedMode == pending.toMode -> ClickCatLogCode.MODE_SWITCH_ACTIVITY_FOCUSED
+    else -> ClickCatLogCode.MODE_SWITCH_WRONG_PROFILE
+}
+
 /**
  * Local Click-authored troubleshooting events only. This is not Android logcat:
  * renderer events may store a sanitized URL, tab ID, device/runtime context,
@@ -234,9 +249,19 @@ internal object ClickDiagnosticsLog {
         val outcome = resolveClickModeSwitchOutcome(pending, bootMode, bootBlocked)
         if (pending != null && outcome != null) {
             record(context, outcome, pending.fromMode, pending.toMode)
-            runCatching { prefs(context).edit().remove(PENDING_SWITCH_KEY).commit() }
+            if (!shouldRetainPendingModeSwitchUntilForeground(outcome)) {
+                runCatching { prefs(context).edit().remove(PENDING_SWITCH_KEY).commit() }
+            }
         }
         if (bootBlocked) record(context, ClickCatLogCode.PROFILE_BOOT_BLOCKED, toMode = bootMode)
+    }
+
+    @Synchronized
+    fun confirmModeSwitchWindowFocus(context: Context, focusedMode: BrowserMode, bootBlocked: Boolean) {
+        val pending = readPendingSwitch(context) ?: return
+        val outcome = resolveClickModeSwitchWindowFocusOutcome(pending, focusedMode, bootBlocked) ?: return
+        record(context, outcome, pending.fromMode, pending.toMode)
+        runCatching { prefs(context).edit().remove(PENDING_SWITCH_KEY).commit() }
     }
 
     @Synchronized
