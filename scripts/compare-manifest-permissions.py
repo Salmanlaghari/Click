@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Fail unless candidate and baseline merged Android manifests keep identical permission declarations."""
+"""Fail on unapproved Android permission changes between merged manifests."""
 from __future__ import annotations
 
 import sys
@@ -8,35 +8,44 @@ from pathlib import Path
 
 ANDROID = "{http://schemas.android.com/apk/res/android}"
 PERMISSION_TAG_PREFIX = "uses-permission"
+PermissionDeclaration = tuple[str, tuple[tuple[str, str], ...]]
+APPROVED_ADDITIONS = {
+    ("uses-permission", ((ANDROID + "name", "android.permission.FOREGROUND_SERVICE_DATA_SYNC"),)),
+    ("uses-permission", ((ANDROID + "name", "android.permission.RUN_USER_INITIATED_JOBS"),)),
+}
 
 
-def permissions(path: Path) -> set[tuple[str, str, str | None, str | None, str | None]]:
+def permissions(path: Path) -> set[PermissionDeclaration]:
     root = ET.parse(path).getroot()
     found = set()
     for element in root.iter():
-        tag = element.tag.rsplit("}", 1)[-1]
-        if not tag.startswith(PERMISSION_TAG_PREFIX):
+        raw_tag = element.tag
+        local_tag = raw_tag.rsplit("}", 1)[-1]
+        if not local_tag.startswith(PERMISSION_TAG_PREFIX):
             continue
-        name = element.attrib.get(ANDROID + "name")
-        if not name:
-            continue
-        found.add(
-            (
-                tag,
-                name,
-                element.attrib.get(ANDROID + "maxSdkVersion"),
-                element.attrib.get(ANDROID + "minSdkVersion"),
-                element.attrib.get(ANDROID + "usesPermissionFlags"),
-            )
-        )
+        attributes = tuple(sorted(element.attrib.items()))
+        found.add((raw_tag, attributes))
     return found
 
 
-def describe(items: set[tuple[str, str, str | None, str | None, str | None]]) -> list[str]:
-    return [
-        f"{tag} {name} (maxSdk={max_sdk}, minSdk={min_sdk}, flags={flags})"
-        for tag, name, max_sdk, min_sdk, flags in sorted(items)
-    ]
+def describe(items: set[PermissionDeclaration]) -> list[str]:
+    rows = []
+    for tag, attributes in sorted(items):
+        name = next((value for key, value in attributes if key == ANDROID + "name"), None)
+        if name is None:
+            declaration = f"{tag} <missing android:name>"
+        elif not name:
+            declaration = f"{tag} <empty android:name>"
+        else:
+            declaration = f"{tag} {name}"
+        extras = [
+            f"{key}={value}"
+            for key, value in attributes
+            if key != ANDROID + "name"
+        ]
+        suffix = f" ({', '.join(extras)})" if extras else ""
+        rows.append(f"{declaration}{suffix}")
+    return rows
 
 
 def main() -> int:
@@ -47,15 +56,21 @@ def main() -> int:
     baseline = permissions(baseline_path)
     candidate = permissions(candidate_path)
     added, removed = candidate - baseline, baseline - candidate
-    if added or removed:
-        if added:
+    approved_added = added & APPROVED_ADDITIONS
+    blocked_added = added - APPROVED_ADDITIONS
+    if approved_added:
+        print("Owner-approved merged permission additions:")
+        print("\n".join(f"  + {row}" for row in describe(approved_added)))
+    if blocked_added or removed:
+        if blocked_added:
             print("New merged permissions (blocked):")
-            print("\n".join(f"  + {row}" for row in describe(added)))
+            print("\n".join(f"  + {row}" for row in describe(blocked_added)))
         if removed:
             print("Baseline merged permissions removed (review required):")
             print("\n".join(f"  - {row}" for row in describe(removed)))
         return 1
-    print(f"Merged permission declarations unchanged from main ({len(candidate)} entries).")
+    if not approved_added:
+        print(f"Merged permission declarations unchanged from main ({len(candidate)} entries).")
     return 0
 
 

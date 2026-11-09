@@ -200,6 +200,7 @@ private data class PendingBrowserDownload(
     val fileName: String,
     val mimeType: String?,
     val userAgent: String?,
+    val mode: BrowserMode,
     val responseBody: java.io.InputStream? = null
 )
 
@@ -329,6 +330,8 @@ class MainActivity : FragmentActivity() {
     // default-browser status shown in Settings and used for the one-time
     // first-launch prompt.
     private val pendingExternalUrl = MutableStateFlow<String?>(null)
+    private val pendingOpenDownloads = MutableStateFlow(false)
+    private val activityResumeCount = MutableStateFlow(0L)
     private val isDefaultBrowserState = MutableStateFlow(false)
     private val defaultBrowserLauncher: ActivityResultLauncher<Intent> =
         registerForActivityResult(ActivityResultContracts.StartActivityForResult()) {
@@ -575,6 +578,7 @@ class MainActivity : FragmentActivity() {
 
     override fun onResume() {
         super.onResume()
+        activityResumeCount.value += 1L
         // The fallback default-apps page (pre-Android 10) does not return an
         // ActivityResult, so always refresh the role state when we come back.
         isDefaultBrowserState.value = DefaultBrowserHelper.isDefaultBrowser(this)
@@ -594,10 +598,19 @@ class MainActivity : FragmentActivity() {
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         setIntent(intent)
+        consumeOpenDownloadsIntent(intent)
         consumeNotificationUrl(intent)
         // Link delivered to the already-running instance: open it in a new
         // foreground tab via the pending-URL flow.
         externalViewUrl(intent)?.let { pendingExternalUrl.value = it }
+    }
+
+    private fun consumeOpenDownloadsIntent(intent: Intent) {
+        if (!intent.getBooleanExtra(com.click.browser.engine.CustomDownloadNotifications.EXTRA_OPEN_DOWNLOADS, false)) {
+            return
+        }
+        intent.removeExtra(com.click.browser.engine.CustomDownloadNotifications.EXTRA_OPEN_DOWNLOADS)
+        pendingOpenDownloads.value = true
     }
 
     /**
@@ -720,21 +733,24 @@ class MainActivity : FragmentActivity() {
         }
     }
 
-    /** Records synchronous custom-folder saves; DownloadManager tracks other destinations. */
+    /** Custom-folder transfers record on completion; DownloadManager tracks other destinations. */
     private suspend fun enqueueAndRecordDownload(
         url: String,
         fileName: String,
         locationOverride: String? = null,
-        userAgent: String? = null
+        userAgent: String? = null,
+        mode: BrowserMode = liveMode
     ) {
         val saved = DownloadHelper.enqueue(
             context = this,
             url = url,
             fileName = fileName,
             locationOverride = locationOverride,
-            userAgent = userAgent
+            userAgent = userAgent,
+            mode = mode
         ) ?: return
-        repository.addDownloadItem(
+        repository.addDownloadItemFor(
+            mode,
             DownloadItem(
                 fileName = saved.fileName,
                 url = url,
@@ -1278,6 +1294,8 @@ class MainActivity : FragmentActivity() {
             return
         }
 
+        consumeOpenDownloadsIntent(intent)
+
         // News notification deep link (cold start): consume the article URL
         // once so the composable below opens it in a new tab. Skipped on
         // recreation (rotation / process death) — the URL was already
@@ -1318,6 +1336,7 @@ class MainActivity : FragmentActivity() {
                 finishFirstRunOnboarding()
             }
             val activeMode by modeManager.modeFlow.collectAsState(initial = V9Engine.bootMode)
+            val appResumeCount by activityResumeCount.collectAsState()
             // Palette selection is shared across profiles; each mode keeps its own label and behavior.
             var lightThemeVariant by rememberSaveable { mutableStateOf(LightThemeVariant.CREAM) }
             var autoRotateThemes by rememberSaveable { mutableStateOf(false) }
@@ -1659,6 +1678,13 @@ class MainActivity : FragmentActivity() {
             var showBookmarks by remember { mutableStateOf(false) }
             var showHistory by remember { mutableStateOf(false) }
             var showDownloads by remember { mutableStateOf(false) }
+            val openDownloadsRequested by pendingOpenDownloads.collectAsState()
+            LaunchedEffect(openDownloadsRequested) {
+                if (openDownloadsRequested) {
+                    showDownloads = true
+                    pendingOpenDownloads.value = false
+                }
+            }
             var showPlaylist by remember { mutableStateOf(false) }
             var showStreamPlayer by remember { mutableStateOf(false) }
             // One-shot URL from the long-press menu ("Add to Playlist").
@@ -4226,6 +4252,7 @@ class MainActivity : FragmentActivity() {
                                                                                 fileName = fileName,
                                                                                 mimeType = mimeType,
                                                                                 userAgent = null,
+                                                                                mode = liveMode,
                                                                                 responseBody = body
                                                                             )
                                                                         }
@@ -5135,7 +5162,8 @@ class MainActivity : FragmentActivity() {
                                                                             url = url,
                                                                             fileName = fileName,
                                                                             mimeType = mimeType,
-                                                                            userAgent = userAgent
+                                                                            userAgent = userAgent,
+                                                                            mode = liveMode
                                                                         )
                                                                         scope.launch {
                                                                             val savedLocation = DownloadSettings.location(this@MainActivity)
@@ -5572,6 +5600,8 @@ class MainActivity : FragmentActivity() {
                             if (showDownloads) {
                                 DownloadsScreen(
                                     repository = repository,
+                                    mode = activeMode,
+                                    resumeSignal = appResumeCount,
                                     onClose = { showDownloads = false }
                                 )
                             }
@@ -7092,18 +7122,23 @@ class MainActivity : FragmentActivity() {
                                         TextButton(onClick = {
                                             val accepted = downloadPrompt
                                             pendingBrowserDownload = null
+                                            val acceptedMode = accepted.mode
+                                            val acceptedDestination = downloadDestination
                                             scope.launch {
                                                 val responseBody = accepted.responseBody
                                                 if (responseBody != null) {
                                                     val saved = DownloadHelper.enqueueResponse(
-                                                        this@MainActivity,
-                                                        responseBody,
-                                                        accepted.fileName,
-                                                        accepted.mimeType,
-                                                        locationOverride = downloadDestination
+                                                        context = this@MainActivity,
+                                                        responseBody = responseBody,
+                                                        url = accepted.url,
+                                                        fileName = accepted.fileName,
+                                                        mimeType = accepted.mimeType,
+                                                        locationOverride = acceptedDestination,
+                                                        mode = acceptedMode
                                                     )
                                                     if (saved != null) {
-                                                        repository.addDownloadItem(
+                                                        repository.addDownloadItemFor(
+                                                            acceptedMode,
                                                             DownloadItem(
                                                                 saved.fileName,
                                                                 accepted.url,
@@ -7116,8 +7151,9 @@ class MainActivity : FragmentActivity() {
                                                     enqueueAndRecordDownload(
                                                         accepted.url,
                                                         accepted.fileName,
-                                                        locationOverride = downloadDestination,
-                                                        userAgent = accepted.userAgent
+                                                        locationOverride = acceptedDestination,
+                                                        userAgent = accepted.userAgent,
+                                                        mode = acceptedMode
                                                     )
                                                 }
                                             }
@@ -8204,7 +8240,8 @@ class MainActivity : FragmentActivity() {
                             contentResolver.openInputStream(uri)?.use { input ->
                                 target.outputStream().use { output -> input.copyTo(output) }
                             }
-                            repository.addDownloadItem(
+                            repository.addDownloadItemFor(
+                                liveMode,
                                 DownloadItem(
                                     fileName = name,
                                     url = "file://${target.absolutePath}",

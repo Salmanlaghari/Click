@@ -1,13 +1,17 @@
 package com.click.browser.ui.screens
 
 import android.app.DownloadManager
+import android.Manifest
 import android.content.ClipData
 import android.content.Context
 import android.content.Intent
 import android.database.Cursor
 import android.net.Uri
+import android.provider.Settings
 import android.widget.Toast
 import android.webkit.MimeTypeMap
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -22,8 +26,14 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.core.content.FileProvider
 import com.click.browser.data.BrowserRepository
+import com.click.browser.data.CustomDownloadItem
+import com.click.browser.data.customDownloadProgress
+import com.click.browser.data.CustomDownloadState
 import com.click.browser.data.DownloadItem
 import com.click.browser.engine.DownloadHelper
+import com.click.browser.engine.BrowserMode
+import com.click.browser.engine.CustomDownloadNotifications
+import com.click.browser.engine.CustomDownloadScheduler
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
@@ -44,10 +54,29 @@ import java.util.Date
 @Composable
 fun DownloadsScreen(
     repository: BrowserRepository,
+    mode: BrowserMode,
+    resumeSignal: Long,
     onClose: () -> Unit
 ) {
     val context = LocalContext.current
-    val downloads by repository.downloadsFlow.collectAsState(initial = emptyList())
+    val downloadsFlow = remember(mode) { repository.downloadsFlowFor(mode) }
+    val customDownloadsFlow = remember(mode) { repository.customDownloadsFlowFor(mode) }
+    val downloads by downloadsFlow.collectAsState(initial = emptyList())
+    val customDownloads by customDownloadsFlow.collectAsState(initial = emptyList())
+    LaunchedEffect(mode) {
+        CustomDownloadScheduler.reconcile(context, mode)
+    }
+    var notificationsEnabled by remember {
+        mutableStateOf(CustomDownloadNotifications.canPostNotifications(context))
+    }
+    val notificationPermissionLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) {
+        notificationsEnabled = CustomDownloadNotifications.canPostNotifications(context)
+    }
+    LaunchedEffect(resumeSignal) {
+        notificationsEnabled = CustomDownloadNotifications.canPostNotifications(context)
+    }
     var queryState by remember {
         mutableStateOf<DownloadCenterQueryState>(DownloadCenterQueryState.Loading)
     }
@@ -78,6 +107,12 @@ fun DownloadsScreen(
     }
     val completed = managedDownloads.filter { it.state == ManagedDownloadState.COMPLETED }
     val failed = managedDownloads.filter { it.state == ManagedDownloadState.FAILED }
+    val activeCustom = customDownloads.filter { it.canCancel }
+    val activeCustomIds = activeCustom.mapTo(mutableSetOf()) { it.id }
+    val savedDownloads = downloads.filter { it.transferId == null || it.transferId !in activeCustomIds }
+    val failedCustom = customDownloads.filter {
+        it.state == CustomDownloadState.FAILED || it.state == CustomDownloadState.CANCELED
+    }
 
     Scaffold(
         topBar = {
@@ -96,6 +131,41 @@ fun DownloadsScreen(
                 .fillMaxSize()
                 .padding(padding)
         ) {
+            if (!notificationsEnabled && customDownloads.isNotEmpty()) {
+                item(key = "custom-download-notification-permission") {
+                    Card(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 16.dp, vertical = 8.dp)
+                    ) {
+                        Column(Modifier.padding(14.dp)) {
+                            Text(
+                                "Download notifications are off",
+                                style = MaterialTheme.typography.titleSmall
+                            )
+                            Text(
+                                "Transfers remain visible here, but Android may not show progress or completion notifications.",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                            TextButton(onClick = {
+                                if (!CustomDownloadNotifications.hasRuntimePermission(context)) {
+                                    notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+                                } else {
+                                    val settingsIntent = Intent(Settings.ACTION_CHANNEL_NOTIFICATION_SETTINGS).apply {
+                                        putExtra(Settings.EXTRA_APP_PACKAGE, context.packageName)
+                                        putExtra(Settings.EXTRA_CHANNEL_ID, CustomDownloadNotifications.CHANNEL_ID)
+                                    }
+                                    runCatching { context.startActivity(settingsIntent) }
+                                }
+                            }) {
+                                Text("Enable notifications")
+                            }
+                        }
+                    }
+                }
+            }
+
             when (val state = queryState) {
                 DownloadCenterQueryState.Loading -> {
                     if (downloads.isEmpty()) {
@@ -152,7 +222,7 @@ fun DownloadsScreen(
                 is DownloadCenterQueryState.Loaded -> Unit
             }
 
-            if (active.isNotEmpty()) {
+            if (active.isNotEmpty() || activeCustom.isNotEmpty()) {
                 item {
                     Text(
                         "In progress",
@@ -171,6 +241,13 @@ fun DownloadsScreen(
                                 Toast.makeText(context, "Could not cancel this download.", Toast.LENGTH_SHORT).show()
                             }
                         }
+                    )
+                }
+                items(activeCustom, key = { "custom-${it.id}" }) { item ->
+                    CustomTransferRow(
+                        item = item,
+                        onCancel = { scope.launch { CustomDownloadScheduler.cancel(context, item) } },
+                        onRetry = {}
                     )
                 }
                 item { HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp)) }
@@ -206,9 +283,15 @@ fun DownloadsScreen(
                         item = item,
                         onRetry = {
                             scope.launch {
-                                val saved = DownloadHelper.enqueue(context, item.sourceUrl, item.label)
+                                val saved = DownloadHelper.enqueue(
+                                    context,
+                                    item.sourceUrl,
+                                    item.label,
+                                    mode = mode
+                                )
                                 if (saved != null) {
-                                    repository.addDownloadItem(
+                                    repository.addDownloadItemFor(
+                                        mode,
                                         DownloadItem(
                                             saved.fileName,
                                             item.sourceUrl,
@@ -223,7 +306,23 @@ fun DownloadsScreen(
                 }
             }
 
-            if (downloads.isNotEmpty()) {
+            if (failedCustom.isNotEmpty()) {
+                items(failedCustom, key = { "custom-failed-${it.id}" }) { item ->
+                    CustomTransferRow(
+                        item = item,
+                        onCancel = {},
+                        onRetry = {
+                            scope.launch {
+                                if (!DownloadHelper.retryCustomFolder(context, item)) {
+                                    Toast.makeText(context, "Could not restart this download.", Toast.LENGTH_SHORT).show()
+                                }
+                            }
+                        }
+                    )
+                }
+            }
+
+            if (savedDownloads.isNotEmpty()) {
                 item {
                     Text(
                         "Saved files",
@@ -231,10 +330,13 @@ fun DownloadsScreen(
                         modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)
                     )
                 }
-                items(downloads) { item -> SavedDownloadRow(context, item) }
+                items(savedDownloads) { item -> SavedDownloadRow(context, item) }
             }
 
-            if (queryState.shouldShowEmptyState(savedFileCount = downloads.size)) {
+            if (queryState.shouldShowEmptyState(
+                    savedFileCount = savedDownloads.size + activeCustom.size + failedCustom.size
+                )
+            ) {
                 item {
                     Box(
                         modifier = Modifier
@@ -296,6 +398,65 @@ private fun ActiveDownloadRow(item: ManagedDownload, onCancel: () -> Unit) {
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant
         )
+    }
+}
+
+@Composable
+private fun CustomTransferRow(
+    item: CustomDownloadItem,
+    onCancel: () -> Unit,
+    onRetry: () -> Unit
+) {
+    val progress = customDownloadProgress(item.bytesDownloaded, item.totalBytes)
+    val status = when (item.state) {
+        CustomDownloadState.QUEUED -> "Waiting for network…"
+        CustomDownloadState.RUNNING -> "Downloading…"
+        CustomDownloadState.FAILED -> item.errorMessage ?: "Download failed."
+        CustomDownloadState.CANCELED -> "Canceled."
+        CustomDownloadState.COMPLETED -> "Saved."
+    }
+    val sizeText = if (item.totalBytes > 0L) {
+        "${formatBytes(item.bytesDownloaded)} of ${formatBytes(item.totalBytes)}"
+    } else {
+        "${formatBytes(item.bytesDownloaded)} downloaded"
+    }
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp, vertical = 8.dp)
+    ) {
+        Text(
+            item.fileName,
+            style = MaterialTheme.typography.bodyMedium,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis
+        )
+        if (item.canCancel) {
+            if (progress != null) {
+                LinearProgressIndicator(progress = { progress }, modifier = Modifier.fillMaxWidth())
+            } else {
+                LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+            }
+            Text(
+                "$status · $sizeText",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        } else {
+            Text(
+                status,
+                style = MaterialTheme.typography.bodySmall,
+                color = if (item.state == CustomDownloadState.FAILED) {
+                    MaterialTheme.colorScheme.error
+                } else {
+                    MaterialTheme.colorScheme.onSurfaceVariant
+                }
+            )
+        }
+        Row {
+            if (item.canCancel) TextButton(onClick = onCancel) { Text("Cancel") }
+            if (item.canRetry) TextButton(onClick = onRetry) { Text("Retry") }
+        }
     }
 }
 
