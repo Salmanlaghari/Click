@@ -20,6 +20,37 @@ class WebsiteMicrophonePermissionPolicyTest {
     }
 
     @Test
+    fun canonicalOriginNormalizesIpv6IdnAndPortBoundaries() {
+        assertEquals(
+            "https://[0:0:0:0:0:0:0:1]",
+            canonicalWebsiteMicrophoneOrigin("https://[::1]/meet")
+        )
+        assertEquals(
+            "https://xn--exmple-cua.com",
+            canonicalWebsiteMicrophoneOrigin("https://exämple.com")
+        )
+        assertNull(canonicalWebsiteMicrophoneOrigin("https://example.com:0"))
+        assertEquals(
+            "https://example.com:65535",
+            canonicalWebsiteMicrophoneOrigin("https://example.com:65535")
+        )
+        assertNull(canonicalWebsiteMicrophoneOrigin("https://example.com:65536"))
+    }
+
+    @Test
+    fun originHostExtractionNormalizesDomainAndIpv6Hosts() {
+        assertEquals(
+            "xn--exmple-cua.com",
+            websiteMicrophoneOriginHost("https://EXÄMPLE.com:8443/meet")
+        )
+        assertEquals(
+            "0:0:0:0:0:0:0:1",
+            websiteMicrophoneOriginHost("https://[::1]:8443/meet")
+        )
+        assertEquals("0:0:0:0:0:0:0:1", websiteMicrophoneHostKey("::1"))
+    }
+
+    @Test
     fun microphoneConsentRejectsInsecureOrMalformedOrigins() {
         assertNull(canonicalWebsiteMicrophoneOrigin("http://example.com"))
         assertNull(canonicalWebsiteMicrophoneOrigin("file:///tmp/page.html"))
@@ -45,6 +76,10 @@ class WebsiteMicrophonePermissionPolicyTest {
             websiteMicrophoneStatus(permissions["https://www.example.com"], true))
         assertEquals(WebsiteMicrophoneStatus.BLOCKED_FOR_SITE,
             websiteMicrophoneStatus(false, true))
+        assertEquals(
+            WebsiteMicrophoneDecision.BLOCKED_FOR_SITE.name,
+            WebsiteMicrophoneStatus.BLOCKED_FOR_SITE.name
+        )
     }
 
     @Test

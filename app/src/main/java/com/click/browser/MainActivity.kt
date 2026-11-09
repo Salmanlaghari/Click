@@ -210,7 +210,8 @@ private data class WebsiteMicrophoneConsentUiState(
 )
 
 private data class WebsiteMicrophoneRecoveryUiState(
-    val host: String,
+    val origin: String,
+    val tabId: String,
     val privateTab: Boolean
 )
 
@@ -2420,7 +2421,8 @@ class MainActivity : FragmentActivity() {
             LaunchedEffect(
                 tabs.map { it.id },
                 websiteMicrophoneConsent?.requestId,
-                pendingWebsiteMicrophoneAndroidResult?.requestId
+                pendingWebsiteMicrophoneAndroidResult?.requestId,
+                websiteMicrophoneRecovery?.tabId
             ) {
                 val consent = websiteMicrophoneConsent
                 if (consent != null && tabs.none { it.id == consent.tabId }) {
@@ -2431,6 +2433,10 @@ class MainActivity : FragmentActivity() {
                 if (pending != null && tabs.none { it.id == pending.tabId }) {
                     pendingWebsiteMicrophoneAndroidResult = null
                     runCatching { pending.onCancel() }
+                }
+                val recovery = websiteMicrophoneRecovery
+                if (recovery != null && tabs.none { it.id == recovery.tabId }) {
+                    websiteMicrophoneRecovery = null
                 }
             }
 
@@ -2481,7 +2487,8 @@ class MainActivity : FragmentActivity() {
                             } else {
                                 runCatching { reject() }
                                 websiteMicrophoneRecovery = WebsiteMicrophoneRecoveryUiState(
-                                    host = android.net.Uri.parse(origin).host ?: origin,
+                                    origin = origin,
+                                    tabId = tab.id,
                                     privateTab = privateTab
                                 )
                             }
@@ -2498,7 +2505,8 @@ class MainActivity : FragmentActivity() {
                         }
                         runCatching { reject() }
                         websiteMicrophoneRecovery = WebsiteMicrophoneRecoveryUiState(
-                            host = android.net.Uri.parse(origin).host ?: origin,
+                            origin = origin,
+                            tabId = tab.id,
                             privateTab = privateTab
                         )
                     }
@@ -3082,13 +3090,8 @@ class MainActivity : FragmentActivity() {
                             showClearSiteDataConfirm = false
                             showSiteSettings = false
                             scope.launch {
-                                repository.clearWebsiteMicrophonePermissionsForHost(
-                                    normalizedHost,
-                                    BrowserMode.SIMPLE
-                                )
-                                repository.clearWebsiteMicrophonePermissionsForHost(
-                                    normalizedHost,
-                                    BrowserMode.ADVANCED
+                                repository.clearWebsiteMicrophonePermissionsForHostAcrossProfiles(
+                                    normalizedHost
                                 )
                             }
                             Toast.makeText(
@@ -7406,7 +7409,7 @@ class MainActivity : FragmentActivity() {
                                     title = { Text("Android microphone permission is off") },
                                     text = {
                                         Text(
-                                            "The microphone choice for ${recovery.host} is saved in " +
+                                            "The microphone choice for ${recovery.origin} is saved in " +
                                                 if (recovery.privateTab) {
                                                     "this private tab, but Android denied Click's RECORD_AUDIO permission. Enable microphone access in Android settings, then return to the site and try again."
                                                 } else {
