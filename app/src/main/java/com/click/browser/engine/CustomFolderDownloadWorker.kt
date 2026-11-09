@@ -119,16 +119,16 @@ class CustomFolderDownloadWorker(
             CustomDownloadScheduler.cancelPendingIntent(applicationContext, item)
         )
         val notificationId = CustomDownloadNotifications.progressNotificationId(item.id, item.attemptId)
-        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
             dataSyncForegroundInfo(notificationId, notification)
         } else {
             ForegroundInfo(notificationId, notification)
         }
     }
 
-    @RequiresApi(Build.VERSION_CODES.Q)
+    @RequiresApi(Build.VERSION_CODES.UPSIDE_DOWN_CAKE)
     private fun dataSyncForegroundInfo(notificationId: Int, notification: android.app.Notification): ForegroundInfo {
-        // DATA_SYNC is available from API 29 (Q), matching the caller's SDK guard.
+        // Newer Android versions require the explicit foreground-service type for this target SDK.
         return ForegroundInfo(notificationId, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC)
     }
 }

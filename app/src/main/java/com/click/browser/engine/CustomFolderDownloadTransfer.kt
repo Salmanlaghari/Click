@@ -3,6 +3,7 @@ package com.click.browser.engine
 import android.content.Context
 import android.net.Uri
 import android.os.SystemClock
+import android.provider.DocumentsContract
 import androidx.documentfile.provider.DocumentFile
 import com.click.browser.data.CustomDownloadItem
 import kotlinx.coroutines.CancellationException
@@ -204,12 +205,13 @@ internal object CustomFolderDownloadTransfer {
         onProgress(downloaded, total)
         currentCoroutineContext().ensureActive()
         val finalName = uniqueName(tree, item.fileName, item.id, item.attemptId)
-        // AndroidX DocumentFile.renameTo(String) is public; providers that cannot rename return false.
-        if (part.renameTo(finalName)) {
-            val saved = tree.findFile(finalName)
+        val renamedUri = runCatching {
+            DocumentsContract.renameDocument(context.contentResolver, part.uri, finalName)
+        }.getOrNull()
+        if (renamedUri != null) {
             return CustomTransferResult(
                 fileName = finalName,
-                location = (saved?.uri ?: part.uri).toString(),
+                location = renamedUri.toString(),
                 bytesDownloaded = downloaded,
                 totalBytes = total
             )
