@@ -6247,15 +6247,37 @@ class MainActivity : FragmentActivity() {
                                                     horizontalAlignment = Alignment.CenterHorizontally,
                                                     verticalArrangement = Arrangement.Center
                                                 ) {
+                                                    val retryAction = geckoTabActionsState.value[currentTab.id].orEmpty()
+                                                        .firstOrNull { it.extensionId == extensionPopup.extensionId }
+                                                    val retryRouter = normalTabExtensionRouter
                                                     Text("This add-on popup stopped loading or did not render. Your webpage is still open.", color = theme.onSurface)
                                                     androidx.compose.material3.TextButton(
-                                                        enabled = com.click.browser.extensions.supportsNormalTabExtensionActions(currentTab.url),
+                                                        enabled = com.click.browser.extensions.canRetryNormalTabExtensionPopup(
+                                                            isOwnerSelected = extensionPopup.ownerTabId == currentTab.id,
+                                                            hasAvailableAction = retryAction != null && retryRouter != null,
+                                                            currentUrl = currentTab.url
+                                                        ),
                                                         onClick = {
                                                             val action = geckoTabActionsState.value[currentTab.id].orEmpty()
                                                                 .firstOrNull { it.extensionId == extensionPopup.extensionId }
-                                                            normalTabExtensionRouter?.closePopup(extensionPopup.session)
-                                                            if (action != null) {
-                                                                normalTabExtensionRouter?.clickAction(currentTab.id, action, currentTab.url)
+                                                            val router = normalTabExtensionRouter
+                                                            if (action == null || router == null) {
+                                                                Toast.makeText(
+                                                                    this@MainActivity,
+                                                                    "This add-on action is no longer available. Close this popup and try the toolbar action again.",
+                                                                    Toast.LENGTH_SHORT
+                                                                ).show()
+                                                            } else if (
+                                                                router.clickAction(currentTab.id, action, currentTab.url) ==
+                                                                com.click.browser.extensions.NormalTabActionDispatchResult.REQUESTED
+                                                            ) {
+                                                                router.closePopup(extensionPopup.session)
+                                                            } else {
+                                                                Toast.makeText(
+                                                                    this@MainActivity,
+                                                                    "This add-on action could not be retried. Your webpage is still open.",
+                                                                    Toast.LENGTH_SHORT
+                                                                ).show()
                                                             }
                                                         }
                                                     ) { Text("Try again") }
