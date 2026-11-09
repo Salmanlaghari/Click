@@ -47,7 +47,6 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.ArrowForward
 import androidx.compose.material.icons.filled.Lock
-import androidx.compose.material.icons.filled.LocationOff
 import androidx.compose.material.icons.filled.LocationOn
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Refresh
@@ -64,6 +63,7 @@ import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Shield
 import androidx.compose.material.icons.filled.Tab
 import androidx.compose.material.icons.filled.Translate
@@ -120,7 +120,6 @@ import com.click.browser.engine.ClosedTab
 import com.click.browser.engine.ConnectionSecurityInfo
 import com.click.browser.engine.ConnectionSecurityPolicy
 import com.click.browser.engine.ConnectionSecurityStatus
-import com.click.browser.engine.LocationGuard
 import com.click.browser.engine.SearchEngineBrands
 import com.click.browser.engine.ModePersonalization
 import com.click.browser.engine.QuickSiteDef
@@ -1613,15 +1612,9 @@ fun homeGreeting(): String {
 /**
  * 2026-style premium address bar for the browsing surface.
  *
- * Layout: [back · forward · reload/new tab · tabs · add-on icon · three-dot menu]
- *          [compact address/search box]
- * - The hamburger is kept on the home/new-tab surface; loaded pages use the
- *   three-dot menu and edge-swipe for navigation-drawer access.
- * - Add-on action labels stay in one dropdown anchored to the extension icon.
- * - Search-provider branding appears on the new-tab search field; loaded pages
- *   show their site security affordance instead.
- * - Tab counter button for quick tab switching.
- * - The address field is 46dp high; mode-aware accent colors keep touch targets clear.
+ * Home keeps its mode and navigation controls. Open webpages use one compact
+ * row for Back, Forward, the address bar (with site security/settings), and
+ * browser Settings; secondary actions remain in Menu and More.
  *
  * The URL field is directly editable (tap, type, Go).
  */
@@ -1645,6 +1638,7 @@ fun CompactBrowseBar(
     onNewTab: () -> Unit,
     onMenuClick: () -> Unit,
     onSiteSettingsClick: () -> Unit = {},
+    onSettingsClick: () -> Unit,
     // Kilo: these are required (no defaults) so missing wiring fails at
     // compile time instead of silently doing nothing.
     onDrawerClick: () -> Unit,
@@ -1655,9 +1649,6 @@ fun CompactBrowseBar(
     tabCount: Int,
     onTabsClick: () -> Unit,
     modifier: Modifier = Modifier,
-    // Location indicator: null = no indicator; otherwise the effective mode.
-    locationMode: LocationGuard.LocationMode? = null,
-    onLocationClick: () -> Unit = {},
     showDeveloperTools: Boolean = false,
     onDeveloperToolsClick: () -> Unit = {},
     showExtensionButton: Boolean = false,
@@ -1683,8 +1674,7 @@ fun CompactBrowseBar(
         ConnectionSecurityStatus.CHECKING,
         ConnectionSecurityStatus.UNKNOWN -> theme.onSurface.copy(alpha = 0.58f)
     }
-    // Keep toolbar actions on their own row so the address field can use the
-    // full available width and a generous touch target.
+    // Home navigation stays on its own row; page controls share the address row.
     Surface(
         color = theme.topBarBg,
         shadowElevation = 4.dp,
@@ -1696,7 +1686,7 @@ fun CompactBrowseBar(
                 .padding(horizontal = 10.dp, vertical = 4.dp),
             verticalArrangement = Arrangement.spacedBy(4.dp)
         ) {
-            Row(
+            if (currentUrl.isBlank()) Row(
                 modifier = Modifier.fillMaxWidth(),
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(2.dp)
@@ -1856,6 +1846,24 @@ fun CompactBrowseBar(
                         .padding(horizontal = 8.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
+                    if (currentUrl.isNotBlank()) {
+                        IconButton(onClick = onBack, enabled = canGoBack, modifier = Modifier.size(40.dp)) {
+                            Icon(
+                                Icons.AutoMirrored.Filled.ArrowBack,
+                                contentDescription = "Back",
+                                tint = if (canGoBack) theme.onSurface else theme.onSurface.copy(alpha = 0.34f),
+                                modifier = Modifier.size(21.dp)
+                            )
+                        }
+                        IconButton(onClick = onForward, enabled = canGoForward, modifier = Modifier.size(40.dp)) {
+                            Icon(
+                                Icons.AutoMirrored.Filled.ArrowForward,
+                                contentDescription = "Forward",
+                                tint = if (canGoForward) theme.onSurface else theme.onSurface.copy(alpha = 0.34f),
+                                modifier = Modifier.size(21.dp)
+                            )
+                        }
+                    }
                     // On a new tab this is a neutral search affordance;
                     // on real pages it opens site settings and reflects engine-reported status.
                     if (currentUrl.isBlank()) {
@@ -1875,19 +1883,6 @@ fun CompactBrowseBar(
                                 contentDescription = "${ConnectionSecurityPolicy.title(securityStatus)} — tap for site settings",
                                 tint = securityTint,
                                 modifier = Modifier.size(18.dp)
-                            )
-                        }
-                    }
-                    if (locationMode == LocationGuard.LocationMode.BLOCK && currentUrl.isNotBlank()) {
-                        IconButton(
-                            onClick = onLocationClick,
-                            modifier = Modifier.size(32.dp)
-                        ) {
-                            Icon(
-                                Icons.Default.LocationOff,
-                                contentDescription = "Location requests blocked for this site",
-                                tint = Color(0xFF22C55E),
-                                modifier = Modifier.size(16.dp)
                             )
                         }
                     }
@@ -1935,6 +1930,16 @@ fun CompactBrowseBar(
                                 contentDescription = "Clear",
                                 tint = theme.onSurface.copy(alpha = 0.5f),
                                 modifier = Modifier.size(16.dp)
+                            )
+                        }
+                    }
+                    if (currentUrl.isNotBlank()) {
+                        IconButton(onClick = onSettingsClick, modifier = Modifier.size(40.dp)) {
+                            Icon(
+                                Icons.Default.Settings,
+                                contentDescription = "Settings",
+                                tint = theme.onSurface,
+                                modifier = Modifier.size(21.dp)
                             )
                         }
                     }
@@ -2149,55 +2154,44 @@ fun BrowseBottomNav(
             modifier = Modifier
                 .fillMaxWidth()
                 .padding(
-                    horizontal = if (activeMode == BrowserMode.SIMPLE) 12.dp else 2.dp,
-                    vertical = if (activeMode == BrowserMode.SIMPLE) 6.dp else 3.dp
+                    horizontal = if (activeMode == BrowserMode.SIMPLE) 6.dp else 2.dp,
+                    vertical = 3.dp
                 ),
             horizontalArrangement = Arrangement.SpaceEvenly,
             verticalAlignment = Alignment.CenterVertically
         ) {
-            if (activeMode == BrowserMode.SIMPLE) {
-                BrowseNavButton(
-                    icon = Icons.Default.Home,
-                    label = "Home",
-                    enabled = true,
-                    theme = theme,
-                    onClick = onHome
-                )
-            } else {
-                BrowseNavButton(
-                    icon = Icons.Default.Menu, label = "Menu",
-                    enabled = true, theme = theme, onClick = onDrawerClick
-                )
-                BrowseNavButton(
-                    icon = Icons.Default.Home, label = "Home",
-                    enabled = true, theme = theme, onClick = onHome,
-                    highlight = true
-                )
-                BadgedBox(
-                    badge = {
-                        Badge(
-                            containerColor = theme.primary,
-                            contentColor = Color.White,
-                            modifier = Modifier.graphicsLayer {
-                                scaleX = badgeScale.value
-                                scaleY = badgeScale.value
-                            }
-                        ) {
-                            Text(tabBadgeText(tabCount), fontSize = 9.sp)
+            BrowseNavButton(
+                icon = Icons.Default.Menu, label = "Menu",
+                enabled = true, theme = theme, onClick = onDrawerClick
+            )
+            BrowseNavButton(
+                icon = Icons.Default.Home, label = "Home",
+                enabled = true, theme = theme, onClick = onHome
+            )
+            BadgedBox(
+                badge = {
+                    Badge(
+                        containerColor = theme.primary,
+                        contentColor = Color.White,
+                        modifier = Modifier.graphicsLayer {
+                            scaleX = badgeScale.value
+                            scaleY = badgeScale.value
                         }
-                    },
-                    modifier = Modifier.clickable(
-                        interactionSource = remember { MutableInteractionSource() },
-                        indication = null
-                    ) { onTabs() }
-                ) {
-                    BrowseNavContent(icon = Icons.Default.Tab, label = "Tabs", enabled = true, theme = theme)
-                }
-                BrowseNavButton(
-                    icon = Icons.Default.MoreVert, label = "More",
-                    enabled = true, theme = theme, onClick = onMenu
-                )
+                    ) {
+                        Text(tabBadgeText(tabCount), fontSize = 9.sp)
+                    }
+                },
+                modifier = Modifier.clickable(
+                    interactionSource = remember { MutableInteractionSource() },
+                    indication = null
+                ) { onTabs() }
+            ) {
+                BrowseNavContent(icon = Icons.Default.Tab, label = "Tabs", enabled = true, theme = theme)
             }
+            BrowseNavButton(
+                icon = Icons.Default.MoreVert, label = "More",
+                enabled = true, theme = theme, onClick = onMenu
+            )
         }
     }
 }

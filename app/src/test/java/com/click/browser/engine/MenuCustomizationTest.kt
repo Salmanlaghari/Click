@@ -18,6 +18,21 @@ class MenuCustomizationTest {
     }
 
     @Test
+    fun reloadIsVisibleByDefaultAndAddedToLegacyOrdersInEveryMode() {
+        val reload = MenuCustomization.MenuItemId.RELOAD
+        assertTrue(MenuCustomization.DEFAULT_ORDER.contains(reload))
+
+        val legacyOrder = MenuCustomization.DEFAULT_ORDER.filterNot { it == reload }
+        val backfilledOrder = MenuCustomization.effectiveVisibleItems(legacyOrder, emptySet())
+        assertTrue(backfilledOrder.contains(reload))
+        assertFalse(MenuCustomization.effectiveVisibleItems(legacyOrder, setOf(reload)).contains(reload))
+
+        BrowserMode.values().forEach { mode ->
+            assertTrue("Reload should remain available in $mode", reload in MenuCustomization.filterItemsForMode(backfilledOrder, mode))
+        }
+    }
+
+    @Test
     fun modeScopedMenuItemsFollowTheirDeclaredCapability() {
         val modeScopedItems = MenuCustomization.MenuItemId.values()
             .filter { it.modeFeature != null }

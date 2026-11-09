@@ -3962,6 +3962,7 @@ class MainActivity : FragmentActivity() {
 
                             // Immersive Fullscreen WebView setup: if loaded, hide overlays for full screen coverage!
                             val showOverlays = currentTab.url == "about:blank"
+                            val showBrowseBottomNav = !showOverlays && !immersiveMode && !videoFullscreenActive
 
                             // Manual immersive mode and site video fullscreen both hide system bars.
                             LaunchedEffect(immersiveMode, videoFullscreenActive) {
@@ -3983,6 +3984,13 @@ class MainActivity : FragmentActivity() {
                             // reveals on scroll-up (event-driven, battery-safe), thin
                             // page-load progress bar, one-shot theme crossfade.
                             var toolbarVisible by remember { mutableStateOf(true) }
+                            // Keep page content clear of the bottom navigation; reserve extra
+                            // room for the address bar only while its auto-hidden toolbar is shown.
+                            val browseBottomNavInset = browseBottomChromeInsetDp(
+                                showBrowseBottomNav = showBrowseBottomNav,
+                                bottomAddressBarEnabled = flagsUi.bottomAddressBar,
+                                toolbarVisible = toolbarVisible
+                            ).dp
                             val toolbarScrollConnection = remember {
                                 object : NestedScrollConnection {
                                     override fun onPreScroll(
@@ -4030,6 +4038,63 @@ class MainActivity : FragmentActivity() {
                                     showPrivacyPopup = true
                                     kotlinx.coroutines.delay(2_500)
                                     showPrivacyPopup = false
+                                }
+                            }
+
+                            fun canReloadCurrentTab(): Boolean =
+                                currentTab.engine != BrowserTabEngine.GECKOVIEW ||
+                                    currentTab.geckoNavigationFailure == null ||
+                                    currentTab.geckoNavigationFailure?.retryUrl != null
+
+                            fun reloadCurrentTab() {
+                                val failure = currentTab.geckoNavigationFailure
+                                if (currentTab.engine == BrowserTabEngine.GECKOVIEW && failure != null) {
+                                    failure.retryUrl?.let { retryUrl ->
+                                        currentTab.geckoNavigationFailure = null
+                                        currentTab.browserSession?.loadUrl(retryUrl)
+                                    }
+                                } else {
+                                    currentTab.browserSession?.reload()
+                                }
+                            }
+
+                            fun stopCurrentTabLoading() {
+                                val stopResult = runCatching {
+                                    currentTab.browserSession?.stopLoading()
+                                }
+                                if (stopResult.isSuccess) {
+                                    refreshingTabIds = refreshingTabIdsAfterNavigationEnd(
+                                        refreshingTabIds,
+                                        completedTabId = currentTab.id,
+                                        isCurrentNavigation = true
+                                    )
+                                    currentTab.isPageLoading = false
+                                    if (currentTab.engine == BrowserTabEngine.GECKOVIEW) {
+                                        if (!currentTab.hasCommittedContent) {
+                                            currentTab.geckoNavigationFailure = geckoNavigationStopOutcome(
+                                                success = false,
+                                                failedUrl = currentTab.url,
+                                                safeRetryUrl = null,
+                                                wasCancelled = true
+                                            ).failure
+                                        }
+                                    } else {
+                                        currentTab.hasCommittedContent = true
+                                    }
+                                    currentTab.loadProgress = 0
+                                } else {
+                                    stopResult.exceptionOrNull()?.let { error ->
+                                        android.util.Log.w(
+                                            "BrowserNavigation",
+                                            "Browser stop-loading request failed",
+                                            error
+                                        )
+                                        Toast.makeText(
+                                            this@MainActivity,
+                                            "Couldn't stop loading. Try again or close the tab.",
+                                            Toast.LENGTH_SHORT
+                                        ).show()
+                                    }
                                 }
                             }
 
@@ -4086,72 +4151,20 @@ class MainActivity : FragmentActivity() {
                                                         currentTab.connectionSecurity = ConnectionSecurityPolicy.checking(destination)
                                                         currentTab.browserSession?.loadUrl(destination)
                                                     },
-                                                    onReload = {
-                                                        val failure = currentTab.geckoNavigationFailure
-                                                        if (currentTab.engine == BrowserTabEngine.GECKOVIEW && failure != null) {
-                                                            failure.retryUrl?.let { retryUrl ->
-                                                                currentTab.geckoNavigationFailure = null
-                                                                currentTab.browserSession?.loadUrl(retryUrl)
-                                                            }
-                                                        } else {
-                                                            currentTab.browserSession?.reload()
-                                                        }
-                                                    },
-                                                    canReload = currentTab.engine != BrowserTabEngine.GECKOVIEW ||
-                                                        currentTab.geckoNavigationFailure == null ||
-                                                        currentTab.geckoNavigationFailure?.retryUrl != null,
-                                                    onStopLoading = {
-                                                        val stopResult = runCatching {
-                                                            currentTab.browserSession?.stopLoading()
-                                                        }
-                                                        if (stopResult.isSuccess) {
-                                                            refreshingTabIds = refreshingTabIdsAfterNavigationEnd(
-                                                                refreshingTabIds,
-                                                                completedTabId = currentTab.id,
-                                                                isCurrentNavigation = true
-                                                            )
-                                                            currentTab.isPageLoading = false
-                                                            if (currentTab.engine == BrowserTabEngine.GECKOVIEW) {
-                                                                if (!currentTab.hasCommittedContent) {
-                                                                    currentTab.geckoNavigationFailure = geckoNavigationStopOutcome(
-                                                                        success = false,
-                                                                        failedUrl = currentTab.url,
-                                                                        safeRetryUrl = null,
-                                                                        wasCancelled = true
-                                                                    ).failure
-                                                                }
-                                                            } else {
-                                                                currentTab.hasCommittedContent = true
-                                                            }
-                                                            currentTab.loadProgress = 0
-                                                        } else {
-                                                            stopResult.exceptionOrNull()?.let { error ->
-                                                                android.util.Log.w(
-                                                                    "BrowserNavigation",
-                                                                    "Toolbar stop-loading request failed",
-                                                                    error
-                                                                )
-                                                                Toast.makeText(
-                                                                    this@MainActivity,
-                                                                    "Couldn't stop loading. Try again or close the tab.",
-                                                                    Toast.LENGTH_SHORT
-                                                                ).show()
-                                                            }
-                                                        }
-                                                    },
+                                                    onReload = { reloadCurrentTab() },
+                                                    canReload = canReloadCurrentTab(),
+                                                    onStopLoading = { stopCurrentTabLoading() },
                                                     onNewTab = {
                                                         tabs.add(TabItem(url = homeUrl(), title = "New Tab"))
                                                         activeTabIndex = tabs.lastIndex
                                                     },
                                                     onMenuClick = { showBrowserMenu = true },
                                                     onSiteSettingsClick = { showSiteSettings = true },
+                                                    onSettingsClick = { showSettings = true },
                                                     // 2026 style: sidebar (drawer) accessible from top bar.
                                                     onDrawerClick = { scope.launch { drawerState.open() } },
                                                     tabCount = tabs.size,
                                                     onTabsClick = { showTabsManager = true },
-                                                    // Location requests are always blocked by Click.
-                                                    locationMode = LocationGuard.LocationMode.BLOCK,
-                                                    onLocationClick = { showLocationSettings = true },
                                                     showDeveloperTools = activeMode == BrowserMode.DEVELOPER,
                                                     onDeveloperToolsClick = { openDevToolsTab(1) },
                                                     showExtensionButton = showExtensionButton,
@@ -4179,7 +4192,11 @@ class MainActivity : FragmentActivity() {
                                 }
                             }
 
-                            Column(modifier = Modifier.fillMaxSize()) {
+                            Column(
+                                modifier = Modifier
+                                    .fillMaxSize()
+                                    .padding(bottom = browseBottomNavInset)
+                            ) {
 
                                 // The home screen owns its primary search field. Keep the tab
                                 // strip there, but show the browser omnibox only on open pages
@@ -6000,14 +6017,16 @@ class MainActivity : FragmentActivity() {
                             // Polish: one-shot theme crossfade (battery-safe).
                             // Bottom-address-bar option: bar renders below the page,
                             // padded above the overlaid bottom nav so they never overlap.
-                            if (flagsUi.bottomAddressBar && !showOverlays && !videoFullscreenActive) {
-                                Box(modifier = Modifier.padding(bottom = 76.dp)) {
+                            if (flagsUi.bottomAddressBar && showBrowseBottomNav) {
+                                Box(
+                                    modifier = Modifier
+                                        .align(Alignment.BottomCenter)
+                                        .padding(bottom = 76.dp)
+                                ) {
                                     BrowseTopBarBlock()
                                 }
                             }
-                            if (!showOverlays && !immersiveMode && !videoFullscreenActive &&
-                                (currentTab.url == "about:blank" || currentTab.isPageLoading)
-                            ) {
+                            if (showBrowseBottomNav) {
                                 Crossfade(
                                     targetState = theme,
                                     label = "browseNavTheme",
@@ -8442,7 +8461,7 @@ class MainActivity : FragmentActivity() {
                             // works — New tab, New private tab, Tabs switcher,
                             // History, Delete browsing data, Downloads, Bookmarks,
                             // Recent tabs, Share,
-                            // Find in page, Translate, Wide layout, Settings.
+                            // Find in page, Translate, Wide layout, Reload/Stop, Settings.
                             if (showBrowserMenu) {
                                 val menuPageHost = try {
                                     android.net.Uri.parse(currentTab.url).host?.lowercase().orEmpty()
@@ -8455,6 +8474,11 @@ class MainActivity : FragmentActivity() {
                                     theme = theme,
                                     mode = activeMode,
                                     isDesktopForSite = menuDesktopForSite,
+                                    hasCurrentPage = currentTab.url.isNotBlank() && currentTab.url != "about:blank",
+                                    isPageLoading = currentTab.isPageLoading,
+                                    canReload = canReloadCurrentTab(),
+                                    onReload = { showBrowserMenu = false; reloadCurrentTab() },
+                                    onStopLoading = { showBrowserMenu = false; stopCurrentTabLoading() },
                                     onHome = {
                                         showBrowserMenu = false
                                         currentTab.url = "about:blank"

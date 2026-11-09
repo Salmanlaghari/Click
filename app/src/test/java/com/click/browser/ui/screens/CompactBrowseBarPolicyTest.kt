@@ -34,4 +34,44 @@ class CompactBrowseBarPolicyTest {
             )
         }
     }
+
+    @Test
+    fun bottomAddressBarInsetShrinksWhenToolbarAutoHides() {
+        assertEquals(
+            132,
+            browseBottomChromeInsetDp(
+                showBrowseBottomNav = true,
+                bottomAddressBarEnabled = true,
+                toolbarVisible = true
+            )
+        )
+        assertEquals(
+            64,
+            browseBottomChromeInsetDp(
+                showBrowseBottomNav = true,
+                bottomAddressBarEnabled = true,
+                toolbarVisible = false
+            )
+        )
+    }
+
+    @Test
+    fun bottomChromeInsetIsZeroWithoutBrowseNavigationAndNavOnlyOtherwise() {
+        assertEquals(
+            0,
+            browseBottomChromeInsetDp(
+                showBrowseBottomNav = false,
+                bottomAddressBarEnabled = true,
+                toolbarVisible = true
+            )
+        )
+        assertEquals(
+            64,
+            browseBottomChromeInsetDp(
+                showBrowseBottomNav = true,
+                bottomAddressBarEnabled = false,
+                toolbarVisible = true
+            )
+        )
+    }
 }
