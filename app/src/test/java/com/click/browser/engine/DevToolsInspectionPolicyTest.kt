@@ -114,6 +114,92 @@ class DevToolsInspectionPolicyTest {
     }
 
     @Test
+    fun renderedDomCaptureRequiresConfirmationAndDeveloperWebViewSourcesTab() {
+        BrowserMode.values().forEach { mode ->
+            BrowserTabEngine.values().forEach { engine ->
+                (0..4).forEach { selectedTab ->
+                    val expected = mode == BrowserMode.DEVELOPER &&
+                        engine == BrowserTabEngine.WEBVIEW && selectedTab == 3
+                    assertFalse(
+                        DevToolsInspectionPolicy.shouldCaptureRenderedDom(
+                            mode = mode,
+                            engine = engine,
+                            panelVisible = true,
+                            pageLoaded = true,
+                            targetMatches = true,
+                            selectedTab = selectedTab,
+                            userConfirmed = false
+                        )
+                    )
+                    assertEquals(
+                        expected,
+                        DevToolsInspectionPolicy.shouldCaptureRenderedDom(
+                            mode = mode,
+                            engine = engine,
+                            panelVisible = true,
+                            pageLoaded = true,
+                            targetMatches = true,
+                            selectedTab = selectedTab,
+                            userConfirmed = true
+                        )
+                    )
+                }
+            }
+        }
+        assertFalse(
+            DevToolsInspectionPolicy.shouldCaptureRenderedDom(
+                mode = BrowserMode.DEVELOPER,
+                engine = BrowserTabEngine.WEBVIEW,
+                panelVisible = true,
+                pageLoaded = false,
+                targetMatches = true,
+                selectedTab = 3,
+                userConfirmed = true
+            )
+        )
+        assertFalse(
+            DevToolsInspectionPolicy.shouldCaptureRenderedDom(
+                mode = BrowserMode.DEVELOPER,
+                engine = BrowserTabEngine.WEBVIEW,
+                panelVisible = true,
+                pageLoaded = true,
+                targetMatches = false,
+                selectedTab = 3,
+                userConfirmed = true
+            )
+        )
+    }
+
+    @Test
+    fun renderedDomResultsRejectTabAndPageChangesBeforeGenerationAdvances() {
+        fun accepts(
+            currentTabIndex: Int = 2,
+            currentTabId: String = "tab-a",
+            currentTabUrl: String = "https://example.com/page",
+            currentPageUrl: String = "https://example.com/page"
+        ): Boolean = DevToolsInspectionPolicy.acceptsRenderedDomResult(
+            capturedGeneration = 3L,
+            currentGeneration = 3L,
+            capturedTabIndex = 2,
+            currentTabIndex = currentTabIndex,
+            capturedTabId = "tab-a",
+            currentTabId = currentTabId,
+            capturedTabUrl = "https://example.com/page",
+            currentTabUrl = currentTabUrl,
+            capturedPageUrl = "https://example.com/page",
+            currentPageUrl = currentPageUrl,
+            targetMatches = true,
+            sessionActive = true
+        )
+
+        assertTrue(accepts())
+        assertFalse(accepts(currentTabIndex = 1))
+        assertFalse(accepts(currentTabId = "tab-b"))
+        assertFalse(accepts(currentTabUrl = "https://example.com/next"))
+        assertFalse(accepts(currentPageUrl = "https://example.com/next"))
+    }
+
+    @Test
     fun lateCallbacksAreRejectedAfterSessionOrTargetChanges() {
         assertTrue(
             DevToolsInspectionPolicy.acceptsSessionResult(
@@ -179,6 +265,31 @@ class DevToolsInspectionPolicyTest {
     }
 
     @Test
+    fun renderedDomScriptIsBoundedAndOmitsSensitiveValuesAndActiveResources() {
+        val script = DevToolsInspectionPolicy.renderedDomSourceScript
+
+        assertTrue(script.contains("var maxNodes=${DevToolsInspectionPolicy.MAX_RENDERED_DOM_NODES}"))
+        assertTrue(script.contains("var maxDepth=${DevToolsInspectionPolicy.MAX_RENDERED_DOM_DEPTH}"))
+        assertTrue(script.contains("var maxAttributesPerNode=${DevToolsInspectionPolicy.MAX_RENDERED_DOM_ATTRIBUTES_PER_NODE}"))
+        assertTrue(script.contains("i<maxAttributesPerNode"))
+        assertTrue(script.contains("var maxChars=${DevToolsInspectionPolicy.MAX_RENDERED_DOM_SOURCE_LENGTH}"))
+        assertTrue(script.contains("url.origin+'/[path omitted]'"))
+        assertTrue(script.contains("[form value omitted]"))
+        assertTrue(script.contains("[editable content omitted]"))
+        assertTrue(script.contains("tag==='output'"))
+        assertTrue(script.contains("omitted={script:1,style:1,noscript:1,iframe:1,frame:1,object:1,embed:1,template:1}"))
+        assertFalse(script.contains("outerHTML"))
+        assertFalse(script.contains("innerHTML"))
+        assertFalse(script.contains("document.cookie"))
+        assertFalse(script.contains("localStorage"))
+        assertFalse(script.contains("sessionStorage"))
+        assertFalse(script.contains("input.value"))
+        assertFalse(script.contains("textarea.value"))
+        assertFalse(script.contains("fetch("))
+        assertFalse(script.contains("XMLHttpRequest"))
+    }
+
+    @Test
     fun parserIgnoresUntrustedFormValuesCookiesAndUnknownAttributes() {
         val pageJson = """{"root":{"tag":"input","id":"user@example.com","className":"field","type":"password","path":[],"childCount":0,"children":[],"value":"form-secret","cookie":"cookie-secret","text":"private text"},"truncated":false}"""
         val snapshot = DevToolsInspectionPolicy.parseDomSnapshot(JSONObject.quote(pageJson))
@@ -217,6 +328,29 @@ class DevToolsInspectionPolicyTest {
             DevToolsInspectionPolicy.parseSourceReferences(
                 "x".repeat(DevToolsInspectionPolicy.MAX_SOURCE_RESULT_LENGTH + 1)
             ).isEmpty()
+        )
+    }
+
+    @Test
+    fun renderedDomParserBoundsMarkupAndMarksTruncatedResults() {
+        val markup = "<html><body>safe</body></html>"
+        val complete = JSONObject().put("markup", markup).put("truncated", false).toString()
+        assertEquals(markup, DevToolsInspectionPolicy.parseRenderedDomSource(JSONObject.quote(complete)))
+
+        val truncated = JSONObject().put("markup", markup).put("truncated", true).toString()
+        val displayed = DevToolsInspectionPolicy.parseRenderedDomSource(JSONObject.quote(truncated))
+        assertTrue(displayed.orEmpty().startsWith(markup))
+        assertTrue(displayed.orEmpty().contains("Rendered DOM preview truncated by safety limits"))
+
+        val oversizedMarkup = JSONObject()
+            .put("markup", "x".repeat(DevToolsInspectionPolicy.MAX_RENDERED_DOM_SOURCE_LENGTH + 1))
+            .put("truncated", false)
+            .toString()
+        assertNull(DevToolsInspectionPolicy.parseRenderedDomSource(JSONObject.quote(oversizedMarkup)))
+        assertNull(
+            DevToolsInspectionPolicy.parseRenderedDomSource(
+                "x".repeat(DevToolsInspectionPolicy.MAX_RENDERED_DOM_RESULT_LENGTH + 1)
+            )
         )
     }
 

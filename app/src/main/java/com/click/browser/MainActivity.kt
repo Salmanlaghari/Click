@@ -2385,6 +2385,8 @@ class MainActivity : FragmentActivity() {
             var devToolsDomSnapshot by remember { mutableStateOf<DevToolsDomSnapshot?>(null) }
             var devToolsSelectedNodePath by remember { mutableStateOf<List<Int>?>(null) }
             var devToolsSelectedStyles by remember { mutableStateOf<DevToolsComputedStyles?>(null) }
+            var devToolsRenderedDomMarkup by remember { mutableStateOf<String?>(null) }
+            var devToolsRenderedDomLoading by remember { mutableStateOf(false) }
             val sourcesList = devToolsSources
 
             // Power-mode desktop layout controls. The system WebView User-Agent
@@ -2405,6 +2407,22 @@ class MainActivity : FragmentActivity() {
             var showDevToolsSheet by remember { mutableStateOf(false) }
             // Live viewport/device facts for the DevTools Device tab.
             var devToolsDeviceInfo by remember { mutableStateOf<DeviceInfo?>(null) }
+
+            LaunchedEffect(
+                showDevToolsSheet,
+                activeMode,
+                activeTabIndex,
+                currentTab.id,
+                currentTab.engine,
+                currentTab.browserSession,
+                currentTab.webView,
+                currentTab.url,
+                currentTab.hasCommittedContent,
+                devToolsTab
+            ) {
+                devToolsRenderedDomMarkup = null
+                devToolsRenderedDomLoading = false
+            }
 
             // Full-view / immersive browsing: MANUAL fullscreen toggle only.
             // (Prince: no auto-hide on scroll — user control via the drawer toggle.)
@@ -3339,6 +3357,93 @@ class MainActivity : FragmentActivity() {
                     }
                 } catch (_: IllegalStateException) {
                     if (devToolsSessionGeneration == sessionGeneration) devToolsSources.clear()
+                }
+            }
+
+            /** Reads a bounded, redacted rendered-DOM preview only after the user confirms in Sources. */
+            fun inspectDevToolsRenderedDom() {
+                val selectedTabAtConfirmation = tabs.getOrNull(activeTabIndex)
+                val wv = selectedTabAtConfirmation?.webView
+                val pageUrl = wv?.url.orEmpty()
+                val selectionMatchesConfirmation = selectedTabAtConfirmation?.id == currentTab.id &&
+                    wv === currentTab.webView &&
+                    selectedTabAtConfirmation?.url == currentTab.url
+                val pageLoaded = selectionMatchesConfirmation &&
+                    selectedTabAtConfirmation?.hasCommittedContent == true &&
+                    DevToolsInspectionPolicy.isInspectableWebPageUrl(selectedTabAtConfirmation?.url) &&
+                    DevToolsInspectionPolicy.isInspectableWebPageUrl(pageUrl)
+                val canCapture = selectedTabAtConfirmation != null && wv != null &&
+                    DevToolsInspectionPolicy.shouldCaptureRenderedDom(
+                    mode = activeMode,
+                    engine = selectedTabAtConfirmation.engine,
+                    panelVisible = showDevToolsSheet,
+                    pageLoaded = pageLoaded,
+                    targetMatches = wv != null && devToolsTargetWebView === wv,
+                    selectedTab = devToolsTab,
+                    userConfirmed = true
+                )
+                if (!canCapture || wv == null) {
+                    devToolsRenderedDomMarkup = null
+                    devToolsRenderedDomLoading = false
+                    Toast.makeText(
+                        this@MainActivity,
+                        "The webpage is no longer ready. Reopen DevTools after it finishes loading.",
+                        Toast.LENGTH_SHORT
+                    ).show()
+                    return
+                }
+
+                val capturedTabIndex = activeTabIndex
+                val capturedTabId = selectedTabAtConfirmation?.id?.toString().orEmpty()
+                val capturedTabUrl = selectedTabAtConfirmation?.url.orEmpty()
+                val sessionGeneration = devToolsSessionGeneration
+                devToolsRenderedDomMarkup = null
+                devToolsRenderedDomLoading = true
+
+                fun isCurrentRenderedDomSession(): Boolean {
+                    val liveTab = tabs.getOrNull(activeTabIndex)
+                    val liveWebView = liveTab?.webView
+                    val liveTabUrl = liveTab?.url.orEmpty()
+                    val livePageUrl = liveWebView?.url.orEmpty()
+                    val sessionActive = activeMode == BrowserMode.DEVELOPER &&
+                        liveTab?.engine == BrowserTabEngine.WEBVIEW &&
+                        liveTab?.hasCommittedContent == true &&
+                        showDevToolsSheet && devToolsTab == 3 &&
+                        DevToolsInspectionPolicy.isInspectableWebPageUrl(liveTabUrl) &&
+                        DevToolsInspectionPolicy.isInspectableWebPageUrl(livePageUrl)
+                    return DevToolsInspectionPolicy.acceptsRenderedDomResult(
+                        capturedGeneration = sessionGeneration,
+                        currentGeneration = devToolsSessionGeneration,
+                        capturedTabIndex = capturedTabIndex,
+                        currentTabIndex = activeTabIndex,
+                        capturedTabId = capturedTabId,
+                        currentTabId = liveTab?.id?.toString().orEmpty(),
+                        capturedTabUrl = capturedTabUrl,
+                        currentTabUrl = liveTabUrl,
+                        capturedPageUrl = pageUrl,
+                        currentPageUrl = livePageUrl,
+                        targetMatches = liveWebView === wv && devToolsTargetWebView === wv,
+                        sessionActive = sessionActive
+                    )
+                }
+
+                try {
+                    wv.evaluateJavascript(DevToolsInspectionPolicy.renderedDomSourceScript) { result ->
+                        if (isCurrentRenderedDomSession()) {
+                            devToolsRenderedDomMarkup =
+                                DevToolsInspectionPolicy.parseRenderedDomSource(result)
+                                    ?: "Rendered DOM could not be read for this page."
+                            devToolsRenderedDomLoading = false
+                        } else if (devToolsSessionGeneration == sessionGeneration) {
+                            devToolsRenderedDomMarkup = null
+                            devToolsRenderedDomLoading = false
+                        }
+                    }
+                } catch (_: IllegalStateException) {
+                    if (devToolsSessionGeneration == sessionGeneration) {
+                        devToolsRenderedDomMarkup = "Rendered DOM could not be read for this page."
+                        devToolsRenderedDomLoading = false
+                    }
                 }
             }
 
@@ -6782,6 +6887,8 @@ class MainActivity : FragmentActivity() {
                                         selectedNodePath = devToolsSelectedNodePath,
                                         selectedStyles = devToolsSelectedStyles,
                                         sourcesList = sourcesList,
+                                        renderedDomMarkup = devToolsRenderedDomMarkup,
+                                        renderedDomLoading = devToolsRenderedDomLoading,
                                         pageSessionKey = "${currentTab.id}|${currentTab.url}|$devToolsSessionGeneration",
                                         pageMessagesCaptureConsented = devToolsConsoleMessagesConsent,
                                         selectedTab = devToolsTab,
@@ -6827,7 +6934,12 @@ class MainActivity : FragmentActivity() {
                                         },
                                         deviceInfo = devToolsDeviceInfo,
                                         onRefreshDeviceInfo = { refreshDevToolsDeviceInfo() },
-                                        onRefreshSources = { refreshDevToolsSources() }
+                                        onRefreshSources = { refreshDevToolsSources() },
+                                        onInspectRenderedDom = { inspectDevToolsRenderedDom() },
+                                        onClearRenderedDom = {
+                                            devToolsRenderedDomMarkup = null
+                                            devToolsRenderedDomLoading = false
+                                        }
                                     )
                                 }
                             }
