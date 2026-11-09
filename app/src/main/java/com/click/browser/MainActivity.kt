@@ -616,6 +616,17 @@ class MainActivity : FragmentActivity() {
         normalTabExtensionRouter?.refreshAll()
     }
 
+    override fun onWindowFocusChanged(hasFocus: Boolean) {
+        super.onWindowFocusChanged(hasFocus)
+        if (hasFocus) {
+            ClickDiagnosticsLog.confirmModeSwitchWindowFocus(
+                context = this,
+                focusedMode = V9Engine.bootMode,
+                bootBlocked = V9Engine.isBootBlocked
+            )
+        }
+    }
+
     /**
      * Warm-path deep links: singleTask delivers intents here instead of
      * creating a second MainActivity.
