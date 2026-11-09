@@ -5,24 +5,40 @@ import org.junit.Test
 
 class WebsitePermissionPolicyTest {
     @Test
-    fun cameraMicrophoneAndLocationAreBlockedByClick() {
-        assertEquals(WebsitePermissionStatus.BLOCKED_IN_CLICK, websitePermissionStatus(WebsitePermissionCapability.CAMERA))
-        assertEquals(WebsitePermissionStatus.BLOCKED_IN_CLICK, websitePermissionStatus(WebsitePermissionCapability.MICROPHONE))
-        assertEquals(WebsitePermissionStatus.BLOCKED_IN_CLICK, websitePermissionStatus(WebsitePermissionCapability.LOCATION))
+    fun cameraAndLocationRemainBlockedByClick() {
+        assertEquals(
+            WebsitePermissionStatus.BLOCKED_IN_CLICK,
+            websitePermissionStatus(WebsitePermissionCapability.CAMERA)
+        )
+        assertEquals(
+            WebsitePermissionStatus.BLOCKED_IN_CLICK,
+            websitePermissionStatus(WebsitePermissionCapability.LOCATION)
+        )
     }
 
     @Test
-    fun websiteNotificationsAreExplicitlyUnsupported() {
-        assertEquals(WebsitePermissionStatus.UNSUPPORTED, websitePermissionStatus(WebsitePermissionCapability.NOTIFICATIONS))
+    fun microphoneStatusReflectsSiteAndAndroidChoices() {
+        val capability = WebsitePermissionCapability.MICROPHONE
+        assertEquals(WebsitePermissionStatus.ASK, websitePermissionStatus(capability))
+        assertEquals(
+            WebsitePermissionStatus.BLOCKED_FOR_SITE,
+            websitePermissionStatus(capability, siteMicrophoneAllowed = false, androidPermissionGranted = true)
+        )
+        assertEquals(
+            WebsitePermissionStatus.ANDROID_PERMISSION_REQUIRED,
+            websitePermissionStatus(capability, siteMicrophoneAllowed = true, androidPermissionGranted = false)
+        )
+        assertEquals(
+            WebsitePermissionStatus.ALLOWED,
+            websitePermissionStatus(capability, siteMicrophoneAllowed = true, androidPermissionGranted = true)
+        )
     }
 
     @Test
-    fun policyCoversEveryWebsitePermissionCapability() {
-        val statuses = WebsitePermissionCapability.values().associateWith(::websitePermissionStatus)
-        assertEquals(4, statuses.size)
-        assertEquals(WebsitePermissionStatus.BLOCKED_IN_CLICK, statuses[WebsitePermissionCapability.CAMERA])
-        assertEquals(WebsitePermissionStatus.BLOCKED_IN_CLICK, statuses[WebsitePermissionCapability.MICROPHONE])
-        assertEquals(WebsitePermissionStatus.BLOCKED_IN_CLICK, statuses[WebsitePermissionCapability.LOCATION])
-        assertEquals(WebsitePermissionStatus.UNSUPPORTED, statuses[WebsitePermissionCapability.NOTIFICATIONS])
+    fun websiteNotificationsRemainUnsupported() {
+        assertEquals(
+            WebsitePermissionStatus.UNSUPPORTED,
+            websitePermissionStatus(WebsitePermissionCapability.NOTIFICATIONS)
+        )
     }
 }

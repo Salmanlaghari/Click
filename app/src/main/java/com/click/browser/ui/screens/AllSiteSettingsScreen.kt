@@ -18,14 +18,15 @@ import androidx.compose.ui.unit.sp
 import com.click.browser.data.BrowserRepository
 import com.click.browser.engine.ModeTheme
 import com.click.browser.engine.SiteSettings
+import com.click.browser.engine.websiteMicrophoneOriginHost
 import kotlinx.coroutines.launch
 
 /**
  * All-sites settings list (Settings -> Site settings). The per-site sheet
  * reached from the address-bar shield edits ONE site (the one open); this
  * screen is the management view Chrome users expect: every site that has
- * saved per-site choices — content overrides from [SiteSettings] plus
- * explicit wide/mobile layout overrides — with a per-site reset and a reset-all.
+ * saved per-site choices — content overrides from [SiteSettings], explicit
+ * wide/mobile layout overrides, and microphone decisions — with reset actions.
  *
  * Editing happens on the site itself (open it, tap the shield); this list
  * is view + reset only, so nothing here can silently change a live page.
@@ -43,14 +44,17 @@ fun AllSiteSettingsScreen(
     val scope = rememberCoroutineScope()
     val settingsMap by repository.siteSettingsFlow.collectAsState(initial = emptyMap())
     val desktopOverrides by repository.desktopOverridesFlow.collectAsState(initial = emptyMap())
+    val microphonePermissions by repository.websiteMicrophonePermissionsFlow.collectAsState(initial = emptyMap())
     var query by remember { mutableStateOf("") }
     var showResetAll by remember { mutableStateOf(false) }
     var siteToReset by remember { mutableStateOf<String?>(null) }
 
-    // Union of both per-site stores: a host appears when it has content
-    // overrides, a wide-layout preference (on or off), or both.
-    val hosts = remember(settingsMap, desktopOverrides) {
-        (settingsMap.keys + desktopOverrides.keys).sorted()
+    // Union of all profile-scoped per-site choices, including microphone-only hosts.
+    val microphoneHosts = remember(microphonePermissions) {
+        microphonePermissions.keys.mapNotNull(::websiteMicrophoneOriginHost).toSet()
+    }
+    val hosts = remember(settingsMap, desktopOverrides, microphoneHosts) {
+        (settingsMap.keys + desktopOverrides.keys + microphoneHosts).sorted()
     }
     val visible = remember(hosts, query) {
         if (query.isBlank()) hosts
@@ -61,6 +65,7 @@ fun AllSiteSettingsScreen(
         scope.launch {
             repository.clearSiteSettings(host)
             repository.clearDesktopHost(host)
+            repository.clearWebsiteMicrophonePermissionsForHost(host)
         }
     }
 
@@ -104,7 +109,7 @@ fun AllSiteSettingsScreen(
                 shape = RoundedCornerShape(12.dp)
             )
             Text(
-                "🛡️ ${hosts.size} site${if (hosts.size == 1) "" else "s"} with custom settings · current engine mode only",
+                "🛡️ ${hosts.size} site${if (hosts.size == 1) "" else "s"} with saved settings · current engine mode only",
                 color = theme.onSurface.copy(alpha = 0.6f),
                 fontSize = 12.sp,
                 modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp)
@@ -120,7 +125,7 @@ fun AllSiteSettingsScreen(
                             Text("🛡️", fontSize = 48.sp)
                             Spacer(Modifier.height(12.dp))
                             Text(
-                                if (query.isBlank()) "No per-site settings yet."
+                                if (query.isBlank()) "No per-site settings or microphone choices yet."
                                 else "No sites match \"$query\".",
                                 color = theme.onSurface.copy(alpha = 0.7f),
                                 fontSize = 15.sp
@@ -163,7 +168,10 @@ fun AllSiteSettingsScreen(
                                         Text(
                                             siteSettingsSummary(
                                                 settingsMap[host],
-                                                desktopLayout = desktopOverrides[host]
+                                                desktopLayout = desktopOverrides[host],
+                                                microphoneDecisions = microphonePermissions
+                                                    .filterKeys { websiteMicrophoneOriginHost(it) == host }
+                                                    .values.toList()
                                             ),
                                             color = theme.onSurface.copy(alpha = 0.6f),
                                             fontSize = 12.sp
@@ -201,6 +209,7 @@ fun AllSiteSettingsScreen(
                                 repository.clearSiteSettings(host)
                                 repository.clearDesktopHost(host)
                             }
+                            repository.clearAllWebsiteMicrophonePermissions()
                         }
                     }) {
                         Text("Reset all", color = MaterialTheme.colorScheme.error)
@@ -218,7 +227,7 @@ fun AllSiteSettingsScreen(
                 title = { Text("Reset settings for $host?") },
                 text = {
                     Text("This site goes back to the global defaults — content rules, " +
-                        "and its wide-layout choice are removed.")
+                        "microphone choices, and its wide-layout choice are removed.")
                 },
                 confirmButton = {
                     TextButton(onClick = {
@@ -237,7 +246,11 @@ fun AllSiteSettingsScreen(
 }
 
 /** Plain-words summary of one site's overrides, e.g. "JavaScript off · Camera: Block". */
-private fun siteSettingsSummary(settings: SiteSettings?, desktopLayout: Boolean?): String {
+private fun siteSettingsSummary(
+    settings: SiteSettings?,
+    desktopLayout: Boolean?,
+    microphoneDecisions: List<Boolean> = emptyList()
+): String {
     val parts = mutableListOf<String>()
     settings?.let { s ->
         s.javaScript?.let { parts += if (it) "JavaScript on" else "JavaScript off" }
@@ -253,6 +266,13 @@ private fun siteSettingsSummary(settings: SiteSettings?, desktopLayout: Boolean?
         true -> parts += "Wide layout"
         false -> parts += "Mobile layout"
         null -> Unit
+    }
+    if (microphoneDecisions.isNotEmpty()) {
+        parts += when {
+            microphoneDecisions.all { it } -> "Microphone allowed"
+            microphoneDecisions.none { it } -> "Microphone blocked"
+            else -> "Microphone has saved choices"
+        }
     }
     return if (parts.isEmpty()) "Custom settings" else parts.joinToString(" · ")
 }
