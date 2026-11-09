@@ -6,6 +6,7 @@ import android.content.ComponentName
 import android.content.Context
 import android.os.Build
 import android.os.PersistableBundle
+import androidx.annotation.RequiresApi
 import androidx.work.Data
 import androidx.work.OneTimeWorkRequestBuilder
 import androidx.work.WorkManager
@@ -257,11 +258,14 @@ object CustomDownloadScheduler {
 
             val queued = repository.ensureCustomDownloadQueuedFor(prepared)
                 ?: return@withContext repository.getCustomDownloadFor(prepared.mode, prepared.id)
-            val uidtRecord = scheduleUidt(context, repository, queued)
+            val uidtRecord = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+                scheduleUidt(context, repository, queued)
+            } else null
             if (uidtRecord != null) return@withContext uidtRecord
             scheduleWorkManager(context, repository, queued)
         }
 
+    @RequiresApi(Build.VERSION_CODES.UPSIDE_DOWN_CAKE)
     private suspend fun scheduleUidt(
         context: Context,
         repository: BrowserRepository,

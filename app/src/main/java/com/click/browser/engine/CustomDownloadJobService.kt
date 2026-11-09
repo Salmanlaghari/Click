@@ -41,12 +41,12 @@ class CustomDownloadJobService : JobService() {
             setNotification(
                 params,
                 notificationId,
-                CustomDownloadNotifications.progressNotification(
-                    this,
-                    fallbackItem,
-                    CustomDownloadScheduler.cancelPendingIntent(this, fallbackItem)
-                ),
-                JOB_END_NOTIFICATION_POLICY_DETACH
+                    CustomDownloadNotifications.progressNotification(
+                        this,
+                        fallbackItem,
+                        CustomDownloadScheduler.cancelPendingIntent(this, fallbackItem)
+                    ),
+                    JobService.JOB_END_NOTIFICATION_POLICY_DETACH
             )
         }
 
@@ -203,7 +203,7 @@ class CustomDownloadJobService : JobService() {
                         CustomDownloadNotifications.failureNotification(this@CustomDownloadJobService, item)
                     }
                 },
-                JOB_END_NOTIFICATION_POLICY_DETACH
+                JobService.JOB_END_NOTIFICATION_POLICY_DETACH
             )
         }
     }

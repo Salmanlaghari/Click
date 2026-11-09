@@ -3,6 +3,7 @@ package com.click.browser.engine
 import android.content.Context
 import android.content.pm.ServiceInfo
 import android.os.Build
+import androidx.annotation.RequiresApi
 import androidx.work.CoroutineWorker
 import androidx.work.ForegroundInfo
 import androidx.work.WorkerParameters
@@ -119,13 +120,15 @@ class CustomFolderDownloadWorker(
         )
         val notificationId = CustomDownloadNotifications.progressNotificationId(item.id, item.attemptId)
         return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            ForegroundInfo(
-                notificationId,
-                notification,
-                ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC
-            )
+            dataSyncForegroundInfo(notificationId, notification)
         } else {
             ForegroundInfo(notificationId, notification)
         }
+    }
+
+    @RequiresApi(Build.VERSION_CODES.Q)
+    private fun dataSyncForegroundInfo(notificationId: Int, notification: android.app.Notification): ForegroundInfo {
+        // DATA_SYNC is available from API 29 (Q), matching the caller's SDK guard.
+        return ForegroundInfo(notificationId, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC)
     }
 }

@@ -14,6 +14,7 @@ import kotlinx.coroutines.withContext
 import java.io.File
 import java.io.FileOutputStream
 import java.io.InputStream
+import kotlin.io.DEFAULT_BUFFER_SIZE
 
 /**
  * Download entry point honoring the user's download-location setting
@@ -331,6 +332,7 @@ object DownloadHelper {
         val type = mimeType?.takeIf { it.isNotBlank() } ?: guessMime(fileName)
         var pendingUri: Uri? = null
         return try {
+            // MediaStore.RELATIVE_PATH is available from API 29 (Q).
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
                 val values = ContentValues().apply {
                     put(MediaStore.MediaColumns.DISPLAY_NAME, fileName)
@@ -383,6 +385,7 @@ object DownloadHelper {
         mimeType: String?
     ): String? {
         val type = mimeType?.takeIf { it.isNotBlank() } ?: guessMime(fileName)
+        // MediaStore.RELATIVE_PATH is available from API 29 (Q).
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
             val values = ContentValues().apply {
                 put(MediaStore.MediaColumns.DISPLAY_NAME, fileName)

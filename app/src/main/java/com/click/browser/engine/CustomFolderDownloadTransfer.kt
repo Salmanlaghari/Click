@@ -11,6 +11,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.job
 import kotlinx.coroutines.withContext
+import kotlin.io.DEFAULT_BUFFER_SIZE
 import okhttp3.Call
 import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import okhttp3.OkHttpClient
@@ -203,6 +204,7 @@ internal object CustomFolderDownloadTransfer {
         onProgress(downloaded, total)
         currentCoroutineContext().ensureActive()
         val finalName = uniqueName(tree, item.fileName, item.id, item.attemptId)
+        // AndroidX DocumentFile.renameTo(String) is public; providers that cannot rename return false.
         if (part.renameTo(finalName)) {
             val saved = tree.findFile(finalName)
             return CustomTransferResult(
