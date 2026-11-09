@@ -8,8 +8,8 @@ import org.junit.Test
 
 class HomeContentSectionOrderTest {
     @Test
-    fun homeCoreAndSecondaryContentOrderIsExplicitForEveryMode() {
-        val requiredCoreOrder = listOf(
+    fun homeSectionSequenceIsExplicitForEveryMode() {
+        val primaryOrder = listOf(
             HomeContentSection.PRIVACY_STATUS,
             HomeContentSection.QUICK_SITES,
             HomeContentSection.CONTINUE_BROWSING
@@ -22,7 +22,7 @@ class HomeContentSectionOrderTest {
 
         BrowserMode.values().forEach { mode ->
             val expected = buildList {
-                addAll(requiredCoreOrder)
+                addAll(primaryOrder)
                 if (mode != BrowserMode.SIMPLE) add(HomeContentSection.MODE_FOCUS)
                 addAll(secondaryOrder)
             }

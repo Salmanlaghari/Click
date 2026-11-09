@@ -136,6 +136,10 @@ import com.click.browser.engine.NewsResult
 import com.click.browser.engine.NewsStatus
 import java.util.Calendar
 
+/**
+ * Ordered post-search Home sections. Keep privacy, quick sites, and browsing
+ * continuation first, and place the optional feed or opt-in card last.
+ */
 internal enum class HomeContentSection {
     PRIVACY_STATUS,
     QUICK_SITES,
@@ -146,6 +150,11 @@ internal enum class HomeContentSection {
     OPTIONAL_NEWS_FEED
 }
 
+/**
+ * Returns the post-search sections rendered for [activeMode] in display order.
+ * Simple omits mode focus; Developer, Power, and Advance insert it after the
+ * primary browsing sections. The optional feed or opt-in is always last.
+ */
 internal fun homeContentSections(activeMode: BrowserMode): List<HomeContentSection> = buildList {
     add(HomeContentSection.PRIVACY_STATUS)
     add(HomeContentSection.QUICK_SITES)
