@@ -137,6 +137,11 @@ fun DownloadSettingsScreen(
                 )
                 if (location == DownloadSettings.LOCATION_CUSTOM) {
                     Spacer(Modifier.height(4.dp))
+                    Text(
+                        "Signed-in downloads use a temporary encrypted cookie snapshot on this device. Click removes it when the transfer completes, fails, or is canceled.",
+                        fontSize = 11.sp,
+                        color = theme.onSurface.copy(alpha = 0.58f)
+                    )
                     OutlinedButton(
                         onClick = { folderPicker.launch(null) },
                         modifier = Modifier.fillMaxWidth()
