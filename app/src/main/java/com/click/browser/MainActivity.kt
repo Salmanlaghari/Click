@@ -1745,6 +1745,16 @@ class MainActivity : FragmentActivity() {
             var playlistSeedUrl by remember { mutableStateOf<String?>(null) }
             // Generic "background audio for web pages" setting (default off).
             var backgroundAudioEnabled by remember { mutableStateOf(false) }
+            // In-app Home feed is a separate opt-in from background alerts.
+            var homeNewsFeedEnabled by remember { mutableStateOf(false) }
+            fun setHomeNewsFeedEnabled(enabled: Boolean) {
+                homeNewsFeedEnabled = enabled
+                scope.launch {
+                    dataStore.edit { prefs ->
+                        prefs[AppSettings.HOME_NEWS_FEED_ENABLED] = enabled
+                    }
+                }
+            }
             // Background news notifications: opt-in (default OFF). When the
             // user enables them we schedule the battery-friendly WorkManager
             // check; disabling cancels it.
@@ -2943,7 +2953,10 @@ class MainActivity : FragmentActivity() {
                     gpcEnabled = prefs[AppSettings.GPC_ENABLED] == true
                     secureDnsEnabled = prefs[AppSettings.SECURE_DNS_ENABLED] == true
                     backgroundAudioEnabled = prefs[AppSettings.BACKGROUND_AUDIO_ENABLED] == true
-                    backgroundAudioEnabled = prefs[AppSettings.BACKGROUND_AUDIO_ENABLED] == true
+                    // Home feed: opt-in, separate from background notifications.
+                    homeNewsFeedEnabled = com.click.browser.engine.HomeNewsFeedPolicy.isEnabled(
+                        prefs[AppSettings.HOME_NEWS_FEED_ENABLED]
+                    )
                     // Background news notifications (opt-in, default OFF).
                     newsNotificationsEnabled = prefs[AppSettings.NEWS_NOTIFICATIONS_ENABLED] == true
                     newsTopics = prefs[AppSettings.NEWS_NOTIFICATION_TOPICS]
@@ -4174,6 +4187,10 @@ class MainActivity : FragmentActivity() {
                                             searchEngine = currentSearchEngineSetting,
                                             adBlockStatusLabel = adBlockStatus.label,
                                             adBlockStatusActive = adBlockStatus.active,
+                                            homeNewsFeedEnabled = homeNewsFeedEnabled,
+                                            onHomeNewsFeedEnabledChange = { enabled ->
+                                                setHomeNewsFeedEnabled(enabled)
+                                            },
                                             wallpaperUri = wallpaperUri,
                                             shieldActive = shieldActive,
                                             onV9ShieldClick = { showV9Shield = true },
