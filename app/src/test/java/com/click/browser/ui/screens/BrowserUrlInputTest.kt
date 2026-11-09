@@ -1,5 +1,6 @@
 package com.click.browser.ui.screens
 
+import com.click.browser.engine.ModePersonalization
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -45,6 +46,19 @@ class BrowserUrlInputTest {
         assertEquals("https://duckduckgo.com/?q=two+words", result)
     }
 
+    @Test
+    fun googleAddressQueryEncodesPunctuationAndUnicodeForSelectedProvider() {
+        val query = """C++ "quotes" & 50% #1? café"""
+        val result = formatBrowserInputUrl(query, "Google") { engine, encodedQuery ->
+            assertEquals("Google", engine)
+            ModePersonalization.searchUrl(engine, encodedQuery)
+        }
+
+        assertEquals(
+            "https://www.google.com/search?q=C%2B%2B+%22quotes%22+%26+50%25+%231%3F+caf%C3%A9",
+            result
+        )
+    }
     @Test
     fun clickInternalSchemeRemainsNormalizedForNativeInterception() {
         assertEquals(
