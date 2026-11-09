@@ -50,7 +50,7 @@ internal object DevToolsInspectionPolicy {
     const val MAX_CONSOLE_NODES = 100
     const val MAX_CONSOLE_STRING_LENGTH = 256
     const val MAX_CONSOLE_RESULT_LENGTH = 32_000
-    const val MAX_STYLE_RESULT_LENGTH = 16_000
+    const val MAX_STYLE_RESULT_LENGTH = 24_000
 
     fun canInspectPage(
         mode: BrowserMode,
@@ -111,12 +111,22 @@ internal object DevToolsInspectionPolicy {
         requiredTab = 1
     )
 
+    // Fixed read-only allowlist; omit shorthand/background-image and other properties that can expose resource URLs.
     val computedStyleProperties = listOf(
-        "display", "position", "color", "background-color", "font-size",
-        "font-weight", "line-height", "width", "height", "overflow",
+        "display", "position", "color", "background-color", "font-family",
+        "font-size", "font-style", "font-weight", "line-height", "letter-spacing",
+        "text-align", "text-decoration-line", "text-transform", "white-space",
+        "text-overflow", "width", "height", "min-width", "max-width",
+        "min-height", "max-height", "box-sizing", "overflow", "overflow-x", "overflow-y",
         "margin-top", "margin-right", "margin-bottom", "margin-left",
         "padding-top", "padding-right", "padding-bottom", "padding-left",
-        "border-top-width", "border-top-style", "border-top-color"
+        "top", "right", "bottom", "left", "z-index", "opacity", "visibility",
+        "border-top-width", "border-top-style", "border-top-color", "border-width",
+        "border-style", "border-color", "border-radius", "box-shadow",
+        "flex-direction", "flex-wrap", "flex-grow", "flex-shrink", "flex-basis",
+        "align-items", "justify-content", "gap", "row-gap", "column-gap",
+        "grid-template-columns", "grid-template-rows", "grid-auto-flow", "grid-column",
+        "grid-row", "transform", "transform-origin"
     )
 
     val domSnapshotScript: String = """
@@ -387,9 +397,12 @@ internal object DevToolsInspectionPolicy {
                 val keyWithInlineValue = decodedSegment.contains('=') && normalizedKey in sensitivePathKeys
                 val redactCurrent = redactNextSegment || keyWithInlineValue
                 redactNextSegment = !decodedSegment.contains('=') && normalizedKey in sensitivePathKeys
-                val tokenLike = decodedSegment.length >= 24 &&
-                    decodedSegment.any { it.isLetterOrDigit() } &&
-                    decodedSegment.none { it.isWhitespace() || it.isISOControl() }
+                val hasNoWhitespaceOrControls = decodedSegment.none { it.isWhitespace() || it.isISOControl() }
+                val hasMixedLettersAndDigits = decodedSegment.any { it.isLetter() } && decodedSegment.any { it.isDigit() }
+                val tokenLike = hasNoWhitespaceOrControls && (
+                    (decodedSegment.length >= 16 && hasMixedLettersAndDigits) ||
+                        (decodedSegment.length >= 24 && decodedSegment.any { it.isLetterOrDigit() })
+                    )
                 when {
                     redactCurrent || segment.length > 40 || decodedSegment.contains('@') || tokenLike -> "[redacted]"
                     else -> segment.take(128)

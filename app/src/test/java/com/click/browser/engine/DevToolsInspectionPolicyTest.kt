@@ -229,6 +229,14 @@ class DevToolsInspectionPolicyTest {
         DevToolsInspectionPolicy.computedStyleProperties.forEach { property ->
             assertTrue(script.orEmpty().contains(JSONObject.quote(property)))
         }
+        assertTrue(
+            DevToolsInspectionPolicy.computedStyleProperties.containsAll(
+                listOf("font-family", "border-radius", "box-shadow", "flex-direction", "grid-template-columns", "transform", "opacity", "z-index")
+            )
+        )
+        assertTrue(DevToolsInspectionPolicy.computedStyleProperties.size <= 70)
+        assertFalse(DevToolsInspectionPolicy.computedStyleProperties.contains("background"))
+        assertFalse(DevToolsInspectionPolicy.computedStyleProperties.contains("background-image"))
         assertFalse(script.orEmpty().contains("document.cookie"))
         assertFalse(script.orEmpty().contains(".value"))
         assertNull(DevToolsInspectionPolicy.buildComputedStylesScript(listOf(-1)))
@@ -328,6 +336,10 @@ class DevToolsInspectionPolicyTest {
         assertEquals(
             "https://example.com/[redacted]/profile",
             DevToolsInspectionPolicy.sanitizeUrl("https://example.com/abc+def+ghi1234567890123/profile")
+        )
+        assertEquals(
+            "https://example.com/[redacted]/profile",
+            DevToolsInspectionPolicy.sanitizeUrl("https://example.com/key:123456789012345/profile")
         )
         assertEquals(
             "https://example.com/[redacted]",
