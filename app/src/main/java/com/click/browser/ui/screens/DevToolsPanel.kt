@@ -5,25 +5,44 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.click.browser.engine.DevToolsComputedStyles
+import com.click.browser.engine.DevToolsDomNode
+import com.click.browser.engine.DevToolsDomSnapshot
+import com.click.browser.engine.DevToolsInspectionPolicy
 import com.click.browser.engine.LogEntry
 import com.click.browser.engine.NetworkRequest
 import com.click.browser.engine.NetworkRequestOutcome
 
-/**
- * Viewport / device facts gathered from the live page via JS.
- * Every field is real data from the WebView — no placeholders.
- */
+internal object DevToolsPalette {
+    val canvas = Color(0xFFFFF8EC)
+    val surface = Color(0xFFFFFCF6)
+    val card = Color(0xFFF4EBDD)
+    val selected = Color(0xFFE8DFF4)
+    val border = Color(0xFFE3D6C2)
+    val ink = Color(0xFF2D2924)
+    val muted = Color(0xFF71685D)
+    val accent = Color(0xFF6551A3)
+    val teal = Color(0xFF287F83)
+    val info = Color(0xFF316A97)
+    val success = Color(0xFF287548)
+    val warning = Color(0xFF965D00)
+    val error = Color(0xFFB3261E)
+    val white = Color(0xFFFFFFFF)
+}
+
+/** Viewport / device facts gathered from the live WebView via JS. */
 data class DeviceInfo(
     val viewport: String = "",
     val devicePixelRatio: String = "",
@@ -35,35 +54,61 @@ data class DeviceInfo(
     val cookiesEnabled: String = ""
 )
 
+private data class VisibleDomRow(val node: DevToolsDomNode, val depth: Int)
+
 @Composable
-fun DevToolsPanel(
+internal fun DevToolsPanel(
     modifier: Modifier = Modifier,
     logs: List<LogEntry>,
     networkRequests: List<NetworkRequest>,
-    domHtml: String,
+    domSnapshot: DevToolsDomSnapshot?,
+    selectedNodePath: List<Int>?,
+    selectedStyles: DevToolsComputedStyles?,
     sourcesList: List<String>,
+    pageSessionKey: String,
+    pageMessagesCaptureConsented: Boolean,
     selectedTab: Int,
     onTabSelected: (Int) -> Unit,
+    onPageMessagesCaptureConsentChanged: (Boolean) -> Unit,
     onClearLogs: () -> Unit,
     onClearNetwork: () -> Unit,
     onRefreshPageSnapshot: () -> Unit,
+    onSelectNode: (List<Int>) -> Unit,
+    onRunConsoleCommand: (String, (String) -> Unit) -> Unit,
     deviceInfo: DeviceInfo?,
-    onRefreshDeviceInfo: () -> Unit
+    onRefreshDeviceInfo: () -> Unit,
+    onRefreshSources: () -> Unit
 ) {
     val tabs = listOf("Elements", "Console", "Network", "Sources", "Device")
 
     Column(
         modifier = modifier
             .fillMaxWidth()
-            .background(MaterialTheme.colorScheme.surfaceVariant)
+            .background(DevToolsPalette.canvas)
     ) {
-        // Tab Headers
-        TabRow(selectedTabIndex = selectedTab) {
+        Text(
+            text = "Developer Tools · WebView",
+            color = DevToolsPalette.ink,
+            fontSize = 15.sp,
+            fontWeight = FontWeight.SemiBold,
+            modifier = Modifier.padding(start = 16.dp, top = 8.dp, bottom = 4.dp)
+        )
+        TabRow(
+            selectedTabIndex = selectedTab,
+            containerColor = DevToolsPalette.surface,
+            contentColor = DevToolsPalette.ink
+        ) {
             tabs.forEachIndexed { index, title ->
                 Tab(
                     selected = selectedTab == index,
                     onClick = { onTabSelected(index) },
-                    text = { Text(title, style = MaterialTheme.typography.labelMedium) }
+                    text = {
+                        Text(
+                            title,
+                            color = if (selectedTab == index) DevToolsPalette.accent else DevToolsPalette.muted,
+                            style = MaterialTheme.typography.labelMedium
+                        )
+                    }
                 )
             }
         }
@@ -71,15 +116,29 @@ fun DevToolsPanel(
         Box(
             modifier = Modifier
                 .fillMaxWidth()
-                .heightIn(min = 280.dp, max = 480.dp)
-                .background(Color(0xFF1E1E1E))
-                .padding(8.dp)
+                .heightIn(min = 320.dp, max = 560.dp)
+                .background(DevToolsPalette.canvas)
+                .padding(horizontal = 12.dp, vertical = 8.dp)
         ) {
             when (selectedTab) {
-                0 -> ElementsTab(domHtml, onRefreshPageSnapshot)
-                1 -> ConsoleTab(logs, onClearLogs)
+                0 -> ElementsTab(
+                    snapshot = domSnapshot,
+                    selectedNodePath = selectedNodePath,
+                    selectedStyles = selectedStyles,
+                    onRefresh = onRefreshPageSnapshot,
+                    onSelectNode = onSelectNode
+                )
+                1 -> key(pageSessionKey) {
+                    ConsoleTab(
+                        logs = logs,
+                        pageMessagesCaptureConsented = pageMessagesCaptureConsented,
+                        onPageMessagesCaptureConsentChanged = onPageMessagesCaptureConsentChanged,
+                        onClearLogs = onClearLogs,
+                        onRunConsoleCommand = onRunConsoleCommand
+                    )
+                }
                 2 -> NetworkTab(networkRequests, onClearNetwork)
-                3 -> SourcesTab(sourcesList, onRefreshPageSnapshot)
+                3 -> SourcesTab(sourcesList, onRefreshSources)
                 4 -> DeviceTab(deviceInfo, onRefreshDeviceInfo)
             }
         }
@@ -87,65 +146,138 @@ fun DevToolsPanel(
 }
 
 @Composable
-fun ElementsTab(domHtml: String, onRefresh: () -> Unit) {
-    var displayModeHtml by remember { mutableStateOf(true) }
+private fun ElementsTab(
+    snapshot: DevToolsDomSnapshot?,
+    selectedNodePath: List<Int>?,
+    selectedStyles: DevToolsComputedStyles?,
+    onRefresh: () -> Unit,
+    onSelectNode: (List<Int>) -> Unit
+) {
+    var expandedPaths by remember(snapshot) {
+        mutableStateOf(setOf(snapshot?.root?.pathKey.orEmpty()))
+    }
+    val rows = remember(snapshot, expandedPaths) {
+        buildList {
+            fun append(node: DevToolsDomNode, depth: Int) {
+                add(VisibleDomRow(node, depth))
+                if (node.pathKey in expandedPaths) node.children.forEach { append(it, depth + 1) }
+            }
+            snapshot?.root?.let { append(it, 0) }
+        }
+    }
 
     Column(modifier = Modifier.fillMaxSize()) {
         Row(
-            modifier = Modifier.fillMaxWidth().padding(bottom = 4.dp),
+            modifier = Modifier.fillMaxWidth().padding(bottom = 2.dp),
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically
         ) {
-            Text("DOM snapshot · read-only", color = Color.Gray, fontSize = 12.sp)
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                TextButton(onClick = onRefresh) {
-                    Text("Refresh", color = Color(0xFF80CBC4), fontSize = 11.sp)
-                }
-                Button(
-                    onClick = { displayModeHtml = !displayModeHtml },
-                    colors = ButtonDefaults.filledTonalButtonColors(containerColor = Color.DarkGray)
-                ) {
-                    Text(if (displayModeHtml) "Tag list" else "HTML", color = Color.White, fontSize = 10.sp)
-                }
+            Text("Elements · read-only", color = DevToolsPalette.ink, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+            TextButton(onClick = onRefresh) {
+                Text("Refresh", color = DevToolsPalette.accent, fontSize = 12.sp)
             }
         }
         Text(
-            "Page snapshot only (first 100 KB); no live editing or element-click inspection.",
-            color = Color.LightGray,
+            "Structure and computed styles only. Click does not read page text, form values, cookies, or storage.",
+            color = DevToolsPalette.muted,
             fontSize = 10.sp,
             modifier = Modifier.padding(bottom = 5.dp)
         )
+        if (snapshot?.truncated == true) {
+            Text("Tree limited to ${DevToolsInspectionPolicy.MAX_DOM_NODES} elements for responsiveness.", color = DevToolsPalette.warning, fontSize = 10.sp)
+        }
 
-        Box(
-            modifier = Modifier
-                .fillMaxWidth()
-                .weight(1f)
-                .verticalScroll(rememberScrollState())
-        ) {
-            if (displayModeHtml) {
+        if (snapshot?.root == null) {
+            Box(modifier = Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
                 Text(
-                    text = domHtml.ifEmpty { "Tap Refresh to read the current page snapshot." },
-                    color = Color(0xFF80CBC4),
-                    fontFamily = FontFamily.Monospace,
-                    fontSize = 11.sp
+                    "Tap Refresh to inspect the current WebView page.",
+                    color = DevToolsPalette.muted,
+                    fontSize = 12.sp
                 )
-            } else {
-                // Easy parsed tags view
-                val tags = remember(domHtml) {
-                    val list = mutableListOf<String>()
-                    val regex = "<([a-zA-Z0-9]+)([^>]*)>".toRegex()
-                    regex.findAll(domHtml).forEach { match ->
-                        list.add("<" + match.groupValues[1] + ">")
-                    }
-                    list
-                }
-                if (tags.isEmpty()) {
-                        Text("No tags in this snapshot.", color = Color.White)
-                } else {
-                    Column {
-                        tags.forEach { tag ->
-                            Text(tag, color = Color(0xFFECEFF1), fontFamily = FontFamily.Monospace, fontSize = 12.sp)
+            }
+        } else {
+            LazyColumn(
+                modifier = Modifier.fillMaxWidth().weight(1f),
+                contentPadding = PaddingValues(vertical = 2.dp)
+            ) {
+                items(rows, key = { it.node.pathKey }) { row ->
+                    val node = row.node
+                    val isSelected = selectedNodePath == node.path
+                    val isExpanded = node.pathKey in expandedPaths
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(vertical = 1.dp)
+                            .clip(RoundedCornerShape(6.dp))
+                            .background(if (isSelected) DevToolsPalette.selected else DevToolsPalette.surface)
+                            .clickable { onSelectNode(node.path) }
+                            .padding(horizontal = 5.dp, vertical = 2.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Spacer(Modifier.width((row.depth * 12).coerceAtMost(144).dp))
+                        if (node.childCount > 0) {
+                            TextButton(
+                                onClick = {
+                                    expandedPaths = if (isExpanded) expandedPaths - node.pathKey else expandedPaths + node.pathKey
+                                },
+                                contentPadding = PaddingValues(horizontal = 3.dp, vertical = 0.dp)
+                            ) {
+                                Text(if (isExpanded) "▾" else "▸", color = DevToolsPalette.accent, fontSize = 13.sp)
+                            }
+                        } else {
+                            Spacer(Modifier.width(28.dp))
                         }
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = "<${node.tagName}>",
+                                color = DevToolsPalette.teal,
+                                fontFamily = FontFamily.Monospace,
+                                fontSize = 11.sp,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                            val details = buildList {
+                                node.id.takeIf { it.isNotBlank() }?.let { add("#$it") }
+                                node.classes.take(3).takeIf { it.isNotEmpty() }?.let { add(".${it.joinToString(".")}") }
+                                node.elementType?.takeIf { it.isNotBlank() }?.let { add("type=$it") }
+                            }.joinToString(" ")
+                            if (details.isNotBlank()) {
+                                Text(
+                                    details,
+                                    color = DevToolsPalette.muted,
+                                    fontFamily = FontFamily.Monospace,
+                                    fontSize = 9.sp,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        Divider(color = DevToolsPalette.border)
+        Column(modifier = Modifier.fillMaxWidth().heightIn(min = 86.dp, max = 146.dp).padding(top = 5.dp)) {
+            Text(
+                text = selectedStyles?.let { "Computed styles · <${it.tagName}>" } ?: "Computed styles",
+                color = DevToolsPalette.ink,
+                fontSize = 11.sp,
+                fontWeight = FontWeight.SemiBold,
+                modifier = Modifier.padding(bottom = 3.dp)
+            )
+            if (selectedStyles == null || selectedStyles.properties.isEmpty()) {
+                Text("Select an element to inspect its safe, read-only style properties.", color = DevToolsPalette.muted, fontSize = 10.sp)
+            } else {
+                LazyColumn(modifier = Modifier.fillMaxWidth()) {
+                    items(selectedStyles.properties.entries.toList(), key = { it.key }) { (name, value) ->
+                        Text(
+                            "$name: $value",
+                            color = DevToolsPalette.ink,
+                            fontFamily = FontFamily.Monospace,
+                            fontSize = 10.sp,
+                            modifier = Modifier.padding(vertical = 1.dp)
+                        )
                     }
                 }
             }
@@ -154,136 +286,282 @@ fun ElementsTab(domHtml: String, onRefresh: () -> Unit) {
 }
 
 @Composable
-fun ConsoleTab(
+private fun ConsoleTab(
     logs: List<LogEntry>,
-    onClearLogs: () -> Unit
+    pageMessagesCaptureConsented: Boolean,
+    onPageMessagesCaptureConsentChanged: (Boolean) -> Unit,
+    onClearLogs: () -> Unit,
+    onRunConsoleCommand: (String, (String) -> Unit) -> Unit
 ) {
+    var command by remember { mutableStateOf("") }
+    var output by remember { mutableStateOf("") }
+    var consentGranted by remember { mutableStateOf(false) }
+    var showConsentDialog by remember { mutableStateOf(false) }
+    var showPageMessagesConsentDialog by remember { mutableStateOf(false) }
+    var pendingCommand by remember { mutableStateOf("") }
+
     Column(modifier = Modifier.fillMaxSize()) {
         Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically
         ) {
-            Text("WebView console · read-only", color = Color.Gray, fontSize = 12.sp)
-            TextButton(onClick = onClearLogs) {
-                Text("Clear", color = Color.Red, fontSize = 12.sp)
+            Text("Page console", color = DevToolsPalette.ink, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+            TextButton(onClick = { onClearLogs(); output = "" }) {
+                Text("Clear", color = DevToolsPalette.error, fontSize = 12.sp)
             }
         }
-        Text("Native WebView messages only; no command prompt or page-script execution.", color = Color.LightGray, fontSize = 10.sp)
-
-        // Logs Display list
-        Box(
-            modifier = Modifier
-                .fillMaxWidth()
-                .weight(1f)
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(bottom = 3.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween
         ) {
-            // Cache the date formatter — creating one per log entry per
-            // composition is wasteful, and SimpleDateFormat is not
-            // thread-safe. DateTimeFormatter (java.time) is immutable
-            // and thread-safe (minSdk 26 has full java.time support).
-            val timeFormatter = remember {
-                java.time.format.DateTimeFormatter.ofPattern(
-                    "HH:mm:ss", java.util.Locale.getDefault()
-                )
+            Text(
+                if (pageMessagesCaptureConsented) {
+                    "Page messages are on only while Console is selected."
+                } else {
+                    "Page message capture is off; sites may log private data."
+                },
+                color = DevToolsPalette.muted,
+                fontSize = 9.sp,
+                modifier = Modifier.weight(1f)
+            )
+            if (pageMessagesCaptureConsented) {
+                TextButton(onClick = { onPageMessagesCaptureConsentChanged(false); onClearLogs() }) {
+                    Text("Stop", color = DevToolsPalette.error, fontSize = 11.sp)
+                }
+            } else {
+                TextButton(onClick = { showPageMessagesConsentDialog = true }) {
+                    Text("Enable", color = DevToolsPalette.accent, fontSize = 11.sp)
+                }
             }
-            LazyColumn(
-                modifier = Modifier.fillMaxSize(),
-                reverseLayout = true
-            ) {
+        }
+        LazyColumn(
+            modifier = Modifier.fillMaxWidth().weight(1f),
+            reverseLayout = true
+        ) {
+            if (!pageMessagesCaptureConsented) {
+                item {
+                    Text(
+                        "Page messages are not collected until you enable them.",
+                        color = DevToolsPalette.muted,
+                        fontSize = 11.sp,
+                        modifier = Modifier.padding(vertical = 6.dp)
+                    )
+                }
+            } else {
                 items(logs.reversed()) { log ->
                     val color = when (log.type) {
-                        "info" -> Color(0xFF29B6F6) // info blue
-                        "success" -> Color(0xFF66BB6A) // success green
-                        "warning" -> Color(0xFFFFA726) // warning orange
-                        "error" -> Color(0xFFEF5350) // error red
-                        else -> Color.White
+                        "success" -> DevToolsPalette.success
+                        "warning" -> DevToolsPalette.warning
+                        "error" -> DevToolsPalette.error
+                        else -> DevToolsPalette.info
                     }
-                    val time = timeFormatter.format(
-                        java.time.Instant.ofEpochMilli(log.timestamp)
-                            .atZone(java.time.ZoneId.systemDefault())
-                            .toLocalTime()
-                    )
+                    val time = remember(log.timestamp) {
+                        java.time.format.DateTimeFormatter.ofPattern("HH:mm:ss", java.util.Locale.getDefault())
+                            .format(java.time.Instant.ofEpochMilli(log.timestamp).atZone(java.time.ZoneId.systemDefault()).toLocalTime())
+                    }
                     Text(
                         text = "[$time] [${log.type.uppercase()}] ${log.message}",
                         color = color,
                         fontFamily = FontFamily.Monospace,
-                        fontSize = 11.sp,
-                        modifier = Modifier.padding(vertical = 2.dp)
+                        fontSize = 10.sp,
+                        modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp)
                     )
                 }
             }
         }
-
-    }
-}
-
-@Composable
-fun NetworkTab(requests: List<NetworkRequest>, onClearNetwork: () -> Unit) {
-    Column(modifier = Modifier.fillMaxSize()) {
+        if (output.isNotBlank()) {
+            Text(
+                "Command result",
+                color = DevToolsPalette.ink,
+                fontWeight = FontWeight.SemiBold,
+                fontSize = 10.sp,
+                modifier = Modifier.padding(top = 3.dp)
+            )
+            Text(
+                output,
+                color = DevToolsPalette.ink,
+                fontFamily = FontFamily.Monospace,
+                fontSize = 10.sp,
+                modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(6.dp)).background(DevToolsPalette.card).padding(6.dp),
+                maxLines = 4,
+                overflow = TextOverflow.Ellipsis
+            )
+        }
         Row(
-            modifier = Modifier.fillMaxWidth().padding(bottom = 4.dp),
-            horizontalArrangement = Arrangement.SpaceBetween,
+            modifier = Modifier.fillMaxWidth().padding(top = 5.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            Text(
-                "Native WebView requests (${requests.size})",
-                color = Color.Gray, fontSize = 12.sp
+            OutlinedTextField(
+                value = command,
+                onValueChange = { command = it.take(DevToolsInspectionPolicy.MAX_COMMAND_LENGTH) },
+                modifier = Modifier.weight(1f),
+                label = { Text("JavaScript command", color = DevToolsPalette.muted) },
+                singleLine = true,
+                textStyle = MaterialTheme.typography.bodySmall.copy(
+                    color = DevToolsPalette.ink,
+                    fontFamily = FontFamily.Monospace
+                ),
+                colors = OutlinedTextFieldDefaults.colors(
+                    focusedTextColor = DevToolsPalette.ink,
+                    unfocusedTextColor = DevToolsPalette.ink,
+                    focusedBorderColor = DevToolsPalette.accent,
+                    unfocusedBorderColor = DevToolsPalette.border,
+                    focusedLabelColor = DevToolsPalette.accent,
+                    unfocusedLabelColor = DevToolsPalette.muted,
+                    cursorColor = DevToolsPalette.accent
+                )
             )
-            TextButton(onClick = onClearNetwork) {
-                Text("Clear", color = Color.Red, fontSize = 12.sp)
+            Spacer(Modifier.width(6.dp))
+            Button(
+                enabled = command.isNotBlank(),
+                onClick = {
+                    pendingCommand = command.trim()
+                    if (consentGranted) {
+                        val toRun = pendingCommand
+                        pendingCommand = ""
+                        command = ""
+                        output = "Running…"
+                        onRunConsoleCommand(toRun) { output = it }
+                    } else {
+                        showConsentDialog = true
+                    }
+                },
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = DevToolsPalette.accent,
+                    contentColor = DevToolsPalette.white,
+                    disabledContainerColor = DevToolsPalette.border,
+                    disabledContentColor = DevToolsPalette.muted
+                ),
+                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp)
+            ) {
+                Text("Run", fontSize = 11.sp)
             }
         }
         Text(
-            "Passive log while this panel is open. Errors are separate events (WebView provides no request IDs); successful status/body and some redirects are not exposed.",
-            color = Color.LightGray,
+            "Commands run only after you tap Run and are cleared when this panel closes.",
+            color = DevToolsPalette.muted,
+            fontSize = 9.sp,
+            modifier = Modifier.padding(top = 2.dp)
+        )
+    }
+
+    if (showPageMessagesConsentDialog) {
+        AlertDialog(
+            onDismissRequest = { showPageMessagesConsentDialog = false },
+            title = { Text("Capture page console messages?", color = DevToolsPalette.ink) },
+            text = {
+                Text(
+                    "A website can put private text, form data, cookies, or tokens in its own console messages. Click will collect none until you enable this. If enabled, messages are kept only in this panel while Console is selected and are cleared when you leave it or close DevTools. Continue only on pages you trust.",
+                    color = DevToolsPalette.ink
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    onPageMessagesCaptureConsentChanged(true)
+                    showPageMessagesConsentDialog = false
+                }) {
+                    Text("Enable page messages", color = DevToolsPalette.accent)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showPageMessagesConsentDialog = false }) {
+                    Text("Cancel", color = DevToolsPalette.muted)
+                }
+            },
+            containerColor = DevToolsPalette.surface,
+            titleContentColor = DevToolsPalette.ink,
+            textContentColor = DevToolsPalette.ink
+        )
+    }
+
+    if (showConsentDialog) {
+        AlertDialog(
+            onDismissRequest = { showConsentDialog = false; pendingCommand = "" },
+            title = { Text("Run code on this page?", color = DevToolsPalette.ink) },
+            text = {
+                Text(
+                    "JavaScript runs in the active website context and can read or change data that site can access, including form values and cookies. Click does not read these automatically. Run only trusted commands; results stay in this panel and are cleared when it closes.",
+                    color = DevToolsPalette.ink
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    consentGranted = true
+                    showConsentDialog = false
+                    val toRun = pendingCommand
+                    pendingCommand = ""
+                    command = ""
+                    output = "Running…"
+                    if (toRun.isNotBlank()) onRunConsoleCommand(toRun) { output = it }
+                }) {
+                    Text("Run this command", color = DevToolsPalette.accent)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showConsentDialog = false; pendingCommand = "" }) {
+                    Text("Cancel", color = DevToolsPalette.muted)
+                }
+            },
+            containerColor = DevToolsPalette.surface,
+            titleContentColor = DevToolsPalette.ink,
+            textContentColor = DevToolsPalette.ink
+        )
+    }
+}
+
+@Composable
+private fun NetworkTab(requests: List<NetworkRequest>, onClearNetwork: () -> Unit) {
+    Column(modifier = Modifier.fillMaxSize()) {
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(bottom = 3.dp),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text("Observed WebView requests (${requests.size})", color = DevToolsPalette.ink, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+            TextButton(onClick = onClearNetwork) {
+                Text("Clear", color = DevToolsPalette.error, fontSize = 12.sp)
+            }
+        }
+        Text(
+            "Captured only while Network is selected. Credentials, query strings, fragments, and token-like path parts are hidden.",
+            color = DevToolsPalette.muted,
             fontSize = 10.sp,
             modifier = Modifier.padding(bottom = 5.dp)
         )
-
         LazyColumn(modifier = Modifier.fillMaxWidth().weight(1f)) {
-            items(requests.asReversed()) { req ->
-                val statusColor = when (req.outcome) {
-                    NetworkRequestOutcome.HTTP_ERROR, NetworkRequestOutcome.LOAD_ERROR -> Color(0xFFEF5350)
-                    NetworkRequestOutcome.BLOCKED_BY_CLICK -> Color(0xFFFFA726)
-                    NetworkRequestOutcome.OBSERVED -> Color(0xFFB0BEC5)
+            items(requests.asReversed()) { request ->
+                val statusColor = when (request.outcome) {
+                    NetworkRequestOutcome.HTTP_ERROR, NetworkRequestOutcome.LOAD_ERROR -> DevToolsPalette.error
+                    NetworkRequestOutcome.BLOCKED_BY_CLICK -> DevToolsPalette.warning
+                    NetworkRequestOutcome.OBSERVED -> DevToolsPalette.muted
                 }
-                val statusLabel = when (req.outcome) {
+                val statusLabel = when (request.outcome) {
                     NetworkRequestOutcome.OBSERVED -> "Observed · status n/a"
                     NetworkRequestOutcome.BLOCKED_BY_CLICK -> "Blocked by Click"
-                    NetworkRequestOutcome.HTTP_ERROR -> "HTTP error · ${req.statusCode ?: "?"}"
+                    NetworkRequestOutcome.HTTP_ERROR -> "HTTP error · ${request.statusCode ?: "?"}"
                     NetworkRequestOutcome.LOAD_ERROR -> "Load error"
                 }
-                val entryType = when (req.outcome) {
-                    NetworkRequestOutcome.OBSERVED -> if (req.isMainFrame) "Document" else "Resource"
+                val entryType = when (request.outcome) {
+                    NetworkRequestOutcome.OBSERVED -> if (request.isMainFrame) "Document" else "Resource"
                     NetworkRequestOutcome.BLOCKED_BY_CLICK -> "Request"
                     NetworkRequestOutcome.HTTP_ERROR, NetworkRequestOutcome.LOAD_ERROR -> "Error event"
                 }
-
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(vertical = 4.dp)
-                        .background(Color(0xFF2B2B2B))
-                        .padding(6.dp),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
+                Column(
+                    modifier = Modifier.fillMaxWidth().padding(vertical = 3.dp)
+                        .clip(RoundedCornerShape(8.dp)).background(DevToolsPalette.surface)
+                        .padding(8.dp)
                 ) {
-                    Column(modifier = Modifier.weight(1f)) {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Text(req.method, color = Color.Cyan, fontWeight = FontWeight.Bold, fontSize = 11.sp)
-                            Spacer(modifier = Modifier.width(6.dp))
-                            Text(entryType, color = Color.LightGray, fontSize = 10.sp)
-                        }
-                        Text(req.url, color = Color.White, fontFamily = FontFamily.Monospace, fontSize = 10.sp, maxLines = 2)
-                        req.detail?.let { Text(it, color = Color.LightGray, fontSize = 10.sp, maxLines = 2) }
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(request.method, color = DevToolsPalette.accent, fontWeight = FontWeight.Bold, fontSize = 10.sp)
+                        Spacer(Modifier.width(6.dp))
+                        Text(entryType, color = DevToolsPalette.muted, fontSize = 10.sp)
+                        Spacer(Modifier.weight(1f))
+                        Text(statusLabel, color = statusColor, fontWeight = FontWeight.SemiBold, fontSize = 9.sp)
                     }
-                    Spacer(modifier = Modifier.width(6.dp))
-                    Text(
-                        text = statusLabel,
-                        color = statusColor,
-                        fontWeight = FontWeight.Bold,
-                        fontSize = 10.sp
-                    )
+                    Text(request.url, color = DevToolsPalette.ink, fontFamily = FontFamily.Monospace, fontSize = 10.sp, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                    request.detail?.let { Text(it, color = DevToolsPalette.muted, fontSize = 10.sp, maxLines = 2, overflow = TextOverflow.Ellipsis) }
                 }
             }
         }
@@ -291,44 +569,40 @@ fun NetworkTab(requests: List<NetworkRequest>, onClearNetwork: () -> Unit) {
 }
 
 @Composable
-fun SourcesTab(sources: List<String>, onRefresh: () -> Unit) {
+private fun SourcesTab(sources: List<String>, onRefresh: () -> Unit) {
     Column(modifier = Modifier.fillMaxSize()) {
         Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically
         ) {
-            Text("Markup resource references", color = Color.Gray, fontSize = 12.sp)
+            Text("Markup resource references", color = DevToolsPalette.ink, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
             TextButton(onClick = onRefresh) {
-                Text("Refresh", color = Color(0xFF80CBC4), fontSize = 11.sp)
+                Text("Refresh", color = DevToolsPalette.accent, fontSize = 11.sp)
             }
         }
-        Text("Scripts, stylesheets and images found in the current page markup (up to 500); source contents are not loaded.", color = Color.LightGray, fontSize = 10.sp, modifier = Modifier.padding(bottom = 5.dp))
-
+        Text(
+            "Only references from page markup are listed; source contents are not loaded. Query and fragment data are hidden.",
+            color = DevToolsPalette.muted,
+            fontSize = 10.sp,
+            modifier = Modifier.padding(bottom = 5.dp)
+        )
         if (sources.isEmpty()) {
             Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                Text("Tap Refresh to list page references.", color = Color.Gray, fontSize = 12.sp)
+                Text("Tap Refresh to list page references.", color = DevToolsPalette.muted, fontSize = 12.sp)
             }
         } else {
             LazyColumn(modifier = Modifier.fillMaxSize()) {
-                items(sources) { src ->
-                    val typeColor = when {
-                        src.endsWith(".js") -> Color(0xFFFFF176)
-                        src.endsWith(".css") -> Color(0xFF81D4FA)
-                        src.endsWith(".png") || src.endsWith(".jpg") || src.endsWith(".jpeg") || src.endsWith(".gif") || src.endsWith(".webp") -> Color(0xFFC5E1A5)
-                        else -> Color.White
-                    }
-
+                items(sources) { source ->
                     Text(
-                        text = src,
-                        color = typeColor,
+                        text = source,
+                        color = DevToolsPalette.teal,
                         fontFamily = FontFamily.Monospace,
-                        fontSize = 11.sp,
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(vertical = 3.dp)
-                            .background(Color(0xFF262626))
-                            .padding(4.dp)
+                        fontSize = 10.sp,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.fillMaxWidth().padding(vertical = 3.dp)
+                            .clip(RoundedCornerShape(6.dp)).background(DevToolsPalette.surface).padding(6.dp)
                     )
                 }
             }
@@ -337,29 +611,26 @@ fun SourcesTab(sources: List<String>, onRefresh: () -> Unit) {
 }
 
 @Composable
-fun DeviceTab(deviceInfo: DeviceInfo?, onRefreshDeviceInfo: () -> Unit) {
+private fun DeviceTab(deviceInfo: DeviceInfo?, onRefreshDeviceInfo: () -> Unit) {
     Column(modifier = Modifier.fillMaxSize()) {
         Row(
             modifier = Modifier.fillMaxWidth().padding(bottom = 4.dp),
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically
         ) {
-            Text("Viewport & Device Info", color = Color.Gray, fontSize = 12.sp)
+            Text("Viewport & device facts", color = DevToolsPalette.ink, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
             Button(
                 onClick = onRefreshDeviceInfo,
-                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF1565C0)),
+                colors = ButtonDefaults.buttonColors(containerColor = DevToolsPalette.accent, contentColor = DevToolsPalette.white),
                 contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp)
             ) {
-                Text("Refresh", color = Color.White, fontSize = 10.sp)
+                Text("Refresh", fontSize = 10.sp)
             }
         }
 
         if (deviceInfo == null) {
             Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                Text(
-                    "Tap Refresh to read live viewport info from the page.",
-                    color = Color.Gray, fontSize = 12.sp
-                )
+                Text("Tap Refresh to read live viewport facts from the WebView.", color = DevToolsPalette.muted, fontSize = 12.sp)
             }
         } else {
             val rows = listOf(
@@ -374,45 +645,28 @@ fun DeviceTab(deviceInfo: DeviceInfo?, onRefreshDeviceInfo: () -> Unit) {
             LazyColumn(modifier = Modifier.fillMaxSize()) {
                 items(rows) { (label, value) ->
                     Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(vertical = 3.dp)
-                            .background(Color(0xFF262626))
-                            .padding(8.dp)
+                        modifier = Modifier.fillMaxWidth().padding(vertical = 3.dp)
+                            .clip(RoundedCornerShape(6.dp)).background(DevToolsPalette.surface).padding(8.dp)
                     ) {
-                        Text(
-                            text = "$label: ",
-                            color = Color(0xFF81D4FA),
-                            fontFamily = FontFamily.Monospace,
-                            fontSize = 11.sp,
-                            fontWeight = FontWeight.Bold
-                        )
-                        Text(
-                            text = value.ifEmpty { "—" },
-                            color = Color.White,
-                            fontFamily = FontFamily.Monospace,
-                            fontSize = 11.sp
-                        )
+                        Text("$label: ", color = DevToolsPalette.accent, fontFamily = FontFamily.Monospace, fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                        Text(value.ifEmpty { "—" }, color = DevToolsPalette.ink, fontFamily = FontFamily.Monospace, fontSize = 10.sp)
                     }
                 }
                 item {
                     Text(
-                        text = "User Agent:",
-                        color = Color(0xFF81D4FA),
+                        "User Agent:",
+                        color = DevToolsPalette.accent,
                         fontFamily = FontFamily.Monospace,
-                        fontSize = 11.sp,
+                        fontSize = 10.sp,
                         fontWeight = FontWeight.Bold,
                         modifier = Modifier.padding(top = 6.dp, bottom = 2.dp)
                     )
                     Text(
-                        text = deviceInfo.userAgent.ifEmpty { "—" },
-                        color = Color.White,
+                        deviceInfo.userAgent.ifEmpty { "—" },
+                        color = DevToolsPalette.ink,
                         fontFamily = FontFamily.Monospace,
                         fontSize = 10.sp,
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .background(Color(0xFF262626))
-                            .padding(8.dp)
+                        modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(6.dp)).background(DevToolsPalette.surface).padding(8.dp)
                     )
                 }
             }

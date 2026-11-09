@@ -111,7 +111,7 @@ object DevToolsNetworkLog {
         timestamp: Long
     ) = NetworkRequest(
         method = method.take(MAX_METHOD_LENGTH).ifBlank { "GET" },
-        url = url.take(MAX_URL_LENGTH),
+        url = DevToolsInspectionPolicy.sanitizeUrl(url).take(MAX_URL_LENGTH),
         isMainFrame = isMainFrame,
         webViewKey = webViewKey,
         outcome = outcome,
