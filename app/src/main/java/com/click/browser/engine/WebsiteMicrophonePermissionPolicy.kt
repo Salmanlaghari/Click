@@ -78,7 +78,7 @@ private fun parseWebsiteAuthority(authority: String): CanonicalWebsiteAuthority?
         }
         val ipv6 = runCatching { InetAddress.getByName(literal) as? Inet6Address }
             .getOrNull() ?: return null
-        val hostKey = ipv6.hostAddress.substringBefore('%').lowercase(Locale.ROOT)
+        val hostKey = ipv6.hostAddress.lowercase(Locale.ROOT)
         return CanonicalWebsiteAuthority("[$hostKey]", hostKey, port)
     }
 
@@ -86,8 +86,9 @@ private fun parseWebsiteAuthority(authority: String): CanonicalWebsiteAuthority?
     if (colon >= 0 && authority.indexOf(':') != colon) return null
     val rawHost = if (colon >= 0) authority.substring(0, colon) else authority
     val port = if (colon >= 0) parseWebsitePort(authority.substring(colon + 1)) ?: return null else null
-    val hostWithoutFinalDot = if (rawHost.endsWith('.')) rawHost.dropLast(1) else rawHost
-    if (hostWithoutFinalDot.isBlank() || hostWithoutFinalDot.endsWith('.')) return null
+    if (rawHost.endsWith("..")) return null
+    val hostWithoutFinalDot = rawHost.removeSuffix(".")
+    if (hostWithoutFinalDot.isBlank()) return null
     val asciiHost = runCatching {
         IDN.toASCII(hostWithoutFinalDot, IDN.USE_STD3_ASCII_RULES).lowercase(Locale.ROOT)
     }.getOrNull()?.takeIf { it.isNotBlank() && it.length <= 253 } ?: return null

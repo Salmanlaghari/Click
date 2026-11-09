@@ -669,7 +669,9 @@ private class NormalTabDevicePermissionDelegate(
     private val pendingAndroidAudioCallbacks = ArrayDeque<PendingAndroidAudioCallback>()
 
     companion object {
-        private const val MAX_PENDING_ANDROID_AUDIO_CALLBACKS = 8
+        // Bound per-session memory against a page flooding callbacks before Gecko's
+        // paired media requests arrive; 32 permits a generous burst and overflow is logged.
+        private const val MAX_PENDING_ANDROID_AUDIO_CALLBACKS = 32
         private const val PENDING_ANDROID_AUDIO_CALLBACK_TIMEOUT_MS = 30_000L
         private const val PERMISSION_LOG_TAG = "ClickMicPermissions"
     }

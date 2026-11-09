@@ -692,14 +692,12 @@ class BrowserRepository(private val context: Context) {
             Log.w(TAG, "Ignoring invalid website microphone host in cross-profile clear request")
             return
         }
-        clearWebsiteMicrophonePermissionsFromStore(
-            context.profileDataStoreFor(BrowserMode.SIMPLE),
-            normalizedHost
-        )
-        clearWebsiteMicrophonePermissionsFromStore(
-            context.profileDataStoreFor(BrowserMode.ADVANCED),
-            normalizedHost
-        )
+        BrowserMode.values()
+            .map { context.profileDataStoreFor(it) }
+            .distinct()
+            .forEach { store ->
+                clearWebsiteMicrophonePermissionsFromStore(store, normalizedHost)
+            }
     }
 
     private suspend fun clearWebsiteMicrophonePermissionsFromStore(
@@ -734,6 +732,10 @@ class BrowserRepository(private val context: Context) {
     }
 
     suspend fun clearSiteSettings(host: String) {
+        val normalizedHost = websiteMicrophoneHostKey(host)
+        if (normalizedHost == null) {
+            Log.w(TAG, "Could not normalize host while clearing site settings")
+        }
         context.profileDataStore.edit { preferences ->
             val jsonStr = preferences[SITE_SETTINGS_KEY] ?: "{}"
             val map = SiteSettings.mapFromJson(jsonStr).toMutableMap()
@@ -743,10 +745,11 @@ class BrowserRepository(private val context: Context) {
             val microphonePermissions = websiteMicrophonePermissionsFromJson(
                 preferences[WEBSITE_MICROPHONE_PERMISSIONS_KEY]
             ).toMutableMap()
-            val normalizedHost = host.trim().lowercase(Locale.ROOT).trimEnd('.')
-            microphonePermissions.keys
-                .filter { websiteMicrophoneOriginHost(it) == normalizedHost }
-                .forEach(microphonePermissions::remove)
+            if (normalizedHost != null) {
+                microphonePermissions.keys
+                    .filter { websiteMicrophoneOriginHost(it) == normalizedHost }
+                    .forEach(microphonePermissions::remove)
+            }
             preferences[WEBSITE_MICROPHONE_PERMISSIONS_KEY] =
                 websiteMicrophonePermissionsToJson(microphonePermissions)
         }
