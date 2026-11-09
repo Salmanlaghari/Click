@@ -6364,6 +6364,7 @@ class MainActivity : FragmentActivity() {
                                     onToggleJs = { javaScriptEnabledGlobal = it },
                                     dataSaver = dataSaverEnabled,
                                     onToggleDataSaver = { dataSaverEnabled = it },
+                                    currentTabEngine = currentTab.engine,
                                     backgroundAudioEnabled = backgroundAudioEnabled,
                                     onToggleBackgroundAudio = { v ->
                                         backgroundAudioEnabled = v
