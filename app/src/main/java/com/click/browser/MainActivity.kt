@@ -1429,8 +1429,8 @@ class MainActivity : FragmentActivity() {
                 tabUndoSnackbarJob = null
                 val currentSnackbar = snackbarHostState.currentSnackbarData
                 if (currentSnackbar != null &&
-                    currentSnackbar.message == "Tab closed" &&
-                    currentSnackbar.actionLabel == "UNDO"
+                    currentSnackbar.visuals.message == "Tab closed" &&
+                    currentSnackbar.visuals.actionLabel == "UNDO"
                 ) {
                     currentSnackbar.dismiss()
                 }
