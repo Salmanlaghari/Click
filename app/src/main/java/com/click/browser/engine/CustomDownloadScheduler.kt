@@ -1,7 +1,7 @@
 package com.click.browser.engine
 
-import android.app.JobScheduler
 import android.app.job.JobInfo
+import android.app.job.JobScheduler
 import android.content.ComponentName
 import android.content.Context
 import android.os.Build
@@ -13,7 +13,6 @@ import com.click.browser.data.BrowserRepository
 import com.click.browser.data.CustomDownloadBackend
 import com.click.browser.data.CustomDownloadItem
 import com.click.browser.data.CustomDownloadState
-import com.click.browser.engine.BrowserMode
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.withContext

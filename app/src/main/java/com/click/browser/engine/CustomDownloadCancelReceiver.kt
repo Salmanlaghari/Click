@@ -3,7 +3,6 @@ package com.click.browser.engine
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
-import com.click.browser.data.BrowserMode
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
