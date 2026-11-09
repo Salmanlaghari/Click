@@ -61,8 +61,9 @@ internal fun supportsNormalTabExtensionActions(url: String): Boolean =
 internal fun canRetryNormalTabExtensionPopup(
     isOwnerSelected: Boolean,
     hasAvailableAction: Boolean,
-    currentUrl: String
-): Boolean = isOwnerSelected && hasAvailableAction && supportsNormalTabExtensionActions(currentUrl)
+    currentUrl: String,
+    isPopupFailed: Boolean = true
+): Boolean = isPopupFailed && isOwnerSelected && hasAvailableAction && supportsNormalTabExtensionActions(currentUrl)
 
 /**
  * Routes GeckoView's runtime-wide ActionDelegate callbacks to the currently active

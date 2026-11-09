@@ -139,5 +139,13 @@ class NormalTabExtensionSupportTest {
                 currentUrl = "about:blank"
             )
         )
+        assertFalse(
+            canRetryNormalTabExtensionPopup(
+                isOwnerSelected = true,
+                hasAvailableAction = true,
+                currentUrl = "https://example.com/",
+                isPopupFailed = false
+            )
+        )
     }
 }
