@@ -4407,6 +4407,17 @@ class MainActivity : FragmentActivity() {
                                                     onSettingsClick = { showSettings = true },
                                                     // 2026 style: sidebar (drawer) accessible from top bar.
                                                     onDrawerClick = { scope.launch { drawerState.open() } },
+                                                    onModeChange = { mode ->
+                                                        if (activeMode != mode) {
+                                                            pendingModeSwitch = mode
+                                                        } else {
+                                                            Toast.makeText(
+                                                                this@MainActivity,
+                                                                "Already in ${mode.display().title}",
+                                                                Toast.LENGTH_SHORT
+                                                            ).show()
+                                                        }
+                                                    },
                                                     tabCount = tabs.size,
                                                     onTabsClick = { showTabsManager = true },
                                                     showDeveloperTools = activeMode == BrowserMode.DEVELOPER,
@@ -7699,9 +7710,43 @@ class MainActivity : FragmentActivity() {
                                         androidx.compose.material3.Text("Switch to ${targetMode.display().title}?")
                                     },
                                     text = {
-                                        androidx.compose.material3.Text(
-                                            "Switching profiles closes and reopens Click; Android may take a little time to relaunch it. Eligible regular web tabs are saved in this profile and restored when you return. Private and internal tabs are not included. Continue?"
-                                        )
+                                        val sessionDisclosure = if (liveFlags.clearOnExit) {
+                                            "Clear data on exit is on: the saved-tab snapshot is cleared; " +
+                                                "cache/cookie/site-storage cleanup may not run " +
+                                                "during the forced restart."
+                                        } else {
+                                            "Eligible regular tabs are saved and restored for this profile."
+                                        }
+                                        val historyDisclosure = if (liveFlags.clearHistoryOnExit) {
+                                            "Clear history on exit is on; history and Recently Closed cleanup " +
+                                                "may not run during the forced restart."
+                                        } else {
+                                            ""
+                                        }
+                                        val profileDisclosure =
+                                            "Simple, Developer, and Power share app data " +
+                                                "(bookmarks, history, downloads, passwords, and preferences). " +
+                                                "Advance has a separate store that starts empty; " +
+                                                "app data is not copied across."
+                                        val engineDisclosure =
+                                            "WebView website data is separate by mode. Gecko shares one context " +
+                                                "Simple, Developer, and Power; Advance uses a separate context."
+                                        val switchDisclosure = listOf(
+                                            "Switching restarts Click.",
+                                            engineDisclosure,
+                                            profileDisclosure,
+                                            "Device-wide V9 Shield/VPN, DNS, and AI settings stay shared.",
+                                            sessionDisclosure,
+                                            historyDisclosure,
+                                            "Private and internal tabs are never included in tab restore. Continue?"
+                                        ).filter { it.isNotBlank() }.joinToString(" ")
+                                        Column(
+                                            modifier = Modifier
+                                                .heightIn(max = 260.dp)
+                                                .verticalScroll(rememberScrollState())
+                                        ) {
+                                            androidx.compose.material3.Text(switchDisclosure)
+                                        }
                                     },
                                     confirmButton = {
                                         androidx.compose.material3.TextButton(onClick = {

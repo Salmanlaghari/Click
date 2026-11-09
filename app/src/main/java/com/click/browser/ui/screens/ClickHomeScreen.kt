@@ -74,6 +74,8 @@ import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -93,6 +95,7 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Brush
@@ -1622,6 +1625,100 @@ fun homeGreeting(): String {
 internal fun tabBadgeText(count: Int): String =
     if (count > 99) "99+" else count.coerceAtLeast(0).toString()
 
+internal object CompactModeSelectorPolicy {
+    val modes: List<BrowserMode> = listOf(
+        BrowserMode.SIMPLE,
+        BrowserMode.DEVELOPER,
+        BrowserMode.HACK,
+        BrowserMode.ADVANCED
+    )
+
+    fun title(mode: BrowserMode): String = mode.display().title
+
+    fun homeChipLabel(mode: BrowserMode): String = when (mode) {
+        BrowserMode.SIMPLE -> "SIMPLE"
+        BrowserMode.DEVELOPER -> "DEV"
+        BrowserMode.HACK -> "POWER"
+        BrowserMode.ADVANCED -> "ADVANCE"
+    }
+}
+
+@Composable
+private fun CompactModeSelector(
+    activeMode: BrowserMode,
+    theme: ModeTheme,
+    compact: Boolean,
+    onModeSelected: (BrowserMode) -> Unit
+) {
+    var expanded by remember { mutableStateOf(false) }
+    val label = if (compact) {
+        CompactModeSelectorPolicy.homeChipLabel(activeMode)
+    } else {
+        CompactModeSelectorPolicy.title(activeMode)
+    }
+
+    Box {
+        Surface(
+            modifier = Modifier
+                .clip(CircleShape)
+                .clickable(
+                    role = Role.Button,
+                    onClickLabel = "Choose browser mode",
+                    onClick = { expanded = true }
+                ),
+            shape = CircleShape,
+            color = theme.modeAccent.copy(alpha = 0.12f),
+            contentColor = theme.modeAccent,
+            border = androidx.compose.foundation.BorderStroke(
+                1.dp, theme.modeAccent.copy(alpha = 0.28f)
+            )
+        ) {
+            Row(
+                modifier = Modifier
+                    .height(48.dp)
+                    .padding(horizontal = if (compact) 8.dp else 10.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(2.dp)
+            ) {
+                Text(
+                    text = label,
+                    fontSize = if (compact) 9.sp else 10.sp,
+                    fontWeight = FontWeight.Bold,
+                    maxLines = 1
+                )
+                Icon(
+                    Icons.Default.ExpandMore,
+                    contentDescription = null,
+                    tint = theme.modeAccent,
+                    modifier = Modifier.size(16.dp)
+                )
+            }
+        }
+
+        DropdownMenu(
+            expanded = expanded,
+            onDismissRequest = { expanded = false }
+        ) {
+            CompactModeSelectorPolicy.modes.forEach { mode ->
+                val isCurrentMode = mode == activeMode
+                DropdownMenuItem(
+                    text = {
+                        Text(
+                            if (isCurrentMode) "${CompactModeSelectorPolicy.title(mode)} (Current)"
+                            else CompactModeSelectorPolicy.title(mode)
+                        )
+                    },
+                    enabled = !isCurrentMode,
+                    onClick = {
+                        expanded = false
+                        onModeSelected(mode)
+                    }
+                )
+            }
+        }
+    }
+}
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun CompactBrowseBar(
@@ -1642,6 +1739,7 @@ fun CompactBrowseBar(
     // Kilo: these are required (no defaults) so missing wiring fails at
     // compile time instead of silently doing nothing.
     onDrawerClick: () -> Unit,
+    onModeChange: (BrowserMode) -> Unit,
     canGoBack: Boolean,
     onBack: () -> Unit,
     canGoForward: Boolean,
@@ -1701,27 +1799,12 @@ fun CompactBrowseBar(
                         )
                     }
                 }
-                Surface(
-                    shape = CircleShape,
-                    color = theme.modeAccent.copy(alpha = 0.12f),
-                    contentColor = theme.modeAccent,
-                    border = androidx.compose.foundation.BorderStroke(
-                        1.dp, theme.modeAccent.copy(alpha = 0.28f)
-                    )
-                ) {
-                    Text(
-                        when (activeMode) {
-                            BrowserMode.SIMPLE -> "SIMPLE"
-                            BrowserMode.DEVELOPER -> "DEV"
-                            BrowserMode.HACK -> "POWER"
-                            BrowserMode.ADVANCED -> "ADVANCE"
-                        },
-                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 5.dp),
-                        fontSize = 9.sp,
-                        fontWeight = FontWeight.Bold,
-                        maxLines = 1
-                    )
-                }
+                CompactModeSelector(
+                    activeMode = activeMode,
+                    theme = theme,
+                    compact = true,
+                    onModeSelected = onModeChange
+                )
                 Spacer(modifier = Modifier.weight(1f))
                 val primaryAction = compactBrowsePrimaryAction(
                     activeMode = activeMode,
@@ -1812,6 +1895,22 @@ fun CompactBrowseBar(
                         contentDescription = "Browser menu",
                         tint = theme.onTopBar,
                         modifier = Modifier.size(22.dp)
+                    )
+                }
+            }
+
+            if (currentUrl.isNotBlank()) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(48.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    CompactModeSelector(
+                        activeMode = activeMode,
+                        theme = theme,
+                        compact = false,
+                        onModeSelected = onModeChange
                     )
                 }
             }
