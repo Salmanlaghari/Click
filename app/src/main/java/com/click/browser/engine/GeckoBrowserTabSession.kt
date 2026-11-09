@@ -84,6 +84,7 @@ internal class GeckoBrowserTabSession(
     private val onTitleChanged: (String) -> Unit,
     private val onProgressChanged: (Int, Long) -> Unit,
     private val onNavigationStarted: (String, Long) -> Unit,
+    private val onPageFirstContentfulPaint: (Long) -> Unit,
     private val onNavigationStopped: (GeckoNavigationCompletion) -> Unit,
     private val onPageLoaded: (String) -> Unit,
     private val onSessionStateChanged: (String) -> Unit,
@@ -404,6 +405,14 @@ internal class GeckoBrowserTabSession(
                 rendererRecoveryRequired = false
                 rendererRecoveryInProgress = false
                 onRendererRecovery(GeckoRenderEvent.FIRST_COMPOSITE)
+            }
+
+            override fun onFirstContentfulPaint(session: GeckoSession) {
+                // Paint is session-level and has no load ID. Associate the
+                // visibility signal with the latest navigation; page-stop still
+                // owns completion and progress for each individual generation.
+                val generation = navigationTracker.contentPaintGeneration() ?: return
+                onPageFirstContentfulPaint(generation)
             }
         })
         val restoredState = if (adoptedChildSession) null else initialSessionState?.let { encoded ->

@@ -36,6 +36,31 @@ class GeckoNavigationErrorPolicyTest {
     }
 
     @Test
+    fun firstContentfulPaintRevealsOnlyTheCurrentStillLoadingGeneration() {
+        assertTrue(
+            shouldCommitGeckoContentOnFirstPaint(
+                activeGeneration = 12L,
+                paintedGeneration = 12L,
+                isLoading = true
+            )
+        )
+        assertFalse(
+            shouldCommitGeckoContentOnFirstPaint(
+                activeGeneration = 13L,
+                paintedGeneration = 12L,
+                isLoading = true
+            )
+        )
+        assertFalse(
+            shouldCommitGeckoContentOnFirstPaint(
+                activeGeneration = 12L,
+                paintedGeneration = 12L,
+                isLoading = false
+            )
+        )
+    }
+
+    @Test
     fun nullableLoadErrorUriStillPreventsFalseSuccessfulCommit() {
         val url = "https://example.test/failed"
         val tracker = GeckoNavigationTracker()
@@ -70,6 +95,28 @@ class GeckoNavigationErrorPolicyTest {
         assertEquals(newerUrl, newerCompletion.url)
         assertTrue(newerCompletion.isCurrent)
         assertTrue(newerCompletion.outcome.commitsContent)
+    }
+
+    @Test
+    fun contentPaintDuringOverlappingStartsTargetsLatestNavigationWithoutChangingProgressRules() {
+        val tracker = GeckoNavigationTracker()
+        val older = tracker.begin("https://example.test/older", null)
+        val newer = tracker.begin("https://example.test/newer", null)
+
+        assertNull(tracker.progressGeneration())
+        assertEquals(newer.generation, tracker.contentPaintGeneration())
+        assertTrue(
+            shouldCommitGeckoContentOnFirstPaint(
+                activeGeneration = newer.generation,
+                paintedGeneration = tracker.contentPaintGeneration()!!,
+                isLoading = true
+            )
+        )
+
+        val olderCompletion = tracker.complete(success = true)!!
+        assertEquals(older.generation, olderCompletion.generation)
+        assertFalse(olderCompletion.isCurrent)
+        assertEquals(newer.generation, tracker.contentPaintGeneration())
     }
 
     @Test
