@@ -716,7 +716,7 @@ fun SettingsScreen(
                     HorizontalDivider(color = theme.onSurface.copy(alpha = 0.1f))
                     ActionRow(
                         "Privacy & Security",
-                        "Click account, passwords, Safety Check, autofill, payment methods",
+                        "Protection status, site controls, private browsing, accounts and passwords",
                         Icons.Default.VerifiedUser, theme, onOpenPrivacySecurity
                     )
                     HorizontalDivider(color = theme.onSurface.copy(alpha = 0.1f))

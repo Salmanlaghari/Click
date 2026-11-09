@@ -29,9 +29,12 @@ import androidx.datastore.preferences.core.edit
 import com.click.browser.engine.AppSettings
 import com.click.browser.engine.ClickAccount
 import com.click.browser.engine.ClickAccountManager
+import com.click.browser.engine.ConnectionSecurityInfo
+import com.click.browser.engine.ConnectionSecurityStatus
 import com.click.browser.engine.CredentialVault
 import com.click.browser.engine.ModeTheme
 import com.click.browser.engine.SafetyCheck
+import com.click.browser.engine.V9VpnController
 import com.click.browser.engine.dataStore
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
@@ -45,8 +48,21 @@ import kotlinx.coroutines.launch
 @Composable
 fun PrivacySecurityScreen(
     theme: ModeTheme,
+    currentUrl: String,
+    connectionSecurity: ConnectionSecurityInfo,
+    adBlockStatusLabel: String,
+    adBlockStatusActive: Boolean,
+    isPrivateTab: Boolean,
+    currentSiteControlsAvailable: Boolean,
     onOpenPaymentMethods: () -> Unit,
     onOpenPasswords: () -> Unit,
+    onOpenCurrentSiteSettings: () -> Unit,
+    onOpenAllSiteSettings: () -> Unit,
+    onOpenCookieManager: () -> Unit,
+    onOpenV9Shield: () -> Unit,
+    onOpenPrivacyGuards: () -> Unit,
+    onOpenAdvancedSecurity: () -> Unit,
+    onClearAllCurrentModeData: () -> Unit,
     onClose: () -> Unit
 ) {
     val context = LocalContext.current
@@ -65,6 +81,16 @@ fun PrivacySecurityScreen(
 
     var vaultMessage by remember { mutableStateOf<String?>(null) }
     var showSavePasswordDialog by remember { mutableStateOf(false) }
+    var showClearDataConfirm by remember { mutableStateOf(false) }
+    var showPrivateStorageDetails by remember { mutableStateOf(false) }
+
+    val dnsProtectionActive by V9VpnController.isRunning.collectAsState(initial = false)
+    val strictDns by context.dataStore.data
+        .map { prefs -> AppSettings.strictDnsEnabled(prefs) }
+        .collectAsState(initial = false)
+    val currentPageOverview = remember(currentUrl, connectionSecurity) {
+        PrivacyDashboardPolicy.currentPage(currentUrl, connectionSecurity)
+    }
 
     fun refreshAccount() {
         scope.launch {
@@ -129,6 +155,138 @@ fun PrivacySecurityScreen(
                 .padding(14.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
+            // ============ PROTECTION OVERVIEW ==========
+            PrivCard(theme) {
+                PrivCardTitle("Protection overview", Icons.Default.Shield, theme)
+                if (currentPageOverview == null) {
+                    Text(
+                        "Open an HTTP or HTTPS website to see page-specific connection and ad/tracker status.",
+                        fontSize = 12.sp, color = theme.onSurface.copy(alpha = 0.68f)
+                    )
+                } else {
+                    Text(
+                        "Current site · ${currentPageOverview.host}",
+                        fontWeight = FontWeight.SemiBold, fontSize = 14.sp, color = theme.onSurface
+                    )
+                    Text(
+                        currentPageOverview.connectionTitle,
+                        fontWeight = FontWeight.SemiBold, fontSize = 13.sp,
+                        color = when (currentPageOverview.connectionStatus) {
+                            ConnectionSecurityStatus.SECURE_HTTPS -> theme.primary
+                            ConnectionSecurityStatus.CERTIFICATE_WARNING -> MaterialTheme.colorScheme.error
+                            else -> theme.onSurface.copy(alpha = 0.78f)
+                        }
+                    )
+                    Text(
+                        currentPageOverview.connectionDescription,
+                        fontSize = 11.sp, color = theme.onSurface.copy(alpha = 0.62f)
+                    )
+                    Spacer(Modifier.height(6.dp))
+                    Text("Ad & tracker blocking", fontWeight = FontWeight.SemiBold, fontSize = 13.sp, color = theme.onSurface)
+                    Text(
+                        adBlockStatusLabel,
+                        fontSize = 12.sp,
+                        color = if (adBlockStatusActive) theme.primary else theme.onSurface.copy(alpha = 0.68f)
+                    )
+                }
+                Spacer(Modifier.height(8.dp))
+                HorizontalDivider(color = theme.onSurface.copy(alpha = 0.08f))
+                Spacer(Modifier.height(8.dp))
+                Text(
+                    if (dnsProtectionActive) "V9 Shield · ON · DNS only, not a VPN" else "V9 Shield · OFF",
+                    fontWeight = FontWeight.SemiBold, fontSize = 13.sp,
+                    color = if (dnsProtectionActive) theme.primary else theme.onSurface.copy(alpha = 0.72f)
+                )
+                Text(
+                    PrivacyDisclosurePolicy.v9ShieldDnsDisclosure(dnsProtectionActive, strictDns),
+                    fontSize = 11.sp, color = theme.onSurface.copy(alpha = 0.62f)
+                )
+                PrivActionRow(
+                    "DNS protection settings",
+                    "Provider, strict-DNS behavior and live status",
+                    Icons.Default.Shield, theme, onOpenV9Shield
+                )
+                PrivActionRow(
+                    "Safe Browsing & security checks",
+                    "View the supported WebView status and run on-device checks",
+                    Icons.Default.VerifiedUser, theme, onOpenAdvancedSecurity
+                )
+            }
+
+            // ============ SITE PERMISSIONS & DATA =======
+            PrivCard(theme) {
+                PrivCardTitle("Site permissions & data", Icons.Default.Security, theme)
+                Text(
+                    PrivacyDashboardPolicy.WEBSITE_PERMISSION_SCOPE_DESCRIPTION,
+                    fontSize = 12.sp, color = theme.onSurface.copy(alpha = 0.68f), lineHeight = 17.sp
+                )
+                if (currentPageOverview != null && currentSiteControlsAvailable) {
+                    PrivActionRow(
+                        "Current site details",
+                        "Connection, supported permissions and available site controls",
+                        Icons.Default.Lock, theme, onOpenCurrentSiteSettings
+                    )
+                } else if (currentPageOverview == null) {
+                    Text(
+                        "Open a supported website to view its site-specific controls.",
+                        fontSize = 11.sp, color = theme.onSurface.copy(alpha = 0.58f)
+                    )
+                } else if (isPrivateTab) {
+                    Text(
+                        "Profile-wide site controls are not opened from a private WebView tab. Private-tab website choices are temporary where supported.",
+                        fontSize = 11.sp, color = theme.onSurface.copy(alpha = 0.58f)
+                    )
+                }
+                if (!isPrivateTab) {
+                    PrivActionRow(
+                        "All site settings",
+                        "Review or reset saved choices for this browser mode",
+                        Icons.Default.Shield, theme, onOpenAllSiteSettings
+                    )
+                    PrivActionRow(
+                        "Cookie manager",
+                        "Inspect or delete WebView cookies for the current profile",
+                        Icons.Default.Cookie, theme, onOpenCookieManager
+                    )
+                    OutlinedButton(
+                        onClick = { showClearDataConfirm = true },
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Icon(Icons.Default.DeleteSweep, contentDescription = null, modifier = Modifier.size(18.dp))
+                        Spacer(Modifier.width(6.dp))
+                        Text("Clear supported data for this mode")
+                    }
+                } else {
+                    Text(
+                        "Cookie and profile-data controls are available from a regular tab. Private tabs use the profile WebView store, so they are not a separate data-wipe boundary.",
+                        fontSize = 11.sp, color = theme.onSurface.copy(alpha = 0.58f)
+                    )
+                }
+                PrivActionRow(
+                    "Privacy signals & WebRTC test",
+                    "Manage optional DNT/GPC signals and run the best-effort test",
+                    Icons.Default.Security, theme, onOpenPrivacyGuards
+                )
+            }
+
+            // ============ PRIVATE BROWSING DISCLOSURE ===
+            PrivCard(theme) {
+                PrivCardTitle("Private browsing", Icons.Default.VisibilityOff, theme)
+                Text(
+                    PrivateBrowsingDisclosurePolicy.aboutPrivateTabStorageDescription + " Private tabs are not anonymous.",
+                    fontSize = 12.sp, color = theme.onSurface.copy(alpha = 0.68f), lineHeight = 17.sp
+                )
+                TextButton(onClick = { showPrivateStorageDetails = !showPrivateStorageDetails }) {
+                    Text(if (showPrivateStorageDetails) "Hide storage details" else "Show storage details")
+                }
+                if (showPrivateStorageDetails) {
+                    Text(
+                        PrivateBrowsingDisclosurePolicy.privateTabStorageDescription,
+                        fontSize = 11.sp, color = theme.onSurface.copy(alpha = 0.62f), lineHeight = 16.sp
+                    )
+                }
+            }
+
             // ============ CLICK ACCOUNT ============
             PrivCard(theme) {
                 PrivCardTitle("Click Account", Icons.Default.AccountCircle, theme)
@@ -355,6 +513,27 @@ fun PrivacySecurityScreen(
 
             Spacer(Modifier.height(24.dp))
         }
+    }
+
+    if (showClearDataConfirm && !isPrivateTab) {
+        AlertDialog(
+            onDismissRequest = { showClearDataConfirm = false },
+            title = { Text("Clear supported browsing data?") },
+            text = {
+                Text(
+                    "This clears cookies and the active WebView cache, requests Gecko profile-data cleanup, and clears history and recently closed tabs for the current mode's history scope. Other profiles or data outside these supported stores may remain. This cannot be undone."
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    showClearDataConfirm = false
+                    onClearAllCurrentModeData()
+                }) { Text("Clear data", color = MaterialTheme.colorScheme.error) }
+            },
+            dismissButton = {
+                TextButton(onClick = { showClearDataConfirm = false }) { Text("Cancel") }
+            }
+        )
     }
 
     if (showSavePasswordDialog && activity != null) {
