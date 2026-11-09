@@ -26,6 +26,11 @@ class WebsiteMicrophonePermissionPolicyTest {
             canonicalWebsiteMicrophoneOrigin("https://[::1]/meet")
         )
         assertEquals(
+            "https://[fe80:0:0:0:0:0:0:1]",
+            canonicalWebsiteMicrophoneOrigin("https://[fe80::1]")
+        )
+        assertNull(canonicalWebsiteMicrophoneOrigin("https://[fe80::1%25wlan0]"))
+        assertEquals(
             "https://xn--exmple-cua.com",
             canonicalWebsiteMicrophoneOrigin("https://exämple.com")
         )
@@ -46,6 +51,10 @@ class WebsiteMicrophonePermissionPolicyTest {
         assertEquals(
             "0:0:0:0:0:0:0:1",
             websiteMicrophoneOriginHost("https://[::1]:8443/meet")
+        )
+        assertEquals(
+            "fe80:0:0:0:0:0:0:1",
+            websiteMicrophoneOriginHost("https://[fe80::1]")
         )
         assertEquals("0:0:0:0:0:0:0:1", websiteMicrophoneHostKey("::1"))
     }

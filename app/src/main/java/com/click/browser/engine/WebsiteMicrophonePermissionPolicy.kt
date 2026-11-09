@@ -78,7 +78,9 @@ private fun parseWebsiteAuthority(authority: String): CanonicalWebsiteAuthority?
         }
         val ipv6 = runCatching { InetAddress.getByName(literal) as? Inet6Address }
             .getOrNull() ?: return null
-        val hostKey = ipv6.hostAddress.lowercase(Locale.ROOT)
+        // URL zone identifiers are rejected above; some platforms may still
+        // append an interface scope when resolving a link-local IPv6 literal.
+        val hostKey = ipv6.hostAddress.substringBefore('%').lowercase(Locale.ROOT)
         return CanonicalWebsiteAuthority("[$hostKey]", hostKey, port)
     }
 
