@@ -178,6 +178,7 @@ class TabItem(
         com.click.browser.engine.PasswordAccessPolicy.AutofillPromptGuard()
     var rendererRecoveryRequired by mutableStateOf(false)
     internal var geckoNavigationFailure by mutableStateOf<GeckoNavigationFailure?>(null)
+    internal var webViewNavigationStopRecovery by mutableStateOf(false)
     var geckoNavigationGeneration by mutableStateOf(-1L)
 }
 
@@ -3175,6 +3176,7 @@ class MainActivity : FragmentActivity() {
                 tab.loadProgress = 0
                 tab.isPageLoading = currentUrl != "about:blank"
                 tab.hasCommittedContent = false
+                tab.webViewNavigationStopRecovery = false
                 return true
             }
 
@@ -4314,7 +4316,14 @@ class MainActivity : FragmentActivity() {
                                             ).failure
                                         }
                                     } else {
-                                        currentTab.hasCommittedContent = true
+                                        currentTab.webViewNavigationStopRecovery =
+                                            com.click.browser.engine.shouldShowWebViewStopRecovery(
+                                                hasCommittedContent = currentTab.hasCommittedContent,
+                                                url = currentTab.url
+                                            )
+                                        if (!currentTab.webViewNavigationStopRecovery) {
+                                            currentTab.hasCommittedContent = true
+                                        }
                                     }
                                     currentTab.loadProgress = 0
                                 } else {
@@ -5161,6 +5170,7 @@ class MainActivity : FragmentActivity() {
                                                                 loadingTab.connectionSecurity = ConnectionSecurityPolicy.checking(loadingTab.url)
                                                                 loadingTab.isPageLoading = true
                                                                 loadingTab.hasCommittedContent = false
+                                                                loadingTab.webViewNavigationStopRecovery = false
                                                                 loadingTab.loadProgress = 0
                                                                 if (loadingTab === currentTab) {
                                                                     invalidateDevToolsSession()
@@ -5185,7 +5195,10 @@ class MainActivity : FragmentActivity() {
                                                             override fun onPageCommitVisible(view: WebView?, url: String?) {
                                                                 super.onPageCommitVisible(view, url)
                                                                 view?.let { target ->
-                                                                    tabs.firstOrNull { it.webView === target }?.hasCommittedContent = true
+                                                                    tabs.firstOrNull { it.webView === target }?.let { committedTab ->
+                                                                        committedTab.hasCommittedContent = true
+                                                                        committedTab.webViewNavigationStopRecovery = false
+                                                                    }
                                                                 }
                                                             }
 
@@ -5242,6 +5255,7 @@ class MainActivity : FragmentActivity() {
                                                                 finishedTab.title = view.title ?: "Page"
                                                                 finishedTab.isPageLoading = false
                                                                 finishedTab.hasCommittedContent = true
+                                                                finishedTab.webViewNavigationStopRecovery = false
                                                                 finishedTab.loadProgress = 100
                                                                 if (finishedTab === currentTab) {
                                                                     pageLoadTime = System.currentTimeMillis() - lastPageStart
@@ -5578,6 +5592,7 @@ class MainActivity : FragmentActivity() {
                                                                 )
                                                                 failedTab.isPageLoading = false
                                                                 failedTab.hasCommittedContent = true
+                                                                failedTab.webViewNavigationStopRecovery = false
                                                                 failedTab.loadProgress = 0
                                                                 val retryUrl = request?.let { browserRetryUrl(it.method, it.url.toString()) }
                                                                 this@MainActivity.showBrowserErrorPage(view, error?.description?.toString(), retryUrl)
@@ -6008,24 +6023,56 @@ class MainActivity : FragmentActivity() {
                                                         site = hostOfUrl(currentTab.url),
                                                         progress = currentTab.loadProgress,
                                                         animationsEnabled = flagsUi.tabAnimations && !liveReducedMotion,
-                                                        onCancel = {
-                                                            currentTab.browserSession?.stopLoading()
-                                                            currentTab.isPageLoading = false
-                                                            if (currentTab.engine == BrowserTabEngine.GECKOVIEW) {
-                                                                if (!currentTab.hasCommittedContent) {
-                                                                    currentTab.geckoNavigationFailure = geckoNavigationStopOutcome(
-                                                                        success = false,
-                                                                        failedUrl = currentTab.url,
-                                                                        safeRetryUrl = null,
-                                                                        wasCancelled = true
-                                                                    ).failure
-                                                                }
-                                                            } else {
-                                                                currentTab.hasCommittedContent = true
-                                                            }
-                                                            currentTab.loadProgress = 0
-                                                        }
+                                                        onCancel = { stopCurrentTabLoading() }
                                                     )
+                                                }
+                                                if (
+                                                    currentTab.engine == BrowserTabEngine.WEBVIEW &&
+                                                    currentTab.webViewNavigationStopRecovery &&
+                                                    !currentTab.hasCommittedContent
+                                                ) {
+                                                    Surface(
+                                                        modifier = Modifier
+                                                            .align(Alignment.Center)
+                                                            .padding(horizontal = 20.dp)
+                                                            .fillMaxWidth(),
+                                                        shape = RoundedCornerShape(20.dp),
+                                                        color = theme.surface,
+                                                        tonalElevation = 8.dp
+                                                    ) {
+                                                        Column(
+                                                            modifier = Modifier.padding(20.dp),
+                                                            verticalArrangement = Arrangement.spacedBy(10.dp)
+                                                        ) {
+                                                            Text(
+                                                                "Loading stopped",
+                                                                color = theme.onSurface,
+                                                                fontWeight = FontWeight.SemiBold
+                                                            )
+                                                            Text(
+                                                                "Loading stopped before content appeared. Use Back or enter another address; retry isn't offered because the request type is unknown.",
+                                                                color = theme.onSurface.copy(alpha = 0.8f)
+                                                            )
+                                                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                                                if (currentTab.browserSession?.canGoBack() == true) {
+                                                                    TextButton(onClick = {
+                                                                        currentTab.webViewNavigationStopRecovery = false
+                                                                        currentTab.browserSession?.goBackIfPossible()
+                                                                    }) {
+                                                                        Text("Back")
+                                                                    }
+                                                                }
+                                                                TextButton(onClick = {
+                                                                    currentTab.webViewNavigationStopRecovery = false
+                                                                    val homeDestination = homeUrl()
+                                                                    currentTab.url = homeDestination
+                                                                    currentTab.browserSession?.loadUrl(homeDestination)
+                                                                }) {
+                                                                    Text("Home")
+                                                                }
+                                                            }
+                                                        }
+                                                    }
                                                 }
                                                 if (currentTab.engine == BrowserTabEngine.GECKOVIEW &&
                                                     currentTab.rendererRecoveryRequired
