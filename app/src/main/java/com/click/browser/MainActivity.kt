@@ -7201,6 +7201,29 @@ class MainActivity : FragmentActivity() {
                                 )
                             }
 
+                            fun performCurrentModeDataClear() {
+                                val modeToClear = activeMode
+                                discardPendingTabUndoForMode(modeToClear)
+                                CookieStore.clearAll()
+                                currentTab.webView?.clearCache(true)
+                                requestGeckoModeDataClear(modeToClear)
+                                val historyScope = if (modeToClear == BrowserMode.ADVANCED) {
+                                    "Advance"
+                                } else {
+                                    "Simple/Developer/Power shared"
+                                }
+                                scope.launch {
+                                    RecentlyClosedTabs.clearHistoryAndRecentlyClosedForMode(modeToClear) { historyMode ->
+                                        repository.clearHistoryFor(historyMode)
+                                    }
+                                    Toast.makeText(
+                                        this@MainActivity,
+                                        "WebView cookies/cache and Gecko profile data clear requested for ${modeToClear.display().title}; $historyScope history and recently closed tabs cleared",
+                                        Toast.LENGTH_SHORT
+                                    ).show()
+                                }
+                            }
+
                             if (showSettings) {
                                 SettingsScreen(
                                     theme = theme,
@@ -7445,28 +7468,7 @@ class MainActivity : FragmentActivity() {
                                             Toast.makeText(this@MainActivity, "Cache cleared (current profile)", Toast.LENGTH_SHORT).show()
                                         }
                                     },
-                                    onClearAllCurrentMode = {
-                                        val modeToClear = activeMode
-                                        discardPendingTabUndoForMode(modeToClear)
-                                        CookieStore.clearAll()
-                                        currentTab.webView?.clearCache(true)
-                                        requestGeckoModeDataClear(modeToClear)
-                                        val historyScope = if (modeToClear == BrowserMode.ADVANCED) {
-                                            "Advance"
-                                        } else {
-                                            "Simple/Developer/Power shared"
-                                        }
-                                        scope.launch {
-                                            RecentlyClosedTabs.clearHistoryAndRecentlyClosedForMode(modeToClear) { historyMode ->
-                                                repository.clearHistoryFor(historyMode)
-                                            }
-                                            Toast.makeText(
-                                                this@MainActivity,
-                                                "WebView cookies/cache and Gecko profile data clear requested for ${modeToClear.display().title}; $historyScope history and recently closed tabs cleared",
-                                                Toast.LENGTH_SHORT
-                                            ).show()
-                                        }
-                                    },
+                                    onClearAllCurrentMode = ::performCurrentModeDataClear,
                                     onOpenCookieManager = { showSettings = false; showCookieManager = true },
                                     onOpenSiteSettings = {
                                         siteSettingsReturnToAdvancedSecurity = false
@@ -7711,12 +7713,30 @@ class MainActivity : FragmentActivity() {
                                     }
                                 )
                             }
-                            // Privacy & Security suite: account, passwords, Safety Check, autofill, cards.
+                            // Privacy & Security overview and account/password hub.
                             if (showPrivacySecurity) {
                                 com.click.browser.ui.screens.PrivacySecurityScreen(
                                     theme = theme,
+                                    currentUrl = currentTab.url,
+                                    connectionSecurity = currentTab.connectionSecurity,
+                                    adBlockStatusLabel = adBlockStatus.label,
+                                    adBlockStatusActive = adBlockStatus.active,
+                                    dnsProtectionActive = shieldActive,
+                                    isPrivateTab = currentTab.isIncognito,
+                                    currentSiteControlsAvailable = !currentTab.isIncognito ||
+                                        currentTab.engine == BrowserTabEngine.GECKOVIEW,
                                     onOpenPaymentMethods = { showPaymentMethods = true },
                                     onOpenPasswords = { requestPasswordManagerAccess() },
+                                    onOpenCurrentSiteSettings = { showSiteSettings = true },
+                                    onOpenAllSiteSettings = {
+                                        siteSettingsReturnToAdvancedSecurity = false
+                                        showSiteSettingsList = true
+                                    },
+                                    onOpenCookieManager = { showCookieManager = true },
+                                    onOpenV9Shield = { showV9Shield = true },
+                                    onOpenPrivacyGuards = { showPrivacyGuards = true },
+                                    onOpenAdvancedSecurity = { showAdvancedSecurity = true },
+                                    onClearAllCurrentModeData = ::performCurrentModeDataClear,
                                     onClose = { showPrivacySecurity = false }
                                 )
                             }
