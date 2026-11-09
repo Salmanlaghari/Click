@@ -74,7 +74,9 @@ internal class GeckoBrowserTabSession(
     private val onUrlChanged: (String) -> Unit,
     private val onConnectionSecurityChanged: (ConnectionSecurityInfo) -> Unit,
     private val onTitleChanged: (String) -> Unit,
-    private val onProgressChanged: (Int, Boolean) -> Unit,
+    private val onProgressChanged: (Int, Long) -> Unit,
+    private val onNavigationStarted: (String, Long) -> Unit,
+    private val onNavigationStopped: (GeckoNavigationCompletion) -> Unit,
     private val onPageLoaded: (String) -> Unit,
     private val onSessionStateChanged: (String) -> Unit,
     private val onCanGoBackChanged: (Boolean) -> Unit,
@@ -106,12 +108,13 @@ internal class GeckoBrowserTabSession(
     private var canForward = false
     private var destroyed = false
     private var extensionAttached = false
-    private var historyCandidateUrl: String? = initialUrl
     @Volatile private var lastKnownPageUrl: String = initialUrl.ifBlank { "about:blank" }
     @Volatile private var latestConnectionSecurityInfo = ConnectionSecurityPolicy.unknown(initialUrl)
     @Volatile private var latestSessionState: String? = initialSessionState
     @Volatile private var rendererRecoveryRequired = false
     @Volatile private var rendererRecoveryInProgress = false
+    @Volatile private var pendingSafeRetryUrl: String? = null
+    private val navigationTracker = GeckoNavigationTracker()
     private val recoveryFailureLock = Any()
     private var recoveryFailureTimesMillis: List<Long> = emptyList()
     private val adoptedChildSession = initialGeckoSession != null
@@ -204,8 +207,8 @@ internal class GeckoBrowserTabSession(
                 hasUserGesture: Boolean
             ) {
                 url?.let {
-                    historyCandidateUrl = it
                     lastKnownPageUrl = it
+                    navigationTracker.updateCurrentUrl(it)
                     onUrlChanged(it)
                 }
             }
@@ -229,10 +232,26 @@ internal class GeckoBrowserTabSession(
                 }
                 val target = navigationTarget(request.uri)
                 if (target == null) {
+                    pendingSafeRetryUrl = null
+                    navigationTracker.updateCurrentRetryUrl(null)
                     if (GoogleAuthPolicy.shouldShowBlockedNavigationNotice(request.uri)) {
                         onNavigationBlocked(request.uri)
                     }
                     return GeckoResult.fromValue(AllowOrDeny.DENY)
+                }
+                val retryCandidate = if (request.isRedirect) {
+                    navigationTracker.currentRetryUrl() ?: pendingSafeRetryUrl
+                } else pendingSafeRetryUrl
+                val nextRetryUrl = when {
+                    request.isRedirect && retryCandidate != null -> geckoSafeRetryUrl("GET", target)
+                    !request.isRedirect && retryCandidate != null && request.uri == retryCandidate ->
+                        geckoSafeRetryUrl("GET", target)
+                    else -> null
+                }
+                pendingSafeRetryUrl = nextRetryUrl
+                if (request.isRedirect) {
+                    navigationTracker.updateCurrentUrl(target)
+                    navigationTracker.updateCurrentRetryUrl(nextRetryUrl)
                 }
                 setWideLayout(wideLayoutForUrl(target))
                 if (target != request.uri) {
@@ -251,6 +270,17 @@ internal class GeckoBrowserTabSession(
                 }
                 return onNewSession(uri, GeckoSession(settings))
             }
+
+            override fun onLoadError(
+                session: GeckoSession,
+                uri: String?,
+                error: org.mozilla.geckoview.WebRequestError
+            ): GeckoResult<String>? {
+                navigationTracker.markLoadError(uri)
+                // Keep Gecko's default error handling; Click presents its own
+                // safe, accessible recovery actions above the browser surface.
+                return null
+            }
         })
         session.setProgressDelegate(object : GeckoSession.ProgressDelegate {
             override fun onSessionStateChange(
@@ -267,27 +297,33 @@ internal class GeckoBrowserTabSession(
                 onRendererRecovery(GeckoRenderEvent.LOAD_STARTED)
                 attachExtensionRouterIfOpen()
                 updateActiveState()
-                historyCandidateUrl = url
+                val retryUrl = pendingSafeRetryUrl?.takeIf { it == url }
+                pendingSafeRetryUrl = null
+                val navigation = navigationTracker.begin(url, retryUrl)
                 lastKnownPageUrl = url
                 latestConnectionSecurityInfo = ConnectionSecurityPolicy.checking(url)
                 onConnectionSecurityChanged(latestConnectionSecurityInfo)
-                onProgressChanged(0, true)
+                onNavigationStarted(url, navigation.generation)
+                onProgressChanged(0, navigation.generation)
                 onUrlChanged(url)
             }
 
             override fun onPageStop(session: GeckoSession, success: Boolean) {
-                if (latestConnectionSecurityInfo.status == ConnectionSecurityStatus.CHECKING) {
+                val completion = navigationTracker.complete(success) ?: return
+                if (completion.isCurrent &&
+                    latestConnectionSecurityInfo.status == ConnectionSecurityStatus.CHECKING
+                ) {
                     latestConnectionSecurityInfo = ConnectionSecurityPolicy.unknown(
-                        lastKnownPageUrl,
+                        completion.url,
                         "GeckoView did not provide connection-security details for this page."
                     )
                     onConnectionSecurityChanged(latestConnectionSecurityInfo)
                 }
-                onProgressChanged(100, false)
-                if (success) {
-                    historyCandidateUrl
-                        ?.takeIf { it.startsWith("http://") || it.startsWith("https://") }
-                        ?.let(onPageLoaded)
+                onNavigationStopped(completion)
+                if (completion.isCurrent && completion.outcome.commitsContent &&
+                    (completion.url.startsWith("http://") || completion.url.startsWith("https://"))
+                ) {
+                    onPageLoaded(completion.url)
                 }
             }
 
@@ -317,7 +353,8 @@ internal class GeckoBrowserTabSession(
             }
 
             override fun onProgressChange(session: GeckoSession, progress: Int) {
-                onProgressChanged(progress.coerceIn(0, 100), progress < 100)
+                val generation = navigationTracker.progressGeneration() ?: return
+                onProgressChanged(progress.coerceIn(0, 100), generation)
             }
         })
         session.setContentDelegate(object : GeckoSession.ContentDelegate {
@@ -370,6 +407,7 @@ internal class GeckoBrowserTabSession(
         if (startup.restoreSavedState && restoredState != null) {
             session.restoreState(restoredState)
         } else if (startup.loadInitialUrl) {
+            pendingSafeRetryUrl = geckoSafeRetryUrl("GET", initialUrl)
             session.loadUri(initialUrl)
         }
         updateActiveState()
@@ -404,6 +442,7 @@ internal class GeckoBrowserTabSession(
     override fun loadUrl(url: String) {
         if (destroyed) return
         try {
+            pendingSafeRetryUrl = geckoSafeRetryUrl("GET", url)
             setWideLayout(wideLayoutForUrl(url))
             if (!session.isOpen) {
                 beginRendererRecovery()
@@ -471,7 +510,16 @@ internal class GeckoBrowserTabSession(
             reportRecoveryFailure(error)
         }
     }
-    override fun stopLoading() { if (!destroyed) session.stop() }
+    override fun stopLoading() {
+        if (destroyed) return
+        val cancelledGeneration = navigationTracker.cancelActive()
+        try {
+            session.stop()
+        } catch (error: Exception) {
+            navigationTracker.clearCancellation(cancelledGeneration)
+            throw error
+        }
+    }
 
     override fun onPause() {
         hostResumed = false
