@@ -34,15 +34,14 @@ import com.click.browser.engine.ConnectionSecurityStatus
 import com.click.browser.engine.CredentialVault
 import com.click.browser.engine.ModeTheme
 import com.click.browser.engine.SafetyCheck
-import com.click.browser.engine.V9VpnController
 import com.click.browser.engine.dataStore
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 
 /**
- * Privacy & Security hub: Click account (Google Sign-In), Google Password
- * Manager (Credential Manager), Safety Check, Autofill, Payment methods.
+ * Privacy & Security overview plus Click account, password manager, Safety Check,
+ * autofill and payment methods.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -52,6 +51,7 @@ fun PrivacySecurityScreen(
     connectionSecurity: ConnectionSecurityInfo,
     adBlockStatusLabel: String,
     adBlockStatusActive: Boolean,
+    dnsProtectionActive: Boolean,
     isPrivateTab: Boolean,
     currentSiteControlsAvailable: Boolean,
     onOpenPaymentMethods: () -> Unit,
@@ -84,7 +84,6 @@ fun PrivacySecurityScreen(
     var showClearDataConfirm by remember { mutableStateOf(false) }
     var showPrivateStorageDetails by remember { mutableStateOf(false) }
 
-    val dnsProtectionActive by V9VpnController.isRunning.collectAsState(initial = false)
     val strictDns by context.dataStore.data
         .map { prefs -> AppSettings.strictDnsEnabled(prefs) }
         .collectAsState(initial = false)

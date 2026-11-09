@@ -20,11 +20,11 @@ class PrivacyDashboardPolicyTest {
             sslErrorObserved = false
         )
 
-        val summary = PrivacyDashboardPolicy.currentPage(url, evidence)
+        val summary = requireNotNull(PrivacyDashboardPolicy.currentPage(url, evidence))
 
-        assertEquals("example.com", summary?.host)
-        assertEquals(ConnectionSecurityStatus.SECURE_HTTPS, summary?.connectionStatus)
-        assertTrue(summary?.connectionTitle.orEmpty().contains("HTTPS"))
+        assertEquals("example.com", summary.host)
+        assertEquals(ConnectionSecurityStatus.SECURE_HTTPS, summary.connectionStatus)
+        assertTrue(summary.connectionTitle.contains("HTTPS"))
         assertFalse(summary.toString().contains("alice"))
         assertFalse(summary.toString().contains("secret"))
         assertFalse(summary.toString().contains("private/path"))

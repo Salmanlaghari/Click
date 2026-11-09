@@ -7721,6 +7721,7 @@ class MainActivity : FragmentActivity() {
                                     connectionSecurity = currentTab.connectionSecurity,
                                     adBlockStatusLabel = adBlockStatus.label,
                                     adBlockStatusActive = adBlockStatus.active,
+                                    dnsProtectionActive = shieldActive,
                                     isPrivateTab = currentTab.isIncognito,
                                     currentSiteControlsAvailable = !currentTab.isIncognito ||
                                         currentTab.engine == BrowserTabEngine.GECKOVIEW,
