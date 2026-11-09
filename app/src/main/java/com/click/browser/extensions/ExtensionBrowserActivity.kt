@@ -107,7 +107,7 @@ class ExtensionBrowserActivity : ComponentActivity() {
         val requestedStartUrl = intent.getStringExtra(EXTRA_START_URL).orEmpty()
         val openManagerOnStart = intent.getBooleanExtra(EXTRA_SHOW_MANAGER, false)
         setContent {
-            MaterialTheme {
+            MaterialTheme(colorScheme = ExtensionManagerPalette.colorScheme) {
                 ExtensionBrowserScreen(
                     runtime = geckoRuntime,
                     session = requireNotNull(session),
