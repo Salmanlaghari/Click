@@ -3,16 +3,19 @@ package com.click.browser.engine
 import androidx.compose.ui.graphics.Color
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
-import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import kotlin.math.pow
 
 class LightThemeVariantTest {
     @Test
     fun variantsHaveUniqueStableIdsAndLabels() {
         val variants = LightThemeVariant.values().toList()
 
-        assertTrue("Expected Cream plus at least three additional palettes", variants.size >= 4)
+        assertEquals(
+            listOf(LightThemeVariant.CREAM, LightThemeVariant.SAGE, LightThemeVariant.SKY, LightThemeVariant.ROSE),
+            variants
+        )
         assertEquals(variants.size, variants.map { it.id }.distinct().size)
         assertEquals(variants.size, variants.map { it.label }.distinct().size)
         variants.forEach { assertEquals(it, LightThemeVariant.fromId(it.id)) }
@@ -48,55 +51,106 @@ class LightThemeVariantTest {
     }
 
     @Test
-    fun eachPaletteIsDistinctAndRemainsLightAcrossEveryMode() {
+    fun allSelectableSurfacePalettesRemainWarmLightAndDistinct() {
         val variants = LightThemeVariant.values().toList()
-        val primaryColors = variants.map { ModeThemes.forMode(BrowserMode.SIMPLE, dark = true, lightVariant = it).primary }
-        assertEquals(variants.size, primaryColors.distinct().size)
+        val themes = variants.map { variant ->
+            ModeThemes.forMode(BrowserMode.SIMPLE, dark = true, lightVariant = variant)
+        }
+        val expectedBackgrounds = listOf(
+            Color(0xFFFBF8F1),
+            Color(0xFFF8F7F0),
+            Color(0xFFF7F7F2),
+            Color(0xFFFAF6F0)
+        )
+        val expectedSurfaces = listOf(
+            Color(0xFFFFFEFB),
+            Color(0xFFFFFEFA),
+            Color(0xFFFFFEFA),
+            Color(0xFFFFFEFB)
+        )
+        val expectedSurfaceVariants = listOf(
+            Color(0xFFF2EBDD),
+            Color(0xFFEFEEE4),
+            Color(0xFFEEEDE5),
+            Color(0xFFF1E8DE)
+        )
 
-        BrowserMode.values().forEach { mode ->
-            variants.forEach { variant ->
-                val theme = ModeThemes.forMode(mode, dark = true, lightVariant = variant)
+        assertEquals(expectedBackgrounds, themes.map { it.background })
+        assertEquals(expectedSurfaces, themes.map { it.surface })
+        assertEquals(expectedSurfaceVariants, themes.map { it.surfaceVariant })
+        assertEquals(variants.size, themes.map { it.surfaceVariant }.distinct().size)
+        themes.forEach { theme ->
+            assertFalse("${theme.mode} remains light", theme.dark)
+            assertTrue(theme.background.red > 0.9f)
+            assertTrue(theme.background.green > 0.9f)
+            assertTrue(theme.background.blue > 0.9f)
+            assertTrue(theme.surface.red > 0.97f)
+            assertTrue(theme.surface.green > 0.97f)
+            assertTrue(theme.surface.blue > 0.97f)
+            assertTrue(theme.surfaceVariant.red > 0.9f)
+            assertTrue(theme.surfaceVariant.green > 0.88f)
+            assertTrue(theme.surfaceVariant.blue > 0.85f)
+            assertEquals(Color(0xFF302A22), theme.onBackground)
+            assertEquals(Color(0xFF393228), theme.onSurface)
+        }
+    }
+
+    @Test
+    fun everyModeHasDistinctWarmAccentsWhileRespectingTheSelectedSurfacePalette() {
+        val variants = LightThemeVariant.values().toList()
+        val modes = BrowserMode.values().toList()
+        val expectedPrimaries = listOf(
+            Color(0xFF66533F), // Simple: bronze
+            Color(0xFF70563A), // Developer: aged bronze
+            Color(0xFF81552F), // Power: copper-brown
+            Color(0xFF594738)  // Advance: charcoal-brown
+        )
+        val expectedSecondaries = listOf(
+            Color(0xFF8B6A46),
+            Color(0xFF8D6B46),
+            Color(0xFF935F33),
+            Color(0xFF80684E)
+        )
+
+        variants.forEach { variant ->
+            val themes = modes.map { mode ->
+                // Legacy dark input must not make any profile dark.
+                ModeThemes.forMode(mode, dark = true, lightVariant = variant)
+            }
+            val selectedSurfacePalette = themes.first()
+
+            assertEquals(expectedPrimaries, themes.map { it.primary })
+            assertEquals(expectedSecondaries, themes.map { it.secondary })
+            assertEquals(modes.size, themes.map { it.primary }.distinct().size)
+            assertEquals(modes.size, themes.map { it.modePillText }.distinct().size)
+
+            modes.zip(themes).forEach { (mode, theme) ->
                 assertEquals(mode, theme.mode)
-                assertFalse("$mode must remain light for ${variant.label}", theme.dark)
-                assertNotEquals(theme.background, theme.onSurface)
+                assertFalse("$mode stays light", theme.dark)
+                assertEquals(selectedSurfacePalette.background, theme.background)
+                assertEquals(selectedSurfacePalette.surface, theme.surface)
+                assertEquals(selectedSurfacePalette.surfaceVariant, theme.surfaceVariant)
+                assertEquals(Color(0xFF302A22), theme.onBackground)
+                assertEquals(theme.primary, theme.modeAccent)
+                assertTrue("$mode primary contrast", contrastRatio(theme.primary, theme.background) >= 4.5)
+                assertTrue("$mode secondary contrast", contrastRatio(theme.secondary, theme.background) >= 4.5)
+                assertTrue("$mode secondary has white-button contrast", contrastRatio(theme.secondary, Color.White) >= 4.5)
                 assertTrue(theme.modePillText.isNotBlank())
             }
         }
     }
 
-    @Test
-    fun everyModeSharesTheSelectedLightPaletteAndKeepsDistinctLabels() {
-        val variants = LightThemeVariant.values().toList()
-        val modes = BrowserMode.values().toList()
+    private fun contrastRatio(foreground: Color, background: Color): Double {
+        val lighter = maxOf(relativeLuminance(foreground), relativeLuminance(background))
+        val darker = minOf(relativeLuminance(foreground), relativeLuminance(background))
+        return (lighter + 0.05) / (darker + 0.05)
+    }
 
-        variants.forEach { variant ->
-            val themes = modes.map { mode ->
-                ModeThemes.forMode(mode, dark = false, lightVariant = variant)
-            }
-            val selectedPalette = themes.first()
-            themes.forEach { theme ->
-                assertEquals("${theme.mode} shares ${variant.label} background", selectedPalette.background, theme.background)
-                assertEquals("${theme.mode} shares ${variant.label} surface", selectedPalette.surface, theme.surface)
-                assertEquals("${theme.mode} shares ${variant.label} surface variant", selectedPalette.surfaceVariant, theme.surfaceVariant)
-                assertEquals("${theme.mode} shares ${variant.label} primary", selectedPalette.primary, theme.primary)
-                assertEquals("${theme.mode} shares ${variant.label} secondary", selectedPalette.secondary, theme.secondary)
-                assertEquals("${theme.mode} shares ${variant.label} background text", selectedPalette.onBackground, theme.onBackground)
-                assertEquals("${theme.mode} shares ${variant.label} surface text", selectedPalette.onSurface, theme.onSurface)
-                assertEquals("${theme.mode} shares ${variant.label} toolbar", selectedPalette.topBarBg, theme.topBarBg)
-                assertEquals("${theme.mode} shares ${variant.label} toolbar text", selectedPalette.onTopBar, theme.onTopBar)
-                assertEquals("${theme.mode} shares ${variant.label} glow", selectedPalette.glow, theme.glow)
-                assertEquals("${theme.mode} accent uses the selected palette", theme.primary, theme.modeAccent)
-                assertFalse("${theme.mode} stays light", theme.dark)
-            }
-            assertEquals("Mode labels remain distinct for ${variant.label}", modes.size, themes.map { it.modePillText }.distinct().size)
-        }
+    private fun relativeLuminance(color: Color): Double =
+        0.2126 * linearize(color.red) + 0.7152 * linearize(color.green) + 0.0722 * linearize(color.blue)
 
-        modes.forEach { mode ->
-            val cream = ModeThemes.forMode(mode, dark = false, lightVariant = LightThemeVariant.CREAM)
-            assertEquals("$mode keeps the warm cream background", Color(0xFFFBF8F1), cream.background)
-            assertEquals("$mode keeps the bronze primary accent", Color(0xFF66533F), cream.primary)
-            assertEquals("$mode keeps charcoal body text", Color(0xFF302A22), cream.onBackground)
-            assertEquals("$mode uses bronze rather than a mode tint", cream.primary, cream.modeAccent)
-        }
+    private fun linearize(channel: Float): Double {
+        val value = channel.toDouble()
+        return if (value <= 0.04045) value / 12.92 else ((value + 0.055) / 1.055).pow(2.4)
     }
 }
