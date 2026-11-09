@@ -2953,7 +2953,6 @@ class MainActivity : FragmentActivity() {
                     gpcEnabled = prefs[AppSettings.GPC_ENABLED] == true
                     secureDnsEnabled = prefs[AppSettings.SECURE_DNS_ENABLED] == true
                     backgroundAudioEnabled = prefs[AppSettings.BACKGROUND_AUDIO_ENABLED] == true
-                    backgroundAudioEnabled = prefs[AppSettings.BACKGROUND_AUDIO_ENABLED] == true
                     // Home feed: opt-in, separate from background notifications.
                     homeNewsFeedEnabled = com.click.browser.engine.HomeNewsFeedPolicy.isEnabled(
                         prefs[AppSettings.HOME_NEWS_FEED_ENABLED]
