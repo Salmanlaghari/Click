@@ -4566,6 +4566,7 @@ class MainActivity : FragmentActivity() {
                                                                 selectionActivity = this@MainActivity,
                                                                 runtime = ExtensionBrowserRuntime.get(applicationContext),
                                                                 tabId = tabId,
+                                                                isIncognito = currentTab.isIncognito,
                                                                 mode = activeMode,
                                                                 initialUrl = currentTab.url,
                                                                 initialSessionState = currentTab.geckoSessionState,
@@ -4744,6 +4745,24 @@ class MainActivity : FragmentActivity() {
                                                                     }
                                                                     if (android.os.Looper.myLooper() == android.os.Looper.getMainLooper()) update()
                                                                     else runOnUiThread { update() }
+                                                                },
+                                                                onTabPreviewCaptured = { capturedUrl, bitmap ->
+                                                                    runOnUiThread {
+                                                                        val previewTab = tabs.firstOrNull { it.id == tabId }
+                                                                        val expectedSession = createdGeckoSession
+                                                                        if (expectedSession != null &&
+                                                                            previewTab != null &&
+                                                                            previewTab.browserSession === expectedSession &&
+                                                                            previewTab.engine == BrowserTabEngine.GECKOVIEW &&
+                                                                            !previewTab.isIncognito &&
+                                                                            previewTab.url == capturedUrl
+                                                                        ) {
+                                                                            TabThumbnailStore.put(tabId, bitmap)
+                                                                            thumbnailVersion++
+                                                                        } else {
+                                                                            runCatching { bitmap.recycle() }
+                                                                        }
+                                                                    }
                                                                 },
                                                                 onNavigationStopped = { completion ->
                                                                     val update = {

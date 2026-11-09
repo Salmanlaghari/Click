@@ -2,6 +2,7 @@ package com.click.browser.engine
 
 import android.app.Activity
 import android.content.Context
+import android.graphics.Bitmap
 import android.util.Log
 import android.view.MenuItem
 import android.view.View
@@ -62,6 +63,7 @@ internal class GeckoBrowserTabSession(
     selectionActivity: Activity,
     private val runtime: GeckoRuntime,
     private val tabId: String,
+    private val isIncognito: Boolean,
     mode: BrowserMode,
     initialUrl: String,
     initialSessionState: String?,
@@ -85,6 +87,7 @@ internal class GeckoBrowserTabSession(
     private val onProgressChanged: (Int, Long) -> Unit,
     private val onNavigationStarted: (String, Long) -> Unit,
     private val onPageFirstContentfulPaint: (Long) -> Unit,
+    private val onTabPreviewCaptured: (String, Bitmap) -> Unit,
     private val onNavigationStopped: (GeckoNavigationCompletion) -> Unit,
     private val onPageLoaded: (String) -> Unit,
     private val onSessionStateChanged: (String) -> Unit,
@@ -115,7 +118,10 @@ internal class GeckoBrowserTabSession(
     private var hostResumed = initiallyResumed
     private var canBack = false
     private var canForward = false
-    private var destroyed = false
+    @Volatile private var previewGeneration = 0L
+    @Volatile private var pendingPreviewGeneration: Long? = null
+    @Volatile private var completedPreviewGeneration: Long? = null
+    @Volatile private var destroyed = false
     private val devicePermissionDelegate = NormalTabDevicePermissionDelegate(
         tabId = tabId,
         onWebsiteMicrophoneRequest = onWebsiteMicrophoneRequest,
@@ -221,6 +227,11 @@ internal class GeckoBrowserTabSession(
                 hasUserGesture: Boolean
             ) {
                 url?.let {
+                    if (lastKnownPageUrl != it) {
+                        previewGeneration += 1
+                        pendingPreviewGeneration = null
+                        completedPreviewGeneration = null
+                    }
                     lastKnownPageUrl = it
                     navigationTracker.updateCurrentUrl(it)
                     onUrlChanged(it)
@@ -308,6 +319,9 @@ internal class GeckoBrowserTabSession(
             }
 
             override fun onPageStart(session: GeckoSession, url: String) {
+                previewGeneration += 1
+                pendingPreviewGeneration = null
+                completedPreviewGeneration = null
                 onRendererRecovery(GeckoRenderEvent.LOAD_STARTED)
                 attachExtensionRouterIfOpen()
                 updateActiveState()
@@ -405,6 +419,7 @@ internal class GeckoBrowserTabSession(
                 rendererRecoveryRequired = false
                 rendererRecoveryInProgress = false
                 onRendererRecovery(GeckoRenderEvent.FIRST_COMPOSITE)
+                captureTabPreviewAfterFirstComposite()
             }
 
             override fun onFirstContentfulPaint(session: GeckoSession) {
@@ -434,6 +449,54 @@ internal class GeckoBrowserTabSession(
         }
         updateActiveState()
     }
+
+    private fun captureTabPreviewAfterFirstComposite() {
+        val captureUrl = lastKnownPageUrl
+        val captureGeneration = previewGeneration
+        if (!shouldCaptureGeckoTabPreview(captureUrl, isIncognito) ||
+            pendingPreviewGeneration == captureGeneration ||
+            completedPreviewGeneration == captureGeneration
+        ) return
+
+        pendingPreviewGeneration = captureGeneration
+        geckoView.post {
+            if (!isCurrentPreviewCapture(captureUrl, captureGeneration)) {
+                if (pendingPreviewGeneration == captureGeneration) pendingPreviewGeneration = null
+                return@post
+            }
+            val capture = try {
+                geckoView.capturePixels()
+            } catch (_: Exception) {
+                if (pendingPreviewGeneration == captureGeneration) pendingPreviewGeneration = null
+                return@post
+            }
+            capture.accept(
+                { bitmap ->
+                    if (isCurrentPreviewCapture(captureUrl, captureGeneration)) {
+                        pendingPreviewGeneration = null
+                        completedPreviewGeneration = captureGeneration
+                        onTabPreviewCaptured(captureUrl, bitmap)
+                    } else {
+                        if (pendingPreviewGeneration == captureGeneration) pendingPreviewGeneration = null
+                        runCatching { bitmap.recycle() }
+                    }
+                },
+                { _ ->
+                    if (pendingPreviewGeneration == captureGeneration) pendingPreviewGeneration = null
+                }
+            )
+        }
+    }
+
+    private fun isCurrentPreviewCapture(captureUrl: String, captureGeneration: Long): Boolean =
+        !destroyed && session.isOpen &&
+            shouldStoreGeckoTabPreview(
+                capturedUrl = captureUrl,
+                currentUrl = lastKnownPageUrl,
+                capturedGeneration = captureGeneration,
+                currentGeneration = previewGeneration,
+                isIncognito = isIncognito
+            )
 
     override fun canGoBack(): Boolean = canBack
     override fun goBack() {
@@ -650,6 +713,8 @@ internal class GeckoBrowserTabSession(
     override fun destroy() {
         if (destroyed) return
         destroyed = true
+        previewGeneration += 1
+        pendingPreviewGeneration = null
         devicePermissionDelegate.rejectPendingAndroidPermission()
         extensionRouter?.detach(tabId, session)
         runCatching { geckoView.releaseSession() }
