@@ -59,6 +59,7 @@ class BrowserUrlInputTest {
             result
         )
     }
+
     @Test
     fun clickInternalSchemeRemainsNormalizedForNativeInterception() {
         assertEquals(
