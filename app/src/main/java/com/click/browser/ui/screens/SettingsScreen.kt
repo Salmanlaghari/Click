@@ -34,6 +34,9 @@ import androidx.compose.ui.unit.sp
 import com.click.browser.BuildConfig
 import com.click.browser.engine.AiProviders
 import com.click.browser.engine.BrowserMode
+import com.click.browser.engine.BrowserSetting
+import com.click.browser.engine.BrowserSettingCapabilityPolicy
+import com.click.browser.engine.BrowserTabEngine
 import com.click.browser.engine.ClickInternalPages
 import com.click.browser.engine.LightThemeVariant
 import com.click.browser.engine.ModePersonalization
@@ -97,6 +100,7 @@ fun SettingsScreen(
     onToggleJs: (Boolean) -> Unit,
     dataSaver: Boolean,
     onToggleDataSaver: (Boolean) -> Unit,
+    currentTabEngine: BrowserTabEngine,
     backgroundAudioEnabled: Boolean,
     onToggleBackgroundAudio: (Boolean) -> Unit,
     // --- Biometric private-tab lock ---
@@ -158,6 +162,12 @@ fun SettingsScreen(
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val listState = rememberLazyListState()
+    val javaScriptAvailability = BrowserSettingCapabilityPolicy.availability(
+        BrowserSetting.JAVASCRIPT, currentTabEngine
+    )
+    val dataSaverAvailability = BrowserSettingCapabilityPolicy.availability(
+        BrowserSetting.DATA_SAVER, currentTabEngine
+    )
 
     var showAiKey by remember { mutableStateOf(false) }
     var historyModeTarget by remember { mutableStateOf(activeMode) }
@@ -184,7 +194,7 @@ fun SettingsScreen(
         theme, lightThemeVariant, autoRotateThemes, wallpaperUri, activeMode, onOpenV9Shield,
         currentSearchEngineSetting, addressBarPosition,
         adBlockerEnabled,
-        httpsMode, httpsStrictExceptions, jsEnabled, dataSaver, historyModeTarget,
+        httpsMode, httpsStrictExceptions, jsEnabled, dataSaver, currentTabEngine, historyModeTarget,
         aiApiKey, aiProvider, aiModel, showAiKey, animationsEnabled, isDefaultBrowser, advanceIntroEnabled,
         sharpViewEnabled,
         newsNotificationsEnabled, newsTopics
@@ -588,12 +598,22 @@ fun SettingsScreen(
                         }
                     }
                     HorizontalDivider(color = theme.onSurface.copy(alpha = 0.1f))
-                    ToggleRow("JavaScript", "Enable core scripting execution", jsEnabled, onToggleJs, theme)
+                    ToggleRow(
+                        title = "JavaScript",
+                        desc = javaScriptAvailability.description,
+                        checked = jsEnabled,
+                        onCheckedChange = onToggleJs,
+                        theme = theme,
+                        enabled = javaScriptAvailability.enabled
+                    )
                     HorizontalDivider(color = theme.onSurface.copy(alpha = 0.1f))
                     ToggleRow(
-                        "Data Saver",
-                        "Reduce resource use in WebView tabs; not currently applied to regular GeckoView tabs",
-                        dataSaver, onToggleDataSaver, theme
+                        title = "Data Saver",
+                        desc = dataSaverAvailability.description,
+                        checked = dataSaver,
+                        onCheckedChange = onToggleDataSaver,
+                        theme = theme,
+                        enabled = dataSaverAvailability.enabled
                     )
                     HorizontalDivider(color = theme.onSurface.copy(alpha = 0.1f))
                     ToggleRow("Lock Private Tabs", biometricStatusText, biometricLockEnabled, onToggleBiometricLock, theme)
@@ -1017,7 +1037,8 @@ private fun ToggleRow(
     desc: String,
     checked: Boolean,
     onCheckedChange: (Boolean) -> Unit,
-    theme: ModeTheme
+    theme: ModeTheme,
+    enabled: Boolean = true
 ) {
     Row(
         modifier = Modifier.fillMaxWidth().padding(vertical = 6.dp),
@@ -1025,10 +1046,19 @@ private fun ToggleRow(
         verticalAlignment = Alignment.CenterVertically
     ) {
         Column(Modifier.weight(1f)) {
-            Text(title, color = theme.onSurface, fontWeight = FontWeight.SemiBold, fontSize = 14.sp)
-            Text(desc, fontSize = 11.sp, color = theme.onSurface.copy(alpha = 0.6f))
+            Text(
+                title,
+                color = theme.onSurface.copy(alpha = if (enabled) 1f else 0.62f),
+                fontWeight = FontWeight.SemiBold,
+                fontSize = 14.sp
+            )
+            Text(
+                desc,
+                fontSize = 11.sp,
+                color = theme.onSurface.copy(alpha = if (enabled) 0.6f else 0.55f)
+            )
         }
-        Switch(checked = checked, onCheckedChange = onCheckedChange)
+        Switch(checked = checked, onCheckedChange = onCheckedChange, enabled = enabled)
     }
 }
 
