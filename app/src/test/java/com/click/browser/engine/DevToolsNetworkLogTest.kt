@@ -146,4 +146,27 @@ class DevToolsNetworkLogTest {
         assertNull(blocked.statusCode)
         assertTrue(blocked.detail.orEmpty().contains("content filter"))
     }
+
+    @Test
+    fun requestIdsRemainUniqueWhenTimestampAndUrlMatch() {
+        val first = DevToolsNetworkLog.observed(
+            existing = emptyList(),
+            method = "GET",
+            url = "https://example.com/repeated",
+            isMainFrame = false,
+            webViewKey = 3,
+            timestamp = 42L
+        )
+        val second = DevToolsNetworkLog.observed(
+            existing = first,
+            method = "GET",
+            url = "https://example.com/repeated",
+            isMainFrame = false,
+            webViewKey = 3,
+            timestamp = 42L
+        )
+
+        assertEquals(2, second.size)
+        assertTrue(second[0].id != second[1].id)
+    }
 }

@@ -42,6 +42,7 @@ internal object DevToolsInspectionPolicy {
     const val MAX_SOURCE_URL_LENGTH = 512
     const val MAX_SOURCE_RESULT_LENGTH = 200_000
     const val MAX_RAW_URL_LENGTH = 4_096
+    const val MAX_DISPLAYED_URL_PATH_SEGMENTS = 24
     const val MAX_COMMAND_LENGTH = 1_000
     const val MAX_RESULT_LENGTH = 4_000
     const val MAX_CONSOLE_ITEMS = 40
@@ -217,7 +218,7 @@ internal object DevToolsInspectionPolicy {
         """.trimIndent()
     }
 
-    /** Wraps explicitly user-entered JavaScript as a JS string, never raw source interpolation. */
+    /** Wraps one explicitly consented JavaScript expression as a JS string, never raw source interpolation. */
     fun buildConsoleEvaluationScript(command: String): String? {
         val trimmed = command.trim().take(MAX_COMMAND_LENGTH)
         if (trimmed.isEmpty()) return null
@@ -225,7 +226,7 @@ internal object DevToolsInspectionPolicy {
         return """
             (function(){
               try {
-                var result = (0, eval)($quotedCommand);
+                var result = (new Function("return (" + $quotedCommand + ")"))();
                 if (result && typeof result.then === "function") {
                   return JSON.stringify({kind:"error",value:"Promise results are not supported."});
                 }
@@ -374,24 +375,34 @@ internal object DevToolsInspectionPolicy {
             "secret", "authorization", "session", "password", "code", "auth"
         )
         var redactNextSegment = false
-        val path = uri.rawPath.orEmpty().split('/').joinToString("/") { segment ->
+        val safePathSegments = uri.rawPath.orEmpty().split('/').map { segment ->
             if (segment.isEmpty()) {
                 segment
             } else {
-                val decodedSegment = runCatching { URLDecoder.decode(segment, Charsets.UTF_8.name()) }
+                val decodedSegment = runCatching {
+                    URLDecoder.decode(segment.replace("+", "%2B"), Charsets.UTF_8.name())
+                }
                     .getOrDefault(segment)
                 val normalizedKey = decodedSegment.substringBefore('=').lowercase()
                 val keyWithInlineValue = decodedSegment.contains('=') && normalizedKey in sensitivePathKeys
                 val redactCurrent = redactNextSegment || keyWithInlineValue
                 redactNextSegment = !decodedSegment.contains('=') && normalizedKey in sensitivePathKeys
-                val tokenLike = decodedSegment.matches(Regex("[A-Za-z0-9_-]+")) &&
-                    ((decodedSegment.length >= 16 && decodedSegment.any { it.isLetter() } && decodedSegment.any { it.isDigit() }) || decodedSegment.length >= 24)
+                val tokenLike = decodedSegment.length >= 24 &&
+                    decodedSegment.any { it.isLetterOrDigit() } &&
+                    decodedSegment.none { it.isWhitespace() || it.isISOControl() }
                 when {
-                    redactCurrent || segment.length > 40 || segment.contains('@') || tokenLike -> "[redacted]"
+                    redactCurrent || segment.length > 40 || decodedSegment.contains('@') || tokenLike -> "[redacted]"
                     else -> segment.take(128)
                 }
             }
-        }.take(512)
+        }
+        val pathSegments = if (safePathSegments.size > MAX_DISPLAYED_URL_PATH_SEGMENTS) {
+            val edgeCount = MAX_DISPLAYED_URL_PATH_SEGMENTS / 2
+            safePathSegments.take(edgeCount) + "…" + safePathSegments.takeLast(edgeCount)
+        } else {
+            safePathSegments
+        }
+        val path = pathSegments.joinToString("/")
         return "$scheme://$host$port${path.ifBlank { "/" }}"
     }
 

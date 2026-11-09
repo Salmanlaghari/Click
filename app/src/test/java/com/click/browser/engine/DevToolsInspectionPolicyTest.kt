@@ -247,11 +247,13 @@ class DevToolsInspectionPolicyTest {
 
     @Test
     fun consoleCommandIsQuotedCappedAndCookieLikeStringResultsAreRedacted() {
-        val command = "document.title; window.__probe = \"quoted\""
+        val command = "document.title + \"quoted\""
         val script = DevToolsInspectionPolicy.buildConsoleEvaluationScript(command)
 
         assertNotNull(script)
         assertTrue(script.orEmpty().contains(JSONObject.quote(command)))
+        assertTrue(script.orEmpty().contains("new Function"))
+        assertFalse(script.orEmpty().contains("(0, eval)"))
         assertTrue(script.orEmpty().contains("[redacted cookie-like value]"))
         assertTrue(script.orEmpty().contains("access[_-]?key"))
         assertTrue(script.orEmpty().contains("Math.min(value.length, ${DevToolsInspectionPolicy.MAX_CONSOLE_ITEMS})"))
@@ -259,7 +261,7 @@ class DevToolsInspectionPolicyTest {
         assertTrue(script.orEmpty().contains("remaining:${DevToolsInspectionPolicy.MAX_CONSOLE_NODES}"))
         assertTrue(script.orEmpty().contains("Object.getOwnPropertyDescriptor"))
         assertFalse(script.orEmpty().contains("JSON.stringify(result,"))
-        assertFalse(script.orEmpty().contains("window.__probe = \"quoted\""))
+        assertFalse(script.orEmpty().contains("window.__probe"))
         assertNull(DevToolsInspectionPolicy.buildConsoleEvaluationScript("   "))
         val longCommand = "x".repeat(2_000)
         val limitedScript = DevToolsInspectionPolicy.buildConsoleEvaluationScript(longCommand).orEmpty()
@@ -314,6 +316,28 @@ class DevToolsInspectionPolicyTest {
             "URL hidden",
             DevToolsInspectionPolicy.sanitizeUrl("https://example.com/" + "x".repeat(DevToolsInspectionPolicy.MAX_RAW_URL_LENGTH))
         )
+        val dottedToken = "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0In0.doesNotMatch"
+        assertEquals(
+            "https://example.com/[redacted]/profile",
+            DevToolsInspectionPolicy.sanitizeUrl("https://example.com/$dottedToken/profile")
+        )
+        assertEquals(
+            "https://example.com/[redacted]/profile",
+            DevToolsInspectionPolicy.sanitizeUrl("https://example.com/abc.def.ghi1234567890123/profile")
+        )
+        assertEquals(
+            "https://example.com/[redacted]/profile",
+            DevToolsInspectionPolicy.sanitizeUrl("https://example.com/abc+def+ghi1234567890123/profile")
+        )
+        assertEquals(
+            "https://example.com/[redacted]",
+            DevToolsInspectionPolicy.sanitizeUrl("https://example.com/user%40example.com")
+        )
+        val deepPath = (0..59).joinToString("/") { "segment$it" }
+        val safeDeepPath = DevToolsInspectionPolicy.sanitizeUrl("https://example.com/$deepPath")
+        assertTrue(safeDeepPath.contains("/…/"))
+        assertTrue(safeDeepPath.endsWith("/segment59"))
+        assertTrue(safeDeepPath.length < 2_048)
     }
 
     @Test

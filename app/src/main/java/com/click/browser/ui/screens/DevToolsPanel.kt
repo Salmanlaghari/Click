@@ -295,10 +295,14 @@ private fun ConsoleTab(
 ) {
     var command by remember { mutableStateOf("") }
     var output by remember { mutableStateOf("") }
+    var commandWasTruncated by remember { mutableStateOf(false) }
     var consentGranted by remember { mutableStateOf(false) }
     var showConsentDialog by remember { mutableStateOf(false) }
     var showPageMessagesConsentDialog by remember { mutableStateOf(false) }
     var pendingCommand by remember { mutableStateOf("") }
+    val timeFormatter = remember {
+        java.time.format.DateTimeFormatter.ofPattern("HH:mm:ss", java.util.Locale.getDefault())
+    }
 
     Column(modifier = Modifier.fillMaxSize()) {
         Row(
@@ -357,10 +361,11 @@ private fun ConsoleTab(
                         "error" -> DevToolsPalette.error
                         else -> DevToolsPalette.info
                     }
-                    val time = remember(log.timestamp) {
-                        java.time.format.DateTimeFormatter.ofPattern("HH:mm:ss", java.util.Locale.getDefault())
-                            .format(java.time.Instant.ofEpochMilli(log.timestamp).atZone(java.time.ZoneId.systemDefault()).toLocalTime())
-                    }
+                    val time = timeFormatter.format(
+                        java.time.Instant.ofEpochMilli(log.timestamp)
+                            .atZone(java.time.ZoneId.systemDefault())
+                            .toLocalTime()
+                    )
                     Text(
                         text = "[$time] [${log.type.uppercase()}] ${log.message}",
                         color = color,
@@ -373,7 +378,7 @@ private fun ConsoleTab(
         }
         if (output.isNotBlank()) {
             Text(
-                "Command result",
+                "Expression result",
                 color = DevToolsPalette.ink,
                 fontWeight = FontWeight.SemiBold,
                 fontSize = 10.sp,
@@ -395,9 +400,12 @@ private fun ConsoleTab(
         ) {
             OutlinedTextField(
                 value = command,
-                onValueChange = { command = it.take(DevToolsInspectionPolicy.MAX_COMMAND_LENGTH) },
+                onValueChange = { input ->
+                    commandWasTruncated = input.length > DevToolsInspectionPolicy.MAX_COMMAND_LENGTH
+                    command = input.take(DevToolsInspectionPolicy.MAX_COMMAND_LENGTH)
+                },
                 modifier = Modifier.weight(1f),
-                label = { Text("JavaScript command", color = DevToolsPalette.muted) },
+                label = { Text("JavaScript expression", color = DevToolsPalette.muted) },
                 singleLine = true,
                 textStyle = MaterialTheme.typography.bodySmall.copy(
                     color = DevToolsPalette.ink,
@@ -415,13 +423,14 @@ private fun ConsoleTab(
             )
             Spacer(Modifier.width(6.dp))
             Button(
-                enabled = command.isNotBlank(),
+                enabled = command.trim().isNotBlank(),
                 onClick = {
                     pendingCommand = command.trim()
                     if (consentGranted) {
                         val toRun = pendingCommand
                         pendingCommand = ""
                         command = ""
+                        commandWasTruncated = false
                         output = "Running…"
                         onRunConsoleCommand(toRun) { output = it }
                     } else {
@@ -439,8 +448,16 @@ private fun ConsoleTab(
                 Text("Run", fontSize = 11.sp)
             }
         }
+        if (commandWasTruncated) {
+            Text(
+                "Input exceeded ${DevToolsInspectionPolicy.MAX_COMMAND_LENGTH} characters; only the first ${DevToolsInspectionPolicy.MAX_COMMAND_LENGTH} were kept. Review before running.",
+                color = DevToolsPalette.warning,
+                fontSize = 9.sp,
+                modifier = Modifier.padding(top = 2.dp)
+            )
+        }
         Text(
-            "Commands run only after you tap Run and are cleared when this panel closes.",
+            "One JavaScript expression per run. After page-session consent, each run still requires tapping Run; input clears when this panel closes.",
             color = DevToolsPalette.muted,
             fontSize = 9.sp,
             modifier = Modifier.padding(top = 2.dp)
@@ -479,10 +496,10 @@ private fun ConsoleTab(
     if (showConsentDialog) {
         AlertDialog(
             onDismissRequest = { showConsentDialog = false; pendingCommand = "" },
-            title = { Text("Run code on this page?", color = DevToolsPalette.ink) },
+            title = { Text("Run an expression on this page?", color = DevToolsPalette.ink) },
             text = {
                 Text(
-                    "JavaScript runs in the active website context and can read or change data that site can access, including form values and cookies. Click does not read these automatically. Run only trusted commands; results stay in this panel and are cleared when it closes.",
+                    "One JavaScript expression runs in the active website context and can read or change data that site can access, including form values and cookies. Click does not read these automatically. Run only trusted expressions; results stay in this panel and are cleared when it closes.",
                     color = DevToolsPalette.ink
                 )
             },
@@ -493,10 +510,11 @@ private fun ConsoleTab(
                     val toRun = pendingCommand
                     pendingCommand = ""
                     command = ""
+                    commandWasTruncated = false
                     output = "Running…"
                     if (toRun.isNotBlank()) onRunConsoleCommand(toRun) { output = it }
                 }) {
-                    Text("Run this command", color = DevToolsPalette.accent)
+                    Text("Run this expression", color = DevToolsPalette.accent)
                 }
             },
             dismissButton = {
@@ -531,7 +549,7 @@ private fun NetworkTab(requests: List<NetworkRequest>, onClearNetwork: () -> Uni
             modifier = Modifier.padding(bottom = 5.dp)
         )
         LazyColumn(modifier = Modifier.fillMaxWidth().weight(1f)) {
-            items(requests.asReversed()) { request ->
+            items(requests.asReversed(), key = { it.id }) { request ->
                 val statusColor = when (request.outcome) {
                     NetworkRequestOutcome.HTTP_ERROR, NetworkRequestOutcome.LOAD_ERROR -> DevToolsPalette.error
                     NetworkRequestOutcome.BLOCKED_BY_CLICK -> DevToolsPalette.warning

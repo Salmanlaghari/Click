@@ -2642,7 +2642,9 @@ class MainActivity : FragmentActivity() {
                     feature = id,
                     mode = activeMode,
                     engine = currentTab.engine,
-                    hasLoadedPage = currentTab.url.isNotBlank() && currentTab.url != "about:blank"
+                    hasLoadedPage = currentTab.hasCommittedContent &&
+                        DevToolsInspectionPolicy.isInspectableWebPageUrl(currentTab.url) &&
+                        DevToolsInspectionPolicy.isInspectableWebPageUrl(currentTab.webView?.url)
                 )
                 if (!capability.visible) return
                 if (!capability.enabled) {
@@ -3196,7 +3198,7 @@ class MainActivity : FragmentActivity() {
                 val pageUrl = webView?.url.orEmpty()
                 val pageLoaded = currentTab.url.isNotBlank() && currentTab.url != "about:blank" &&
                     pageUrl.isNotBlank() && pageUrl != "about:blank" &&
-                    currentTab.hasCommittedContent && !currentTab.isPageLoading &&
+                    currentTab.hasCommittedContent &&
                     DevToolsInspectionPolicy.isInspectableWebPageUrl(currentTab.url) &&
                     DevToolsInspectionPolicy.isInspectableWebPageUrl(pageUrl)
                 return DevToolsInspectionPolicy.shouldCaptureSelectedTabData(
@@ -3396,7 +3398,7 @@ class MainActivity : FragmentActivity() {
                         feature = FeatureId.DEVTOOLS,
                         mode = activeMode,
                         engine = currentTab.engine,
-                        hasLoadedPage = currentTab.hasCommittedContent && !currentTab.isPageLoading &&
+                        hasLoadedPage = currentTab.hasCommittedContent &&
                             DevToolsInspectionPolicy.isInspectableWebPageUrl(currentTab.url) &&
                             DevToolsInspectionPolicy.isInspectableWebPageUrl(currentTab.webView?.url)
                     )
@@ -3447,14 +3449,13 @@ class MainActivity : FragmentActivity() {
                 currentTab.browserSession,
                 currentTab.webView,
                 currentTab.url,
-                currentTab.isPageLoading,
                 currentTab.hasCommittedContent,
                 devToolsTab
             ) {
                 invalidateDevToolsSession()
                 devToolsConsoleMessagesConsent = false
                 val webView = currentTab.webView
-                val pageLoaded = currentTab.hasCommittedContent && !currentTab.isPageLoading &&
+                val pageLoaded = currentTab.hasCommittedContent &&
                     DevToolsInspectionPolicy.isInspectableWebPageUrl(currentTab.url) &&
                     DevToolsInspectionPolicy.isInspectableWebPageUrl(webView?.url)
                 val canInspect = DevToolsInspectionPolicy.canInspectPage(
@@ -3505,8 +3506,8 @@ class MainActivity : FragmentActivity() {
                         val message = when {
                             activeMode != BrowserMode.DEVELOPER -> "DevTools is only available in Developer mode."
                             currentTab.engine == BrowserTabEngine.GECKOVIEW -> "DevTools is not connected to GeckoView yet."
-                            currentTab.isPageLoading || !currentTab.hasCommittedContent ->
-                                "Wait for the webpage to finish loading, then reopen DevTools."
+                            !currentTab.hasCommittedContent ->
+                                "Wait for the webpage to render its first content, then reopen DevTools."
                             !DevToolsInspectionPolicy.isInspectableWebPageUrl(currentTab.url) ||
                                 !DevToolsInspectionPolicy.isInspectableWebPageUrl(webView?.url) ->
                                 "DevTools only inspects ordinary HTTP(S) webpages."
@@ -6148,7 +6149,9 @@ class MainActivity : FragmentActivity() {
                                             feature = FeatureId.DEVTOOLS,
                                             mode = activeMode,
                                             engine = currentTab.engine,
-                                            hasLoadedPage = currentTab.url.isNotBlank() && currentTab.url != "about:blank"
+                                            hasLoadedPage = currentTab.hasCommittedContent &&
+                                                DevToolsInspectionPolicy.isInspectableWebPageUrl(currentTab.url) &&
+                                                DevToolsInspectionPolicy.isInspectableWebPageUrl(currentTab.webView?.url)
                                         ).enabled
                                     ) {
                                         Column(
