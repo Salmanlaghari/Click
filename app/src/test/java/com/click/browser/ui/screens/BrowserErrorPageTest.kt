@@ -18,6 +18,20 @@ class BrowserErrorPageTest {
     }
 
     @Test
+    fun usesWarmCreamPaletteAndPreservesRetryControl() {
+        val html = browserErrorPageHtml("net::ERR_CONNECTION_FAILED", "https://example.test/")
+
+        assertTrue(html.contains("background-color: #FBF8F1"))
+        assertTrue(html.contains("color: #302A22"))
+        assertTrue(html.contains("color: #66533F"))
+        assertTrue(html.contains("color: #393228"))
+        assertTrue(html.contains("background-color: #66533F"))
+        assertTrue(html.contains("color: #FFFEFB"))
+        assertFalse(html.contains("#0f172a"))
+        assertTrue(html.contains("Retry Connection"))
+    }
+
+    @Test
     fun retryIsUnavailableForNonGetOrNonHttpRequests() {
         assertNull(browserRetryUrl("POST", "https://example.test/submit"))
         assertNull(browserRetryUrl("GET", "javascript:alert(1)"))

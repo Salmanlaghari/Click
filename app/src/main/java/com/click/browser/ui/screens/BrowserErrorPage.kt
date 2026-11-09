@@ -21,10 +21,10 @@ internal fun browserErrorPageHtml(description: String?, retryUrl: String?): Stri
         <head>
             <meta name="viewport" content="width=device-width, initial-scale=1">
             <style>
-                body { background-color: #0f172a; color: #f8fafc; font-family: sans-serif; text-align: center; padding: 50px; }
-                h1 { color: #ef4444; font-size: 24px; }
-                p { color: #94a3b8; font-size: 16px; }
-                .btn { display: inline-block; background-color: #3b82f6; border: none; color: white; padding: 12px 24px; border-radius: 8px; font-weight: bold; margin-top: 20px; text-decoration: none; }
+                body { background-color: #FBF8F1; color: #302A22; font-family: sans-serif; text-align: center; padding: 50px; }
+                h1 { color: #66533F; font-size: 24px; }
+                p { color: #393228; font-size: 16px; }
+                .btn { display: inline-block; background-color: #66533F; border: none; color: #FFFEFB; padding: 12px 24px; border-radius: 8px; font-weight: bold; margin-top: 20px; text-decoration: none; }
             </style>
         </head>
         <body>
