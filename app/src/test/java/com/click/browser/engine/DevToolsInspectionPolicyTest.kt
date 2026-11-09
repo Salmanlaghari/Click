@@ -231,10 +231,14 @@ class DevToolsInspectionPolicyTest {
         }
         assertTrue(
             DevToolsInspectionPolicy.computedStyleProperties.containsAll(
-                listOf("font-family", "border-radius", "box-shadow", "flex-direction", "grid-template-columns", "transform", "opacity", "z-index")
+                listOf(
+                    "font-family", "border-radius", "box-shadow", "flex-direction",
+                    "grid-template-columns", "align-content", "grid-auto-rows", "object-fit",
+                    "transform", "opacity", "z-index"
+                )
             )
         )
-        assertTrue(DevToolsInspectionPolicy.computedStyleProperties.size <= 70)
+        assertTrue(DevToolsInspectionPolicy.computedStyleProperties.size <= 80)
         assertFalse(DevToolsInspectionPolicy.computedStyleProperties.contains("background"))
         assertFalse(DevToolsInspectionPolicy.computedStyleProperties.contains("background-image"))
         assertFalse(script.orEmpty().contains("document.cookie"))
@@ -251,6 +255,13 @@ class DevToolsInspectionPolicyTest {
         assertEquals(setOf("display", "color", "width"), styles?.properties?.keys)
         assertFalse(styles.toString().contains("private"))
         assertFalse(styles.toString().contains("secret"))
+    }
+
+    @Test
+    fun styleParserRejectsOversizedEvaluationResults() {
+        val oversized = "x".repeat(DevToolsInspectionPolicy.MAX_STYLE_RESULT_LENGTH + 1)
+
+        assertNull(DevToolsInspectionPolicy.parseComputedStyles(oversized))
     }
 
     @Test

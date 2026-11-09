@@ -111,22 +111,27 @@ internal object DevToolsInspectionPolicy {
         requiredTab = 1
     )
 
-    // Fixed read-only allowlist; omit shorthand/background-image and other properties that can expose resource URLs.
+    // Fixed read-only allowlist for common layout and presentation values.
+    // URL-bearing shorthands like `background` and `background-image` are omitted.
     val computedStyleProperties = listOf(
-        "display", "position", "color", "background-color", "font-family",
-        "font-size", "font-style", "font-weight", "line-height", "letter-spacing",
-        "text-align", "text-decoration-line", "text-transform", "white-space",
-        "text-overflow", "width", "height", "min-width", "max-width",
-        "min-height", "max-height", "box-sizing", "overflow", "overflow-x", "overflow-y",
-        "margin-top", "margin-right", "margin-bottom", "margin-left",
-        "padding-top", "padding-right", "padding-bottom", "padding-left",
-        "top", "right", "bottom", "left", "z-index", "opacity", "visibility",
-        "border-top-width", "border-top-style", "border-top-color", "border-width",
-        "border-style", "border-color", "border-radius", "box-shadow",
-        "flex-direction", "flex-wrap", "flex-grow", "flex-shrink", "flex-basis",
-        "align-items", "justify-content", "gap", "row-gap", "column-gap",
-        "grid-template-columns", "grid-template-rows", "grid-auto-flow", "grid-column",
-        "grid-row", "transform", "transform-origin"
+        "display", "position", "color", "background-color",
+        "font-family", "font-size", "font-style", "font-weight",
+        "line-height", "letter-spacing", "text-align", "text-decoration-line",
+        "text-transform", "white-space", "text-overflow", "width",
+        "height", "min-width", "max-width", "min-height",
+        "max-height", "box-sizing", "overflow", "overflow-x",
+        "overflow-y", "margin-top", "margin-right", "margin-bottom",
+        "margin-left", "padding-top", "padding-right", "padding-bottom",
+        "padding-left", "top", "right", "bottom", "left",
+        "z-index", "opacity", "visibility", "border-top-width",
+        "border-top-style", "border-top-color", "border-width", "border-style",
+        "border-color", "border-radius", "box-shadow", "flex-direction",
+        "flex-wrap", "flex-grow", "flex-shrink", "flex-basis", "align-items",
+        "align-content", "align-self", "justify-content", "justify-items",
+        "justify-self", "place-items", "place-content", "place-self", "gap",
+        "row-gap", "column-gap", "grid-template-columns", "grid-template-rows",
+        "grid-auto-flow", "grid-auto-columns", "grid-auto-rows", "grid-column",
+        "grid-row", "object-fit", "object-position", "transform", "transform-origin"
     )
 
     val domSnapshotScript: String = """
