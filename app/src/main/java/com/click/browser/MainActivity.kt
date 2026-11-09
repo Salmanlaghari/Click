@@ -175,7 +175,7 @@ class TabItem(
     internal val passwordAutofillPromptGuard =
         com.click.browser.engine.PasswordAccessPolicy.AutofillPromptGuard()
     var rendererRecoveryRequired by mutableStateOf(false)
-    var geckoNavigationFailure by mutableStateOf<GeckoNavigationFailure?>(null)
+    internal var geckoNavigationFailure by mutableStateOf<GeckoNavigationFailure?>(null)
     var geckoNavigationGeneration by mutableStateOf(-1L)
 }
 
