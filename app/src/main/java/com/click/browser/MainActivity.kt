@@ -370,36 +370,65 @@ class MainActivity : FragmentActivity() {
     // Text scaling live copies for WebViewClient callbacks (per-host map).
     private var liveGlobalTextScale = com.click.browser.engine.TextScaleStore.DEFAULT
     private var liveHostTextScales: Map<String, Int> = emptyMap()
-    // DevTools captures only while its Developer-mode panel is open. The
-    // target WebView is volatile because shouldInterceptRequest runs off UI.
+    // DevTools captures only while the Developer-mode panel is open on the
+    // matching WebView. Network and Console data are collected only on their
+    // selected tabs; the target is volatile because request callbacks may run off UI.
     private val devToolsLogs = androidx.compose.runtime.mutableStateListOf<com.click.browser.engine.LogEntry>()
     private val devToolsNetwork = androidx.compose.runtime.mutableStateListOf<com.click.browser.engine.NetworkRequest>()
-    private val devToolsDomHtml = androidx.compose.runtime.mutableStateOf("")
     private val devToolsSources = androidx.compose.runtime.mutableStateListOf<String>()
     @Volatile private var devToolsCaptureEnabled: Boolean = false
+    @Volatile private var devToolsConsoleCaptureEnabled: Boolean = false
     @Volatile private var devToolsTargetWebView: WebView? = null
+    @Volatile private var devToolsSessionGeneration: Long = 0L
+    @Volatile private var devToolsConsoleCaptureGeneration: Long = 0L
 
-    /** Thread-safe DevTools log append (caps at 500 entries, drops oldest). */
-    private fun addDevToolsLog(entry: com.click.browser.engine.LogEntry) {
-        if (android.os.Looper.myLooper() == android.os.Looper.getMainLooper()) {
-            devToolsLogs.add(entry)
-            if (devToolsLogs.size > 500) devToolsLogs.removeAt(0)
-        } else {
-            runOnUiThread {
+    /** Call on the main thread when a panel, page, tab, or engine session changes. */
+    private fun invalidateDevToolsSession(): Long {
+        devToolsSessionGeneration += 1
+        devToolsConsoleCaptureGeneration += 1
+        return devToolsSessionGeneration
+    }
+
+    /** Thread-safe log append, rejected if its page/tab session ended while queued. */
+    private fun addDevToolsLog(
+        entry: com.click.browser.engine.LogEntry,
+        expectedTarget: WebView,
+        captureGeneration: Long
+    ) {
+        val apply = {
+            if (com.click.browser.engine.DevToolsInspectionPolicy.acceptsSessionResult(
+                    capturedGeneration = captureGeneration,
+                    currentGeneration = devToolsConsoleCaptureGeneration,
+                    targetMatches = devToolsTargetWebView === expectedTarget,
+                    sessionActive = devToolsConsoleCaptureEnabled
+                )
+            ) {
                 devToolsLogs.add(entry)
                 if (devToolsLogs.size > 500) devToolsLogs.removeAt(0)
             }
         }
+        if (android.os.Looper.myLooper() == android.os.Looper.getMainLooper()) apply()
+        else runOnUiThread { apply() }
     }
 
-    /** Apply a pure network-log update on the UI thread; the model enforces its cap. */
+    /** Apply a network-log update only if its original WebView session is still active. */
     private fun updateDevToolsNetwork(
+        expectedTarget: WebView,
+        sessionGeneration: Long,
         update: (List<com.click.browser.engine.NetworkRequest>) -> List<com.click.browser.engine.NetworkRequest>
     ) {
         val apply = {
-            val updated = update(devToolsNetwork.toList())
-            devToolsNetwork.clear()
-            devToolsNetwork.addAll(updated)
+            if (com.click.browser.engine.DevToolsInspectionPolicy.acceptsSessionResult(
+                    capturedGeneration = sessionGeneration,
+                    currentGeneration = devToolsSessionGeneration,
+                    targetMatches = devToolsTargetWebView === expectedTarget,
+                    sessionActive = devToolsCaptureEnabled
+                )
+            ) {
+                val updated = update(devToolsNetwork.toList())
+                devToolsNetwork.clear()
+                devToolsNetwork.addAll(updated)
+            }
         }
         if (android.os.Looper.myLooper() == android.os.Looper.getMainLooper()) apply()
         else runOnUiThread { apply() }
@@ -410,6 +439,7 @@ class MainActivity : FragmentActivity() {
         request: WebResourceRequest?,
         blockedByClick: Boolean = false
     ) {
+        val sessionGeneration = devToolsSessionGeneration
         if (!devToolsCaptureEnabled || view == null || view !== devToolsTargetWebView || request == null) return
         val url = request.url.toString()
         val scheme = request.url.scheme?.lowercase()
@@ -417,7 +447,7 @@ class MainActivity : FragmentActivity() {
         val method = request.method.orEmpty().ifBlank { "GET" }
         val isMainFrame = request.isForMainFrame
         val webViewKey = System.identityHashCode(view)
-        updateDevToolsNetwork { entries ->
+        updateDevToolsNetwork(view, sessionGeneration) { entries ->
             if (blockedByClick) {
                 com.click.browser.engine.DevToolsNetworkLog.blocked(
                     entries, method, url, isMainFrame, webViewKey
@@ -435,6 +465,7 @@ class MainActivity : FragmentActivity() {
         request: WebResourceRequest?,
         response: WebResourceResponse?
     ) {
+        val sessionGeneration = devToolsSessionGeneration
         if (!devToolsCaptureEnabled || view == null || view !== devToolsTargetWebView || request == null || response == null) return
         val url = request.url.toString()
         val scheme = request.url.scheme?.lowercase()
@@ -442,10 +473,10 @@ class MainActivity : FragmentActivity() {
         val method = request.method.orEmpty().ifBlank { "GET" }
         val isMainFrame = request.isForMainFrame
         val webViewKey = System.identityHashCode(view)
-        updateDevToolsNetwork { entries ->
+        updateDevToolsNetwork(view, sessionGeneration) { entries ->
             com.click.browser.engine.DevToolsNetworkLog.httpError(
                 entries, method, url, isMainFrame, webViewKey,
-                response.statusCode, response.reasonPhrase
+                response.statusCode, reason = null
             )
         }
     }
@@ -455,6 +486,7 @@ class MainActivity : FragmentActivity() {
         request: WebResourceRequest?,
         error: WebResourceError?
     ) {
+        val sessionGeneration = devToolsSessionGeneration
         if (!devToolsCaptureEnabled || view == null || view !== devToolsTargetWebView || request == null) return
         val url = request.url.toString()
         val scheme = request.url.scheme?.lowercase()
@@ -462,11 +494,10 @@ class MainActivity : FragmentActivity() {
         val method = request.method.orEmpty().ifBlank { "GET" }
         val isMainFrame = request.isForMainFrame
         val webViewKey = System.identityHashCode(view)
-        val description = listOfNotNull(
-            error?.errorCode?.let { "WebView error $it" },
-            error?.description?.toString()?.takeIf { it.isNotBlank() }
-        ).joinToString(": ").ifBlank { "WebView load error" }
-        updateDevToolsNetwork { entries ->
+        // Keep the stable error code only; WebView descriptions can contain a
+        // raw URL or server-provided text that may expose page-specific data.
+        val description = error?.errorCode?.let { "WebView error $it" } ?: "WebView load error"
+        updateDevToolsNetwork(view, sessionGeneration) { entries ->
             com.click.browser.engine.DevToolsNetworkLog.loadError(
                 entries, method, url, isMainFrame, webViewKey, description
             )
@@ -2350,7 +2381,9 @@ class MainActivity : FragmentActivity() {
             // aliases keep the existing code below unchanged.
             val logs = devToolsLogs
             val networkRequests = devToolsNetwork
-            val domHtml: String by devToolsDomHtml
+            var devToolsDomSnapshot by remember { mutableStateOf<DevToolsDomSnapshot?>(null) }
+            var devToolsSelectedNodePath by remember { mutableStateOf<List<Int>?>(null) }
+            var devToolsSelectedStyles by remember { mutableStateOf<DevToolsComputedStyles?>(null) }
             val sourcesList = devToolsSources
 
             // Power-mode desktop layout controls. The system WebView User-Agent
@@ -2364,33 +2397,13 @@ class MainActivity : FragmentActivity() {
 
             // DevTools panel tab (0=Elements, 1=Console, 2=Network, 3=Sources, 4=Device)
             var devToolsTab by remember { mutableStateOf(0) }
+            var devToolsOpenRequested by remember { mutableStateOf(false) }
+            var devToolsConsoleMessagesConsent by remember { mutableStateOf(false) }
             // DevTools bottom sheet visibility — the panel is a dismissible sheet
             // so the website stays visible (never a fixed top overlay).
             var showDevToolsSheet by remember { mutableStateOf(false) }
             // Live viewport/device facts for the DevTools Device tab.
             var devToolsDeviceInfo by remember { mutableStateOf<DeviceInfo?>(null) }
-
-            LaunchedEffect(
-                showDevToolsSheet,
-                activeMode,
-                activeTabIndex,
-                currentTab.engine,
-                currentTab.browserSession
-            ) {
-                val capture = showDevToolsSheet &&
-                    DevToolsAvailabilityPolicy.canCapture(activeMode, currentTab.engine)
-                if (capture) {
-                    if (devToolsTargetWebView !== currentTab.webView) {
-                        devToolsLogs.clear()
-                        devToolsNetwork.clear()
-                    }
-                    devToolsTargetWebView = currentTab.webView
-                    devToolsCaptureEnabled = true
-                } else {
-                    devToolsCaptureEnabled = false
-                    devToolsTargetWebView = null
-                }
-            }
 
             // Full-view / immersive browsing: MANUAL fullscreen toggle only.
             // (Prince: no auto-hide on scroll — user control via the drawer toggle.)
@@ -2416,7 +2429,6 @@ class MainActivity : FragmentActivity() {
                     val unavailable = when {
                         showCookieManager -> { showCookieManager = false; "Cookie manager" }
                         showTextScaleSheet -> { showTextScaleSheet = false; "Page text zoom" }
-                        showDevToolsSheet -> { showDevToolsSheet = false; "DevTools" }
                         else -> null
                     }
                     unavailable?.let {
@@ -2630,7 +2642,9 @@ class MainActivity : FragmentActivity() {
                     feature = id,
                     mode = activeMode,
                     engine = currentTab.engine,
-                    hasLoadedPage = currentTab.url.isNotBlank() && currentTab.url != "about:blank"
+                    hasLoadedPage = currentTab.hasCommittedContent &&
+                        DevToolsInspectionPolicy.isInspectableWebPageUrl(currentTab.url) &&
+                        DevToolsInspectionPolicy.isInspectableWebPageUrl(currentTab.webView?.url)
                 )
                 if (!capability.visible) return
                 if (!capability.enabled) {
@@ -2661,7 +2675,7 @@ class MainActivity : FragmentActivity() {
                     FeatureId.DEVTOOLS -> {
                         // Opens the DevTools bottom sheet (website stays visible).
                         // The FPS diagnostics overlay has its own drawer toggle.
-                        showDevToolsSheet = true
+                        devToolsOpenRequested = true
                     }
                     FeatureId.DOWNLOADS -> showDownloads = true
                     FeatureId.BOOKMARKS -> showBookmarks = true
@@ -3179,19 +3193,51 @@ class MainActivity : FragmentActivity() {
                     }
                 }
             }
+
+            fun canInspectDevToolsPage(expectedTab: Int, webView: WebView? = currentTab.webView): Boolean {
+                val pageUrl = webView?.url.orEmpty()
+                val pageLoaded = currentTab.url.isNotBlank() && currentTab.url != "about:blank" &&
+                    pageUrl.isNotBlank() && pageUrl != "about:blank" &&
+                    currentTab.hasCommittedContent &&
+                    DevToolsInspectionPolicy.isInspectableWebPageUrl(currentTab.url) &&
+                    DevToolsInspectionPolicy.isInspectableWebPageUrl(pageUrl)
+                return DevToolsInspectionPolicy.shouldCaptureSelectedTabData(
+                    mode = activeMode,
+                    engine = currentTab.engine,
+                    panelVisible = showDevToolsSheet,
+                    pageLoaded = pageLoaded,
+                    targetMatches = webView != null && devToolsTargetWebView === webView,
+                    selectedTab = devToolsTab,
+                    requiredTab = expectedTab
+                )
+            }
+
+            fun isCurrentDevToolsSession(
+                capturedGeneration: Long,
+                expectedTab: Int,
+                webView: WebView
+            ): Boolean = DevToolsInspectionPolicy.acceptsSessionResult(
+                capturedGeneration = capturedGeneration,
+                currentGeneration = devToolsSessionGeneration,
+                targetMatches = currentTab.webView === webView && devToolsTargetWebView === webView,
+                sessionActive = canInspectDevToolsPage(expectedTab = expectedTab, webView = webView)
+            )
+
             /**
-             * Reads live viewport/device facts from the current page via JS.
-             * Updates [devToolsDeviceInfo]; safe to call when no page is loaded
-             * (clears the info instead of crashing). Declared before
-             * [openDevToolsTab] (Kotlin local funs need declaration-before-use).
+             * Reads live viewport facts only while the Device tab is selected.
+             * This is a targeted WebView query; it does not collect page text,
+             * form values, cookies, or storage values.
              */
             fun refreshDevToolsDeviceInfo() {
                 val wv = currentTab.webView
-                if (wv == null || currentTab.url == "about:blank") {
+                if (!canInspectDevToolsPage(expectedTab = 4, webView = wv) || wv == null) {
                     devToolsDeviceInfo = null
                     return
                 }
-                wv.evaluateJavascript(
+                val pageUrl = wv.url.orEmpty()
+                val sessionGeneration = devToolsSessionGeneration
+                try {
+                    wv.evaluateJavascript(
                     """(function(){
                         try {
                             return JSON.stringify({
@@ -3207,7 +3253,7 @@ class MainActivity : FragmentActivity() {
                         } catch(e) { return '{}'; }
                     })()"""
                 ) { result ->
-                    devToolsDeviceInfo = try {
+                    val info = if (result.orEmpty().length > 8_192) null else try {
                         // evaluateJavascript returns the JS string as a JSON string
                         // literal (quoted + escaped). Decode via a JSON array wrapper.
                         val inner = if (result.isNullOrBlank() || result == "null") "{}"
@@ -3226,39 +3272,119 @@ class MainActivity : FragmentActivity() {
                     } catch (_: Exception) {
                         null
                     }
+                    if (isCurrentDevToolsSession(sessionGeneration, expectedTab = 4, webView = wv) &&
+                        wv.url == pageUrl
+                    ) {
+                        devToolsDeviceInfo = info
+                    }
+                }
+                } catch (_: IllegalStateException) {
+                    if (devToolsSessionGeneration == sessionGeneration) devToolsDeviceInfo = null
                 }
             }
 
-            /** Reads a bounded, read-only page snapshot only when the user opens/refreshes DevTools. */
+            /** Reads a bounded structure-only DOM snapshot while Elements is selected. */
             fun refreshDevToolsPageSnapshot() {
                 val wv = currentTab.webView
                 val pageUrl = wv?.url.orEmpty()
-                if (wv == null || pageUrl.isBlank() || pageUrl == "about:blank") {
-                    devToolsDomHtml.value = ""
+                if (!canInspectDevToolsPage(expectedTab = 0, webView = wv) || wv == null) {
+                    devToolsDomSnapshot = null
+                    devToolsSelectedNodePath = null
+                    devToolsSelectedStyles = null
+                    return
+                }
+                val sessionGeneration = devToolsSessionGeneration
+
+                try {
+                    wv.evaluateJavascript(DevToolsInspectionPolicy.domSnapshotScript) { result ->
+                        if (isCurrentDevToolsSession(sessionGeneration, expectedTab = 0, webView = wv) &&
+                            wv.url == pageUrl
+                        ) {
+                            val snapshot = DevToolsInspectionPolicy.parseDomSnapshot(result)
+                            devToolsDomSnapshot = snapshot
+                            val selectedPath = devToolsSelectedNodePath
+                            fun containsPath(node: DevToolsDomNode?): Boolean = node != null &&
+                                (node.path == selectedPath || node.children.any { containsPath(it) })
+                            if (selectedPath != null && !containsPath(snapshot.root)) {
+                                devToolsSelectedNodePath = null
+                                devToolsSelectedStyles = null
+                            }
+                        }
+                    }
+                } catch (_: IllegalStateException) {
+                    if (devToolsSessionGeneration == sessionGeneration) devToolsDomSnapshot = null
+                }
+            }
+
+            /** Reads only markup resource references while Sources is selected. */
+            fun refreshDevToolsSources() {
+                val wv = currentTab.webView
+                val pageUrl = wv?.url.orEmpty()
+                if (!canInspectDevToolsPage(expectedTab = 3, webView = wv) || wv == null) {
                     devToolsSources.clear()
                     return
                 }
-                wv.evaluateJavascript(
-                    "(function(){try{return document.documentElement ? document.documentElement.outerHTML.slice(0,100000) : ''; }catch(e){return '';}})()"
-                ) { result ->
-                    val html = try {
-                        if (result.isNullOrBlank() || result == "null") ""
-                        else org.json.JSONArray("[$result]").optString(0, "")
-                    } catch (_: Exception) { "" }
-                    if (currentTab.webView === wv && wv.url == pageUrl) {
-                        devToolsDomHtml.value = html
+                val sessionGeneration = devToolsSessionGeneration
+                try {
+                    wv.evaluateJavascript(DevToolsInspectionPolicy.sourceReferencesScript) { result ->
+                        if (isCurrentDevToolsSession(sessionGeneration, expectedTab = 3, webView = wv) &&
+                            wv.url == pageUrl
+                        ) {
+                            val sources = DevToolsInspectionPolicy.parseSourceReferences(result)
+                            devToolsSources.clear()
+                            devToolsSources.addAll(sources)
+                        }
                     }
+                } catch (_: IllegalStateException) {
+                    if (devToolsSessionGeneration == sessionGeneration) devToolsSources.clear()
                 }
-                wv.evaluateJavascript(
-                    "(function(){try{return Array.from(document.querySelectorAll('script[src],link[rel=\\\"stylesheet\\\"],img[src]')).slice(0,500).map(function(el){return el.src||el.href||'';}).filter(Boolean);}catch(e){return [];}})()"
-                ) { result ->
-                    val sources = try {
-                        val array = org.json.JSONArray(result ?: "[]")
-                        (0 until array.length()).map { array.optString(it) }.filter { it.isNotBlank() }
-                    } catch (_: Exception) { emptyList() }
-                    if (currentTab.webView === wv && wv.url == pageUrl) {
-                        devToolsSources.clear()
-                        devToolsSources.addAll(sources)
+            }
+
+            fun selectDevToolsNode(path: List<Int>) {
+                val wv = currentTab.webView
+                val script = DevToolsInspectionPolicy.buildComputedStylesScript(path)
+                if (script == null || wv == null || !canInspectDevToolsPage(expectedTab = 0, webView = wv)) return
+                val pageUrl = wv.url.orEmpty()
+                val sessionGeneration = devToolsSessionGeneration
+                devToolsSelectedNodePath = path.toList()
+                devToolsSelectedStyles = null
+                try {
+                    wv.evaluateJavascript(script) { result ->
+                        if (isCurrentDevToolsSession(sessionGeneration, expectedTab = 0, webView = wv) &&
+                            wv.url == pageUrl && devToolsSelectedNodePath == path
+                        ) {
+                            devToolsSelectedStyles = DevToolsInspectionPolicy.parseComputedStyles(result)
+                        }
+                    }
+                } catch (_: IllegalStateException) {
+                    if (devToolsSessionGeneration == sessionGeneration) devToolsSelectedStyles = null
+                }
+            }
+
+            fun runDevToolsConsoleCommand(command: String, onResult: (String) -> Unit) {
+                val wv = currentTab.webView
+                val script = DevToolsInspectionPolicy.buildConsoleEvaluationScript(command)
+                if (script == null) {
+                    onResult("Enter a command first.")
+                    return
+                }
+                if (wv == null || !canInspectDevToolsPage(expectedTab = 1, webView = wv)) {
+                    onResult("Console is no longer active for this page.")
+                    return
+                }
+                val pageUrl = wv.url.orEmpty()
+                val sessionGeneration = devToolsSessionGeneration
+                try {
+                    wv.evaluateJavascript(script) { result ->
+                        if (isCurrentDevToolsSession(sessionGeneration, expectedTab = 1, webView = wv) &&
+                            wv.url == pageUrl
+                        ) {
+                            onResult(DevToolsInspectionPolicy.parseConsoleResult(result))
+                        }
+                    }
+                } catch (_: IllegalStateException) {
+                    if (devToolsSessionGeneration == sessionGeneration) {
+                        onResult("The current page is no longer available.")
                     }
                 }
             }
@@ -3272,7 +3398,9 @@ class MainActivity : FragmentActivity() {
                         feature = FeatureId.DEVTOOLS,
                         mode = activeMode,
                         engine = currentTab.engine,
-                        hasLoadedPage = currentTab.url.isNotBlank() && currentTab.url != "about:blank"
+                        hasLoadedPage = currentTab.hasCommittedContent &&
+                            DevToolsInspectionPolicy.isInspectableWebPageUrl(currentTab.url) &&
+                            DevToolsInspectionPolicy.isInspectableWebPageUrl(currentTab.webView?.url)
                     )
                     if (!capability.visible || !capability.enabled) {
                         val reason = capability.explanation
@@ -3280,13 +3408,120 @@ class MainActivity : FragmentActivity() {
                         Toast.makeText(this@MainActivity, reason, Toast.LENGTH_LONG).show()
                         return@launch
                     }
+                    invalidateDevToolsSession()
+                    devToolsConsoleMessagesConsent = false
+                    devToolsCaptureEnabled = false
+                    devToolsConsoleCaptureEnabled = false
+                    devToolsTargetWebView = null
+                    devToolsLogs.clear()
+                    devToolsNetwork.clear()
+                    devToolsSources.clear()
+                    devToolsDomSnapshot = null
+                    devToolsSelectedNodePath = null
+                    devToolsSelectedStyles = null
+                    devToolsDeviceInfo = null
                     devToolsTab = tab
-                    if (activeMode == BrowserMode.DEVELOPER && (tab == 0 || tab == 3)) {
-                        refreshDevToolsPageSnapshot()
-                    }
-                    // Refresh device facts when the Device tab is requested.
-                    if (tab == 4) refreshDevToolsDeviceInfo()
                     showDevToolsSheet = true
+                }
+            }
+
+            fun closeDevToolsPanel() {
+                invalidateDevToolsSession()
+                devToolsConsoleMessagesConsent = false
+                showDevToolsSheet = false
+                devToolsCaptureEnabled = false
+                devToolsConsoleCaptureEnabled = false
+                devToolsTargetWebView = null
+                devToolsLogs.clear()
+                devToolsNetwork.clear()
+                devToolsSources.clear()
+                devToolsDomSnapshot = null
+                devToolsSelectedNodePath = null
+                devToolsSelectedStyles = null
+                devToolsDeviceInfo = null
+            }
+
+            LaunchedEffect(
+                showDevToolsSheet,
+                activeMode,
+                activeTabIndex,
+                currentTab.engine,
+                currentTab.browserSession,
+                currentTab.webView,
+                currentTab.url,
+                currentTab.hasCommittedContent,
+                devToolsTab
+            ) {
+                invalidateDevToolsSession()
+                devToolsConsoleMessagesConsent = false
+                val webView = currentTab.webView
+                val pageLoaded = currentTab.hasCommittedContent &&
+                    DevToolsInspectionPolicy.isInspectableWebPageUrl(currentTab.url) &&
+                    DevToolsInspectionPolicy.isInspectableWebPageUrl(webView?.url)
+                val canInspect = DevToolsInspectionPolicy.canInspectPage(
+                    mode = activeMode,
+                    engine = currentTab.engine,
+                    panelVisible = showDevToolsSheet,
+                    pageLoaded = pageLoaded,
+                    targetMatches = webView != null
+                )
+                devToolsLogs.clear()
+                devToolsNetwork.clear()
+                devToolsSources.clear()
+                devToolsDomSnapshot = null
+                devToolsSelectedNodePath = null
+                devToolsSelectedStyles = null
+                devToolsDeviceInfo = null
+                if (canInspect && webView != null) {
+                    devToolsTargetWebView = webView
+                    devToolsCaptureEnabled = DevToolsInspectionPolicy.shouldCaptureSelectedTabData(
+                        mode = activeMode,
+                        engine = currentTab.engine,
+                        panelVisible = showDevToolsSheet,
+                        pageLoaded = pageLoaded,
+                        targetMatches = true,
+                        selectedTab = devToolsTab,
+                        requiredTab = 2
+                    )
+                    devToolsConsoleCaptureEnabled = DevToolsInspectionPolicy.shouldCapturePageConsoleMessages(
+                        mode = activeMode,
+                        engine = currentTab.engine,
+                        panelVisible = showDevToolsSheet,
+                        pageLoaded = pageLoaded,
+                        targetMatches = true,
+                        selectedTab = devToolsTab,
+                        consentGranted = devToolsConsoleMessagesConsent
+                    )
+                    when (devToolsTab) {
+                        0 -> refreshDevToolsPageSnapshot()
+                        3 -> refreshDevToolsSources()
+                        4 -> refreshDevToolsDeviceInfo()
+                    }
+                } else {
+                    devToolsCaptureEnabled = false
+                    devToolsConsoleCaptureEnabled = false
+                    devToolsTargetWebView = null
+                    if (showDevToolsSheet) {
+                        showDevToolsSheet = false
+                        val message = when {
+                            activeMode != BrowserMode.DEVELOPER -> "DevTools is only available in Developer mode."
+                            currentTab.engine == BrowserTabEngine.GECKOVIEW -> "DevTools is not connected to GeckoView yet."
+                            !currentTab.hasCommittedContent ->
+                                "Wait for the webpage to render its first content, then reopen DevTools."
+                            !DevToolsInspectionPolicy.isInspectableWebPageUrl(currentTab.url) ||
+                                !DevToolsInspectionPolicy.isInspectableWebPageUrl(webView?.url) ->
+                                "DevTools only inspects ordinary HTTP(S) webpages."
+                            else -> "The active WebView page is not available for inspection."
+                        }
+                        Toast.makeText(this@MainActivity, message, Toast.LENGTH_SHORT).show()
+                    }
+                }
+            }
+
+            LaunchedEffect(devToolsOpenRequested) {
+                if (devToolsOpenRequested) {
+                    devToolsOpenRequested = false
+                    openDevToolsTab(tab = 0)
                 }
             }
 
@@ -4928,11 +5163,22 @@ class MainActivity : FragmentActivity() {
                                                                 loadingTab.hasCommittedContent = false
                                                                 loadingTab.loadProgress = 0
                                                                 if (loadingTab === currentTab) {
+                                                                    invalidateDevToolsSession()
+                                                                    devToolsConsoleMessagesConsent = false
                                                                     lastPageStart = System.currentTimeMillis()
                                                                     pageTransitionTick++
                                                                     networkRequests.clear()
+                                                                    logs.clear()
                                                                     sourcesList.clear()
-                                                                    devToolsDomHtml.value = ""
+                                                                    devToolsLogs.clear()
+                                                                    devToolsNetwork.clear()
+                                                                    devToolsSources.clear()
+                                                                    devToolsCaptureEnabled = false
+                                                                    devToolsConsoleCaptureEnabled = false
+                                                                    devToolsTargetWebView = null
+                                                                    devToolsDomSnapshot = null
+                                                                    devToolsSelectedNodePath = null
+                                                                    devToolsSelectedStyles = null
                                                                 }
                                                             }
 
@@ -4941,6 +5187,33 @@ class MainActivity : FragmentActivity() {
                                                                 view?.let { target ->
                                                                     tabs.firstOrNull { it.webView === target }?.hasCommittedContent = true
                                                                 }
+                                                            }
+
+                                                            override fun doUpdateVisitedHistory(
+                                                                view: WebView?,
+                                                                url: String?,
+                                                                isReload: Boolean
+                                                            ) {
+                                                                super.doUpdateVisitedHistory(view, url, isReload)
+                                                                val target = view ?: return
+                                                                val updatedTab = tabs.firstOrNull { it.webView === target } ?: return
+                                                                val updatedUrl = url ?: target.url.orEmpty()
+                                                                if (!DevToolsInspectionPolicy.shouldResetPageSessionForUrlChange(updatedTab.url, updatedUrl)) return
+                                                                if (updatedTab === currentTab && showDevToolsSheet) {
+                                                                    invalidateDevToolsSession()
+                                                                    devToolsConsoleMessagesConsent = false
+                                                                    devToolsCaptureEnabled = false
+                                                                    devToolsConsoleCaptureEnabled = false
+                                                                    devToolsTargetWebView = null
+                                                                    devToolsLogs.clear()
+                                                                    devToolsNetwork.clear()
+                                                                    devToolsSources.clear()
+                                                                    devToolsDomSnapshot = null
+                                                                    devToolsSelectedNodePath = null
+                                                                    devToolsSelectedStyles = null
+                                                                    devToolsDeviceInfo = null
+                                                                }
+                                                                updatedTab.url = updatedUrl
                                                             }
 
                                                             override fun onPageFinished(view: WebView?, url: String?) {
@@ -5351,11 +5624,12 @@ class MainActivity : FragmentActivity() {
                                                         val devToolsOwnerWebView = this
                                                         webChromeClient = object : WebChromeClient() {
 
-                                                            // Read page console output from the native WebView callback only.
-                                                            // No page-side console patch or DevTools JavaScript bridge is used.
+                                                            // Capture page console output only while the user has selected
+                                                            // Console and explicitly enabled page-message capture. Never write page text to Logcat.
                                                             override fun onConsoleMessage(consoleMessage: ConsoleMessage?): Boolean {
                                                                 val msg = consoleMessage ?: return true
-                                                                if (!devToolsCaptureEnabled || devToolsTargetWebView !== devToolsOwnerWebView) return false
+                                                                val captureGeneration = devToolsConsoleCaptureGeneration
+                                                                if (!devToolsConsoleCaptureEnabled || devToolsTargetWebView !== devToolsOwnerWebView) return true
                                                                 val type = when (msg.messageLevel()) {
                                                                     ConsoleMessage.MessageLevel.ERROR -> "error"
                                                                     ConsoleMessage.MessageLevel.WARNING -> "warning"
@@ -5379,11 +5653,11 @@ class MainActivity : FragmentActivity() {
                                                                 val loc = if (src != null) " ($src:${msg.lineNumber()})" else ""
                                                                 // Cap message length so a spammy page can't OOM the log list.
                                                                 val text = msg.message().take(500)
-                                                                android.util.Log.d(
-                                                                    "ClickDevTools",
-                                                                    "console [$type] $text$loc"
+                                                                addDevToolsLog(
+                                                                    LogEntry(type, "$text$loc"),
+                                                                    expectedTarget = devToolsOwnerWebView,
+                                                                    captureGeneration = captureGeneration
                                                                 )
-                                                                addDevToolsLog(LogEntry(type, "$text$loc"))
                                                                 return true
                                                             }
 
@@ -5875,7 +6149,9 @@ class MainActivity : FragmentActivity() {
                                             feature = FeatureId.DEVTOOLS,
                                             mode = activeMode,
                                             engine = currentTab.engine,
-                                            hasLoadedPage = currentTab.url.isNotBlank() && currentTab.url != "about:blank"
+                                            hasLoadedPage = currentTab.hasCommittedContent &&
+                                                DevToolsInspectionPolicy.isInspectableWebPageUrl(currentTab.url) &&
+                                                DevToolsInspectionPolicy.isInspectableWebPageUrl(currentTab.webView?.url)
                                         ).enabled
                                     ) {
                                         Column(
@@ -5887,27 +6163,21 @@ class MainActivity : FragmentActivity() {
                                             // DevTools panel toggle — top-right corner.
                                             IconButton(
                                                 onClick = {
-                                                    val opening = !showDevToolsSheet
-                                                    if (opening) {
-                                                        when (devToolsTab) {
-                                                            0, 3 -> refreshDevToolsPageSnapshot()
-                                                            4 -> refreshDevToolsDeviceInfo()
-                                                        }
-                                                    }
-                                                    showDevToolsSheet = opening
+                                                    if (showDevToolsSheet) closeDevToolsPanel()
+                                                    else openDevToolsTab(devToolsTab)
                                                 },
                                                 modifier = Modifier
                                                     .size(44.dp)
                                                     .background(
-                                                        if (showDevToolsSheet) Color(0xFF7B1FA2)
-                                                        else Color(0xCC1A1A2E),
+                                                        if (showDevToolsSheet) DevToolsPalette.selected
+                                                        else DevToolsPalette.surface,
                                                         shape = RoundedCornerShape(12.dp)
                                                     )
                                             ) {
                                                 Icon(
                                                     Icons.Default.Code,
                                                     contentDescription = "DevTools",
-                                                    tint = Color.White,
+                                                    tint = DevToolsPalette.accent,
                                                     modifier = Modifier.size(22.dp)
                                                 )
                                             }
@@ -6423,27 +6693,64 @@ class MainActivity : FragmentActivity() {
                                     skipPartiallyExpanded = false
                                 )
                                 ModalBottomSheet(
-                                    onDismissRequest = { showDevToolsSheet = false },
+                                    onDismissRequest = { closeDevToolsPanel() },
                                     sheetState = devToolsSheetState,
                                     dragHandle = { BottomSheetDefaults.DragHandle() },
-                                    containerColor = MaterialTheme.colorScheme.surface
+                                    containerColor = DevToolsPalette.canvas
                                 ) {
                                     DevToolsPanel(
                                         logs = logs,
                                         networkRequests = networkRequests,
-                                        domHtml = domHtml,
+                                        domSnapshot = devToolsDomSnapshot,
+                                        selectedNodePath = devToolsSelectedNodePath,
+                                        selectedStyles = devToolsSelectedStyles,
                                         sourcesList = sourcesList,
+                                        pageSessionKey = "${currentTab.id}|${currentTab.url}|$devToolsSessionGeneration",
+                                        pageMessagesCaptureConsented = devToolsConsoleMessagesConsent,
                                         selectedTab = devToolsTab,
-                                        onTabSelected = {
-                                            devToolsTab = it
-                                            if (it == 0 || it == 3) refreshDevToolsPageSnapshot()
-                                            if (it == 4) refreshDevToolsDeviceInfo()
+                                        onTabSelected = { selectedTab ->
+                                            if (devToolsTab != selectedTab) {
+                                                invalidateDevToolsSession()
+                                                devToolsConsoleMessagesConsent = false
+                                                devToolsCaptureEnabled = false
+                                                devToolsConsoleCaptureEnabled = false
+                                                devToolsTargetWebView = null
+                                                devToolsLogs.clear()
+                                                devToolsNetwork.clear()
+                                                devToolsSources.clear()
+                                                devToolsDomSnapshot = null
+                                                devToolsSelectedNodePath = null
+                                                devToolsSelectedStyles = null
+                                                devToolsDeviceInfo = null
+                                                devToolsTab = selectedTab
+                                            }
+                                        },
+                                        onPageMessagesCaptureConsentChanged = { enabled ->
+                                            val canCapture = enabled && canInspectDevToolsPage(expectedTab = 1)
+                                            if (!canCapture) devToolsConsoleCaptureGeneration += 1
+                                            devToolsConsoleMessagesConsent = canCapture
+                                            devToolsConsoleCaptureEnabled = canCapture
+                                            if (!canCapture) {
+                                                devToolsLogs.clear()
+                                                if (enabled) {
+                                                    Toast.makeText(
+                                                        this@MainActivity,
+                                                        "The webpage is no longer ready. Reopen DevTools after it finishes loading.",
+                                                        Toast.LENGTH_SHORT
+                                                    ).show()
+                                                }
+                                            }
                                         },
                                         onClearLogs = { logs.clear() },
                                         onClearNetwork = { networkRequests.clear() },
                                         onRefreshPageSnapshot = { refreshDevToolsPageSnapshot() },
+                                        onSelectNode = { path -> selectDevToolsNode(path) },
+                                        onRunConsoleCommand = { command, onResult ->
+                                            runDevToolsConsoleCommand(command, onResult)
+                                        },
                                         deviceInfo = devToolsDeviceInfo,
-                                        onRefreshDeviceInfo = { refreshDevToolsDeviceInfo() }
+                                        onRefreshDeviceInfo = { refreshDevToolsDeviceInfo() },
+                                        onRefreshSources = { refreshDevToolsSources() }
                                     )
                                 }
                             }

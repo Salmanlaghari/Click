@@ -1,5 +1,10 @@
 package com.click.browser.engine
 
+private object NetworkRequestIdentity {
+    private val nextId = java.util.concurrent.atomic.AtomicLong(0L)
+    fun next(): Long = nextId.incrementAndGet()
+}
+
 data class LogEntry(
     val type: String,
     val message: String,
@@ -14,7 +19,8 @@ data class NetworkRequest(
     val outcome: NetworkRequestOutcome = NetworkRequestOutcome.OBSERVED,
     val statusCode: Int? = null,
     val detail: String? = null,
-    val timestamp: Long = System.currentTimeMillis()
+    val timestamp: Long = System.currentTimeMillis(),
+    val id: Long = NetworkRequestIdentity.next()
 )
 
 enum class NetworkRequestOutcome {
@@ -111,7 +117,7 @@ object DevToolsNetworkLog {
         timestamp: Long
     ) = NetworkRequest(
         method = method.take(MAX_METHOD_LENGTH).ifBlank { "GET" },
-        url = url.take(MAX_URL_LENGTH),
+        url = DevToolsInspectionPolicy.sanitizeUrl(url).take(MAX_URL_LENGTH),
         isMainFrame = isMainFrame,
         webViewKey = webViewKey,
         outcome = outcome,

@@ -82,6 +82,56 @@ class DevToolsNetworkLogTest {
     }
 
     @Test
+    fun storedRequestUrlDoesNotRetainCredentialsQueryOrFragment() {
+        val request = DevToolsNetworkLog.observed(
+            existing = emptyList(),
+            method = "GET",
+            url = "https://user:pass@example.com/account?token=secret#private",
+            isMainFrame = true,
+            webViewKey = 5
+        ).single()
+
+        assertEquals("https://example.com/account", request.url)
+        assertFalse(request.url.contains("pass"))
+        assertFalse(request.url.contains("token"))
+        assertFalse(request.url.contains("private"))
+    }
+
+    @Test
+    fun storedRequestUrlRedactsLongPathTokens() {
+        val request = DevToolsNetworkLog.observed(
+            existing = emptyList(),
+            method = "GET",
+            url = "https://example.com/${"a".repeat(64)}/asset.js",
+            isMainFrame = false,
+            webViewKey = 5
+        ).single()
+
+        assertEquals("https://example.com/[redacted]/asset.js", request.url)
+    }
+
+    @Test
+    fun storedRequestUrlRedactsOpaqueAndNamedPathTokens() {
+        val opaque = DevToolsNetworkLog.observed(
+            existing = emptyList(),
+            method = "GET",
+            url = "https://example.com/route/aBcD0123456789eFgHiJk/profile",
+            isMainFrame = false,
+            webViewKey = 6
+        ).single()
+        val named = DevToolsNetworkLog.observed(
+            existing = emptyList(),
+            method = "GET",
+            url = "https://example.com/api/access_token/shortToken123/profile",
+            isMainFrame = false,
+            webViewKey = 6
+        ).single()
+
+        assertEquals("https://example.com/route/[redacted]/profile", opaque.url)
+        assertEquals("https://example.com/api/access_token/[redacted]/profile", named.url)
+    }
+
+    @Test
     fun blockedRequestIsMarkedWithoutPretendingItReceivedAResponse() {
         val blocked = DevToolsNetworkLog.blocked(
             existing = emptyList(),
@@ -95,5 +145,28 @@ class DevToolsNetworkLogTest {
         assertEquals(NetworkRequestOutcome.BLOCKED_BY_CLICK, blocked.outcome)
         assertNull(blocked.statusCode)
         assertTrue(blocked.detail.orEmpty().contains("content filter"))
+    }
+
+    @Test
+    fun requestIdsRemainUniqueWhenTimestampAndUrlMatch() {
+        val first = DevToolsNetworkLog.observed(
+            existing = emptyList(),
+            method = "GET",
+            url = "https://example.com/repeated",
+            isMainFrame = false,
+            webViewKey = 3,
+            timestamp = 42L
+        )
+        val second = DevToolsNetworkLog.observed(
+            existing = first,
+            method = "GET",
+            url = "https://example.com/repeated",
+            isMainFrame = false,
+            webViewKey = 3,
+            timestamp = 42L
+        )
+
+        assertEquals(2, second.size)
+        assertTrue(second[0].id != second[1].id)
     }
 }
