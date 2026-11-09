@@ -4445,6 +4445,26 @@ class MainActivity : FragmentActivity() {
                                                                     if (android.os.Looper.myLooper() == android.os.Looper.getMainLooper()) update()
                                                                     else runOnUiThread { update() }
                                                                 },
+                                                                onPageFirstContentfulPaint = { generation ->
+                                                                    val update = {
+                                                                        tabs.firstOrNull { it.id == tabId }?.let { tab ->
+                                                                            if (createdGeckoSession != null && tab.browserSession !== createdGeckoSession) {
+                                                                                return@let
+                                                                            }
+                                                                            if (!com.click.browser.engine.shouldCommitGeckoContentOnFirstPaint(
+                                                                                    activeGeneration = tab.geckoNavigationGeneration,
+                                                                                    paintedGeneration = generation,
+                                                                                    isLoading = tab.isPageLoading
+                                                                                )
+                                                                            ) return@let
+                                                                            // Keep navigation progress active, but stop covering
+                                                                            // content once Gecko has actually painted the page.
+                                                                            tab.hasCommittedContent = true
+                                                                        }
+                                                                    }
+                                                                    if (android.os.Looper.myLooper() == android.os.Looper.getMainLooper()) update()
+                                                                    else runOnUiThread { update() }
+                                                                },
                                                                 onNavigationStopped = { completion ->
                                                                     val update = {
                                                                         tabs.firstOrNull { it.id == tabId }?.let { tab ->
