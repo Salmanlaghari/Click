@@ -131,7 +131,7 @@ fun BrowserMenuSheet(
                                 label = when {
                                     isPageLoading -> "Stop loading"
                                     canReload -> "Reload"
-                                    else -> "Reload unavailable for this request"
+                                    else -> "Can't safely reload. Go back or enter an address."
                                 },
                                 enabled = isPageLoading || canReload,
                                 onClick = if (isPageLoading) onStopLoading else onReload

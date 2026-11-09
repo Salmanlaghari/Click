@@ -6021,7 +6021,7 @@ class MainActivity : FragmentActivity() {
                                 Box(
                                     modifier = Modifier
                                         .align(Alignment.BottomCenter)
-                                        .padding(bottom = 76.dp)
+                                        .padding(bottom = BROWSE_BOTTOM_ADDRESS_BAR_OFFSET_DP.dp)
                                 ) {
                                     BrowseTopBarBlock()
                                 }

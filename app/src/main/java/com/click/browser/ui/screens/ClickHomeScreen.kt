@@ -1701,22 +1701,6 @@ fun CompactBrowseBar(
                         )
                     }
                 }
-                IconButton(onClick = onBack, enabled = canGoBack, modifier = Modifier.size(40.dp)) {
-                    Icon(
-                        Icons.AutoMirrored.Filled.ArrowBack,
-                        contentDescription = "Back",
-                        tint = if (canGoBack) theme.onTopBar else theme.onTopBar.copy(alpha = 0.34f),
-                        modifier = Modifier.size(21.dp)
-                    )
-                }
-                IconButton(onClick = onForward, enabled = canGoForward, modifier = Modifier.size(40.dp)) {
-                    Icon(
-                        Icons.AutoMirrored.Filled.ArrowForward,
-                        contentDescription = "Forward",
-                        tint = if (canGoForward) theme.onTopBar else theme.onTopBar.copy(alpha = 0.34f),
-                        modifier = Modifier.size(21.dp)
-                    )
-                }
                 Surface(
                     shape = CircleShape,
                     color = theme.modeAccent.copy(alpha = 0.12f),
@@ -1739,7 +1723,11 @@ fun CompactBrowseBar(
                     )
                 }
                 Spacer(modifier = Modifier.weight(1f))
-                val primaryAction = compactBrowsePrimaryAction(activeMode, isPageLoading)
+                val primaryAction = compactBrowsePrimaryAction(
+                    activeMode = activeMode,
+                    isPageLoading = isPageLoading,
+                    isHomePage = currentUrl.isBlank()
+                )
                 IconButton(
                     onClick = when (primaryAction) {
                         CompactBrowsePrimaryAction.NEW_TAB -> onNewTab
