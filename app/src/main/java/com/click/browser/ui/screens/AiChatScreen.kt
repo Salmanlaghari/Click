@@ -591,7 +591,7 @@ internal fun AiChatScreen(
                 actions = {
                     IconButton(onClick = onToggleExpanded) {
                         Icon(
-                            imageVector = if (isExpanded) Icons.Default.ExpandMore else Icons.Default.ExpandLess,
+                            imageVector = if (isExpanded) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
                             contentDescription = if (isExpanded) "Collapse Ask AI panel" else "Expand Ask AI panel"
                         )
                     }
