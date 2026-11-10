@@ -363,6 +363,10 @@ fun FeatureMenuFabOverlay(
                                     engine = activeEngine,
                                     hasLoadedPage = hasLoadedPage
                                 )
+                                val availabilityDescription = availability.explanation?.let {
+                                    if (availability.enabled) "${feature.label}. $it"
+                                    else "${feature.label}. Unavailable: $it"
+                                } ?: feature.label
                                 val tileContainerColor by animateColorAsState(
                                     targetValue = when {
                                         !availability.enabled -> theme.surfaceVariant.copy(alpha = 0.35f)
@@ -378,9 +382,7 @@ fun FeatureMenuFabOverlay(
                                     modifier = Modifier
                                         .weight(1f)
                                         .semantics {
-                                            contentDescription = availability.explanation?.let {
-                                                "${feature.label}. Unavailable: $it"
-                                            } ?: feature.label
+                                            contentDescription = availabilityDescription
                                         }
                                         .clickable(enabled = availability.enabled) { onFeature(feature.id) }
                                 ) {
@@ -402,11 +404,9 @@ fun FeatureMenuFabOverlay(
                                     ) {
                                         Icon(
                                             feature.icon,
-                                            contentDescription = if (availability.explanation != null) {
-                                                "${feature.label}. Unavailable: ${availability.explanation}"
-                                            } else if (isWideLayoutTile) {
+                                            contentDescription = if (isWideLayoutTile) {
                                                 if (desktopLayoutEnabled) "Wide layout on" else "Wide layout off"
-                                            } else feature.label,
+                                            } else availabilityDescription,
                                             tint = if (!availability.enabled) {
                                                 theme.onSurface.copy(alpha = 0.38f)
                                             } else if (isWideLayoutTile) theme.primary else accent,

@@ -29,7 +29,7 @@ class ModeCapabilityRegistryTest {
     }
 
     @Test
-    fun developerDevToolsOnRegularGeckoTabIsVisibleButDisabledWithReason() {
+    fun developerDevToolsOnRegularGeckoTabOffersConfirmedSwitch() {
         val access = ModeCapabilityRegistry.availability(
             FeatureId.DEVTOOLS,
             BrowserMode.DEVELOPER,
@@ -37,10 +37,26 @@ class ModeCapabilityRegistryTest {
         )
 
         assertTrue(access.visible)
-        assertFalse(access.enabled)
+        assertTrue(access.enabled)
         assertNotNull(access.explanation)
-        assertTrue(access.explanation!!.contains("WebView"))
-        assertTrue(access.explanation.contains("GeckoView"))
+        val explanation = access.explanation.orEmpty()
+        assertTrue(explanation.contains("WebView"))
+        assertTrue(explanation.contains("reload"))
+        assertTrue(explanation.contains("DevTools"))
+    }
+
+    @Test
+    fun developerDevToolsOnUnloadedGeckoTabIsVisibleButDisabled() {
+        val access = ModeCapabilityRegistry.availability(
+            FeatureId.DEVTOOLS,
+            BrowserMode.DEVELOPER,
+            BrowserTabEngine.GECKOVIEW,
+            hasLoadedPage = false
+        )
+
+        assertTrue(access.visible)
+        assertFalse(access.enabled)
+        assertEquals("Load a web page before opening DevTools.", access.explanation)
     }
 
     @Test
@@ -106,7 +122,7 @@ class ModeCapabilityRegistryTest {
     }
 
     @Test
-    fun devToolsRequiresARealLoadedPageAndDoesNotAdvertiseEngineFallback() {
+    fun devToolsRequiresALoadedPageAndOffersAConfirmedGeckoSwitch() {
         val blank = ModeCapabilityRegistry.availability(
             FeatureId.DEVTOOLS,
             BrowserMode.DEVELOPER,
@@ -124,6 +140,25 @@ class ModeCapabilityRegistryTest {
             hasLoadedPage = true
         )
         assertTrue(loaded.enabled)
+
+        val geckoBlank = ModeCapabilityRegistry.availability(
+            FeatureId.DEVTOOLS,
+            BrowserMode.DEVELOPER,
+            BrowserTabEngine.GECKOVIEW,
+            hasLoadedPage = false
+        )
+        assertFalse(geckoBlank.enabled)
+        assertEquals("Load a web page before opening DevTools.", geckoBlank.explanation)
+
+        val geckoLoaded = ModeCapabilityRegistry.availability(
+            FeatureId.DEVTOOLS,
+            BrowserMode.DEVELOPER,
+            BrowserTabEngine.GECKOVIEW,
+            hasLoadedPage = true
+        )
+        assertTrue(geckoLoaded.visible)
+        assertTrue(geckoLoaded.enabled)
+        assertEquals("Tap to review a WebView reload before opening DevTools.", geckoLoaded.explanation)
     }
 
     @Test

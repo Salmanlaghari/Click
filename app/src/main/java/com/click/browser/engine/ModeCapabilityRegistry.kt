@@ -18,8 +18,8 @@ internal data class FeatureAvailability(
 
 /**
  * Single source of truth for which shared feature shortcuts belong in each mode
- * and which rendering engines can actually perform them. This does not switch
- * engines; it reports unsupported combinations to the UI for hiding/disabling.
+ * and which can run or be opened through an explicitly consented transition.
+ * This registry never changes engines; the UI must request consent first.
  */
 internal object ModeCapabilityRegistry {
     private val allModes = BrowserMode.values().toSet()
@@ -38,7 +38,6 @@ internal object ModeCapabilityRegistry {
 
     /** Actions whose current implementation directly depends on android.webkit.WebView. */
     private val webViewOnlyReasons: Map<FeatureId, String> = mapOf(
-        FeatureId.DEVTOOLS to "DevTools is only connected to WebView; this regular tab uses GeckoView.",
         FeatureId.COOKIES to "Cookie management is connected to WebView tabs only; this tab uses GeckoView.",
         FeatureId.ADBLOCK to "The custom filter is WebView-only; GeckoView tracking protection remains enabled.",
         FeatureId.READER to "Reader mode is not yet connected to GeckoView tabs.",
@@ -63,6 +62,14 @@ internal object ModeCapabilityRegistry {
     ): FeatureAvailability {
         if (!supportsMode(feature, mode)) {
             return FeatureAvailability(visible = false, enabled = false)
+        }
+
+        if (feature == FeatureId.DEVTOOLS && engine == BrowserTabEngine.GECKOVIEW && hasLoadedPage) {
+            return FeatureAvailability(
+                visible = true,
+                enabled = true,
+                explanation = "Tap to review a WebView reload before opening DevTools."
+            )
         }
 
         if (engine == BrowserTabEngine.GECKOVIEW) {
