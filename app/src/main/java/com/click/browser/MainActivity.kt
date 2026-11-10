@@ -5119,28 +5119,31 @@ class MainActivity : FragmentActivity() {
                                                                             response.uri, disposition, mimeType
                                                                         )
                                                                         val downloadMode = liveMode
-                                                                        scope.launch {
-                                                                            val saved = DownloadHelper.enqueueResponse(
-                                                                                context = this@MainActivity,
-                                                                                responseBody = body,
-                                                                                url = response.uri,
-                                                                                fileName = fileName,
-                                                                                mimeType = mimeType,
-                                                                                mode = downloadMode,
-                                                                                totalBytes = contentLengthBytes
-                                                                            )
-                                                                            if (saved != null) {
-                                                                                repository.addDownloadItemFor(
-                                                                                    downloadMode,
-                                                                                    DownloadItem(
-                                                                                        saved.fileName,
-                                                                                        response.uri,
-                                                                                        saved.location,
-                                                                                        System.currentTimeMillis()
+                                                                        val downloadContext = applicationContext
+                                                                        val downloadUrl = response.uri
+                                                                        val downloadRepository = BrowserRepository(downloadContext)
+                                                                        DownloadHelper.enqueueResponseInApplicationScope(
+                                                                            context = downloadContext,
+                                                                            responseBody = body,
+                                                                            url = downloadUrl,
+                                                                            fileName = fileName,
+                                                                            mimeType = mimeType,
+                                                                            mode = downloadMode,
+                                                                            totalBytes = contentLengthBytes,
+                                                                            onComplete = { saved ->
+                                                                                if (saved != null) {
+                                                                                    downloadRepository.addDownloadItemFor(
+                                                                                        downloadMode,
+                                                                                        DownloadItem(
+                                                                                            saved.fileName,
+                                                                                            downloadUrl,
+                                                                                            saved.location,
+                                                                                            System.currentTimeMillis()
+                                                                                        )
                                                                                     )
-                                                                                )
+                                                                                }
                                                                             }
-                                                                        }
+                                                                        )
                                                                     }
                                                                 },
                                                                 onSelectedText = { selection, pageUrl ->
