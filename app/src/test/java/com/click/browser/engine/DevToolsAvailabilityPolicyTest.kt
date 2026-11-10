@@ -7,6 +7,38 @@ import org.junit.Test
 
 class DevToolsAvailabilityPolicyTest {
     @Test
+    fun loadedInspectablePageRequiresCommittedNonLoadingHttpOrHttpsUrl() {
+        assertTrue(
+            DevToolsAvailabilityPolicy.hasLoadedInspectablePage(
+                hasCommittedContent = true,
+                isPageLoading = false,
+                pageUrl = "https://example.com/page"
+            )
+        )
+        assertFalse(
+            DevToolsAvailabilityPolicy.hasLoadedInspectablePage(
+                hasCommittedContent = false,
+                isPageLoading = false,
+                pageUrl = "https://example.com/page"
+            )
+        )
+        assertFalse(
+            DevToolsAvailabilityPolicy.hasLoadedInspectablePage(
+                hasCommittedContent = true,
+                isPageLoading = true,
+                pageUrl = "https://example.com/page"
+            )
+        )
+        assertFalse(
+            DevToolsAvailabilityPolicy.hasLoadedInspectablePage(
+                hasCommittedContent = true,
+                isPageLoading = false,
+                pageUrl = "about:blank"
+            )
+        )
+    }
+
+    @Test
     fun capturesOnlyForDeveloperModeWebViewPages() {
         BrowserMode.values().forEach { mode ->
             BrowserTabEngine.values().forEach { engine ->

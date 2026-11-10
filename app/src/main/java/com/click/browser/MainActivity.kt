@@ -2641,14 +2641,14 @@ class MainActivity : FragmentActivity() {
              */
             /** Loaded-page state is engine-agnostic; actual DevTools capture stays WebView-only. */
             fun currentTabHasLoadedWebPage(): Boolean =
-                currentTab.hasCommittedContent &&
-                    !currentTab.isPageLoading &&
-                    DevToolsInspectionPolicy.isInspectableWebPageUrl(currentTab.url)
+                DevToolsAvailabilityPolicy.hasLoadedInspectablePage(
+                    hasCommittedContent = currentTab.hasCommittedContent,
+                    isPageLoading = currentTab.isPageLoading,
+                    pageUrl = currentTab.url
+                )
 
             fun currentTabCanRequestDevTools(): Boolean =
-                currentTabHasLoadedWebPage() &&
-                    (currentTab.engine == BrowserTabEngine.GECKOVIEW ||
-                        DevToolsInspectionPolicy.isInspectableWebPageUrl(currentTab.webView?.url))
+                currentTabHasLoadedWebPage()
 
             fun requestDevToolsForCurrentTab() {
                 if (activeMode != BrowserMode.DEVELOPER) {
@@ -3606,6 +3606,23 @@ class MainActivity : FragmentActivity() {
                         Toast.makeText(this@MainActivity, reason, Toast.LENGTH_LONG).show()
                         return@launch
                     }
+                    val webView = currentTab.webView
+                    if (webView == null) {
+                        Toast.makeText(
+                            this@MainActivity,
+                            "The page view is still starting. Wait a moment, then reopen DevTools.",
+                            Toast.LENGTH_LONG
+                        ).show()
+                        return@launch
+                    }
+                    if (!DevToolsInspectionPolicy.isInspectableWebPageUrl(webView.url)) {
+                        Toast.makeText(
+                            this@MainActivity,
+                            "DevTools only inspects ordinary HTTP(S) webpages.",
+                            Toast.LENGTH_LONG
+                        ).show()
+                        return@launch
+                    }
                     invalidateDevToolsSession()
                     devToolsConsoleMessagesConsent = false
                     devToolsCaptureEnabled = false
@@ -3619,6 +3636,7 @@ class MainActivity : FragmentActivity() {
                     devToolsSelectedStyles = null
                     devToolsDeviceInfo = null
                     devToolsTab = tab
+                    devToolsTargetWebView = webView
                     showDevToolsSheet = true
                 }
             }
@@ -3736,7 +3754,14 @@ class MainActivity : FragmentActivity() {
                     openDevToolsTab(tab = 0)
                 } else if (currentTab.engine == BrowserTabEngine.WEBVIEW && hasAttachedWebView && !currentTab.isPageLoading) {
                     devToolsOpenRequestedTabId = null
-                    Toast.makeText(this@MainActivity, "The page did not finish loading for DevTools.", Toast.LENGTH_LONG).show()
+                    val message = when {
+                        !currentTab.hasCommittedContent ->
+                            "Wait for the webpage to render content, then reopen DevTools."
+                        !DevToolsInspectionPolicy.isInspectableWebPageUrl(currentTab.url) ->
+                            "DevTools only inspects ordinary HTTP(S) webpages."
+                        else -> "The page is not ready for DevTools yet. Try again."
+                    }
+                    Toast.makeText(this@MainActivity, message, Toast.LENGTH_LONG).show()
                 }
             }
 
