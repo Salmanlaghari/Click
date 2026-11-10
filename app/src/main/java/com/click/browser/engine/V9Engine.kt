@@ -181,7 +181,7 @@ object V9Engine {
         try {
             modeManager.setMode(mode)
         } catch (t: Throwable) {
-            ClickDiagnosticsLog.failModeSwitch(context, sourceMode, mode)
+            restoreSourceModeAfterFailedSwitch(context, modeManager, sourceMode, mode)
             Log.e(TAG, "V9: target profile could not be saved", t)
             if (t is kotlinx.coroutines.CancellationException) throw t
             return false
@@ -192,7 +192,7 @@ object V9Engine {
         val activity = context as? Activity
         if (activity == null || activity.isFinishing || activity.isDestroyed || !activity.hasWindowFocus()) {
             Log.e(TAG, "V9: no focused Activity for the profile handoff — staying in the current profile")
-            ClickDiagnosticsLog.failModeSwitch(context, sourceMode, mode)
+            restoreSourceModeAfterFailedSwitch(context, modeManager, sourceMode, mode)
             return false
         }
 
@@ -224,7 +224,10 @@ object V9Engine {
                 }
             } == true
         } catch (t: Throwable) {
-            if (t is kotlinx.coroutines.CancellationException) throw t
+            if (t is kotlinx.coroutines.CancellationException) {
+                restoreSourceModeAfterFailedSwitch(context, modeManager, sourceMode, mode)
+                throw t
+            }
             Log.e(TAG, "V9: profile handoff did not become visible", t)
             false
         }
@@ -237,7 +240,7 @@ object V9Engine {
                 )
             }
             Log.e(TAG, "V9: no visible profile handoff — staying in the current profile")
-            ClickDiagnosticsLog.failModeSwitch(context, sourceMode, mode)
+            restoreSourceModeAfterFailedSwitch(context, modeManager, sourceMode, mode)
             return false
         }
 
@@ -251,6 +254,22 @@ object V9Engine {
             Process.killProcess(Process.myPid())
         }
         return true // unreachable
+    }
+
+    private suspend fun restoreSourceModeAfterFailedSwitch(
+        context: Context,
+        modeManager: ModeManager,
+        sourceMode: BrowserMode,
+        targetMode: BrowserMode,
+    ) {
+        withContext(NonCancellable) {
+            try {
+                modeManager.setMode(sourceMode)
+            } catch (t: Throwable) {
+                Log.e(TAG, "V9: could not restore the source profile after a failed handoff", t)
+            }
+            ClickDiagnosticsLog.failModeSwitch(context, sourceMode, targetMode)
+        }
     }
 
     /** Legacy intent extra: show the Power Mode intro animation on launch. */
