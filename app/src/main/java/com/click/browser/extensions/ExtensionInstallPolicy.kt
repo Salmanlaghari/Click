@@ -2,7 +2,10 @@ package com.click.browser.extensions
 
 /** Narrow guardrails for user-initiated, verified Mozilla AMO add-on installs. */
 internal object ExtensionInstallPolicy {
-    const val MAX_XPI_BYTES: Long = 30L * 1024L * 1024L
+    private const val BYTES_PER_MB: Long = 1_000_000L
+
+    /** Mozilla AMO's documented maximum accepted add-on package size is 200 decimal MB. */
+    const val MAX_XPI_BYTES: Long = 200L * BYTES_PER_MB
 
     // These capabilities are not exposed by Click: they could bridge an add-on
     // into native app code, let it install more add-ons, or request device location.
@@ -14,9 +17,6 @@ internal object ExtensionInstallPolicy {
         "geolocation"
     )
 
-    // Keep the visible review bounded; all listed patterns within this limit are
-    // shown verbatim and granted only after the user's explicit Add/Allow action.
-    private const val MAX_REVIEWED_ORIGIN_PATTERNS = 100
     private val webExtensionOriginPattern = Regex(
         """^(\*|https?|ftp|file|ws|wss)://([^/]*)(/.*)$""",
         RegexOption.IGNORE_CASE
@@ -35,9 +35,6 @@ internal object ExtensionInstallPolicy {
 
     fun blockedOriginPatterns(requested: Iterable<String>): List<String> {
         val origins = requested.map(String::trim).filter(String::isNotEmpty).distinct()
-        if (origins.size > MAX_REVIEWED_ORIGIN_PATTERNS) {
-            return listOf("More than $MAX_REVIEWED_ORIGIN_PATTERNS site access patterns requested")
-        }
         return origins.filterNot(::isReviewableOriginPattern).distinct().sorted()
     }
 

@@ -5,6 +5,7 @@ import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import org.mozilla.geckoview.WebExtension
 
 class FirefoxAmoCatalogTest {
     @Test
@@ -47,12 +48,20 @@ class FirefoxAmoCatalogTest {
     }
 
     @Test
-    fun runtimeTrustGateRequiresSignatureAndOfficialAmoButNotRecommendation() {
+    fun runtimeTrustGateAcceptsMozillaReviewSignaturesAndOfficialAmoButNotUntrustedStates() {
         val listing = "https://addons.mozilla.org/en-US/android/addon/another-addon/"
-        assertTrue(isEligibleMozillaCatalogExtension(true, true, listing, "another-addon@example.org"))
-        assertFalse(isEligibleMozillaCatalogExtension(false, true, listing, "another-addon@example.org"))
-        assertFalse(isEligibleMozillaCatalogExtension(true, false, listing, "another-addon@example.org"))
-        assertFalse(isEligibleMozillaCatalogExtension(true, true, "https://example.com/addon/another-addon/", "another-addon@example.org"))
+        assertTrue(isEligibleMozillaCatalogExtension(WebExtension.SignedStateFlags.SIGNED, true, listing, "another-addon@example.org"))
+        assertTrue(isEligibleMozillaCatalogExtension(WebExtension.SignedStateFlags.PRELIMINARY, true, listing, "another-addon@example.org"))
+        listOf(
+            WebExtension.SignedStateFlags.MISSING,
+            WebExtension.SignedStateFlags.UNKNOWN,
+            WebExtension.SignedStateFlags.PRIVILEGED,
+            WebExtension.SignedStateFlags.SYSTEM
+        ).forEach { state ->
+            assertFalse(isEligibleMozillaCatalogExtension(state, true, listing, "another-addon@example.org"))
+        }
+        assertFalse(isEligibleMozillaCatalogExtension(WebExtension.SignedStateFlags.SIGNED, false, listing, "another-addon@example.org"))
+        assertFalse(isEligibleMozillaCatalogExtension(WebExtension.SignedStateFlags.SIGNED, true, "https://example.com/addon/another-addon/", "another-addon@example.org"))
     }
 
     @Test
@@ -75,7 +84,7 @@ class FirefoxAmoCatalogTest {
     }
 
     @Test
-    fun currentAmoRecordMustBePublicEnabledAndroidCompatibleAndUseOfficialBoundedXpi() {
+    fun currentAmoRecordMustBePublicEnabledAndroidCompatibleAndRespectAmoXpiSizeLimit() {
         val good = validNonRecommendedRecord()
         assertTrue(FirefoxAmoCatalog.verifyCurrentAndroidCompatiblePackage("sample-addon", good) != null)
         assertNull(FirefoxAmoCatalog.verifyCurrentAndroidCompatiblePackage("sample-addon", good.replace("\"status\":\"public\"", "\"status\":\"unreviewed\"")))
@@ -83,7 +92,9 @@ class FirefoxAmoCatalogTest {
         assertNull(FirefoxAmoCatalog.verifyCurrentAndroidCompatiblePackage("sample-addon", good.replace("\"android\":{\"min\":\"120.0\",\"max\":\"*\"}", "\"firefox\":{\"min\":\"120.0\",\"max\":\"*\"}")))
         assertNull(FirefoxAmoCatalog.verifyCurrentAndroidCompatiblePackage("sample-addon", good.replace("\"min\":\"120.0\"", "\"min\":\"154.0\"")))
         assertNull(FirefoxAmoCatalog.verifyCurrentAndroidCompatiblePackage("sample-addon", good.replace("addons.mozilla.org/firefox/downloads/file/55", "example.com/firefox/downloads/file/55")))
-        assertNull(FirefoxAmoCatalog.verifyCurrentAndroidCompatiblePackage("sample-addon", good.replace("\"size\":1200", "\"size\":40000000")))
+        assertTrue(FirefoxAmoCatalog.verifyCurrentAndroidCompatiblePackage("sample-addon", good.replace("\"size\":1200", "\"size\":40000000")) != null)
+        assertTrue(FirefoxAmoCatalog.verifyCurrentAndroidCompatiblePackage("sample-addon", good.replace("\"size\":1200", "\"size\":${ExtensionInstallPolicy.MAX_XPI_BYTES}")) != null)
+        assertNull(FirefoxAmoCatalog.verifyCurrentAndroidCompatiblePackage("sample-addon", good.replace("\"size\":1200", "\"size\":${ExtensionInstallPolicy.MAX_XPI_BYTES + 1L}")))
         assertNull(FirefoxAmoCatalog.verifyCurrentAndroidCompatiblePackage("other-addon", good))
     }
 
