@@ -91,8 +91,7 @@ class MenuCustomizationTest {
         assertEquals(
             customizedItems.filterNot {
                 it == MenuCustomization.MenuItemId.FIND_IN_PAGE ||
-                    it == MenuCustomization.MenuItemId.RECENT_TABS ||
-                    it == MenuCustomization.MenuItemId.DESKTOP_SITE
+                    it == MenuCustomization.MenuItemId.RECENT_TABS
             },
             simpleItems
         )
@@ -105,7 +104,7 @@ class MenuCustomizationTest {
 
         val advanceItems = MenuCustomization.filterItemsForMode(customizedItems, BrowserMode.ADVANCED)
         assertFalse(advanceItems.contains(MenuCustomization.MenuItemId.FIND_IN_PAGE))
-        assertFalse(advanceItems.contains(MenuCustomization.MenuItemId.DESKTOP_SITE))
+        assertTrue(advanceItems.contains(MenuCustomization.MenuItemId.DESKTOP_SITE))
         assertFalse(advanceItems.contains(MenuCustomization.MenuItemId.RECENT_TABS))
     }
 }
