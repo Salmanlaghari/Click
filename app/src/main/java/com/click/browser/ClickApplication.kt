@@ -1,6 +1,10 @@
 package com.click.browser
 
+import android.app.ActivityManager
 import android.app.Application
+import android.content.Context
+import android.os.Build
+import android.os.Process
 import android.util.Log
 import com.click.browser.engine.AppSettings
 import com.click.browser.engine.ClickDiagnosticsLog
@@ -14,16 +18,19 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 
 /**
- * Application entry point.
- *
- * The FIRST thing we do is pin this process to its V9 engine data directory
- * ([V9Engine.applyDataDirectorySuffix]) — this must happen before any WebView
- * is instantiated anywhere, otherwise the per-engine isolation silently fails.
+ * Application entry point. The browser process pins itself to its V9 engine
+ * data directory before creating a WebView. The temporary mode-switch process
+ * displays only a handoff screen and deliberately creates no WebView.
  */
 class ClickApplication : Application() {
     override fun onCreate() {
-        V9Engine.applyDataDirectorySuffix(this)
+        val isModeSwitchProcess = isModeSwitchProcess()
+        if (!isModeSwitchProcess) {
+            V9Engine.applyDataDirectorySuffix(this)
+            V9Engine.cancelLegacyModeSwitchRelaunch(this)
+        }
         super.onCreate()
+        if (isModeSwitchProcess) return
         ClickDiagnosticsLog.resolveStartup(this, V9Engine.bootMode, V9Engine.isBootBlocked)
         if (V9Engine.isBootBlocked) {
             Log.e("ClickApplication", "Skipping browsing startup tasks because the selected profile could not be initialized safely")
@@ -49,5 +56,18 @@ class ClickApplication : Application() {
                 Log.w("NewsNotifications", "startup schedule check failed", e)
             }
         }
+    }
+
+    private fun isModeSwitchProcess(): Boolean {
+        val processName = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+            Application.getProcessName()
+        } else {
+            @Suppress("DEPRECATION")
+            (getSystemService(Context.ACTIVITY_SERVICE) as? ActivityManager)
+                ?.runningAppProcesses
+                ?.firstOrNull { it.pid == Process.myPid() }
+                ?.processName
+        }
+        return processName == "$packageName${ModeSwitchActivity.PROCESS_SUFFIX}"
     }
 }

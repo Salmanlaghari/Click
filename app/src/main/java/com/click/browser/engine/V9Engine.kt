@@ -1,20 +1,24 @@
 package com.click.browser.engine
 
+import android.app.Activity
 import android.app.AlarmManager
-import android.app.ActivityOptions
 import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
-import android.os.Build
+import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
 import android.os.Process
+import android.os.ResultReceiver
 import android.util.Log
 import android.webkit.WebView
-import androidx.annotation.RequiresApi
 import kotlinx.coroutines.NonCancellable
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
+import kotlin.coroutines.resume
 
 internal data class ProfileBootFailureDecision(
     val bootMode: BrowserMode,
@@ -133,24 +137,38 @@ object V9Engine {
     /** True when switching to [mode] requires a process restart (profile change). */
     fun needsRestart(mode: BrowserMode): Boolean = mode != bootMode
 
+    /** Cancel the one-shot process-relaunch alarm used by older Click builds. */
+    fun cancelLegacyModeSwitchRelaunch(context: Context) {
+        val launch = context.packageManager
+            .getLaunchIntentForPackage(context.packageName)
+            ?.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK)
+            ?: return
+        try {
+            val pendingIntent = PendingIntent.getActivity(
+                context,
+                LEGACY_RESTART_REQUEST_CODE,
+                launch,
+                PendingIntent.FLAG_NO_CREATE or PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_ONE_SHOT
+            ) ?: return
+            (context.getSystemService(Context.ALARM_SERVICE) as AlarmManager).cancel(pendingIntent)
+            pendingIntent.cancel()
+        } catch (t: Throwable) {
+            Log.w(TAG, "Could not cancel an old mode-switch relaunch alarm", t)
+        }
+    }
+
     /**
-     * Persists [mode] then restarts the app process so the new profile's data
-     * directory takes effect. setMode() is suspend and returns after the
-     * DataStore write completes, so the new mode is durable before we die.
+     * Persists [mode], then opens a dedicated visible transition Activity in a
+     * separate process. The transition stays in front while this browser
+     * process exits, then opens MainActivity only after the old process is gone.
+     * This avoids delayed background alarms and background-launch privileges.
      *
-     * A process restart is needed because WebView's data-directory suffix is
-     * process-wide. Use a permission-free inexact alarm to launch the Activity
-     * after this process exits. Inexact delivery may be delayed by Android; do
-     * not claim an exact restart time or add exact-alarm permissions. A direct
-     * Activity launch in the still-running singleTask process is not a cold
-     * restart and must never be used to justify killing that process.
-     *
-     * @param hackIntro legacy flag name; when true, the relaunched process shows
-     *   the Power Mode Markhor intro animation once (see HackIntroOverlay).
-     * @param advanceIntro when true, the relaunched process shows the Advance
-     *   Mode teal intro animation once (see AdvanceIntroOverlay).
-     * @return true if a cold relaunch alarm was scheduled; false if the caller
-     *   must keep the current profile selected.
+     * @param hackIntro legacy flag name; when true, the new process shows the
+     *   Power Mode Markhor intro animation once (see HackIntroOverlay).
+     * @param advanceIntro when true, the new process shows the Advance Mode
+     *   teal intro animation once (see AdvanceIntroOverlay).
+     * @return true only after the bridge has window focus and this process is
+     *   about to exit; false leaves the current profile running.
      */
     suspend fun restartForEngineSwitch(
         context: Context,
@@ -163,7 +181,7 @@ object V9Engine {
         try {
             modeManager.setMode(mode)
         } catch (t: Throwable) {
-            ClickDiagnosticsLog.failModeSwitch(context, sourceMode, mode)
+            restoreSourceModeAfterFailedSwitch(context, modeManager, sourceMode, mode)
             Log.e(TAG, "V9: target profile could not be saved", t)
             if (t is kotlinx.coroutines.CancellationException) throw t
             return false
@@ -171,62 +189,65 @@ object V9Engine {
         ClickDiagnosticsLog.record(
             context, ClickCatLogCode.MODE_SWITCH_TARGET_PERSISTED, sourceMode, mode
         )
+        val activity = context as? Activity
+        if (activity == null || activity.isFinishing || activity.isDestroyed || !activity.hasWindowFocus()) {
+            Log.e(TAG, "V9: no focused Activity for the profile handoff — staying in the current profile")
+            restoreSourceModeAfterFailedSwitch(context, modeManager, sourceMode, mode)
+            return false
+        }
 
-        // 1. Build the relaunch intent. If this fails we MUST NOT kill the
-        // process — better to stay alive on the old engine than to die.
-        val launch: Intent? = try {
-            context.packageManager
-                .getLaunchIntentForPackage(context.packageName)
-                ?.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK)
-                ?.also {
-                    if (hackIntro) it.putExtra(EXTRA_HACK_INTRO, true)
-                    if (advanceIntro) it.putExtra(EXTRA_ADVANCE_INTRO, true)
+        val bridgeFocused = try {
+            withTimeoutOrNull(MODE_SWITCH_BRIDGE_FOCUS_TIMEOUT_MS) {
+                suspendCancellableCoroutine { continuation ->
+                    val readyReceiver = object : ResultReceiver(Handler(Looper.getMainLooper())) {
+                        override fun onReceiveResult(resultCode: Int, resultData: Bundle?) {
+                            if (continuation.isActive) {
+                                continuation.resume(
+                                    resultCode == com.click.browser.ModeSwitchActivity.RESULT_BRIDGE_WINDOW_FOCUSED
+                                )
+                            }
+                        }
+                    }
+                    val bridge = Intent(activity, com.click.browser.ModeSwitchActivity::class.java).apply {
+                        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK)
+                        putExtra(com.click.browser.ModeSwitchActivity.EXTRA_SOURCE_PID, Process.myPid())
+                        putExtra(com.click.browser.ModeSwitchActivity.EXTRA_BRIDGE_READY_RECEIVER, readyReceiver)
+                        if (hackIntro) putExtra(EXTRA_HACK_INTRO, true)
+                        if (advanceIntro) putExtra(EXTRA_ADVANCE_INTRO, true)
+                    }
+                    try {
+                        activity.startActivity(bridge)
+                    } catch (t: Throwable) {
+                        Log.e(TAG, "V9: cannot open the visible profile handoff", t)
+                        if (continuation.isActive) continuation.resume(false)
+                    }
                 }
+            } == true
         } catch (t: Throwable) {
-            Log.e(TAG, "V9: cannot build relaunch intent", t)
-            null
+            if (t is kotlinx.coroutines.CancellationException) {
+                restoreSourceModeAfterFailedSwitch(context, modeManager, sourceMode, mode)
+                throw t
+            }
+            Log.e(TAG, "V9: profile handoff did not become visible", t)
+            false
         }
-        if (launch == null) {
-            Log.e(TAG, "V9: no launch intent — staying in the current profile")
-            ClickDiagnosticsLog.failModeSwitch(context, sourceMode, mode)
+
+        if (!shouldRequestSourceProcessExit(bridgeHasWindowFocus = bridgeFocused)) {
+            runCatching {
+                activity.sendBroadcast(
+                    Intent(com.click.browser.ModeSwitchActivity.ACTION_CANCEL)
+                        .setPackage(activity.packageName)
+                )
+            }
+            Log.e(TAG, "V9: no visible profile handoff — staying in the current profile")
+            restoreSourceModeAfterFailedSwitch(context, modeManager, sourceMode, mode)
             return false
         }
 
-        // 2. Schedule an inexact RTC_WAKEUP relaunch. setAlarmClock is an exact
-        // alarm and can throw SecurityException for this app (target SDK 36,
-        // no exact-alarm permission). A direct startActivity here would reuse
-        // the current process and is not a safe substitute.
-        var scheduled = false
-        try {
-            val pi = createModeSwitchRelaunchPendingIntent(context, launch)
-            val am = context.getSystemService(Context.ALARM_SERVICE) as AlarmManager
-            am.set(
-                AlarmManager.RTC_WAKEUP,
-                System.currentTimeMillis() + RELAUNCH_DELAY_MS,
-                pi
-            )
-            scheduled = true
-        } catch (t: Throwable) {
-            Log.e(TAG, "V9 restart schedule failed", t)
-        }
-
-        if (!hasEngineRestartPath(scheduled)) {
-            // Last resort: do NOT kill or pretend the process-pinned profile
-            // changed. The caller restores the saved selection to bootMode.
-            Log.e(TAG, "V9: no restart path available — staying in the current profile")
-            ClickDiagnosticsLog.failModeSwitch(context, sourceMode, mode)
-            return false
-        }
         ClickDiagnosticsLog.record(
-            context, ClickCatLogCode.MODE_SWITCH_RELAUNCH_SCHEDULED, sourceMode, mode
+            context, ClickCatLogCode.MODE_SWITCH_BRIDGE_FOCUSED, sourceMode, mode
         )
-
-        // 3. Let the Activity finish its current UI work, then exit so the
-        // scheduled PendingIntent can create a fresh process using the target
-        // profile. This remains non-cancellable because it is called from the
-        // Activity's coroutine scope.
         withContext(NonCancellable) {
-            delay(PROCESS_EXIT_DELAY_MS)
             ClickDiagnosticsLog.record(
                 context, ClickCatLogCode.MODE_SWITCH_EXIT_REQUESTED, sourceMode, mode
             )
@@ -235,54 +256,21 @@ object V9Engine {
         return true // unreachable
     }
 
-    /**
-     * Grant only this one-shot, explicit launcher PendingIntent the creator
-     * background-start mode needed to reopen after this user-requested process exit.
-     */
-    private fun createModeSwitchRelaunchPendingIntent(
+    private suspend fun restoreSourceModeAfterFailedSwitch(
         context: Context,
-        launch: Intent,
-    ): PendingIntent {
-        val flags = PendingIntent.FLAG_UPDATE_CURRENT or
-            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_ONE_SHOT
-        val options = when (relaunchPendingIntentCreatorBackgroundStartMode(Build.VERSION.SDK_INT)) {
-            RelaunchBackgroundActivityStartMode.PLATFORM_DEFAULT -> null
-            RelaunchBackgroundActivityStartMode.ALLOW_BACKGROUND ->
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
-                    backgroundActivityStartAllowedOptions()
-                } else {
-                    null
-                }
-            RelaunchBackgroundActivityStartMode.ALLOW_ALWAYS ->
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.BAKLAVA) {
-                    backgroundActivityStartAllowAlwaysOptions()
-                } else {
-                    null
-                }
-        }
-        return if (options == null) {
-            PendingIntent.getActivity(context, RESTART_REQUEST_CODE, launch, flags)
-        } else {
-            PendingIntent.getActivity(
-                context, RESTART_REQUEST_CODE, launch, flags, options.toBundle()
-            )
+        modeManager: ModeManager,
+        sourceMode: BrowserMode,
+        targetMode: BrowserMode,
+    ) {
+        withContext(NonCancellable) {
+            try {
+                modeManager.setMode(sourceMode)
+            } catch (t: Throwable) {
+                Log.e(TAG, "V9: could not restore the source profile after a failed handoff", t)
+            }
+            ClickDiagnosticsLog.failModeSwitch(context, sourceMode, targetMode)
         }
     }
-
-    @RequiresApi(Build.VERSION_CODES.UPSIDE_DOWN_CAKE)
-    @Suppress("DEPRECATION") // ALLOWED is the correct mode on API 34-35.
-    private fun backgroundActivityStartAllowedOptions(): ActivityOptions =
-        ActivityOptions.makeBasic()
-            .setPendingIntentCreatorBackgroundActivityStartMode(
-                ActivityOptions.MODE_BACKGROUND_ACTIVITY_START_ALLOWED
-            )
-
-    @RequiresApi(Build.VERSION_CODES.BAKLAVA)
-    private fun backgroundActivityStartAllowAlwaysOptions(): ActivityOptions =
-        ActivityOptions.makeBasic()
-            .setPendingIntentCreatorBackgroundActivityStartMode(
-                ActivityOptions.MODE_BACKGROUND_ACTIVITY_START_ALLOW_ALWAYS
-            )
 
     /** Legacy intent extra: show the Power Mode intro animation on launch. */
     const val EXTRA_HACK_INTRO = "v9_hack_intro"
@@ -290,8 +278,7 @@ object V9Engine {
     /** Intent extra: show the Advance Mode intro animation on launch. */
     const val EXTRA_ADVANCE_INTRO = "v9_advance_intro"
 
-    private const val RESTART_REQUEST_CODE = 9001
-    private const val PROCESS_EXIT_DELAY_MS = 700L
-    private const val RELAUNCH_DELAY_MS = 3_000L
+    private const val MODE_SWITCH_BRIDGE_FOCUS_TIMEOUT_MS = 8_000L
+    private const val LEGACY_RESTART_REQUEST_CODE = 9001
 
 }
