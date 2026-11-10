@@ -50,25 +50,22 @@ internal fun buildRestorableSnapshot(
 }
 
 /**
- * Crash / force-close session restore.
+ * Persistent session restoration, scoped to each browsing profile.
  *
- * Chrome-style semantics, per browsing profile:
+ * While Click runs, [saveSession] keeps a snapshot of eligible non-incognito
+ * tabs in that profile's DataStore. The next launch resumes the saved tabs,
+ * selected tab, and Gecko session history without asking the user to choose
+ * between restoring and starting fresh.
  *
- * - While the app runs, [saveSession] keeps a snapshot of the open
- *   non-incognito tabs in the profile's DataStore ([profileDataStoreFor]).
- * - A `clean_exit` flag distinguishes a normal close or intentional profile
- *   switch from an unexpected process death (crash, force-close, system kill).
  * - An intentional switch also arms a one-shot marker in the source profile;
- *   returning to that same profile restores its own tabs automatically.
- * - On the next launch, if the flag says the previous run was NOT clean
- *   and a snapshot exists, the UI offers "Restore N tabs?".
+ *   returning to that profile restores only its own tabs.
  *
- * SESSION ISOLATION (Prince's requirement): snapshots are keyed per [BrowserMode] —
+ * SESSION ISOLATION: snapshots are keyed per [BrowserMode] —
  * a snapshot saved in Simple is never offered in Power, and Click Advance
  * (its own DataStore) can never see another mode's session. The store is
  * chosen with [profileDataStoreFor], which — unlike [profileDataStore] —
  * takes the mode explicitly and needs no boot-pinning, so this can run
- * from `onDestroy` and mode-switch paths alike.
+ * from mode-switch paths alike.
  *
  * PRIVACY: incognito tabs, blank tabs and non-http(s) URLs are never
  * persisted. When the "clear data on exit" experimental flag is on, no
@@ -80,9 +77,6 @@ object SessionRestore {
     const val MAX_TABS = 25
     /** Bound optional Gecko history/form-state data stored per tab. */
     internal const val MAX_GECKO_STATE_CHARS = 32_768
-
-    private fun cleanExitKey(mode: BrowserMode) =
-        booleanPreferencesKey("session_clean_exit_${mode.name.lowercase()}")
 
     private fun tabsKey(mode: BrowserMode) =
         stringPreferencesKey("session_tabs_${mode.name.lowercase()}")
@@ -195,19 +189,6 @@ object SessionRestore {
         return list to active.coerceIn(0, (list.size - 1).coerceAtLeast(0))
     }
 
-    /** Was the previous run for [mode] a clean exit? Defaults to true (first launch → no restore prompt). */
-    suspend fun wasCleanExit(context: Context, mode: BrowserMode): Boolean {
-        val prefs = context.profileDataStoreFor(mode).data.firstOrNull() ?: return true
-        return prefs[cleanExitKey(mode)] ?: true
-    }
-
-    /** Marks the current run's exit state for [mode]. Call with `true` on clean exits, `false` at startup. */
-    suspend fun markCleanExit(context: Context, mode: BrowserMode, clean: Boolean) {
-        context.profileDataStoreFor(mode).edit { prefs ->
-            prefs[cleanExitKey(mode)] = clean
-        }
-    }
-
     /** Atomically reads and removes the one-shot marker for this profile. */
     suspend fun consumeModeSwitchRestore(context: Context, mode: BrowserMode): Boolean {
         var pending = false
@@ -225,20 +206,12 @@ object SessionRestore {
         }
     }
 
-    /**
-     * Drops the snapshot for [mode] (used when the user discards the restore
-     * offer, or when "clear data on exit" wipes it). Also resets the
-     * clean-exit flag: the discarded crash is now resolved, so a stale
-     * "unclean" marker must not cause a phantom restore prompt later.
-     * (Crash detection for the current run is re-armed by the caller —
-     * the snapshot saver re-marks unclean on every save.)
-     */
+    /** Drops the snapshot for [mode], for example when "clear data on exit" is enabled. */
     suspend fun clearSession(context: Context, mode: BrowserMode) {
         context.profileDataStoreFor(mode).edit { prefs ->
             prefs.remove(tabsKey(mode))
             prefs.remove(activeIndexKey(mode))
             prefs.remove(modeSwitchRestoreKey(mode))
-            prefs.remove(cleanExitKey(mode)) // default = true = clean
         }
     }
 }
