@@ -51,8 +51,8 @@ android {
         applicationId = "com.teampkai.clickbrowser"
         minSdk = 26
         targetSdk = 36
-        versionCode = 14
-        versionName = "1.3.9-geckoview-addon-actions-options"
+        versionCode = 15
+        versionName = "1.4.0"
 
         // Built-in Groq key for AI chat, injected at build time from the
         // GROQ_API_KEY env var (GitHub Actions secret in CI). The key is
