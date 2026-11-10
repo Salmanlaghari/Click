@@ -217,10 +217,16 @@ internal fun isEligibleMozillaCatalogExtension(
     isNotBlocked: Boolean,
     amoListingUrl: String?,
     extensionId: String?
-): Boolean = (signedState == WebExtension.SignedStateFlags.PRELIMINARY ||
-    signedState == WebExtension.SignedStateFlags.SIGNED) && isNotBlocked &&
-    FirefoxAmoCatalog.isApprovedAmoListing(amoListingUrl) &&
-    FirefoxAmoCatalog.isApprovedExtensionId(extensionId)
+): Boolean {
+    // GeckoView reports no signature as MISSING (0) and an unknown result as UNKNOWN (-1).
+    if (signedState == WebExtension.SignedStateFlags.MISSING ||
+        signedState == WebExtension.SignedStateFlags.UNKNOWN
+    ) return false
+    return (signedState == WebExtension.SignedStateFlags.PRELIMINARY ||
+        signedState == WebExtension.SignedStateFlags.SIGNED) && isNotBlocked &&
+        FirefoxAmoCatalog.isApprovedAmoListing(amoListingUrl) &&
+        FirefoxAmoCatalog.isApprovedExtensionId(extensionId)
+}
 
 private val amoApiClient by lazy {
     OkHttpClient.Builder()
@@ -1040,7 +1046,7 @@ private fun ExtensionBrowserScreen(
                     ExtensionUiGuidance.permissionRiskWarning(prompt.permissions)?.let { warning ->
                         Text(
                             warning,
-                            color = MaterialTheme.colorScheme.tertiary,
+                            color = ExtensionManagerPalette.colorScheme.tertiary,
                             fontSize = 12.sp,
                             fontWeight = FontWeight.SemiBold
                         )
@@ -1048,7 +1054,7 @@ private fun ExtensionBrowserScreen(
                     ExtensionUiGuidance.siteAccessRiskWarning(prompt.origins)?.let { warning ->
                         Text(
                             warning,
-                            color = MaterialTheme.colorScheme.tertiary,
+                            color = ExtensionManagerPalette.colorScheme.tertiary,
                             fontSize = 12.sp,
                             fontWeight = FontWeight.SemiBold
                         )
