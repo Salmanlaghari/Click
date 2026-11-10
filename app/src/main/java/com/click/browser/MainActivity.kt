@@ -3071,7 +3071,7 @@ class MainActivity : FragmentActivity() {
             // 2. Active overlays, sub-screens, sheets, dialogs & drawers: Back closes the active sheet first.
             val isAnyOverlayOpen = drawerState.isOpen || showBrowserMenu || showInstalledAddonsPanel ||
                 showTabsManager || showSettings || showBookmarks || showHistory || showDownloads ||
-                showAiChat || showSiteSettings || showPrivacyGuards || showLocationSettings ||
+                showAiChat || showSiteSettings || showPrivacyGuards || showPrivacySecurity || showLocationSettings ||
                 showQuickTogglesDialog || showFindInPageDialog || showPlaylist || showStreamPlayer ||
                 showClickDiagnostics || showMenuCustomize || showFeatureMenu || showRecentTabs ||
                 showMusicDetails || showVideoDetails || showPdfDetails || showImageDetails ||
@@ -3085,6 +3085,7 @@ class MainActivity : FragmentActivity() {
                     showInstalledAddonsPanel -> showInstalledAddonsPanel = false
                     showTabsManager -> showTabsManager = false
                     showSettings -> showSettings = false
+                    showPrivacySecurity -> showPrivacySecurity = false
                     showBookmarks -> showBookmarks = false
                     showHistory -> showHistory = false
                     showDownloads -> showDownloads = false
