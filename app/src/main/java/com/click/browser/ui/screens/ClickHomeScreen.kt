@@ -1897,134 +1897,222 @@ fun CompactBrowseBar(
             }
 
             if (currentUrl.isNotBlank()) {
-                Row(
+                Surface(
+                    shape = RoundedCornerShape(14.dp),
+                    color = theme.surfaceVariant,
+                    shadowElevation = 2.dp,
+                    border = androidx.compose.foundation.BorderStroke(
+                        1.dp, theme.primary.copy(alpha = 0.28f)
+                    ),
                     modifier = Modifier
                         .fillMaxWidth()
-                        .height(48.dp),
-                    verticalAlignment = Alignment.CenterVertically
+                        .height(46.dp)
                 ) {
-                    CompactModeSelector(
-                        activeMode = activeMode,
-                        theme = theme,
-                        compact = false,
-                        onModeSelected = onModeChange
-                    )
-                }
-            }
-
-            Surface(
-                shape = RoundedCornerShape(14.dp),
-                color = theme.surfaceVariant,
-                shadowElevation = 2.dp,
-                border = androidx.compose.foundation.BorderStroke(
-                    1.dp, theme.primary.copy(alpha = 0.28f)
-                ),
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(46.dp)
-                    .animateContentSize()
-            ) {
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 8.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    if (currentUrl.isNotBlank()) {
-                        IconButton(onClick = onBack, enabled = canGoBack, modifier = Modifier.size(40.dp)) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 4.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        IconButton(onClick = onBack, enabled = canGoBack, modifier = Modifier.size(36.dp)) {
                             Icon(
                                 Icons.AutoMirrored.Filled.ArrowBack,
                                 contentDescription = "Back",
                                 tint = if (canGoBack) theme.onSurface else theme.onSurface.copy(alpha = 0.34f),
-                                modifier = Modifier.size(21.dp)
+                                modifier = Modifier.size(19.dp)
                             )
                         }
-                        IconButton(onClick = onForward, enabled = canGoForward, modifier = Modifier.size(40.dp)) {
+                        IconButton(onClick = onForward, enabled = canGoForward, modifier = Modifier.size(36.dp)) {
                             Icon(
                                 Icons.AutoMirrored.Filled.ArrowForward,
                                 contentDescription = "Forward",
                                 tint = if (canGoForward) theme.onSurface else theme.onSurface.copy(alpha = 0.34f),
-                                modifier = Modifier.size(21.dp)
+                                modifier = Modifier.size(19.dp)
+                            )
+                        }
+                        IconButton(
+                            onClick = onSiteSettingsClick,
+                            modifier = Modifier.size(32.dp)
+                        ) {
+                            Icon(
+                                Icons.Default.Shield,
+                                contentDescription = "${ConnectionSecurityPolicy.title(securityStatus)} — tap for site settings",
+                                tint = securityTint,
+                                modifier = Modifier.size(17.dp)
+                            )
+                        }
+                        androidx.compose.foundation.text.BasicTextField(
+                            value = textInput,
+                            onValueChange = { textInput = it },
+                            singleLine = true,
+                            textStyle = androidx.compose.ui.text.TextStyle(
+                                fontSize = 13.sp,
+                                color = theme.onSurface
+                            ),
+                            decorationBox = { innerTextField ->
+                                Box(contentAlignment = Alignment.CenterStart) {
+                                    if (textInput.isBlank()) {
+                                        Text(
+                                            "Search or type URL",
+                                            color = theme.onSurface.copy(alpha = 0.48f),
+                                            fontSize = 13.sp
+                                        )
+                                    }
+                                    innerTextField()
+                                }
+                            },
+                            keyboardOptions = KeyboardOptions(imeAction = ImeAction.Go),
+                            keyboardActions = KeyboardActions(
+                                onGo = { submit() },
+                                onSearch = { submit() },
+                                onDone = { submit() }
+                            ),
+                            cursorBrush = androidx.compose.ui.graphics.SolidColor(theme.primary),
+                            modifier = Modifier
+                                .weight(1f)
+                                .padding(horizontal = 6.dp, vertical = 8.dp)
+                        )
+                        if (textInput.isNotEmpty()) {
+                            IconButton(
+                                onClick = { textInput = "" },
+                                modifier = Modifier.size(32.dp)
+                            ) {
+                                Icon(
+                                    Icons.Default.Close,
+                                    contentDescription = "Clear",
+                                    tint = theme.onSurface.copy(alpha = 0.5f),
+                                    modifier = Modifier.size(15.dp)
+                                )
+                            }
+                        }
+                        IconButton(
+                            onClick = if (isPageLoading) onStopLoading else onReload,
+                            enabled = isPageLoading || canReload,
+                            modifier = Modifier.size(34.dp)
+                        ) {
+                            Icon(
+                                imageVector = if (isPageLoading) Icons.Default.Close else Icons.Default.Refresh,
+                                contentDescription = if (isPageLoading) "Stop loading" else if (canReload) "Reload" else "Reload unavailable",
+                                tint = if (!isPageLoading && !canReload) theme.onSurface.copy(alpha = 0.38f) else theme.onSurface,
+                                modifier = Modifier.size(18.dp)
+                            )
+                        }
+                        if (showExtensionButton) {
+                            IconButton(
+                                onClick = onAddonsClick,
+                                modifier = Modifier.size(34.dp)
+                            ) {
+                                Icon(
+                                    Icons.Default.Extension,
+                                    contentDescription = "Installed add-ons",
+                                    tint = theme.onSurface,
+                                    modifier = Modifier.size(19.dp)
+                                )
+                            }
+                        }
+                        IconButton(onClick = onTabsClick, modifier = Modifier.size(34.dp)) {
+                            BadgedBox(
+                                badge = {
+                                    Badge(
+                                        containerColor = theme.primary,
+                                        contentColor = Color.White,
+                                        modifier = Modifier.offset(x = 4.dp, y = (-4).dp)
+                                    ) {
+                                        Text(
+                                            tabBadgeText(tabCount),
+                                            fontSize = 8.sp,
+                                            fontWeight = FontWeight.Bold
+                                        )
+                                    }
+                                }
+                            ) {
+                                Icon(
+                                    Icons.Default.Tab,
+                                    contentDescription = "Tabs ($tabCount)",
+                                    tint = theme.onSurface,
+                                    modifier = Modifier.size(19.dp)
+                                )
+                            }
+                        }
+                        IconButton(onClick = onMenuClick, modifier = Modifier.size(34.dp)) {
+                            Icon(
+                                Icons.Default.MoreVert,
+                                contentDescription = "Browser menu",
+                                tint = theme.onSurface,
+                                modifier = Modifier.size(20.dp)
                             )
                         }
                     }
-                    // On a new tab this is a neutral search affordance;
-                    // on real pages it opens site settings and reflects engine-reported status.
-                    if (currentUrl.isBlank()) {
+                }
+            } else {
+                Surface(
+                    shape = RoundedCornerShape(14.dp),
+                    color = theme.surfaceVariant,
+                    shadowElevation = 2.dp,
+                    border = androidx.compose.foundation.BorderStroke(
+                        1.dp, theme.primary.copy(alpha = 0.28f)
+                    ),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(46.dp)
+                        .animateContentSize()
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
                         Icon(
                             Icons.Default.Search,
                             contentDescription = null,
                             tint = theme.onSurface.copy(alpha = 0.58f),
                             modifier = Modifier.padding(start = 8.dp).size(18.dp)
                         )
-                    } else {
-                        IconButton(
-                            onClick = onSiteSettingsClick,
-                            modifier = Modifier.size(34.dp)
-                        ) {
-                            Icon(
-                                Icons.Default.Shield,
-                                contentDescription = "${ConnectionSecurityPolicy.title(securityStatus)} — tap for site settings",
-                                tint = securityTint,
-                                modifier = Modifier.size(18.dp)
-                            )
-                        }
-                    }
-                    if (currentUrl.isBlank()) {
                         SearchEngineBadge(engine = searchEngine, theme = theme, compact = true)
-                    }
-                    androidx.compose.foundation.text.BasicTextField(
-                        value = textInput,
-                        onValueChange = { textInput = it },
-                        singleLine = true,
-                        textStyle = androidx.compose.ui.text.TextStyle(
-                            fontSize = 14.sp,
-                            color = theme.onSurface
-                        ),
-                        decorationBox = { innerTextField ->
-                            Box(contentAlignment = Alignment.CenterStart) {
-                                if (textInput.isBlank()) {
-                                    Text(
-                                        "Search or type URL",
-                                        color = theme.onSurface.copy(alpha = 0.48f),
-                                        fontSize = 14.sp
-                                    )
+                        androidx.compose.foundation.text.BasicTextField(
+                            value = textInput,
+                            onValueChange = { textInput = it },
+                            singleLine = true,
+                            textStyle = androidx.compose.ui.text.TextStyle(
+                                fontSize = 14.sp,
+                                color = theme.onSurface
+                            ),
+                            decorationBox = { innerTextField ->
+                                Box(contentAlignment = Alignment.CenterStart) {
+                                    if (textInput.isBlank()) {
+                                        Text(
+                                            "Search or type URL",
+                                            color = theme.onSurface.copy(alpha = 0.48f),
+                                            fontSize = 14.sp
+                                        )
+                                    }
+                                    innerTextField()
                                 }
-                                innerTextField()
+                            },
+                            keyboardOptions = KeyboardOptions(imeAction = ImeAction.Go),
+                            keyboardActions = KeyboardActions(
+                                onGo = { submit() },
+                                onSearch = { submit() },
+                                onDone = { submit() }
+                            ),
+                            cursorBrush = androidx.compose.ui.graphics.SolidColor(theme.primary),
+                            modifier = Modifier
+                                .weight(1f)
+                                .padding(horizontal = 8.dp, vertical = 12.dp)
+                        )
+                        if (textInput.isNotEmpty()) {
+                            IconButton(
+                                onClick = { textInput = "" },
+                                modifier = Modifier.size(34.dp)
+                            ) {
+                                Icon(
+                                    Icons.Default.Close,
+                                    contentDescription = "Clear",
+                                    tint = theme.onSurface.copy(alpha = 0.5f),
+                                    modifier = Modifier.size(16.dp)
+                                )
                             }
-                        },
-                        keyboardOptions = KeyboardOptions(imeAction = ImeAction.Go),
-                        keyboardActions = KeyboardActions(
-                            onGo = { submit() },
-                            onSearch = { submit() },
-                            onDone = { submit() }
-                        ),
-                        cursorBrush = androidx.compose.ui.graphics.SolidColor(theme.primary),
-                        modifier = Modifier
-                            .weight(1f)
-                            .padding(horizontal = 8.dp, vertical = 12.dp)
-                    )
-                    if (textInput.isNotEmpty()) {
-                        IconButton(
-                            onClick = { textInput = "" },
-                            modifier = Modifier.size(34.dp)
-                        ) {
-                            Icon(
-                                Icons.Default.Close,
-                                contentDescription = "Clear",
-                                tint = theme.onSurface.copy(alpha = 0.5f),
-                                modifier = Modifier.size(16.dp)
-                            )
-                        }
-                    }
-                    if (currentUrl.isNotBlank()) {
-                        IconButton(onClick = onSettingsClick, modifier = Modifier.size(40.dp)) {
-                            Icon(
-                                Icons.Default.Settings,
-                                contentDescription = "Settings",
-                                tint = theme.onSurface,
-                                modifier = Modifier.size(21.dp)
-                            )
                         }
                     }
                 }

@@ -107,13 +107,37 @@ export const PhoneFrame: React.FC<PhoneFrameProps> = ({
           {children}
         </div>
 
-        {/* Android Bottom Navigation Bar (Gesture pill) */}
-        <div className="h-5 bg-neutral-950 flex items-center justify-center flex-shrink-0 z-30 select-none">
-          <div 
+        {/* Android Bottom 3-Button Navigation Bar (Matches User's Mobile Screen Exactly) */}
+        <div className="h-9 bg-neutral-950/95 border-t border-neutral-900/60 flex items-center justify-around px-8 flex-shrink-0 z-30 select-none">
+          {/* Recents / Tabs (Square) */}
+          <button 
+            onClick={onTabsGesture}
+            className="p-2 text-neutral-400 hover:text-white transition active:scale-90"
+            title="Recents / Tabs Overview"
+            aria-label="Recent Tabs"
+          >
+            <Square className="w-4 h-4 stroke-[2.2] rounded-[2px]" />
+          </button>
+
+          {/* Home (Circle) */}
+          <button 
             onClick={onHomeGesture}
-            className="w-32 h-1 rounded-full bg-neutral-600/80 hover:bg-neutral-400 hover:h-1.5 cursor-pointer transition-all active:scale-95"
-            title="Android Home Gesture"
-          />
+            className="p-2 text-neutral-400 hover:text-white transition active:scale-90"
+            title="Home"
+            aria-label="Home"
+          >
+            <Circle className="w-4 h-4 stroke-[2.2]" />
+          </button>
+
+          {/* Back Key (Triangle pointing left) */}
+          <button 
+            onClick={onBackGesture}
+            className="p-2 text-neutral-400 hover:text-white transition active:scale-90"
+            title="Mobile Back Key"
+            aria-label="Mobile Back Key"
+          >
+            <Triangle className="w-3.5 h-3.5 stroke-[2] -rotate-90 fill-current" />
+          </button>
         </div>
       </div>
     </div>

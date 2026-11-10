@@ -3059,34 +3059,98 @@ class MainActivity : FragmentActivity() {
                 }
             }
 
-            // Back Press Handling
-            // Fullscreen video: back exits fullscreen first.
+            // Drawer Navigation State (Simple, Dev, Power and shortcuts inside the hamburger menu)
+            val drawerState = rememberDrawerState(initialValue = DrawerValue.Closed)
+
+            // Comprehensive Mobile Back Key Handling (System Navigation Back button / Gesture)
+            // 1. Fullscreen video: back exits fullscreen first.
             BackHandler(enabled = exitFullscreenVideo != null) {
                 exitFullscreenVideo?.invoke()
             }
-            BackHandler(enabled = currentTab.url != "about:blank" && exitFullscreenVideo == null) {
-                // If there is no page history (including after returning from
-                // Google sign-in), keep the rendered page instead of blanking it.
-                currentTab.browserSession.handleBrowserBackPress()
+
+            // 2. Active overlays, sub-screens, sheets, dialogs & drawers: Back closes the active sheet first.
+            val isAnyOverlayOpen = drawerState.isOpen || showBrowserMenu || showInstalledAddonsPanel ||
+                showTabsManager || showSettings || showBookmarks || showHistory || showDownloads ||
+                showAiChat || showSiteSettings || showPrivacyGuards || showLocationSettings ||
+                showQuickTogglesDialog || showFindInPageDialog || showPlaylist || showStreamPlayer ||
+                showClickDiagnostics || showMenuCustomize || showFeatureMenu || showRecentTabs ||
+                showMusicDetails || showVideoDetails || showPdfDetails || showImageDetails ||
+                showWebViewSwitchConfirmation || showPostInstallGeckoSwitchConfirmation ||
+                showPrivacyPolicy || showAboutApp || showLicenses || showV9Shield || showVpn
+
+            BackHandler(enabled = isAnyOverlayOpen && exitFullscreenVideo == null) {
+                when {
+                    drawerState.isOpen -> scope.launch { drawerState.close() }
+                    showBrowserMenu -> showBrowserMenu = false
+                    showInstalledAddonsPanel -> showInstalledAddonsPanel = false
+                    showTabsManager -> showTabsManager = false
+                    showSettings -> showSettings = false
+                    showBookmarks -> showBookmarks = false
+                    showHistory -> showHistory = false
+                    showDownloads -> showDownloads = false
+                    showAiChat -> showAiChat = false
+                    showSiteSettings -> showSiteSettings = false
+                    showPrivacyGuards -> showPrivacyGuards = false
+                    showLocationSettings -> showLocationSettings = false
+                    showQuickTogglesDialog -> showQuickTogglesDialog = false
+                    showFindInPageDialog -> showFindInPageDialog = false
+                    showPlaylist -> showPlaylist = false
+                    showStreamPlayer -> showStreamPlayer = false
+                    showClickDiagnostics -> showClickDiagnostics = false
+                    showMenuCustomize -> showMenuCustomize = false
+                    showFeatureMenu -> showFeatureMenu = false
+                    showRecentTabs -> showRecentTabs = false
+                    showMusicDetails -> showMusicDetails = false
+                    showVideoDetails -> showVideoDetails = false
+                    showPdfDetails -> showPdfDetails = false
+                    showImageDetails -> showImageDetails = false
+                    showWebViewSwitchConfirmation -> showWebViewSwitchConfirmation = false
+                    showPostInstallGeckoSwitchConfirmation -> showPostInstallGeckoSwitchConfirmation = false
+                    showPrivacyPolicy -> showPrivacyPolicy = false
+                    showAboutApp -> showAboutApp = false
+                    showLicenses -> showLicenses = false
+                    showV9Shield -> showV9Shield = false
+                    showVpn -> showVpn = false
+                }
             }
 
-            // click:// page open: back closes the native page first.
-            BackHandler(enabled = showClickPage != null) {
+            // 3. click:// page open: back closes the native page.
+            BackHandler(enabled = showClickPage != null && !isAnyOverlayOpen && exitFullscreenVideo == null) {
                 showClickPage = null
             }
 
-            // Game player open: back closes the player first.
-            BackHandler(enabled = showGamePlayer != null) {
+            // 4. Game player open: back closes the player.
+            BackHandler(enabled = showGamePlayer != null && !isAnyOverlayOpen && exitFullscreenVideo == null) {
                 showGamePlayer = null
             }
 
-            // Confirm-exit flag: ask before closing the browser from home.
-            BackHandler(enabled = showClickPage == null && currentTab.url == "about:blank" && flagsUi.confirmExit) {
-                showExitConfirm = true
+            // 5. Active webpage browsing: go back in page history; if at start, navigate back to Home.
+            val canCurrentTabGoBack = if (currentTab.engine == BrowserTabEngine.GECKOVIEW) {
+                currentTab.canGoBack
+            } else {
+                currentTab.browserSession?.canGoBack() == true
+            }
+            val isWebPageActive = currentTab.url.isNotBlank() && currentTab.url != "about:blank" && currentTab.url != homeUrl()
+
+            BackHandler(enabled = isWebPageActive && !isAnyOverlayOpen && showClickPage == null && showGamePlayer == null && exitFullscreenVideo == null) {
+                if (canCurrentTabGoBack) {
+                    currentTab.browserSession.goBackIfPossible()
+                } else {
+                    val home = homeUrl()
+                    currentTab.url = home
+                    currentTab.browserSession?.loadUrl(home)
+                }
             }
 
-            // Drawer Navigation State (Simple, Dev, Power and shortcuts inside the hamburger menu)
-            val drawerState = rememberDrawerState(initialValue = DrawerValue.Closed)
+            // 6. Multiple tabs open on Home: back closes the active tab.
+            BackHandler(enabled = !isWebPageActive && showClickPage == null && showGamePlayer == null && !isAnyOverlayOpen && exitFullscreenVideo == null && tabs.size > 1) {
+                closeTabAt(activeTabIndex)
+            }
+
+            // 7. Confirm-exit flag: ask before closing the browser on a single Home tab.
+            BackHandler(enabled = !isWebPageActive && showClickPage == null && showGamePlayer == null && !isAnyOverlayOpen && exitFullscreenVideo == null && tabs.size <= 1 && flagsUi.confirmExit) {
+                showExitConfirm = true
+            }
 
             fun openExtensionStore(tab: TabItem) {
                 if (tab.isIncognito) {
