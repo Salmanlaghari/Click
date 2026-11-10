@@ -5,72 +5,26 @@ import org.junit.Test
 
 class SessionRestoreStartupPolicyTest {
     @Test
-    fun pendingModeSwitchRestoresThatProfilesSavedTabsAutomatically() {
+    fun savedTabsAutomaticallyRestoreAfterAnOrdinaryCleanLaunch() {
         assertEquals(
-            SessionRestoreStartupAction.AUTOMATIC_MODE_RESTORE,
-            sessionRestoreStartupAction(
-                previousExitWasClean = true,
-                modeSwitchRestorePending = true,
-                savedTabCount = 2,
-                clearOnExit = false,
-                externalStartUrlPresent = false
-            )
+            SessionRestoreStartupAction.AUTOMATIC_RESTORE,
+            sessionRestoreStartupAction(savedTabCount = 2, clearOnExit = false)
         )
     }
 
     @Test
-    fun ordinaryCleanLaunchDoesNotRestoreAnOldSession() {
+    fun savedTabsAutomaticallyRestoreAfterAnUncleanExitWithoutARepeatPrompt() {
+        assertEquals(
+            SessionRestoreStartupAction.AUTOMATIC_RESTORE,
+            sessionRestoreStartupAction(savedTabCount = 1, clearOnExit = false)
+        )
+    }
+
+    @Test
+    fun clearOnExitAlwaysSuppressesSessionRestore() {
         assertEquals(
             SessionRestoreStartupAction.NONE,
-            sessionRestoreStartupAction(
-                previousExitWasClean = true,
-                modeSwitchRestorePending = false,
-                savedTabCount = 2,
-                clearOnExit = false,
-                externalStartUrlPresent = false
-            )
-        )
-    }
-
-    @Test
-    fun uncleanExitStillOffersCrashRecovery() {
-        assertEquals(
-            SessionRestoreStartupAction.CRASH_RECOVERY_PROMPT,
-            sessionRestoreStartupAction(
-                previousExitWasClean = false,
-                modeSwitchRestorePending = false,
-                savedTabCount = 1,
-                clearOnExit = false,
-                externalStartUrlPresent = false
-            )
-        )
-    }
-
-    @Test
-    fun clearOnExitDisablesBothKindsOfRestore() {
-        assertEquals(
-            SessionRestoreStartupAction.NONE,
-            sessionRestoreStartupAction(
-                previousExitWasClean = false,
-                modeSwitchRestorePending = true,
-                savedTabCount = 2,
-                clearOnExit = true,
-                externalStartUrlPresent = false
-            )
-        )
-    }
-
-    @Test
-    fun externalLinkTakesPrecedenceOverPendingModeRestore() {
-        assertEquals(
-            SessionRestoreStartupAction.NONE,
-            sessionRestoreStartupAction(
-                previousExitWasClean = true,
-                modeSwitchRestorePending = true,
-                savedTabCount = 2,
-                clearOnExit = false,
-                externalStartUrlPresent = true
-            )
+            sessionRestoreStartupAction(savedTabCount = 2, clearOnExit = true)
         )
     }
 
@@ -78,13 +32,7 @@ class SessionRestoreStartupPolicyTest {
     fun emptySnapshotDoesNotTriggerRestore() {
         assertEquals(
             SessionRestoreStartupAction.NONE,
-            sessionRestoreStartupAction(
-                previousExitWasClean = false,
-                modeSwitchRestorePending = true,
-                savedTabCount = 0,
-                clearOnExit = false,
-                externalStartUrlPresent = false
-            )
+            sessionRestoreStartupAction(savedTabCount = 0, clearOnExit = false)
         )
     }
 }

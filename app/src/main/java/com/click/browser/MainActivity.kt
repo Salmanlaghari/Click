@@ -726,21 +726,6 @@ class MainActivity : FragmentActivity() {
                 } catch (_: Exception) { }
             }
         }
-        // Crash-restore: an explicit finish() (Exit menu / back-out) is a
-        // clean exit — no restore prompt next launch. Rotation and other
-        // config changes have isFinishing=false, so they stay "unclean"
-        // and correctly keep their snapshot for a later crash.
-        // Non-blocking fire-and-forget on IO: runBlocking here would block
-        // the main thread and risk ANR under I/O pressure. If the process
-        // dies before the write lands, the flag simply stays "unclean" and
-        // the (harmless) restore prompt may appear once — safe default.
-        if (isFinishing) {
-            kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.IO).launch {
-                try {
-                    SessionRestore.markCleanExit(this@MainActivity, V9Engine.bootMode, true)
-                } catch (_: Exception) { }
-            }
-        }
         super.onDestroy()
     }
 
@@ -1605,10 +1590,7 @@ class MainActivity : FragmentActivity() {
             }
 
             var isIncognitoMode by remember { mutableStateOf(false) }
-            // Crash / force-close session restore state.
-            var showRestoreDialog by remember { mutableStateOf(false) }
-            var crashedTabs by remember { mutableStateOf<List<SavedTab>>(emptyList()) }
-            var crashedActiveIndex by remember { mutableStateOf(0) }
+            // Persistent session restore state; startup waits until the saved tabs are applied.
             var sessionStartupReady by remember { mutableStateOf(false) }
             // Gated by the flags-loading effect below: the session saver and
             // the restore check must not read liveFlags.clearOnExit before
@@ -1643,30 +1625,23 @@ class MainActivity : FragmentActivity() {
                 }
             }
 
-            // Restore the current profile's own tabs after an intentional mode
-            // switch; only an unclean exit shows the crash-recovery prompt.
+            // Restore the current profile's saved tabs quietly on each launch.
+            // An explicit external URL is opened as a new active tab, so it does
+            // not discard the tabs the user left open.
             // The session saver waits for this decision so it cannot overwrite
             // a snapshot with the initial New Tab before it is restored.
             LaunchedEffect(Unit) {
                 snapshotFlow { flagsLoaded }.first { it }
                 val bootMode = V9Engine.bootMode
-                val clean = SessionRestore.wasCleanExit(this@MainActivity, bootMode)
-                val modeSwitchPending = SessionRestore.consumeModeSwitchRestore(
-                    this@MainActivity, bootMode
-                )
+                SessionRestore.consumeModeSwitchRestore(this@MainActivity, bootMode)
                 val (saved, savedActive) = SessionRestore.loadSession(this@MainActivity, bootMode)
-                // From here on, assume this run may die uncleanly.
-                SessionRestore.markCleanExit(this@MainActivity, bootMode, false)
                 when (
                     sessionRestoreStartupAction(
-                        previousExitWasClean = clean,
-                        modeSwitchRestorePending = modeSwitchPending,
                         savedTabCount = saved.size,
-                        clearOnExit = liveFlags.clearOnExit,
-                        externalStartUrlPresent = startViewUrl != null
+                        clearOnExit = liveFlags.clearOnExit
                     )
                 ) {
-                    SessionRestoreStartupAction.AUTOMATIC_MODE_RESTORE -> {
+                    SessionRestoreStartupAction.AUTOMATIC_RESTORE -> {
                         tabs.clear()
                         tabs.addAll(saved.map {
                             TabItem(
@@ -1676,19 +1651,20 @@ class MainActivity : FragmentActivity() {
                                 initialGeckoSessionState = it.geckoSessionState
                             )
                         })
-                        activeTabIndex = savedActive.coerceIn(0, (tabs.size - 1).coerceAtLeast(0))
+                        if (startViewUrl != null) {
+                            val startTitle = hostOfUrl(startViewUrl).ifBlank { "Opening link" }
+                            tabs.add(TabItem(url = startViewUrl, title = startTitle))
+                            activeTabIndex = tabs.lastIndex
+                        } else {
+                            activeTabIndex = savedActive.coerceIn(0, (tabs.size - 1).coerceAtLeast(0))
+                        }
                         sessionStartupReady = true
-                    }
-                    SessionRestoreStartupAction.CRASH_RECOVERY_PROMPT -> {
-                        crashedTabs = saved
-                        crashedActiveIndex = savedActive
-                        showRestoreDialog = true
                     }
                     SessionRestoreStartupAction.NONE -> sessionStartupReady = true
                 }
             }
 
-            // Keeps the crash-restore snapshot fresh: debounced write of the
+            // Keeps the session snapshot fresh: debounced write of the
             // open restorable tabs (non-incognito, http/https only) into this
             // boot mode's profile store. With "clear data on exit" on, no
             // snapshot is kept at all (privacy first).
@@ -1720,10 +1696,6 @@ class MainActivity : FragmentActivity() {
                             liveRestoreActiveIndex = 0
                         } else {
                             SessionRestore.saveSession(this@MainActivity, bootMode, snapshot, active)
-                            // Re-arm crash detection: clearSession() resets the
-                            // clean-exit flag when the user discards a restore
-                            // offer, so every real save must mark unclean again.
-                            SessionRestore.markCleanExit(this@MainActivity, bootMode, false)
                         }
                     }
             }
@@ -7234,64 +7206,6 @@ class MainActivity : FragmentActivity() {
                                 )
                             }
 
-                            // Crash-restore waits until the first-run tour is complete.
-                            if (showRestoreDialog && onboardingReady && !showOnboarding) {
-                                androidx.compose.material3.AlertDialog(
-                                    onDismissRequest = {
-                                        showRestoreDialog = false
-                                        scope.launch {
-                                            SessionRestore.clearSession(
-                                                this@MainActivity, V9Engine.bootMode
-                                            )
-                                            sessionStartupReady = true
-                                        }
-                                    },
-                                    title = {
-                                        androidx.compose.material3.Text("Restore previous session?")
-                                    },
-                                    text = {
-                                        androidx.compose.material3.Text(
-                                            "Click didn't close properly last time. " +
-                                                "Restore your ${crashedTabs.size} open " +
-                                                (if (crashedTabs.size == 1) "tab?" else "tabs?")
-                                        )
-                                    },
-                                    confirmButton = {
-                                        androidx.compose.material3.TextButton(onClick = {
-                                            showRestoreDialog = false
-                                            tabs.clear()
-                                            tabs.addAll(crashedTabs.map { saved ->
-                                                TabItem(
-                                                    url = saved.url,
-                                                    title = saved.title,
-                                                    initialEngine = saved.engine,
-                                                    initialGeckoSessionState = saved.geckoSessionState
-                                                )
-                                            })
-                                            activeTabIndex = crashedActiveIndex.coerceIn(
-                                                0, (tabs.size - 1).coerceAtLeast(0)
-                                            )
-                                            sessionStartupReady = true
-                                        }) {
-                                            androidx.compose.material3.Text("Restore")
-                                        }
-                                    },
-                                    dismissButton = {
-                                        androidx.compose.material3.TextButton(onClick = {
-                                            showRestoreDialog = false
-                                            scope.launch {
-                                                SessionRestore.clearSession(
-                                                    this@MainActivity, V9Engine.bootMode
-                                                )
-                                                sessionStartupReady = true
-                                            }
-                                        }) {
-                                            androidx.compose.material3.Text("Start fresh")
-                                        }
-                                    }
-                                )
-                            }
-
                             // ---- Default browser: one-time first-launch prompt ----
                             // State + actions live here (after the restore dialog)
                             // so both this dialog and Settings can use them.
@@ -9543,11 +9457,9 @@ class MainActivity : FragmentActivity() {
         android.widget.Toast.makeText(
             this, toastMsg, android.widget.Toast.LENGTH_LONG
         ).show()
-        // An intentional profile switch saves the source profile's own tabs,
-        // arms its one-shot restore marker, and marks the exit clean. Returning
-        // to that profile restores those tabs without a crash prompt. The
-        // mirror is refreshed after composition; only its DataStore write is
-        // debounced. Clear-on-exit still removes the snapshot and marker.
+        // An intentional profile switch saves this profile's own tabs, so
+        // returning to it resumes its isolated session. The mirror is refreshed
+        // after composition; only its DataStore write is debounced.
         val sourceMode = V9Engine.bootMode
         com.click.browser.engine.ClickDiagnosticsLog.beginModeSwitch(this, sourceMode, mode)
         modeSwitchInProgress = true
@@ -9562,7 +9474,6 @@ class MainActivity : FragmentActivity() {
             this, com.click.browser.engine.ClickCatLogCode.MODE_SWITCH_SESSION_SAVED,
             sourceMode, mode
         )
-        SessionRestore.markCleanExit(this, sourceMode, true)
         val restarted = V9Engine.restartForEngineSwitch(
             this, modeManager, mode,
             hackIntro = (mode == BrowserMode.HACK),
@@ -9571,7 +9482,6 @@ class MainActivity : FragmentActivity() {
         if (!restarted) {
             val selectionRestored = runCatching { modeManager.setMode(sourceMode) }.isSuccess
             runCatching { SessionRestore.clearModeSwitchRestore(this, sourceMode) }
-            runCatching { SessionRestore.markCleanExit(this, sourceMode, false) }
             modeSwitchInProgress = false
             com.click.browser.engine.ClickDiagnosticsLog.record(
                 this, com.click.browser.engine.ClickCatLogCode.MODE_SWITCH_ROLLED_BACK,
