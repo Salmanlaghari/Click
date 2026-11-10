@@ -384,12 +384,36 @@ export const App: React.FC = () => {
   };
 
   const handleGoBack = () => {
-    if (!activeTab || activeTab.historyIndex <= 0) return;
-    const newIdx = Math.max(0, activeTab.historyIndex - 1);
-    const prevUrl = activeTab.history[newIdx] || 'click://home';
-    setTabs((prev) =>
-      sanitizeTabs(prev, currentProfile).map((t) => (t.id === activeTab.id ? { ...t, url: prevUrl, historyIndex: newIdx } : t))
-    );
+    // 1. If any modal/overlay is open, close it first!
+    if (isProfileModalOpen) { setIsProfileModalOpen(false); return; }
+    if (isMenuOpen) { setIsMenuOpen(false); return; }
+    if (isSidebarOpen) { setIsSidebarOpen(false); return; }
+    if (isExtensionsModalOpen) { setIsExtensionsModalOpen(false); return; }
+    if (isTabSwitcherOpen) { setIsTabSwitcherOpen(false); return; }
+    if (isNotificationShadeOpen) { setIsNotificationShadeOpen(false); return; }
+
+    if (!activeTab) return;
+
+    // 2. If active tab has history, navigate back in history
+    if (activeTab.historyIndex > 0) {
+      const newIdx = Math.max(0, activeTab.historyIndex - 1);
+      const prevUrl = activeTab.history[newIdx] || 'click://home';
+      setTabs((prev) =>
+        sanitizeTabs(prev, currentProfile).map((t) => (t.id === activeTab.id ? { ...t, url: prevUrl, historyIndex: newIdx } : t))
+      );
+      return;
+    }
+
+    // 3. If active tab is on a website/page with no back history, return to Click Home
+    if (activeTab.url !== 'click://home') {
+      handleNavigate('click://home');
+      return;
+    }
+
+    // 4. If on Click Home and multiple tabs exist, close the active tab
+    if (tabs.length > 1) {
+      handleCloseTab(activeTab.id);
+    }
   };
 
   const handleGoForward = () => {
@@ -746,17 +770,19 @@ export const App: React.FC = () => {
             {renderWebView()}
           </div>
 
-          {/* Bottom Browser Navigation Toolbar */}
-          <BrowserToolbar
-            tabCount={tabs.length}
-            onOpenTabs={() => setIsTabSwitcherOpen(true)}
-            onOpenMenu={() => setIsSidebarOpen(true)}
-            onOpenBookmarks={() => handleNavigate('click://bookmarks')}
-            onOpenAi={() => handleNavigate('click://ai')}
-            onQuickAction={() => setIsSidebarOpen(true)}
-            currentProfile={currentProfile}
-            isFullView={isFullView}
-          />
+          {/* Bottom Browser Navigation Toolbar (Home screen only for full webpage view) */}
+          {activeTab.url === 'click://home' && !isFullView && (
+            <BrowserToolbar
+              tabCount={tabs.length}
+              onOpenTabs={() => setIsTabSwitcherOpen(true)}
+              onOpenMenu={() => setIsSidebarOpen(true)}
+              onOpenBookmarks={() => handleNavigate('click://bookmarks')}
+              onOpenAi={() => handleNavigate('click://ai')}
+              onQuickAction={() => setIsSidebarOpen(true)}
+              currentProfile={currentProfile}
+              isFullView={isFullView}
+            />
+          )}
 
           {/* Overlays inside Phone viewport */}
           <BrowserSidebarDrawer

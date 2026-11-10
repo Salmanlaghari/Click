@@ -269,10 +269,34 @@ export const BrowserAddressBar: React.FC<BrowserAddressBarProps> = ({
           </div>
         </form>
 
+        {/* Extensions Button (🧩) */}
+        {onOpenExtensions && (
+          <button
+            onClick={onOpenExtensions}
+            className={`w-8 h-8 rounded-full flex items-center justify-center transition active:scale-95 flex-shrink-0 ${currentModeStyle.surferBtnHover}`}
+            title="Extensions & Safe Tools (🧩)"
+            aria-label="Extensions"
+          >
+            <Puzzle className="w-4 h-4 stroke-[2]" />
+          </button>
+        )}
+
+        {/* Tabs Counter Button ([1]) */}
+        {onOpenTabs && (
+          <button
+            onClick={onOpenTabs}
+            className={`w-7 h-7 rounded-lg border flex items-center justify-center text-[10px] font-bold transition active:scale-95 flex-shrink-0 ${currentModeStyle.chipInactive}`}
+            title={`Tabs (${tabs.length || 1})`}
+            aria-label="Tabs"
+          >
+            {tabs.length || 1}
+          </button>
+        )}
+
         {/* 3-Dots Menu Button (:) */}
         <button
           onClick={onOpenMenu || onOpenSidebar}
-          className={`w-9 h-9 rounded-full flex items-center justify-center transition active:scale-95 flex-shrink-0 ${currentModeStyle.surferBtnHover}`}
+          className={`w-8 h-8 rounded-full flex items-center justify-center transition active:scale-95 flex-shrink-0 ${currentModeStyle.surferBtnHover}`}
           title="Browser Options & Settings (:)"
           aria-label="Menu"
         >
