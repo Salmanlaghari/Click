@@ -2639,24 +2639,23 @@ class MainActivity : FragmentActivity() {
              * existing screens/actions. Reuses current handlers — no feature is
              * reimplemented. Closes the FAB panel first.
              */
-            fun currentTabCanOpenDevTools(): Boolean {
-                val inspectedPageUrl = if (currentTab.engine == BrowserTabEngine.GECKOVIEW) {
-                    currentTab.url
-                } else {
-                    currentTab.webView?.url
-                }
-                return currentTab.hasCommittedContent &&
+            /** Loaded-page state is engine-agnostic; actual DevTools capture stays WebView-only. */
+            fun currentTabHasLoadedWebPage(): Boolean =
+                currentTab.hasCommittedContent &&
                     !currentTab.isPageLoading &&
-                    DevToolsInspectionPolicy.isInspectableWebPageUrl(currentTab.url) &&
-                    DevToolsInspectionPolicy.isInspectableWebPageUrl(inspectedPageUrl)
-            }
+                    DevToolsInspectionPolicy.isInspectableWebPageUrl(currentTab.url)
+
+            fun currentTabCanRequestDevTools(): Boolean =
+                currentTabHasLoadedWebPage() &&
+                    (currentTab.engine == BrowserTabEngine.GECKOVIEW ||
+                        DevToolsInspectionPolicy.isInspectableWebPageUrl(currentTab.webView?.url))
 
             fun requestDevToolsForCurrentTab() {
                 if (activeMode != BrowserMode.DEVELOPER) {
                     Toast.makeText(this@MainActivity, "DevTools is only available in Developer mode.", Toast.LENGTH_LONG).show()
                     return
                 }
-                if (!currentTabCanOpenDevTools()) {
+                if (!currentTabCanRequestDevTools()) {
                     Toast.makeText(this@MainActivity, "Open an HTTP(S) page and wait for it to load before opening DevTools.", Toast.LENGTH_LONG).show()
                     return
                 }
@@ -2675,7 +2674,7 @@ class MainActivity : FragmentActivity() {
                     feature = id,
                     mode = activeMode,
                     engine = currentTab.engine,
-                    hasLoadedPage = currentTabCanOpenDevTools()
+                    hasLoadedPage = currentTabHasLoadedWebPage()
                 )
                 if (!capability.visible) return
                 if (!capability.enabled) {
@@ -3591,11 +3590,15 @@ class MainActivity : FragmentActivity() {
             fun openDevToolsTab(tab: Int) {
                 scope.launch {
                     drawerState.close()
+                    if (currentTab.engine == BrowserTabEngine.GECKOVIEW) {
+                        requestDevToolsForCurrentTab()
+                        return@launch
+                    }
                     val capability = ModeCapabilityRegistry.availability(
                         feature = FeatureId.DEVTOOLS,
                         mode = activeMode,
                         engine = currentTab.engine,
-                        hasLoadedPage = currentTabCanOpenDevTools()
+                        hasLoadedPage = currentTabHasLoadedWebPage()
                     )
                     if (!capability.visible || !capability.enabled) {
                         val reason = capability.explanation
@@ -3717,6 +3720,7 @@ class MainActivity : FragmentActivity() {
                 devToolsOpenRequestedTabId,
                 currentTab.id,
                 currentTab.engine,
+                currentTab.browserSession,
                 currentTab.hasCommittedContent,
                 currentTab.url,
                 currentTab.isPageLoading
@@ -3726,10 +3730,11 @@ class MainActivity : FragmentActivity() {
                     devToolsOpenRequestedTabId = null
                     return@LaunchedEffect
                 }
-                if (currentTab.engine == BrowserTabEngine.WEBVIEW && currentTabCanOpenDevTools()) {
+                val hasAttachedWebView = currentTab.webView != null
+                if (currentTab.engine == BrowserTabEngine.WEBVIEW && hasAttachedWebView && currentTabCanRequestDevTools()) {
                     devToolsOpenRequestedTabId = null
                     openDevToolsTab(tab = 0)
-                } else if (!currentTab.isPageLoading) {
+                } else if (currentTab.engine == BrowserTabEngine.WEBVIEW && hasAttachedWebView && !currentTab.isPageLoading) {
                     devToolsOpenRequestedTabId = null
                     Toast.makeText(this@MainActivity, "The page did not finish loading for DevTools.", Toast.LENGTH_LONG).show()
                 }
@@ -3918,7 +3923,7 @@ class MainActivity : FragmentActivity() {
                                 }
                                 if (activeMode == BrowserMode.DEVELOPER) {
                                     item {
-                                        val devToolsReady = currentTabCanOpenDevTools()
+                                        val devToolsReady = currentTabCanRequestDevTools()
                                         val devToolsSubtitle = when {
                                             !devToolsReady && currentTab.isPageLoading -> "Wait for the page to finish loading"
                                             !devToolsReady -> "Open an HTTP(S) page first"
@@ -6467,9 +6472,7 @@ class MainActivity : FragmentActivity() {
                                             feature = FeatureId.DEVTOOLS,
                                             mode = activeMode,
                                             engine = currentTab.engine,
-                                            hasLoadedPage = currentTab.hasCommittedContent &&
-                                                DevToolsInspectionPolicy.isInspectableWebPageUrl(currentTab.url) &&
-                                                DevToolsInspectionPolicy.isInspectableWebPageUrl(currentTab.webView?.url)
+                                            hasLoadedPage = currentTabHasLoadedWebPage()
                                         ).enabled
                                     ) {
                                         Column(
@@ -6482,7 +6485,7 @@ class MainActivity : FragmentActivity() {
                                             IconButton(
                                                 onClick = {
                                                     if (showDevToolsSheet) closeDevToolsPanel()
-                                                    else openDevToolsTab(devToolsTab)
+                                                    else requestDevToolsForCurrentTab()
                                                 },
                                                 modifier = Modifier
                                                     .size(44.dp)
@@ -6652,7 +6655,7 @@ class MainActivity : FragmentActivity() {
                                     expanded = showFeatureMenu,
                                     activeMode = activeMode,
                                     activeEngine = currentTab.engine,
-                                    hasLoadedPage = currentTabCanOpenDevTools(),
+                                    hasLoadedPage = currentTabHasLoadedWebPage(),
                                     desktopLayoutEnabled = featureMenuWideLayout,
                                     onToggle = { showFeatureMenu = !showFeatureMenu },
                                     onDismiss = { showFeatureMenu = false },

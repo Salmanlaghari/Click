@@ -46,6 +46,20 @@ class ModeCapabilityRegistryTest {
     }
 
     @Test
+    fun developerDevToolsOnUnloadedGeckoTabIsVisibleButDisabled() {
+        val access = ModeCapabilityRegistry.availability(
+            FeatureId.DEVTOOLS,
+            BrowserMode.DEVELOPER,
+            BrowserTabEngine.GECKOVIEW,
+            hasLoadedPage = false
+        )
+
+        assertTrue(access.visible)
+        assertFalse(access.enabled)
+        assertEquals("Load a web page before opening DevTools.", access.explanation)
+    }
+
+    @Test
     fun developerDesktopShortcutIsEnabledOnGeckoView() {
         val access = ModeCapabilityRegistry.availability(
             FeatureId.DESKTOP,
