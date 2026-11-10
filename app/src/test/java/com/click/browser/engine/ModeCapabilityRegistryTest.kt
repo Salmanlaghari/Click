@@ -29,7 +29,7 @@ class ModeCapabilityRegistryTest {
     }
 
     @Test
-    fun developerDevToolsOnRegularGeckoTabIsVisibleButDisabledWithReason() {
+    fun developerDevToolsOnRegularGeckoTabOffersConfirmedSwitch() {
         val access = ModeCapabilityRegistry.availability(
             FeatureId.DEVTOOLS,
             BrowserMode.DEVELOPER,
@@ -37,10 +37,12 @@ class ModeCapabilityRegistryTest {
         )
 
         assertTrue(access.visible)
-        assertFalse(access.enabled)
+        assertTrue(access.enabled)
         assertNotNull(access.explanation)
-        assertTrue(access.explanation!!.contains("WebView"))
-        assertTrue(access.explanation.contains("GeckoView"))
+        val explanation = access.explanation.orEmpty()
+        assertTrue(explanation.contains("WebView"))
+        assertTrue(explanation.contains("reload"))
+        assertTrue(explanation.contains("DevTools"))
     }
 
     @Test
