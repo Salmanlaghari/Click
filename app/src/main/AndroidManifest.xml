@@ -77,6 +77,14 @@
             </intent-filter>
         </activity>
 
+        <!-- Keeps a visible task alive while the browser process changes profiles. -->
+        <activity
+            android:name=".ModeSwitchActivity"
+            android:process=":mode_switch"
+            android:taskAffinity="${applicationId}.mode_switch"
+            android:exported="false"
+            android:theme="@style/Theme.ClickBrowser" />
+
         <!-- Isolated GeckoView browser used only when the user opens the
              extension browser. It exposes no native JavaScript bridge. -->
         <activity

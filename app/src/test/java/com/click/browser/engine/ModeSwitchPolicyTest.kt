@@ -1,6 +1,5 @@
 package com.click.browser.engine
 
-import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -27,29 +26,14 @@ class ModeSwitchPolicyTest {
     }
 
     @Test
-    fun relaunchPendingIntentUsesApiSpecificCreatorBackgroundStartMode() {
-        assertEquals(
-            RelaunchBackgroundActivityStartMode.PLATFORM_DEFAULT,
-            relaunchPendingIntentCreatorBackgroundStartMode(33)
-        )
-        assertEquals(
-            RelaunchBackgroundActivityStartMode.ALLOW_BACKGROUND,
-            relaunchPendingIntentCreatorBackgroundStartMode(34)
-        )
-        assertEquals(
-            RelaunchBackgroundActivityStartMode.ALLOW_BACKGROUND,
-            relaunchPendingIntentCreatorBackgroundStartMode(35)
-        )
-        assertEquals(
-            RelaunchBackgroundActivityStartMode.ALLOW_ALWAYS,
-            relaunchPendingIntentCreatorBackgroundStartMode(36)
-        )
+    fun sourceProcessCannotExitBeforeTheBridgeHasWindowFocus() {
+        assertFalse(shouldRequestSourceProcessExit(bridgeHasWindowFocus = false))
+        assertTrue(shouldRequestSourceProcessExit(bridgeHasWindowFocus = true))
     }
 
     @Test
-    fun processDeathRequiresAScheduledColdRestart() {
-        assertTrue(hasEngineRestartPath(alarmScheduled = true))
-        // A relaunch into the current singleTask Activity can reuse this process.
-        assertFalse(hasEngineRestartPath(alarmScheduled = false))
+    fun targetProfileCannotOpenUntilTheSourceProcessHasExited() {
+        assertFalse(shouldOpenTargetProfile(sourceProcessExited = false))
+        assertTrue(shouldOpenTargetProfile(sourceProcessExited = true))
     }
 }

@@ -651,11 +651,17 @@ class MainActivity : FragmentActivity() {
     override fun onWindowFocusChanged(hasFocus: Boolean) {
         super.onWindowFocusChanged(hasFocus)
         if (hasFocus) {
-            ClickDiagnosticsLog.confirmModeSwitchWindowFocus(
+            val switchConfirmed = ClickDiagnosticsLog.confirmModeSwitchWindowFocus(
                 context = this,
                 focusedMode = V9Engine.bootMode,
                 bootBlocked = V9Engine.isBootBlocked
             )
+            if (switchConfirmed) {
+                sendBroadcast(
+                    android.content.Intent(ModeSwitchActivity.ACTION_TARGET_PROFILE_FOCUSED)
+                        .setPackage(packageName)
+                )
+            }
         }
     }
 

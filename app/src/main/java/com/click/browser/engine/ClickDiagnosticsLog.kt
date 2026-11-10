@@ -10,10 +10,11 @@ internal enum class ClickCatLogCode(val label: String) {
     MODE_SWITCH_STARTED("Profile switch started"),
     MODE_SWITCH_SESSION_SAVED("Source-profile session preparation completed"),
     MODE_SWITCH_TARGET_PERSISTED("Target profile selection was saved"),
+    MODE_SWITCH_BRIDGE_FOCUSED("Visible profile handoff received window focus"),
     MODE_SWITCH_RELAUNCH_SCHEDULED("Relaunch alarm accepted; delivery not confirmed"),
     MODE_SWITCH_EXIT_REQUESTED("Old process exit was requested"),
-    MODE_SWITCH_FAILED("Profile switch did not reach the relaunch step"),
-    MODE_SWITCH_ROLLED_BACK("Profile selection was rolled back after relaunch failure"),
+    MODE_SWITCH_FAILED("Profile switch did not complete the visible handoff"),
+    MODE_SWITCH_ROLLED_BACK("Profile selection was rolled back after handoff failure"),
     MODE_SWITCH_RELAUNCHED("Target profile process started; Activity window focus unconfirmed"),
     MODE_SWITCH_ACTIVITY_FOCUSED("Target profile Activity window received focus"),
     MODE_SWITCH_BOOT_BLOCKED("Target profile restarted but browser startup was blocked"),
@@ -257,11 +258,12 @@ internal object ClickDiagnosticsLog {
     }
 
     @Synchronized
-    fun confirmModeSwitchWindowFocus(context: Context, focusedMode: BrowserMode, bootBlocked: Boolean) {
-        val pending = readPendingSwitch(context) ?: return
-        val outcome = resolveClickModeSwitchWindowFocusOutcome(pending, focusedMode, bootBlocked) ?: return
+    fun confirmModeSwitchWindowFocus(context: Context, focusedMode: BrowserMode, bootBlocked: Boolean): Boolean {
+        val pending = readPendingSwitch(context) ?: return false
+        val outcome = resolveClickModeSwitchWindowFocusOutcome(pending, focusedMode, bootBlocked) ?: return false
         record(context, outcome, pending.fromMode, pending.toMode)
         runCatching { prefs(context).edit().remove(PENDING_SWITCH_KEY).commit() }
+        return true
     }
 
     @Synchronized

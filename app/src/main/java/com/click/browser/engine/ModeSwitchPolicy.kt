@@ -1,25 +1,15 @@
 package com.click.browser.engine
 
-/** Whether the selected profile must be written when it already matches the process boot profile. */
+/** Whether a no-restart mode choice must be persisted for the next process. */
 internal fun shouldPersistNoRestartModeSelection(
     savedMode: BrowserMode,
     requestedMode: BrowserMode
 ): Boolean = savedMode != requestedMode
 
-internal enum class RelaunchBackgroundActivityStartMode {
-    PLATFORM_DEFAULT,
-    ALLOW_BACKGROUND,
-    ALLOW_ALWAYS,
-}
+/** The source process may exit only after the visible handoff owns window focus. */
+internal fun shouldRequestSourceProcessExit(bridgeHasWindowFocus: Boolean): Boolean =
+    bridgeHasWindowFocus
 
-/** Use the narrow API 34/35 opt-in and API 36's replacement for process-death relaunch. */
-internal fun relaunchPendingIntentCreatorBackgroundStartMode(apiLevel: Int): RelaunchBackgroundActivityStartMode = when {
-    apiLevel >= 36 -> RelaunchBackgroundActivityStartMode.ALLOW_ALWAYS
-    apiLevel >= 34 -> RelaunchBackgroundActivityStartMode.ALLOW_BACKGROUND
-    else -> RelaunchBackgroundActivityStartMode.PLATFORM_DEFAULT
-}
-
-/** A direct activity launch is not a cold-process restart; only a scheduled relaunch qualifies. */
-internal fun hasEngineRestartPath(
-    alarmScheduled: Boolean
-): Boolean = alarmScheduled
+/** The target profile may start only after the source process is no longer alive. */
+internal fun shouldOpenTargetProfile(sourceProcessExited: Boolean): Boolean =
+    sourceProcessExited
