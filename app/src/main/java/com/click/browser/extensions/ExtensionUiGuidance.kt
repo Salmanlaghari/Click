@@ -18,7 +18,7 @@ internal object ExtensionUiGuidance {
         "Add-ons are not active in this WebView tab; they run in regular GeckoView tabs. Switching this page reloads it, and WebView cookies, sign-ins, history, and unsaved page state do not transfer."
 
     const val installPermissionConsent =
-        "Tap Add to grant all browser permissions and site patterns listed below for this add-on. Cancel denies the installation. Optional permissions are not granted now; GeckoView will show a separate request if the add-on asks for them later. Add-ons may read or change listed pages and may process or send data under their own code and privacy terms."
+        "Only public, Android-compatible add-ons from official AMO with a Mozilla preliminary or full-review signature reach this prompt. Unsigned or untrusted packages, blocklisted add-ons, and unsupported native or device capabilities stay blocked. Tap Add to grant all browser permissions and site patterns listed below; Cancel denies installation. Optional permissions need a separate request later. Add-ons may read or change listed pages and may process or send data under their own code and privacy terms."
 
     const val optionalPermissionConsent =
         "This is a separate optional request shown when the add-on asks for access. Allow grants every item listed in this request; Cancel denies it. GeckoView makes this request all-or-nothing, so multiple sites in one request cannot be split into individual site choices. Future requests will be shown separately."

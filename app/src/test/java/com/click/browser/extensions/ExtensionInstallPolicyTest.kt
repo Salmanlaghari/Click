@@ -61,7 +61,7 @@ class ExtensionInstallPolicyTest {
     }
 
     @Test
-    fun rejectsMalformedOrUnreviewablyLargeOriginRequests() {
+    fun rejectsMalformedOriginRequestsButDoesNotCapReviewableRequests() {
         assertEquals(1, ExtensionInstallPolicy.blockedOriginPatterns(listOf("not-a-match-pattern")).size)
         listOf(
             "https://example.com:8443/*",
@@ -69,9 +69,8 @@ class ExtensionInstallPolicyTest {
             "https://*.example.*/*",
             "javascript://example.com/*"
         ).forEach { pattern -> assertEquals("Should reject $pattern", 1, ExtensionInstallPolicy.blockedOriginPatterns(listOf(pattern)).size) }
-        assertEquals(
-            1,
-            ExtensionInstallPolicy.blockedOriginPatterns((1..101).map { "https://site$it.example.com/*" }).size
+        assertTrue(
+            ExtensionInstallPolicy.blockedOriginPatterns((1..101).map { "https://site$it.example.com/*" }).isEmpty()
         )
     }
 

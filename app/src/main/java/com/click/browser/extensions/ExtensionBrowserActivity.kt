@@ -213,11 +213,12 @@ private data class ExtensionActionItem(
 )
 
 internal fun isEligibleMozillaCatalogExtension(
-    isSigned: Boolean,
+    signedState: Int,
     isNotBlocked: Boolean,
     amoListingUrl: String?,
     extensionId: String?
-): Boolean = isSigned && isNotBlocked &&
+): Boolean = (signedState == WebExtension.SignedStateFlags.PRELIMINARY ||
+    signedState == WebExtension.SignedStateFlags.SIGNED) && isNotBlocked &&
     FirefoxAmoCatalog.isApprovedAmoListing(amoListingUrl) &&
     FirefoxAmoCatalog.isApprovedExtensionId(extensionId)
 
@@ -252,7 +253,7 @@ private suspend fun fetchCurrentAmoPackage(slug: String): VerifiedAmoCatalogReco
 private fun isTrustedMozillaExtension(extension: WebExtension): Boolean {
     val metadata = extension.metaData
     return isEligibleMozillaCatalogExtension(
-        isSigned = metadata.signedState == WebExtension.SignedStateFlags.SIGNED,
+        signedState = metadata.signedState,
         isNotBlocked = metadata.blocklistState == WebExtension.BlocklistStateFlags.NOT_BLOCKED,
         amoListingUrl = metadata.amoListingUrl,
         extensionId = extension.id
@@ -1039,7 +1040,7 @@ private fun ExtensionBrowserScreen(
                     ExtensionUiGuidance.permissionRiskWarning(prompt.permissions)?.let { warning ->
                         Text(
                             warning,
-                            color = MaterialTheme.colorScheme.error,
+                            color = MaterialTheme.colorScheme.tertiary,
                             fontSize = 12.sp,
                             fontWeight = FontWeight.SemiBold
                         )
@@ -1047,7 +1048,7 @@ private fun ExtensionBrowserScreen(
                     ExtensionUiGuidance.siteAccessRiskWarning(prompt.origins)?.let { warning ->
                         Text(
                             warning,
-                            color = MaterialTheme.colorScheme.error,
+                            color = MaterialTheme.colorScheme.tertiary,
                             fontSize = 12.sp,
                             fontWeight = FontWeight.SemiBold
                         )
