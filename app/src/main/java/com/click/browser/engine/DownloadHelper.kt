@@ -44,7 +44,8 @@ object DownloadHelper {
         fileName: String,
         locationOverride: String? = null,
         userAgent: String? = null,
-        mode: BrowserMode = V9Engine.bootMode
+        mode: BrowserMode = V9Engine.bootMode,
+        mimeType: String? = null
     ): SavedDownload? {
         val scheme = try { Uri.parse(url).scheme?.lowercase() } catch (_: Exception) { null }
         if (scheme != "http" && scheme != "https") {
@@ -54,6 +55,8 @@ object DownloadHelper {
             return null
         }
         val safeName = fileName.replace(Regex("[\\\\/:*?\"<>|]"), "_").trim().take(180).ifBlank { "download" }
+        val actualMimeType = mimeType?.substringBefore(';')?.trim()?.takeIf { it.isNotBlank() }
+            ?: guessMime(safeName)
         val location = locationOverride?.let(DownloadSettings::normalize) ?: try {
             DownloadSettings.location(context)
         } catch (_: Exception) {
@@ -61,7 +64,10 @@ object DownloadHelper {
         }
         return when (location) {
             DownloadSettings.LOCATION_APP -> {
-                if (enqueueViaDownloadManager(context, url, safeName, appPrivate = true, userAgent = userAgent)) {
+                if (enqueueViaDownloadManager(
+                        context, url, safeName, appPrivate = true, userAgent = userAgent, mimeType = actualMimeType
+                    )
+                ) {
                     SavedDownload(safeName, appPrivateDownloadPath(context, safeName))
                 } else null
             }
@@ -89,7 +95,7 @@ object DownloadHelper {
                         context = context,
                         url = url,
                         fileName = safeName,
-                        mimeType = guessMime(safeName),
+                        mimeType = actualMimeType,
                         userAgent = userAgent,
                         mode = mode,
                         destinationTreeUri = it.toString(),
@@ -104,7 +110,10 @@ object DownloadHelper {
                             Toast.LENGTH_LONG
                         ).show()
                     }
-                    if (enqueueViaDownloadManager(context, url, safeName, appPrivate = false, userAgent = userAgent)) {
+                    if (enqueueViaDownloadManager(
+                            context, url, safeName, appPrivate = false, userAgent = userAgent, mimeType = actualMimeType
+                        )
+                    ) {
                         SavedDownload(safeName, publicDownloadPath(safeName))
                     } else null
                 } else {
@@ -122,7 +131,10 @@ object DownloadHelper {
                 }
             }
             else -> {
-                if (enqueueViaDownloadManager(context, url, safeName, appPrivate = false, userAgent = userAgent)) {
+                if (enqueueViaDownloadManager(
+                        context, url, safeName, appPrivate = false, userAgent = userAgent, mimeType = actualMimeType
+                    )
+                ) {
                     SavedDownload(safeName, publicDownloadPath(safeName))
                 } else null
             }
@@ -519,11 +531,13 @@ object DownloadHelper {
         url: String,
         fileName: String,
         appPrivate: Boolean,
-        userAgent: String?
+        userAgent: String?,
+        mimeType: String
     ): Boolean {
         return try {
             val dm = context.getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager
             val req = DownloadManager.Request(Uri.parse(url))
+                .setMimeType(mimeType)
                 .setTitle("Click Browser Download")
                 .setDescription(fileName)
                 .setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED)
