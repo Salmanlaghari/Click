@@ -1663,7 +1663,7 @@ class MainActivity : FragmentActivity() {
                 }
             }
 
-            // Keeps the crash-restore snapshot fresh: debounced write of the
+            // Keeps the session snapshot fresh: debounced write of the
             // open restorable tabs (non-incognito, http/https only) into this
             // boot mode's profile store. With "clear data on exit" on, no
             // snapshot is kept at all (privacy first).
