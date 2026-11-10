@@ -521,7 +521,7 @@ object DownloadHelper {
         appPrivate: Boolean,
         userAgent: String?
     ): Boolean {
-        try {
+        return try {
             val dm = context.getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager
             val req = DownloadManager.Request(Uri.parse(url))
                 .setTitle("Click Browser Download")
