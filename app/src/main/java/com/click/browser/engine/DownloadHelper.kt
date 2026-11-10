@@ -61,8 +61,9 @@ object DownloadHelper {
         }
         return when (location) {
             DownloadSettings.LOCATION_APP -> {
-                enqueueViaDownloadManager(context, url, safeName, appPrivate = true, userAgent = userAgent)
-                null
+                if (enqueueViaDownloadManager(context, url, safeName, appPrivate = true, userAgent = userAgent)) {
+                    SavedDownload(safeName, appPrivateDownloadPath(context, safeName))
+                } else null
             }
             DownloadSettings.LOCATION_CUSTOM -> {
                 val treeUri = try { DownloadSettings.customUri(context) } catch (_: Exception) { null }
@@ -103,7 +104,9 @@ object DownloadHelper {
                             Toast.LENGTH_LONG
                         ).show()
                     }
-                    enqueueViaDownloadManager(context, url, safeName, appPrivate = false, userAgent = userAgent)
+                    if (enqueueViaDownloadManager(context, url, safeName, appPrivate = false, userAgent = userAgent)) {
+                        SavedDownload(safeName, publicDownloadPath(safeName))
+                    } else null
                 } else {
                     val message = when (transfer.state) {
                         com.click.browser.data.CustomDownloadState.FAILED ->
@@ -115,14 +118,29 @@ object DownloadHelper {
                     withContext(Dispatchers.Main) {
                         Toast.makeText(context, message, Toast.LENGTH_LONG).show()
                     }
+                    null
                 }
-                null
             }
             else -> {
-                enqueueViaDownloadManager(context, url, safeName, appPrivate = false, userAgent = userAgent)
-                null
+                if (enqueueViaDownloadManager(context, url, safeName, appPrivate = false, userAgent = userAgent)) {
+                    SavedDownload(safeName, publicDownloadPath(safeName))
+                } else null
             }
         }
+    }
+
+    /** Absolute path DownloadManager writes to for the public Downloads route. */
+    fun publicDownloadPath(fileName: String): String =
+        File(
+            Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS),
+            "ClickBrowser/$fileName"
+        ).absolutePath
+
+    /** Absolute path DownloadManager writes to for the app-private route. */
+    fun appPrivateDownloadPath(context: Context, fileName: String): String {
+        val directory = context.getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS)
+            ?: File(context.filesDir, Environment.DIRECTORY_DOWNLOADS)
+        return File(directory, fileName).absolutePath
     }
 
     suspend fun retryCustomFolder(context: Context, item: com.click.browser.data.CustomDownloadItem): Boolean {
@@ -162,7 +180,8 @@ object DownloadHelper {
         fileName: String,
         mimeType: String?,
         locationOverride: String? = null,
-        mode: BrowserMode = V9Engine.bootMode
+        mode: BrowserMode = V9Engine.bootMode,
+        totalBytes: Long = -1L
     ): SavedDownload? {
         val safeName = fileName.replace(Regex("[\\\\/:*?\"<>|]"), "_")
             .trim().take(180).ifBlank { "download" }
@@ -171,12 +190,40 @@ object DownloadHelper {
         } catch (_: Exception) {
             DownloadSettings.LOCATION_PHONE
         }
+        // Response-body downloads are streamed by Click itself, never by
+        // DownloadManager, so without this registration they were invisible:
+        // no progress and no Downloads-screen entry while the file copied.
+        val destinationLabel = when (location) {
+            DownloadSettings.LOCATION_APP -> "App private storage"
+            DownloadSettings.LOCATION_CUSTOM -> "Custom folder"
+            else -> "Downloads/ClickBrowser"
+        }
+        val registryId = ActiveResponseDownloads.begin(safeName, destinationLabel, totalBytes)
+        return try {
+            enqueueResponseInternal(
+                context, responseBody, url, safeName, mimeType, location, mode
+            ) { bytes -> ActiveResponseDownloads.updateProgress(registryId, bytes) }
+        } finally {
+            ActiveResponseDownloads.end(registryId)
+        }
+    }
+
+    private suspend fun enqueueResponseInternal(
+        context: Context,
+        responseBody: InputStream,
+        url: String,
+        safeName: String,
+        mimeType: String?,
+        location: String,
+        mode: BrowserMode,
+        onProgress: (Long) -> Unit
+    ): SavedDownload? {
         if (location != DownloadSettings.LOCATION_CUSTOM) {
             val savedWrite = withContext(Dispatchers.IO) {
                 when (location) {
-                    DownloadSettings.LOCATION_APP -> copyResponseBodyToAppStorage(context, responseBody, safeName)
+                    DownloadSettings.LOCATION_APP -> copyResponseBodyToAppStorage(context, responseBody, safeName, onProgress)
                         ?.let { SavedLocationWrite(it) }
-                    else -> copyResponseBodyToPublicDownloads(context, responseBody, safeName, mimeType)
+                    else -> copyResponseBodyToPublicDownloads(context, responseBody, safeName, mimeType, onProgress)
                         ?.let { SavedLocationWrite(it) }
                 }
             }
@@ -189,7 +236,7 @@ object DownloadHelper {
         }
 
         val staged = try {
-            stageResponseBody(context, responseBody)
+            stageResponseBody(context, responseBody, onProgress)
         } catch (_: Exception) {
             withContext(Dispatchers.Main) {
                 Toast.makeText(context, "The custom-folder response could not be staged safely.", Toast.LENGTH_LONG).show()
@@ -232,7 +279,7 @@ object DownloadHelper {
 
         val savedWrite = withContext(Dispatchers.IO) {
             try {
-                copyToPublicDownloads(context, staged, safeName, mimeType)
+                copyToPublicDownloads(context, staged, safeName, mimeType, onProgress)
                     ?.let { SavedLocationWrite(it, usedPublicFallback = true) }
             } catch (_: Exception) {
                 null
@@ -255,7 +302,11 @@ object DownloadHelper {
         return savedWrite?.let { SavedDownload(safeName, it.location) }
     }
 
-    private suspend fun stageResponseBody(context: Context, responseBody: InputStream): File =
+    private suspend fun stageResponseBody(
+        context: Context,
+        responseBody: InputStream,
+        onProgress: ((Long) -> Unit)? = null
+    ): File =
         withContext(Dispatchers.IO) {
             val directory = File(context.noBackupFilesDir, CustomFolderDownloadTransfer.STAGING_DIRECTORY)
             if (!directory.exists() && !directory.mkdirs()) {
@@ -283,6 +334,7 @@ object DownloadHelper {
                                 availableBudget = (android.os.StatFs(directory.absolutePath).availableBytes -
                                     MIN_FREE_SPACE_AFTER_STAGING_BYTES).coerceAtLeast(0L)
                                 bytesSinceSpaceCheck = 0L
+                                onProgress?.invoke(stagedBytes)
                             }
                             if (availableBudget < count) {
                                 throw IllegalStateException("Not enough free storage to stage this response safely")
@@ -305,7 +357,12 @@ object DownloadHelper {
             }
         }
 
-    private fun copyResponseBodyToAppStorage(context: Context, responseBody: InputStream, fileName: String): String? {
+    private fun copyResponseBodyToAppStorage(
+        context: Context,
+        responseBody: InputStream,
+        fileName: String,
+        onProgress: ((Long) -> Unit)? = null
+    ): String? {
         var destination: File? = null
         return try {
             val directory = context.getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS)
@@ -313,7 +370,9 @@ object DownloadHelper {
             if (!directory.exists() && !directory.mkdirs()) return null
             val outputFile = File(directory, fileName)
             destination = outputFile
-            outputFile.outputStream().use { output -> responseBody.use { it.copyTo(output) } }
+            outputFile.outputStream().use { output ->
+                responseBody.use { copyWithProgress(it, output, onProgress) }
+            }
             outputFile.absolutePath
         } catch (_: Exception) {
             runCatching { destination?.delete() }
@@ -327,7 +386,8 @@ object DownloadHelper {
         context: Context,
         responseBody: InputStream,
         fileName: String,
-        mimeType: String?
+        mimeType: String?,
+        onProgress: ((Long) -> Unit)? = null
     ): String? {
         val type = mimeType?.takeIf { it.isNotBlank() } ?: guessMime(fileName)
         var pendingUri: Uri? = null
@@ -345,7 +405,9 @@ object DownloadHelper {
                 pendingUri = uri
                 val output = context.contentResolver.openOutputStream(uri)
                     ?: throw IllegalStateException("Download output stream unavailable")
-                output.use { destination -> responseBody.use { it.copyTo(destination) } }
+                output.use { destination ->
+                    responseBody.use { copyWithProgress(it, destination, onProgress) }
+                }
                 val ready = ContentValues().apply { put(MediaStore.MediaColumns.IS_PENDING, 0) }
                 if (context.contentResolver.update(uri, ready, null, null) <= 0) {
                     throw IllegalStateException("Download could not be finalized")
@@ -363,7 +425,9 @@ object DownloadHelper {
                 if (!directory.exists() && !directory.mkdirs()) return null
                 val outputFile = File(directory, fileName)
                 pendingUri = Uri.fromFile(outputFile)
-                outputFile.outputStream().use { output -> responseBody.use { it.copyTo(output) } }
+                outputFile.outputStream().use { output ->
+                    responseBody.use { copyWithProgress(it, output, onProgress) }
+                }
                 pendingUri = null
                 outputFile.absolutePath
             }
@@ -378,11 +442,34 @@ object DownloadHelper {
         }
     }
 
+    /** Streams [input] to [output], reporting cumulative bytes at most every ~256 KB. */
+    private fun copyWithProgress(
+        input: InputStream,
+        output: java.io.OutputStream,
+        onProgress: ((Long) -> Unit)?
+    ) {
+        val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
+        var total = 0L
+        var lastReported = 0L
+        while (true) {
+            val count = input.read(buffer)
+            if (count < 0) break
+            output.write(buffer, 0, count)
+            total += count
+            if (onProgress != null && total - lastReported >= 256L * 1024L) {
+                lastReported = total
+                onProgress(total)
+            }
+        }
+        onProgress?.invoke(total)
+    }
+
     private fun copyToPublicDownloads(
         context: Context,
         source: File,
         fileName: String,
-        mimeType: String?
+        mimeType: String?,
+        onProgress: ((Long) -> Unit)? = null
     ): String? {
         val type = mimeType?.takeIf { it.isNotBlank() } ?: guessMime(fileName)
         // MediaStore.RELATIVE_PATH is available from API 29 (Q).
@@ -397,7 +484,7 @@ object DownloadHelper {
                 ?: return null
             return try {
                 context.contentResolver.openOutputStream(uri)?.use { output ->
-                    source.inputStream().use { it.copyTo(output) }
+                    source.inputStream().use { copyWithProgress(it, output, onProgress) }
                 } ?: throw IllegalStateException("Download output stream unavailable")
                 val ready = ContentValues().apply { put(MediaStore.MediaColumns.IS_PENDING, 0) }
                 context.contentResolver.update(uri, ready, null, null)
@@ -419,7 +506,7 @@ object DownloadHelper {
             if (!directory.exists() && !directory.mkdirs()) return null
             val destination = File(directory, fileName)
             destination.outputStream().use { output ->
-                source.inputStream().use { it.copyTo(output) }
+                source.inputStream().use { copyWithProgress(it, output, onProgress) }
             }
             destination.absolutePath
         } catch (_: Exception) {
@@ -433,8 +520,8 @@ object DownloadHelper {
         fileName: String,
         appPrivate: Boolean,
         userAgent: String?
-    ) {
-        try {
+    ): Boolean {
+        return try {
             val dm = context.getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager
             val req = DownloadManager.Request(Uri.parse(url))
                 .setTitle("Click Browser Download")
@@ -457,8 +544,10 @@ object DownloadHelper {
             }
             dm.enqueue(req)
             Toast.makeText(context, "Downloading $fileName…", Toast.LENGTH_SHORT).show()
+            true
         } catch (e: Exception) {
             Toast.makeText(context, "Download failed.", Toast.LENGTH_SHORT).show()
+            false
         }
     }
 

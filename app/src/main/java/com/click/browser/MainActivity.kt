@@ -1,5 +1,6 @@
 package com.click.browser
 
+import kotlin.math.roundToInt
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
@@ -91,6 +92,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
@@ -229,7 +231,9 @@ private data class PendingBrowserDownload(
     val mimeType: String?,
     val userAgent: String?,
     val mode: BrowserMode,
-    val responseBody: java.io.InputStream? = null
+    val responseBody: java.io.InputStream? = null,
+    /** Server-reported size of a Gecko response body; -1 when not reported. */
+    val contentLengthBytes: Long = -1L
 )
 
 private data class PendingPasswordSaveOffer(
@@ -815,7 +819,12 @@ class MainActivity : FragmentActivity() {
         }
     }
 
-    /** Custom-folder transfers record on completion; DownloadManager tracks other destinations. */
+    /**
+     * Records every started download in Click's own records with its exact
+     * destination path, so the Downloads screen always shows the file and
+     * where it went; DownloadManager/custom-transfer state is layered on top
+     * (and de-duplicated against these records) by the Downloads screen.
+     */
     private suspend fun enqueueAndRecordDownload(
         url: String,
         fileName: String,
@@ -1090,29 +1099,9 @@ class MainActivity : FragmentActivity() {
         ""
     }
 
-    /** Recognizes valid Google OAuth authorization requests; account pages stay in the current tab. */
-    private fun isGoogleAuthUrl(url: String): Boolean =
-        GoogleAuthPolicy.shouldOpenInCustomTab(url)
-
-    /**
-     * Opens [url] in the system-provided Custom Tab for a recognized Google
-     * OAuth authorization request, as required by Google's secure-browser policy.
-     */
-    private fun openInCustomTab(url: String) {
-        try {
-            val intent = androidx.browser.customtabs.CustomTabsIntent.Builder()
-                .setShowTitle(true)
-                .build()
-            intent.launchUrl(this, android.net.Uri.parse(url))
-        } catch (e: Exception) {
-            // Fallback: open in external browser.
-            try {
-                startActivity(android.content.Intent(android.content.Intent.ACTION_VIEW, android.net.Uri.parse(url)))
-            } catch (_: Exception) {
-                android.widget.Toast.makeText(this, "Could not open sign-in page", android.widget.Toast.LENGTH_SHORT).show()
-            }
-        }
-    }
+    // Website sign-in/OAuth flows intentionally stay inside Click's tabs
+    // (see GoogleAuthPolicy): there is no Custom Tab / external-browser
+    // handoff for them anymore.
 
     /**
      * Returns true if [host] is an IPv4 address (e.g. 182.180.50.52).
@@ -4553,13 +4542,9 @@ class MainActivity : FragmentActivity() {
                                                         currentTab.url, currentTab.connectionSecurity
                                                     ),
                                                     searchEngine = currentSearchEngineSetting,
-                                                    canGoBack = !showOverlays && if (currentTab.engine == BrowserTabEngine.GECKOVIEW) {
-                                                        currentTab.canGoBack
-                                                    } else currentTab.browserSession?.canGoBack() == true,
+                                                    canGoBack = !showOverlays && currentTab.canGoBack,
                                                     onBack = { currentTab.browserSession.goBackIfPossible() },
-                                                    canGoForward = !showOverlays && if (currentTab.engine == BrowserTabEngine.GECKOVIEW) {
-                                                        currentTab.canGoForward
-                                                    } else currentTab.browserSession?.canGoForward() == true,
+                                                    canGoForward = !showOverlays && currentTab.canGoForward,
                                                     onForward = { currentTab.browserSession.goForwardIfPossible() },
                                                     onNavigate = { input ->
                                                         pendingKeyboardDismissTabId = currentTab.id.takeIf {
@@ -4601,21 +4586,35 @@ class MainActivity : FragmentActivity() {
                                                     showExtensionButton = showExtensionButton,
                                                     onAddonsClick = { requestExtensionsForTab(currentTab) }
                                                 )
-                                                // Thin page-load progress indicator.
+                                                // Thin page-load progress indicator — visible for the
+                                                // entire load like Chrome's bar: a determinate fill once
+                                                // the engine reports a percentage, an animated
+                                                // indeterminate bar before that (progress still 0), so a
+                                                // loading page never looks like a silent blank screen.
                                                 val progress = currentTab.loadProgress
                                                 androidx.compose.animation.AnimatedVisibility(
-                                                    visible = progress in 1..99,
+                                                    visible = currentTab.isPageLoading || progress in 1..99,
                                                     enter = fadeIn(),
                                                     exit = fadeOut()
                                                 ) {
-                                                    LinearProgressIndicator(
-                                                        progress = progress / 100f,
-                                                        modifier = Modifier
-                                                            .fillMaxWidth()
-                                                            .height(2.dp),
-                                                        color = themed.primary,
-                                                        trackColor = themed.topBarBg
-                                                    )
+                                                    if (progress in 1..99) {
+                                                        LinearProgressIndicator(
+                                                            progress = { progress / 100f },
+                                                            modifier = Modifier
+                                                                .fillMaxWidth()
+                                                                .height(2.5.dp),
+                                                            color = themed.primary,
+                                                            trackColor = themed.topBarBg
+                                                        )
+                                                    } else {
+                                                        LinearProgressIndicator(
+                                                            modifier = Modifier
+                                                                .fillMaxWidth()
+                                                                .height(2.5.dp),
+                                                            color = themed.primary,
+                                                            trackColor = themed.topBarBg
+                                                        )
+                                                    }
                                                 }
                                             }
                                         }
@@ -4785,10 +4784,8 @@ class MainActivity : FragmentActivity() {
                                                                         showClickPage = pageKey
                                                                         return@navigation null
                                                                     }
-                                                                    if (isGoogleAuthUrl(targetUrl)) {
-                                                                        openInCustomTab(targetUrl)
-                                                                        return@navigation null
-                                                                    }
+                                                                    // Website sign-in/OAuth pages stay in this Click tab
+                                                                    // (Prince, 2026-11-10): no Custom Tab / Chrome handoff.
                                                                     if (!targetUrl.startsWith("http://") && !targetUrl.startsWith("https://")) {
                                                                         return@navigation null
                                                                     }
@@ -5114,6 +5111,9 @@ class MainActivity : FragmentActivity() {
                                                                         val mimeType = response.headers.entries
                                                                             .firstOrNull { it.key.equals("content-type", true) }
                                                                             ?.value?.substringBefore(';')?.trim()
+                                                                        val contentLengthBytes = response.headers.entries
+                                                                            .firstOrNull { it.key.equals("content-length", true) }
+                                                                            ?.value?.toLongOrNull() ?: -1L
                                                                         val fileName = android.webkit.URLUtil.guessFileName(
                                                                             response.uri, disposition, mimeType
                                                                         )
@@ -5134,7 +5134,8 @@ class MainActivity : FragmentActivity() {
                                                                                 mimeType = mimeType,
                                                                                 userAgent = null,
                                                                                 mode = liveMode,
-                                                                                responseBody = body
+                                                                                responseBody = body,
+                                                                                contentLengthBytes = contentLengthBytes
                                                                             )
                                                                         }
                                                                     }
@@ -5245,12 +5246,8 @@ class MainActivity : FragmentActivity() {
                                                                             pdfOfferUrl = urlStr
                                                                             return true
                                                                         }
-                                                                        // Only actual Google OAuth authorization requests use
-                                                                        // the supported browser context, even after redirects.
-                                                                        if (isGoogleAuthUrl(urlStr)) {
-                                                                            openInCustomTab(urlStr)
-                                                                            return true
-                                                                        }
+                                                                        // Website sign-in/OAuth pages load in this tab like any
+                                                                        // other page (no Chrome/Custom Tab handoff).
                                                                         if (request != null && request.isRedirect) return false
                                                                         // HTTPS mode handling FIRST (so http://click://
                                                                         // can't bypass it). Standard upgrades http->https;
@@ -5312,11 +5309,7 @@ class MainActivity : FragmentActivity() {
                                                                         var urlStr = url ?: ""
                                                                         // Query-param stripping (Brave-style).
                                                                         urlStr = cleanTrackingUrl(urlStr)
-                                                                        // Only valid Google OAuth authorization requests hand off.
-                                                                        if (isGoogleAuthUrl(urlStr)) {
-                                                                            openInCustomTab(urlStr)
-                                                                            return true
-                                                                        }
+                                                                        // Sign-in/OAuth pages stay in this tab (no handoff).
                                                                         // HTTPS mode handling FIRST (see above).
                                                                         // PDF: offer in-app viewing instead of navigating.
                                                                         if (isPdfUrl(urlStr)) {
@@ -5378,6 +5371,8 @@ class MainActivity : FragmentActivity() {
                                                                 loadingTab.hasCommittedContent = false
                                                                 loadingTab.webViewNavigationStopRecovery = false
                                                                 loadingTab.loadProgress = 0
+                                                                loadingTab.canGoBack = view?.canGoBack() == true
+                                                                loadingTab.canGoForward = view?.canGoForward() == true
                                                                 if (loadingTab === currentTab) {
                                                                     invalidateDevToolsSession()
                                                                     devToolsConsoleMessagesConsent = false
@@ -5433,6 +5428,8 @@ class MainActivity : FragmentActivity() {
                                                                     devToolsDeviceInfo = null
                                                                 }
                                                                 updatedTab.url = updatedUrl
+                                                                updatedTab.canGoBack = target.canGoBack()
+                                                                updatedTab.canGoForward = target.canGoForward()
                                                             }
 
                                                             override fun onPageFinished(view: WebView?, url: String?) {
@@ -5463,6 +5460,8 @@ class MainActivity : FragmentActivity() {
                                                                 finishedTab.hasCommittedContent = true
                                                                 finishedTab.webViewNavigationStopRecovery = false
                                                                 finishedTab.loadProgress = 100
+                                                                finishedTab.canGoBack = view?.canGoBack() == true
+                                                                finishedTab.canGoForward = view?.canGoForward() == true
                                                                 if (finishedTab === currentTab) {
                                                                     pageLoadTime = System.currentTimeMillis() - lastPageStart
                                                                 }
@@ -8518,7 +8517,8 @@ class MainActivity : FragmentActivity() {
                                                         fileName = accepted.fileName,
                                                         mimeType = accepted.mimeType,
                                                         locationOverride = acceptedDestination,
-                                                        mode = acceptedMode
+                                                        mode = acceptedMode,
+                                                        totalBytes = accepted.contentLengthBytes
                                                     )
                                                     if (saved != null) {
                                                         repository.addDownloadItemFor(
@@ -8729,12 +8729,29 @@ class MainActivity : FragmentActivity() {
                                 )
                             }
                             var aiChatExpanded by remember { mutableStateOf(false) }
+                            // Ask AI panel free-drag offset (Prince, 2026-11-10): the
+                            // panel can be dragged anywhere by its title bar; the
+                            // offset resets whenever the panel closes.
+                            var aiPanelDragX by remember { mutableStateOf(0f) }
+                            var aiPanelDragY by remember { mutableStateOf(0f) }
+                            LaunchedEffect(showAiChat) {
+                                if (!showAiChat) {
+                                    aiPanelDragX = 0f
+                                    aiPanelDragY = 0f
+                                }
+                            }
                             val aiChatPanelShape = RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp)
                             // AI chat panel — one-shot slide/spring entrance (battery-safe:
                             // no continuous animation).
                             androidx.compose.animation.AnimatedVisibility(
                                 modifier = Modifier
                                     .align(Alignment.BottomCenter)
+                                    .offset {
+                                        IntOffset(
+                                            aiPanelDragX.roundToInt(),
+                                            aiPanelDragY.roundToInt()
+                                        )
+                                    }
                                     .fillMaxWidth()
                                     .animateContentSize()
                                     .fillMaxHeight(AiChatPanelLayoutPolicy.heightFraction(aiChatExpanded))
@@ -8788,6 +8805,10 @@ class MainActivity : FragmentActivity() {
                                     usingBuiltInKey = usingBuiltInKey,
                                     isExpanded = aiChatExpanded,
                                     onToggleExpanded = { aiChatExpanded = !aiChatExpanded },
+                                    onPanelDrag = { dragX, dragY ->
+                                        aiPanelDragX = (aiPanelDragX + dragX).coerceIn(-600f, 600f)
+                                        aiPanelDragY = (aiPanelDragY + dragY).coerceIn(-1200f, 400f)
+                                    },
                                     pageTitle = currentTab.title,
                                     pageUrl = currentTab.url,
                                     pageContextIdentity = currentTab.id,

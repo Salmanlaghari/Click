@@ -55,6 +55,18 @@ internal fun managedDownloadState(status: Int): ManagedDownloadState? = when (st
     else -> null
 }
 
+/**
+ * A saved Click record duplicates a managed DownloadManager entry when both
+ * describe the same file from the same source URL (the managed entry's label
+ * is the file name DownloadManager was given). Such records are shown once —
+ * as the managed entry, which carries live state — instead of twice.
+ */
+internal fun isSavedRecordDuplicatedByManaged(
+    savedFileName: String,
+    savedUrl: String,
+    managed: List<ManagedDownload>
+): Boolean = managed.any { it.label == savedFileName && it.sourceUrl == savedUrl }
+
 /** Excludes other apps' downloads and any unexpected DownloadManager status. */
 internal fun isClickManagedDownload(title: String?, status: Int): Boolean =
     title == CLICK_DOWNLOAD_TITLE && managedDownloadState(status) != null
