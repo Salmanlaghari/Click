@@ -2060,6 +2060,7 @@ class MainActivity : FragmentActivity() {
                 }
             }
             var pendingWebViewSwitchTabId by remember { mutableStateOf<String?>(null) }
+            var pendingDevToolsSwitchTabId by remember { mutableStateOf<String?>(null) }
             var showPrivacyPolicy by remember { mutableStateOf(false) }
             var showAboutApp by remember { mutableStateOf(false) }
             var showLicenses by remember { mutableStateOf(false) }
@@ -2383,7 +2384,7 @@ class MainActivity : FragmentActivity() {
 
             // DevTools panel tab (0=Elements, 1=Console, 2=Network, 3=Sources, 4=Device)
             var devToolsTab by remember { mutableStateOf(0) }
-            var devToolsOpenRequested by remember { mutableStateOf(false) }
+            var devToolsOpenRequestedTabId by remember { mutableStateOf<String?>(null) }
             var devToolsConsoleMessagesConsent by remember { mutableStateOf(false) }
             // DevTools bottom sheet visibility — the panel is a dismissible sheet
             // so the website stays visible (never a fixed top overlay).
@@ -2638,15 +2639,43 @@ class MainActivity : FragmentActivity() {
              * existing screens/actions. Reuses current handlers — no feature is
              * reimplemented. Closes the FAB panel first.
              */
+            fun currentTabCanOpenDevTools(): Boolean {
+                val inspectedPageUrl = if (currentTab.engine == BrowserTabEngine.GECKOVIEW) {
+                    currentTab.url
+                } else {
+                    currentTab.webView?.url
+                }
+                return currentTab.hasCommittedContent &&
+                    !currentTab.isPageLoading &&
+                    DevToolsInspectionPolicy.isInspectableWebPageUrl(currentTab.url) &&
+                    DevToolsInspectionPolicy.isInspectableWebPageUrl(inspectedPageUrl)
+            }
+
+            fun requestDevToolsForCurrentTab() {
+                if (activeMode != BrowserMode.DEVELOPER) {
+                    Toast.makeText(this@MainActivity, "DevTools is only available in Developer mode.", Toast.LENGTH_LONG).show()
+                    return
+                }
+                if (!currentTabCanOpenDevTools()) {
+                    Toast.makeText(this@MainActivity, "Open an HTTP(S) page and wait for it to load before opening DevTools.", Toast.LENGTH_LONG).show()
+                    return
+                }
+                if (currentTab.engine == BrowserTabEngine.GECKOVIEW) {
+                    pendingWebViewSwitchTabId = currentTab.id
+                    pendingDevToolsSwitchTabId = currentTab.id
+                    showWebViewSwitchConfirmation = true
+                } else {
+                    devToolsOpenRequestedTabId = currentTab.id
+                }
+            }
+
             fun handleFeature(id: FeatureId) {
                 showFeatureMenu = false
                 val capability = ModeCapabilityRegistry.availability(
                     feature = id,
                     mode = activeMode,
                     engine = currentTab.engine,
-                    hasLoadedPage = currentTab.hasCommittedContent &&
-                        DevToolsInspectionPolicy.isInspectableWebPageUrl(currentTab.url) &&
-                        DevToolsInspectionPolicy.isInspectableWebPageUrl(currentTab.webView?.url)
+                    hasLoadedPage = currentTabCanOpenDevTools()
                 )
                 if (!capability.visible) return
                 if (!capability.enabled) {
@@ -2674,11 +2703,7 @@ class MainActivity : FragmentActivity() {
                     }
                     FeatureId.COOKIES -> showCookieManager = true
                     FeatureId.TOOLS -> showQuickTogglesDialog = true
-                    FeatureId.DEVTOOLS -> {
-                        // Opens the DevTools bottom sheet (website stays visible).
-                        // The FPS diagnostics overlay has its own drawer toggle.
-                        devToolsOpenRequested = true
-                    }
+                    FeatureId.DEVTOOLS -> requestDevToolsForCurrentTab()
                     FeatureId.DOWNLOADS -> showDownloads = true
                     FeatureId.BOOKMARKS -> showBookmarks = true
                     FeatureId.AI_CHAT -> {
@@ -3088,7 +3113,11 @@ class MainActivity : FragmentActivity() {
                     showVideoDetails -> showVideoDetails = false
                     showPdfDetails -> showPdfDetails = false
                     showImageDetails -> showImageDetails = false
-                    showWebViewSwitchConfirmation -> showWebViewSwitchConfirmation = false
+                    showWebViewSwitchConfirmation -> {
+                        showWebViewSwitchConfirmation = false
+                        pendingWebViewSwitchTabId = null
+                        pendingDevToolsSwitchTabId = null
+                    }
                     showPostInstallGeckoSwitchConfirmation -> showPostInstallGeckoSwitchConfirmation = false
                     showPrivacyPolicy -> showPrivacyPolicy = false
                     showAboutApp -> showAboutApp = false
@@ -3566,9 +3595,7 @@ class MainActivity : FragmentActivity() {
                         feature = FeatureId.DEVTOOLS,
                         mode = activeMode,
                         engine = currentTab.engine,
-                        hasLoadedPage = currentTab.hasCommittedContent &&
-                            DevToolsInspectionPolicy.isInspectableWebPageUrl(currentTab.url) &&
-                            DevToolsInspectionPolicy.isInspectableWebPageUrl(currentTab.webView?.url)
+                        hasLoadedPage = currentTabCanOpenDevTools()
                     )
                     if (!capability.visible || !capability.enabled) {
                         val reason = capability.explanation
@@ -3686,10 +3713,25 @@ class MainActivity : FragmentActivity() {
                 }
             }
 
-            LaunchedEffect(devToolsOpenRequested) {
-                if (devToolsOpenRequested) {
-                    devToolsOpenRequested = false
+            LaunchedEffect(
+                devToolsOpenRequestedTabId,
+                currentTab.id,
+                currentTab.engine,
+                currentTab.hasCommittedContent,
+                currentTab.url,
+                currentTab.isPageLoading
+            ) {
+                val requestedTabId = devToolsOpenRequestedTabId ?: return@LaunchedEffect
+                if (currentTab.id != requestedTabId) {
+                    devToolsOpenRequestedTabId = null
+                    return@LaunchedEffect
+                }
+                if (currentTab.engine == BrowserTabEngine.WEBVIEW && currentTabCanOpenDevTools()) {
+                    devToolsOpenRequestedTabId = null
                     openDevToolsTab(tab = 0)
+                } else if (!currentTab.isPageLoading) {
+                    devToolsOpenRequestedTabId = null
+                    Toast.makeText(this@MainActivity, "The page did not finish loading for DevTools.", Toast.LENGTH_LONG).show()
                 }
             }
 
@@ -3871,6 +3913,29 @@ class MainActivity : FragmentActivity() {
                                         scope.launch {
                                             drawerState.close()
                                             requestExtensionsForTab(currentTab)
+                                        }
+                                    }
+                                }
+                                if (activeMode == BrowserMode.DEVELOPER) {
+                                    item {
+                                        val devToolsReady = currentTabCanOpenDevTools()
+                                        val devToolsSubtitle = when {
+                                            !devToolsReady && currentTab.isPageLoading -> "Wait for the page to finish loading"
+                                            !devToolsReady -> "Open an HTTP(S) page first"
+                                            currentTab.engine == BrowserTabEngine.GECKOVIEW -> "Confirm a reload into WebView"
+                                            else -> "Inspect the current page"
+                                        }
+                                        DrawerItem(
+                                            label = "Developer Tools",
+                                            subtitle = devToolsSubtitle,
+                                            icon = Icons.Default.Code,
+                                            color = theme.primary,
+                                            enabled = devToolsReady
+                                        ) {
+                                            scope.launch {
+                                                drawerState.close()
+                                                requestDevToolsForCurrentTab()
+                                            }
                                         }
                                     }
                                 }
@@ -6587,7 +6652,7 @@ class MainActivity : FragmentActivity() {
                                     expanded = showFeatureMenu,
                                     activeMode = activeMode,
                                     activeEngine = currentTab.engine,
-                                    hasLoadedPage = currentTab.url.isNotBlank() && currentTab.url != "about:blank",
+                                    hasLoadedPage = currentTabCanOpenDevTools(),
                                     desktopLayoutEnabled = featureMenuWideLayout,
                                     onToggle = { showFeatureMenu = !showFeatureMenu },
                                     onDismiss = { showFeatureMenu = false },
@@ -7734,6 +7799,7 @@ class MainActivity : FragmentActivity() {
                                     onDismissRequest = {
                                         showWebViewSwitchConfirmation = false
                                         pendingWebViewSwitchTabId = null
+                                        pendingDevToolsSwitchTabId = null
                                     },
                                     title = { Text("Switch this tab to WebView?") },
                                     text = {
@@ -7744,11 +7810,16 @@ class MainActivity : FragmentActivity() {
                                     confirmButton = {
                                         TextButton(onClick = {
                                             val tabId = pendingWebViewSwitchTabId
+                                            val openDevToolsAfterSwitch = pendingDevToolsSwitchTabId == tabId
                                             pendingWebViewSwitchTabId = null
+                                            pendingDevToolsSwitchTabId = null
                                             showWebViewSwitchConfirmation = false
                                             val tab = tabs.firstOrNull { it.id == tabId }
                                             if (tab != null && !tab.isIncognito && tab.engine == BrowserTabEngine.GECKOVIEW) {
-                                                replaceTabEngine(tab, BrowserTabEngine.WEBVIEW)
+                                                val switched = replaceTabEngine(tab, BrowserTabEngine.WEBVIEW)
+                                                if (switched && openDevToolsAfterSwitch) {
+                                                    devToolsOpenRequestedTabId = tab.id
+                                                }
                                             }
                                         }) { Text("Switch to WebView") }
                                     },
@@ -7756,6 +7827,7 @@ class MainActivity : FragmentActivity() {
                                         TextButton(onClick = {
                                             showWebViewSwitchConfirmation = false
                                             pendingWebViewSwitchTabId = null
+                                            pendingDevToolsSwitchTabId = null
                                         }) { Text("Cancel") }
                                     }
                                 )
@@ -9618,6 +9690,7 @@ fun DrawerItem(
     color: Color,
     subtitle: String? = null,
     onInfoClick: (() -> Unit)? = null,
+    enabled: Boolean = true,
     onClick: () -> Unit = {}
 ) {
     var pressed by remember { mutableStateOf(false) }
@@ -9631,7 +9704,7 @@ fun DrawerItem(
                 scaleX = scale
                 scaleY = scale
             }
-            .clickable {
+            .clickable(enabled = enabled) {
                 pressed = true
                 onClick()
             }
@@ -9654,13 +9727,18 @@ fun DrawerItem(
                     .border(BorderStroke(1.dp, color.copy(0.3f)), shape = RoundedCornerShape(8.dp)),
                 contentAlignment = Alignment.Center
             ) {
-                Icon(icon, contentDescription = null, tint = color, modifier = Modifier.size(16.dp))
+                Icon(
+                    icon,
+                    contentDescription = null,
+                    tint = if (enabled) color else color.copy(alpha = 0.4f),
+                    modifier = Modifier.size(16.dp)
+                )
             }
             Spacer(modifier = Modifier.width(12.dp))
             Column(modifier = Modifier.weight(1f)) {
                 Text(
                     text = label,
-                    color = MaterialTheme.colorScheme.onSurface,
+                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = if (enabled) 1f else 0.45f),
                     fontSize = 11.sp,
                     fontWeight = FontWeight.Bold,
                     maxLines = 1,
@@ -9669,7 +9747,7 @@ fun DrawerItem(
                 if (subtitle != null) {
                     Text(
                         text = subtitle,
-                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.55f),
+                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = if (enabled) 0.55f else 0.3f),
                         fontSize = 9.sp,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis

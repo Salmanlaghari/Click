@@ -106,7 +106,7 @@ class ModeCapabilityRegistryTest {
     }
 
     @Test
-    fun devToolsRequiresARealLoadedPageAndDoesNotAdvertiseEngineFallback() {
+    fun devToolsRequiresALoadedPageAndOffersAConfirmedGeckoSwitch() {
         val blank = ModeCapabilityRegistry.availability(
             FeatureId.DEVTOOLS,
             BrowserMode.DEVELOPER,
@@ -124,6 +124,25 @@ class ModeCapabilityRegistryTest {
             hasLoadedPage = true
         )
         assertTrue(loaded.enabled)
+
+        val geckoBlank = ModeCapabilityRegistry.availability(
+            FeatureId.DEVTOOLS,
+            BrowserMode.DEVELOPER,
+            BrowserTabEngine.GECKOVIEW,
+            hasLoadedPage = false
+        )
+        assertFalse(geckoBlank.enabled)
+        assertEquals("Load a web page before opening DevTools.", geckoBlank.explanation)
+
+        val geckoLoaded = ModeCapabilityRegistry.availability(
+            FeatureId.DEVTOOLS,
+            BrowserMode.DEVELOPER,
+            BrowserTabEngine.GECKOVIEW,
+            hasLoadedPage = true
+        )
+        assertTrue(geckoLoaded.visible)
+        assertTrue(geckoLoaded.enabled)
+        assertEquals("Tap to review a WebView reload before opening DevTools.", geckoLoaded.explanation)
     }
 
     @Test

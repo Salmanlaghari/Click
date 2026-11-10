@@ -19,15 +19,17 @@ class DevToolsAvailabilityPolicyTest {
     }
 
     @Test
-    fun GeckoViewDevToolsIsDisabledAndNeverRequestsAnEngineFallback() {
+    fun GeckoViewDevToolsOffersAConfirmedSwitchButNeverCapturesPageData() {
         val access = ModeCapabilityRegistry.availability(
             FeatureId.DEVTOOLS,
             BrowserMode.DEVELOPER,
-            BrowserTabEngine.GECKOVIEW
+            BrowserTabEngine.GECKOVIEW,
+            hasLoadedPage = true
         )
 
         assertTrue(access.visible)
-        assertFalse(access.enabled)
-        assertTrue(access.explanation.orEmpty().contains("GeckoView"))
+        assertTrue(access.enabled)
+        assertTrue(access.explanation.orEmpty().contains("reload"))
+        assertFalse(DevToolsAvailabilityPolicy.canCapture(BrowserMode.DEVELOPER, BrowserTabEngine.GECKOVIEW))
     }
 }
