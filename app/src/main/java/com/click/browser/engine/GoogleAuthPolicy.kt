@@ -5,12 +5,18 @@ import java.net.URLDecoder
 import java.nio.charset.StandardCharsets
 
 /**
- * Recognizes valid Google OAuth authorization requests that must use a
- * supported browser authentication context. Ordinary Google account/site pages
- * are not OAuth authorization requests and stay in Click's current tab.
+ * Classifies Google OAuth authorization requests.
+ *
+ * Prince's direction (2026-11-10 device test): a website's sign-in/sign-up
+ * flow must stay inside Click's current tab — the user opens the site's
+ * sign-in page in Click, completes the whole process there, and is signed in
+ * there. Handing the flow off to Chrome / the default browser (where a
+ * different account list appears) is the bug being fixed, so Click no longer
+ * opens Custom Tabs or external browsers for these URLs; the navigation
+ * simply proceeds in the current tab like any other page load.
  *
  * This only classifies URLs; it does not alter user agents, credentials,
- * redirects, OAuth parameters, or cookies.
+ * redirects, OAuth parameters, or cookies, and it never automates a sign-in.
  */
 internal object GoogleAuthPolicy {
     private const val GOOGLE_AUTH_HOST = "accounts.google.com"
@@ -24,7 +30,8 @@ internal object GoogleAuthPolicy {
         "response_type",
     )
 
-    fun shouldOpenInCustomTab(rawUrl: String): Boolean {
+    /** True when [rawUrl] is a well-formed Google OAuth authorization request. */
+    fun isGoogleOAuthAuthorizationRequest(rawUrl: String): Boolean {
         val uri = runCatching { URI(rawUrl) }.getOrNull() ?: return false
         if (uri.scheme?.lowercase() != "https" || uri.rawUserInfo != null) return false
         if (uri.host?.lowercase()?.trimEnd('.') != GOOGLE_AUTH_HOST) return false
@@ -33,6 +40,12 @@ internal object GoogleAuthPolicy {
         if (path !in authorizationPaths) return false
         return hasRequiredAuthorizationParameters(uri.rawQuery)
     }
+
+    /**
+     * OAuth authorization requests stay in Click's current tab (see class
+     * doc), so no URL is ever handed off to a Custom Tab anymore.
+     */
+    fun shouldOpenInCustomTab(rawUrl: String): Boolean = false
 
     private fun hasRequiredAuthorizationParameters(rawQuery: String?): Boolean {
         if (rawQuery.isNullOrBlank()) return false
@@ -52,7 +65,10 @@ internal object GoogleAuthPolicy {
     private fun decodeQueryPart(value: String): String? =
         runCatching { URLDecoder.decode(value, StandardCharsets.UTF_8.name()) }.getOrNull()
 
-    /** A null Gecko navigation target is an intentional handoff only for OAuth authorization requests. */
-    fun shouldShowBlockedNavigationNotice(rawUrl: String): Boolean =
-        !shouldOpenInCustomTab(rawUrl)
+    /**
+     * Blocked Gecko navigations always show Click's blocked-navigation
+     * notice: no navigation is silently handed off to another browser
+     * anymore, so there is no silent-handoff case left to suppress it for.
+     */
+    fun shouldShowBlockedNavigationNotice(rawUrl: String): Boolean = true
 }

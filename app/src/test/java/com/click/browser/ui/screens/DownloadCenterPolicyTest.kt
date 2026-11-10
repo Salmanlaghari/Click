@@ -77,6 +77,49 @@ class DownloadCenterPolicyTest {
         assertEquals(failed, failed.recordFailure())
     }
 
+    @Test
+    fun savedRecordMatchingAManagedDownloadIsDuplicated() {
+        val managed = listOf(
+            ManagedDownload(
+                id = 7L,
+                label = "Click-Browser-Release.zip",
+                downloadedBytes = 10L,
+                totalBytes = 10L,
+                state = ManagedDownloadState.COMPLETED,
+                sourceUrl = "https://example.com/Click-Browser-Release.zip"
+            )
+        )
+        assertTrue(
+            isSavedRecordDuplicatedByManaged(
+                "Click-Browser-Release.zip",
+                "https://example.com/Click-Browser-Release.zip",
+                managed
+            )
+        )
+        // Different file or different source stays visible as its own record.
+        assertFalse(
+            isSavedRecordDuplicatedByManaged(
+                "other.zip",
+                "https://example.com/Click-Browser-Release.zip",
+                managed
+            )
+        )
+        assertFalse(
+            isSavedRecordDuplicatedByManaged(
+                "Click-Browser-Release.zip",
+                "https://example.com/different.zip",
+                managed
+            )
+        )
+        assertFalse(
+            isSavedRecordDuplicatedByManaged(
+                "Click-Browser-Release.zip",
+                "https://example.com/Click-Browser-Release.zip",
+                emptyList()
+            )
+        )
+    }
+
     private fun item(
         id: Long,
         label: String = "download-$id.bin",

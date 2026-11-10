@@ -34,6 +34,8 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.offset
+import androidx.compose.foundation.gestures.detectDragGestures
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -169,7 +171,10 @@ internal fun AiChatScreen(
     onOpenUrl: (String) -> Unit = {},
     onReportMessage: (String) -> Unit = {},
     onOpenSettings: () -> Unit,
-    onClose: () -> Unit
+    onClose: () -> Unit,
+    /** When set, dragging the panel's title bar reports drag deltas so the
+     * host can move the whole Ask AI panel anywhere on screen. */
+    onPanelDrag: ((dragX: Float, dragY: Float) -> Unit)? = null
 ) {
     val context = LocalContext.current
     val effectiveProviderId = if (apiKey.startsWith("AIza")) "gemini" else providerId
@@ -568,6 +573,15 @@ internal fun AiChatScreen(
     Scaffold(
         topBar = {
             TopAppBar(
+                modifier = if (onPanelDrag != null) {
+                    Modifier.pointerInput(onPanelDrag) {
+                        detectDragGestures { _, dragAmount ->
+                            onPanelDrag(dragAmount.x, dragAmount.y)
+                        }
+                    }
+                } else {
+                    Modifier
+                },
                 title = {
                     Column {
                         Text("Click AI Assistant", fontWeight = FontWeight.Bold, fontSize = 18.sp)

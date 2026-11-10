@@ -30,6 +30,8 @@ import com.click.browser.data.CustomDownloadItem
 import com.click.browser.data.customDownloadProgress
 import com.click.browser.data.CustomDownloadState
 import com.click.browser.data.DownloadItem
+import com.click.browser.engine.ActiveResponseDownload
+import com.click.browser.engine.ActiveResponseDownloads
 import com.click.browser.engine.DownloadHelper
 import com.click.browser.engine.BrowserMode
 import com.click.browser.engine.CustomDownloadNotifications
@@ -63,6 +65,9 @@ fun DownloadsScreen(
     val customDownloadsFlow = remember(mode) { repository.customDownloadsFlowFor(mode) }
     val downloads by downloadsFlow.collectAsState(initial = emptyList())
     val customDownloads by customDownloadsFlow.collectAsState(initial = emptyList())
+    // Response-body downloads are streamed by Click itself (no DownloadManager
+    // entry exists for them); this registry is the only live view of them.
+    val activeResponseDownloads by ActiveResponseDownloads.active.collectAsState()
     LaunchedEffect(mode) {
         CustomDownloadScheduler.reconcile(context, mode)
     }
@@ -109,7 +114,10 @@ fun DownloadsScreen(
     val failed = managedDownloads.filter { it.state == ManagedDownloadState.FAILED }
     val activeCustom = customDownloads.filter { it.canCancel }
     val activeCustomIds = activeCustom.mapTo(mutableSetOf()) { it.id }
-    val savedDownloads = downloads.filter { it.transferId == null || it.transferId !in activeCustomIds }
+    val savedDownloads = downloads.filter {
+        (it.transferId == null || it.transferId !in activeCustomIds) &&
+            !isSavedRecordDuplicatedByManaged(it.fileName, it.url, managedDownloads)
+    }
     val failedCustom = customDownloads.filter {
         it.state == CustomDownloadState.FAILED || it.state == CustomDownloadState.CANCELED
     }
@@ -222,7 +230,7 @@ fun DownloadsScreen(
                 is DownloadCenterQueryState.Loaded -> Unit
             }
 
-            if (active.isNotEmpty() || activeCustom.isNotEmpty()) {
+            if (active.isNotEmpty() || activeCustom.isNotEmpty() || activeResponseDownloads.isNotEmpty()) {
                 item {
                     Text(
                         "In progress",
@@ -249,6 +257,9 @@ fun DownloadsScreen(
                         onCancel = { scope.launch { CustomDownloadScheduler.cancel(context, item) } },
                         onRetry = {}
                     )
+                }
+                items(activeResponseDownloads, key = { "response-${it.id}" }) { item ->
+                    ActiveResponseDownloadRow(item = item)
                 }
                 item { HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp)) }
             }
@@ -334,7 +345,8 @@ fun DownloadsScreen(
             }
 
             if (queryState.shouldShowEmptyState(
-                    savedFileCount = savedDownloads.size + activeCustom.size + failedCustom.size
+                    savedFileCount = savedDownloads.size + activeCustom.size + failedCustom.size +
+                        activeResponseDownloads.size
                 )
             ) {
                 item {
@@ -349,6 +361,40 @@ fun DownloadsScreen(
                 }
             }
         }
+    }
+}
+
+/** Live row for a response-body download Click is streaming to storage itself. */
+@Composable
+private fun ActiveResponseDownloadRow(item: ActiveResponseDownload) {
+    val progress = if (item.totalBytes > 0) {
+        (item.downloadedBytes.toFloat() / item.totalBytes.toFloat()).coerceIn(0f, 1f)
+    } else null
+    val sizeText = if (item.totalBytes > 0) {
+        "${formatBytes(item.downloadedBytes)} of ${formatBytes(item.totalBytes)}"
+    } else {
+        formatBytes(item.downloadedBytes)
+    }
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp, vertical = 8.dp)
+    ) {
+        Text(item.fileName, style = MaterialTheme.typography.bodyMedium)
+        if (progress != null) {
+            LinearProgressIndicator(
+                progress = { progress },
+                modifier = Modifier.fillMaxWidth()
+            )
+        } else {
+            LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+        }
+        Spacer(Modifier.height(4.dp))
+        Text(
+            "Downloading… · $sizeText · Saving to ${item.destinationLabel}",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
     }
 }
 

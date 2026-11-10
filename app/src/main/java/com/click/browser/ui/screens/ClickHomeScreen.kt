@@ -30,6 +30,10 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.offset
+import androidx.compose.foundation.gestures.detectDragGestures
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.unit.IntOffset
+import kotlin.math.roundToInt
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.sizeIn
@@ -2182,9 +2186,16 @@ fun AiQuickFab(
     modifier: Modifier = Modifier
 ) {
     var expanded by remember { mutableStateOf(false) }
+    // Free drag (Prince, 2026-11-10): the Ask AI popup can be dragged anywhere
+    // on screen by its pill; a drag suppresses the tap that ends the gesture
+    // so it does not also open the chat.
+    var fabOffsetX by remember { mutableStateOf(0f) }
+    var fabOffsetY by remember { mutableStateOf(0f) }
+    var fabDragged by remember { mutableStateOf(false) }
     Column(
         horizontalAlignment = Alignment.End,
         modifier = modifier
+            .offset { IntOffset(fabOffsetX.roundToInt(), fabOffsetY.roundToInt()) }
     ) {
         androidx.compose.animation.AnimatedVisibility(
             visible = expanded,
@@ -2218,10 +2229,23 @@ fun AiQuickFab(
                 .clip(RoundedCornerShape(28.dp))
                 .background(Brush.linearGradient(listOf(Color(0xFF72583D), Color(0xFFAA865C))))
                 .border(1.5.dp, Color.White.copy(alpha = 0.35f), RoundedCornerShape(28.dp))
+                .pointerInput(Unit) {
+                    detectDragGestures(
+                        onDragStart = { fabDragged = false },
+                        onDrag = { change, dragAmount ->
+                            fabDragged = true
+                            change.consume()
+                            fabOffsetX = (fabOffsetX + dragAmount.x).coerceIn(-900f, 240f)
+                            fabOffsetY = (fabOffsetY + dragAmount.y).coerceIn(-1400f, 240f)
+                        }
+                    )
+                }
                 .clickable(
                     interactionSource = remember { MutableInteractionSource() },
                     indication = null
-                ) { onAskAi() }
+                ) {
+                    if (fabDragged) fabDragged = false else onAskAi()
+                }
                 .padding(start = 16.dp, top = 12.dp, bottom = 12.dp, end = 8.dp)
         ) {
             Icon(
