@@ -62,6 +62,8 @@ fun PrivacyGuardsScreen(
     onRunWebrtcTest: () -> Unit,
     onClose: () -> Unit
 ) {
+    androidx.activity.compose.BackHandler(onBack = onClose)
+
     Scaffold(
         topBar = {
             TopAppBar(

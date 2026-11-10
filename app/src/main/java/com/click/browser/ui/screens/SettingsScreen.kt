@@ -161,6 +161,7 @@ fun SettingsScreen(
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
+    androidx.activity.compose.BackHandler(onBack = onClose)
     val listState = rememberLazyListState()
     val javaScriptAvailability = BrowserSettingCapabilityPolicy.availability(
         BrowserSetting.JAVASCRIPT, currentTabEngine

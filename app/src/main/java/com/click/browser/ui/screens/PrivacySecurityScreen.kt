@@ -126,11 +126,18 @@ fun PrivacySecurityScreen(
                     account = signed
                 }
             } catch (e: Exception) {
-                accountError = "Sign-in failed: ${(e.message ?: "unknown error").take(100)}"
+                val rawMsg = e.message ?: "unknown error"
+                accountError = if (rawMsg.contains("10:") || rawMsg.contains("10")) {
+                    "Google Play Services configuration required (code 10). Local vault active."
+                } else {
+                    "Sign-in failed: ${rawMsg.take(100)}"
+                }
             }
             accountLoading = false
         }
     }
+
+    androidx.activity.compose.BackHandler(onBack = onClose)
 
     Scaffold(
         topBar = {
