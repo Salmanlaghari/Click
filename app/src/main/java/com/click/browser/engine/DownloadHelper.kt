@@ -9,7 +9,12 @@ import android.os.Environment
 import android.provider.MediaStore
 import android.widget.Toast
 import androidx.documentfile.provider.DocumentFile
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
 import java.io.FileOutputStream
@@ -37,6 +42,45 @@ private data class SavedLocationWrite(
 object DownloadHelper {
     private const val MIN_FREE_SPACE_AFTER_STAGING_BYTES = 64L * 1024L * 1024L
     private const val SPACE_CHECK_INTERVAL_BYTES = 1024L * 1024L
+    private val responseCallbackScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+
+    /**
+     * Consume GeckoView's one-shot response body outside Compose's cancellable scope.
+     * The app-process scope survives recomposition and Activity recreation while the stream is copied.
+     */
+    fun enqueueResponseInApplicationScope(
+        context: Context,
+        responseBody: InputStream,
+        url: String,
+        fileName: String,
+        mimeType: String?,
+        mode: BrowserMode,
+        totalBytes: Long,
+        onComplete: suspend (SavedDownload?) -> Unit
+    ): Job = responseCallbackScope.launch {
+        val appContext = context.applicationContext
+        val saved = try {
+            enqueueResponse(
+                context = appContext,
+                responseBody = responseBody,
+                url = url,
+                fileName = fileName,
+                mimeType = mimeType,
+                mode = mode,
+                totalBytes = totalBytes
+            )
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (_: Exception) {
+            withContext(Dispatchers.Main.immediate) {
+                Toast.makeText(appContext, "Download failed.", Toast.LENGTH_LONG).show()
+            }
+            null
+        } finally {
+            runCatching { responseBody.close() }
+        }
+        withContext(Dispatchers.Main.immediate) { onComplete(saved) }
+    }
 
     suspend fun enqueue(
         context: Context,
@@ -44,7 +88,8 @@ object DownloadHelper {
         fileName: String,
         locationOverride: String? = null,
         userAgent: String? = null,
-        mode: BrowserMode = V9Engine.bootMode
+        mode: BrowserMode = V9Engine.bootMode,
+        mimeType: String? = null
     ): SavedDownload? {
         val scheme = try { Uri.parse(url).scheme?.lowercase() } catch (_: Exception) { null }
         if (scheme != "http" && scheme != "https") {
@@ -54,6 +99,7 @@ object DownloadHelper {
             return null
         }
         val safeName = fileName.replace(Regex("[\\\\/:*?\"<>|]"), "_").trim().take(180).ifBlank { "download" }
+        val actualMimeType = normalizeMimeType(mimeType, safeName)
         val location = locationOverride?.let(DownloadSettings::normalize) ?: try {
             DownloadSettings.location(context)
         } catch (_: Exception) {
@@ -61,7 +107,10 @@ object DownloadHelper {
         }
         return when (location) {
             DownloadSettings.LOCATION_APP -> {
-                if (enqueueViaDownloadManager(context, url, safeName, appPrivate = true, userAgent = userAgent)) {
+                if (enqueueViaDownloadManager(
+                        context, url, safeName, appPrivate = true, userAgent = userAgent, mimeType = actualMimeType
+                    )
+                ) {
                     SavedDownload(safeName, appPrivateDownloadPath(context, safeName))
                 } else null
             }
@@ -89,7 +138,7 @@ object DownloadHelper {
                         context = context,
                         url = url,
                         fileName = safeName,
-                        mimeType = guessMime(safeName),
+                        mimeType = actualMimeType,
                         userAgent = userAgent,
                         mode = mode,
                         destinationTreeUri = it.toString(),
@@ -104,7 +153,10 @@ object DownloadHelper {
                             Toast.LENGTH_LONG
                         ).show()
                     }
-                    if (enqueueViaDownloadManager(context, url, safeName, appPrivate = false, userAgent = userAgent)) {
+                    if (enqueueViaDownloadManager(
+                            context, url, safeName, appPrivate = false, userAgent = userAgent, mimeType = actualMimeType
+                        )
+                    ) {
                         SavedDownload(safeName, publicDownloadPath(safeName))
                     } else null
                 } else {
@@ -122,7 +174,10 @@ object DownloadHelper {
                 }
             }
             else -> {
-                if (enqueueViaDownloadManager(context, url, safeName, appPrivate = false, userAgent = userAgent)) {
+                if (enqueueViaDownloadManager(
+                        context, url, safeName, appPrivate = false, userAgent = userAgent, mimeType = actualMimeType
+                    )
+                ) {
                     SavedDownload(safeName, publicDownloadPath(safeName))
                 } else null
             }
@@ -169,9 +224,8 @@ object DownloadHelper {
     }
 
     /**
-     * Saves GeckoView's already-authenticated response body after Click's normal
-     * confirmation dialog. Custom-folder responses are durably staged; other
-     * destinations stream directly without re-fetching the URL.
+     * Saves GeckoView's already-authenticated response body immediately after it is handed off.
+     * Custom-folder responses are durably staged; other destinations stream directly without re-fetching the URL.
      */
     suspend fun enqueueResponse(
         context: Context,
@@ -185,6 +239,7 @@ object DownloadHelper {
     ): SavedDownload? {
         val safeName = fileName.replace(Regex("[\\\\/:*?\"<>|]"), "_")
             .trim().take(180).ifBlank { "download" }
+        val actualMimeType = normalizeMimeType(mimeType, safeName)
         val location = locationOverride?.let(DownloadSettings::normalize) ?: try {
             DownloadSettings.location(context)
         } catch (_: Exception) {
@@ -201,7 +256,7 @@ object DownloadHelper {
         val registryId = ActiveResponseDownloads.begin(safeName, destinationLabel, totalBytes)
         return try {
             enqueueResponseInternal(
-                context, responseBody, url, safeName, mimeType, location, mode
+                context, responseBody, url, safeName, actualMimeType, location, mode
             ) { bytes -> ActiveResponseDownloads.updateProgress(registryId, bytes) }
         } finally {
             ActiveResponseDownloads.end(registryId)
@@ -389,7 +444,7 @@ object DownloadHelper {
         mimeType: String?,
         onProgress: ((Long) -> Unit)? = null
     ): String? {
-        val type = mimeType?.takeIf { it.isNotBlank() } ?: guessMime(fileName)
+        val type = normalizeMimeType(mimeType, fileName)
         var pendingUri: Uri? = null
         return try {
             // MediaStore.RELATIVE_PATH is available from API 29 (Q).
@@ -471,7 +526,7 @@ object DownloadHelper {
         mimeType: String?,
         onProgress: ((Long) -> Unit)? = null
     ): String? {
-        val type = mimeType?.takeIf { it.isNotBlank() } ?: guessMime(fileName)
+        val type = normalizeMimeType(mimeType, fileName)
         // MediaStore.RELATIVE_PATH is available from API 29 (Q).
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
             val values = ContentValues().apply {
@@ -519,11 +574,13 @@ object DownloadHelper {
         url: String,
         fileName: String,
         appPrivate: Boolean,
-        userAgent: String?
+        userAgent: String?,
+        mimeType: String
     ): Boolean {
         return try {
             val dm = context.getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager
             val req = DownloadManager.Request(Uri.parse(url))
+                .setMimeType(mimeType)
                 .setTitle("Click Browser Download")
                 .setDescription(fileName)
                 .setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED)
@@ -550,6 +607,10 @@ object DownloadHelper {
             false
         }
     }
+
+    internal fun normalizeMimeType(rawMimeType: String?, fileName: String): String =
+        rawMimeType?.substringBefore(';')?.trim()?.takeIf { it.isNotEmpty() }
+            ?: guessMime(fileName)
 
     private fun guessMime(fileName: String): String =
         when (fileName.substringAfterLast('.', "").lowercase()) {

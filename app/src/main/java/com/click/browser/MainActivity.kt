@@ -225,17 +225,6 @@ private data class PendingWebsiteMicrophoneAndroidResult(
     val onCancel: () -> Unit
 )
 
-private data class PendingBrowserDownload(
-    val url: String,
-    val fileName: String,
-    val mimeType: String?,
-    val userAgent: String?,
-    val mode: BrowserMode,
-    val responseBody: java.io.InputStream? = null,
-    /** Server-reported size of a Gecko response body; -1 when not reported. */
-    val contentLengthBytes: Long = -1L
-)
-
 private data class PendingPasswordSaveOffer(
     val tabId: String,
     val sourceOrigin: String,
@@ -830,7 +819,8 @@ class MainActivity : FragmentActivity() {
         fileName: String,
         locationOverride: String? = null,
         userAgent: String? = null,
-        mode: BrowserMode = liveMode
+        mode: BrowserMode = liveMode,
+        mimeType: String? = null
     ) {
         val saved = DownloadHelper.enqueue(
             context = this,
@@ -838,7 +828,8 @@ class MainActivity : FragmentActivity() {
             fileName = fileName,
             locationOverride = locationOverride,
             userAgent = userAgent,
-            mode = mode
+            mode = mode,
+            mimeType = mimeType
         ) ?: return
         repository.addDownloadItemFor(
             mode,
@@ -2180,9 +2171,6 @@ class MainActivity : FragmentActivity() {
             var showAccessibility by remember { mutableStateOf(false) }
             var showLanguage by remember { mutableStateOf(false) }
             var showDownloadSettings by remember { mutableStateOf(false) }
-            var pendingBrowserDownload by remember { mutableStateOf<PendingBrowserDownload?>(null) }
-            var downloadDestination by remember { mutableStateOf(DownloadSettings.LOCATION_PHONE) }
-            var customDownloadFolderAvailable by remember { mutableStateOf(false) }
             var showReports by remember { mutableStateOf(false) }
             // Privacy & Security suite (Google Sign-In, passwords, Safety Check, autofill, cards).
             var showPrivacySecurity by remember { mutableStateOf(false) }
@@ -5130,27 +5118,32 @@ class MainActivity : FragmentActivity() {
                                                                         val fileName = android.webkit.URLUtil.guessFileName(
                                                                             response.uri, disposition, mimeType
                                                                         )
-                                                                        pendingBrowserDownload?.responseBody?.let {
-                                                                            runCatching { it.close() }
-                                                                        }
-                                                                        scope.launch {
-                                                                            val savedLocation = DownloadSettings.location(this@MainActivity)
-                                                                            customDownloadFolderAvailable =
-                                                                                DownloadSettings.customUri(this@MainActivity) != null
-                                                                            downloadDestination = if (
-                                                                                savedLocation == DownloadSettings.LOCATION_CUSTOM &&
-                                                                                !customDownloadFolderAvailable
-                                                                            ) DownloadSettings.LOCATION_PHONE else savedLocation
-                                                                            pendingBrowserDownload = PendingBrowserDownload(
-                                                                                url = response.uri,
-                                                                                fileName = fileName,
-                                                                                mimeType = mimeType,
-                                                                                userAgent = null,
-                                                                                mode = liveMode,
-                                                                                responseBody = body,
-                                                                                contentLengthBytes = contentLengthBytes
-                                                                            )
-                                                                        }
+                                                                        val downloadMode = liveMode
+                                                                        val downloadContext = applicationContext
+                                                                        val downloadUrl = response.uri
+                                                                        val downloadRepository = BrowserRepository(downloadContext)
+                                                                        DownloadHelper.enqueueResponseInApplicationScope(
+                                                                            context = downloadContext,
+                                                                            responseBody = body,
+                                                                            url = downloadUrl,
+                                                                            fileName = fileName,
+                                                                            mimeType = mimeType,
+                                                                            mode = downloadMode,
+                                                                            totalBytes = contentLengthBytes,
+                                                                            onComplete = { saved ->
+                                                                                if (saved != null) {
+                                                                                    downloadRepository.addDownloadItemFor(
+                                                                                        downloadMode,
+                                                                                        DownloadItem(
+                                                                                            saved.fileName,
+                                                                                            downloadUrl,
+                                                                                            saved.location,
+                                                                                            System.currentTimeMillis()
+                                                                                        )
+                                                                                    )
+                                                                                }
+                                                                            }
+                                                                        )
                                                                     }
                                                                 },
                                                                 onSelectedText = { selection, pageUrl ->
@@ -6141,20 +6134,15 @@ class MainActivity : FragmentActivity() {
                                                                         val fileName = android.webkit.URLUtil.guessFileName(
                                                                             url, contentDisposition, mimeType
                                                                         )
-                                                                        val pending = PendingBrowserDownload(
-                                                                            url = url,
-                                                                            fileName = fileName,
-                                                                            mimeType = mimeType,
-                                                                            userAgent = userAgent,
-                                                                            mode = liveMode
-                                                                        )
+                                                                        val downloadMode = liveMode
                                                                         scope.launch {
-                                                                            val savedLocation = DownloadSettings.location(this@MainActivity)
-                                                                            customDownloadFolderAvailable = DownloadSettings.customUri(this@MainActivity) != null
-                                                                            downloadDestination = if (
-                                                                                savedLocation == DownloadSettings.LOCATION_CUSTOM && !customDownloadFolderAvailable
-                                                                            ) DownloadSettings.LOCATION_PHONE else savedLocation
-                                                                            pendingBrowserDownload = pending
+                                                                            enqueueAndRecordDownload(
+                                                                                url = url,
+                                                                                fileName = fileName,
+                                                                                userAgent = userAgent,
+                                                                                mode = downloadMode,
+                                                                                mimeType = mimeType
+                                                                            )
                                                                         }
                                                                     }
                                                                 }
@@ -8467,123 +8455,6 @@ class MainActivity : FragmentActivity() {
                                         pdfOfferUrl = null
                                         try { pdfFile.delete() } catch (_: Exception) { }
                                     }
-                                )
-                            }
-                            val downloadPrompt = pendingBrowserDownload
-                            if (downloadPrompt != null) {
-                                val destinations = listOf(
-                                    Triple(DownloadSettings.LOCATION_PHONE, "Phone storage", "Public Downloads folder"),
-                                    Triple(DownloadSettings.LOCATION_APP, "App private storage", "Only available inside Click"),
-                                    Triple(DownloadSettings.LOCATION_CUSTOM, "Custom folder", "Use the folder selected in Downloads settings")
-                                )
-                                AlertDialog(
-                                    onDismissRequest = {
-                                        pendingBrowserDownload?.responseBody?.let { runCatching { it.close() } }
-                                        pendingBrowserDownload = null
-                                    },
-                                    icon = {
-                                        Icon(
-                                            Icons.Default.Download,
-                                            contentDescription = null,
-                                            tint = theme.primary,
-                                            modifier = Modifier.size(24.dp)
-                                        )
-                                    },
-                                    title = { Text("Save download?") },
-                                    text = {
-                                        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                                            Text(
-                                                downloadPrompt.fileName,
-                                                color = theme.onSurface,
-                                                fontWeight = FontWeight.SemiBold,
-                                                maxLines = 2,
-                                                overflow = TextOverflow.Ellipsis
-                                            )
-                                            downloadPrompt.mimeType?.takeIf { it.isNotBlank() }?.let {
-                                                Text(it, color = theme.onSurface.copy(alpha = 0.6f), fontSize = 12.sp)
-                                            }
-                                            Spacer(Modifier.height(4.dp))
-                                            Text("Choose where to save it:", color = theme.onSurface, fontSize = 13.sp)
-                                            destinations.forEach { (value, label, description) ->
-                                                val enabled = value != DownloadSettings.LOCATION_CUSTOM || customDownloadFolderAvailable
-                                                Row(
-                                                    modifier = Modifier
-                                                        .fillMaxWidth()
-                                                        .clickable(enabled = enabled) { downloadDestination = value }
-                                                        .padding(vertical = 3.dp),
-                                                    verticalAlignment = Alignment.CenterVertically
-                                                ) {
-                                                    RadioButton(
-                                                        selected = downloadDestination == value,
-                                                        onClick = { downloadDestination = value },
-                                                        enabled = enabled
-                                                    )
-                                                    Column(Modifier.padding(start = 8.dp)) {
-                                                        Text(label, color = if (enabled) theme.onSurface else theme.onSurface.copy(alpha = 0.4f), fontSize = 13.sp)
-                                                        Text(description, color = theme.onSurface.copy(alpha = 0.58f), fontSize = 11.sp)
-                                                    }
-                                                }
-                                            }
-                                            if (!customDownloadFolderAvailable) {
-                                                Text(
-                                                    "Choose a custom folder in Settings → Downloads first.",
-                                                    color = theme.onSurface.copy(alpha = 0.58f),
-                                                    fontSize = 11.sp
-                                                )
-                                            }
-                                        }
-                                    },
-                                    confirmButton = {
-                                        TextButton(onClick = {
-                                            val accepted = downloadPrompt
-                                            pendingBrowserDownload = null
-                                            val acceptedMode = accepted.mode
-                                            val acceptedDestination = downloadDestination
-                                            scope.launch {
-                                                val responseBody = accepted.responseBody
-                                                if (responseBody != null) {
-                                                    val saved = DownloadHelper.enqueueResponse(
-                                                        context = this@MainActivity,
-                                                        responseBody = responseBody,
-                                                        url = accepted.url,
-                                                        fileName = accepted.fileName,
-                                                        mimeType = accepted.mimeType,
-                                                        locationOverride = acceptedDestination,
-                                                        mode = acceptedMode,
-                                                        totalBytes = accepted.contentLengthBytes
-                                                    )
-                                                    if (saved != null) {
-                                                        repository.addDownloadItemFor(
-                                                            acceptedMode,
-                                                            DownloadItem(
-                                                                saved.fileName,
-                                                                accepted.url,
-                                                                saved.location,
-                                                                System.currentTimeMillis()
-                                                            )
-                                                        )
-                                                    }
-                                                } else {
-                                                    enqueueAndRecordDownload(
-                                                        accepted.url,
-                                                        accepted.fileName,
-                                                        locationOverride = acceptedDestination,
-                                                        userAgent = accepted.userAgent,
-                                                        mode = acceptedMode
-                                                    )
-                                                }
-                                            }
-                                        }) { Text("Save") }
-                                    },
-                                    dismissButton = {
-                                        TextButton(onClick = {
-                                            pendingBrowserDownload?.responseBody?.let { runCatching { it.close() } }
-                                            pendingBrowserDownload = null
-                                        }) { Text("Cancel") }
-                                    },
-                                    shape = RoundedCornerShape(24.dp),
-                                    containerColor = theme.surface,
-                                    tonalElevation = 6.dp
                                 )
                             }
                             // Password manager: "Save password?" offer dialog.
