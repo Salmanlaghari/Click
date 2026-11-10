@@ -3128,7 +3128,7 @@ class MainActivity : FragmentActivity() {
             }
             val isWebPageActive = currentTab.url.isNotBlank() && currentTab.url != "about:blank" && currentTab.url != homeUrl()
 
-            BackHandler(enabled = isWebPageActive && !isAnyOverlayOpen && showClickPage == null && showGamePlayer == null && exitFullscreenVideo == null) {
+            BackHandler(enabled = isWebPageActive && !immersiveMode && !isAnyOverlayOpen && showClickPage == null && showGamePlayer == null && exitFullscreenVideo == null) {
                 if (canCurrentTabGoBack) {
                     currentTab.browserSession.goBackIfPossible()
                 } else {
@@ -3139,13 +3139,26 @@ class MainActivity : FragmentActivity() {
             }
 
             // 6. Multiple tabs open on Home: back closes the active tab.
-            BackHandler(enabled = !isWebPageActive && showClickPage == null && showGamePlayer == null && !isAnyOverlayOpen && exitFullscreenVideo == null && tabs.size > 1) {
+            BackHandler(enabled = !isWebPageActive && !immersiveMode && showClickPage == null && showGamePlayer == null && !isAnyOverlayOpen && exitFullscreenVideo == null && tabs.size > 1) {
                 closeTabAt(activeTabIndex)
             }
 
             // 7. Confirm-exit flag: ask before closing the browser on a single Home tab.
-            BackHandler(enabled = !isWebPageActive && showClickPage == null && showGamePlayer == null && !isAnyOverlayOpen && exitFullscreenVideo == null && tabs.size <= 1 && flagsUi.confirmExit) {
+            BackHandler(enabled = !isWebPageActive && !immersiveMode && showClickPage == null && showGamePlayer == null && !isAnyOverlayOpen && exitFullscreenVideo == null && tabs.size <= 1 && flagsUi.confirmExit) {
                 showExitConfirm = true
+            }
+
+            // Manual immersive browsing exits before page history, tab-close, or app-exit behavior.
+            val shouldExitManualFullscreenOnBack = ManualFullscreenBackPolicy.shouldExitBeforeBrowserBack(
+                manualFullscreen = immersiveMode,
+                overlayOpen = isAnyOverlayOpen,
+                videoFullscreen = videoFullscreenActive || exitFullscreenVideo != null,
+                internalPageOpen = showClickPage != null,
+                gamePlayerOpen = showGamePlayer != null
+            )
+            BackHandler(enabled = shouldExitManualFullscreenOnBack) {
+                immersiveMode = false
+                showFeatureMenu = false
             }
 
             fun openExtensionStore(tab: TabItem) {
@@ -6601,6 +6614,25 @@ class MainActivity : FragmentActivity() {
                                     },
                                     onFeature = { id -> handleFeature(id) },
                                 )
+                            }
+
+                            if (immersiveMode && !videoFullscreenActive) {
+                                Surface(
+                                    modifier = Modifier
+                                        .align(Alignment.TopEnd)
+                                        .padding(12.dp),
+                                    shape = RoundedCornerShape(24.dp),
+                                    color = theme.surface.copy(alpha = 0.94f),
+                                    border = BorderStroke(1.dp, theme.primary.copy(alpha = 0.45f)),
+                                    shadowElevation = 6.dp
+                                ) {
+                                    TextButton(
+                                        onClick = { immersiveMode = false },
+                                        colors = ButtonDefaults.textButtonColors(contentColor = theme.primary)
+                                    ) {
+                                        Text("Normal view")
+                                    }
+                                }
                             }
 
                             // Tab-close UNDO snackbar (Premium UI v2) — sits above

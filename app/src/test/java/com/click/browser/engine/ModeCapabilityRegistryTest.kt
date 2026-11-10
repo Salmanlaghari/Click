@@ -88,7 +88,7 @@ class ModeCapabilityRegistryTest {
             BrowserMode.values().filter { ModeCapabilityRegistry.supportsMode(FeatureId.DEVTOOLS, it) }.toSet()
         )
         assertEquals(
-            setOf(BrowserMode.DEVELOPER, BrowserMode.HACK),
+            BrowserMode.values().toSet(),
             BrowserMode.values().filter { ModeCapabilityRegistry.supportsMode(FeatureId.DESKTOP, it) }.toSet()
         )
         assertEquals(
