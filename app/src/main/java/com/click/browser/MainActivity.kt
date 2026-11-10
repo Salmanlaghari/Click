@@ -1652,7 +1652,8 @@ class MainActivity : FragmentActivity() {
                             )
                         })
                         if (startViewUrl != null) {
-                            tabs.add(TabItem(url = startViewUrl, title = "New Tab"))
+                            val startTitle = hostOfUrl(startViewUrl).ifBlank { "Opening link" }
+                            tabs.add(TabItem(url = startViewUrl, title = startTitle))
                             activeTabIndex = tabs.lastIndex
                         } else {
                             activeTabIndex = savedActive.coerceIn(0, (tabs.size - 1).coerceAtLeast(0))
