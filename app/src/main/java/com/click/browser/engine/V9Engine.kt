@@ -10,9 +10,11 @@ import android.os.Handler
 import android.os.Looper
 import android.os.Process
 import android.os.ResultReceiver
+import android.os.SystemClock
 import android.util.Log
 import android.webkit.WebView
 import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.suspendCancellableCoroutine
@@ -190,8 +192,31 @@ object V9Engine {
             context, ClickCatLogCode.MODE_SWITCH_TARGET_PERSISTED, sourceMode, mode
         )
         val activity = context as? Activity
-        if (activity == null || activity.isFinishing || activity.isDestroyed || !activity.hasWindowFocus()) {
-            Log.e(TAG, "V9: no focused Activity for the profile handoff — staying in the current profile")
+        if (activity == null || activity.isFinishing || activity.isDestroyed) {
+            Log.e(TAG, "V9: no usable Activity for the profile handoff — staying in the current profile")
+            restoreSourceModeAfterFailedSwitch(context, modeManager, sourceMode, mode)
+            return false
+        }
+        // The switch is confirmed from an AlertDialog, which is a separate
+        // window: the Activity does not hold window focus while the dialog is
+        // showing, and focus only returns asynchronously after dismissal.
+        // Checking hasWindowFocus() once, immediately, therefore fails the
+        // switch on slower devices even though the user just confirmed it.
+        // Wait briefly for focus to return (the bridge handoff below already
+        // gets an 8-second focus budget; the source Activity previously got
+        // none) and only abandon the switch if focus never comes back.
+        val focusGained = try {
+            awaitActivityWindowFocus(activity)
+        } catch (t: Throwable) {
+            if (t is kotlinx.coroutines.CancellationException) {
+                restoreSourceModeAfterFailedSwitch(context, modeManager, sourceMode, mode)
+                throw t
+            }
+            Log.e(TAG, "V9: window-focus wait for the profile handoff failed", t)
+            false
+        }
+        if (!focusGained) {
+            Log.e(TAG, "V9: Activity did not regain window focus for the profile handoff — staying in the current profile")
             restoreSourceModeAfterFailedSwitch(context, modeManager, sourceMode, mode)
             return false
         }
@@ -256,6 +281,24 @@ object V9Engine {
         return true // unreachable
     }
 
+    /**
+     * Polls until the Activity (re)gains window focus or the wait budget in
+     * [MODE_SWITCH_SOURCE_FOCUS_WAIT_MS] is exhausted. Returns the final
+     * focus state; see [shouldKeepWaitingForSourceWindowFocus].
+     */
+    private suspend fun awaitActivityWindowFocus(activity: Activity): Boolean {
+        val startedAt = SystemClock.elapsedRealtime()
+        while (true) {
+            val hasFocus = activity.hasWindowFocus()
+            if (hasFocus) return true
+            val waitedMs = SystemClock.elapsedRealtime() - startedAt
+            if (!shouldKeepWaitingForSourceWindowFocus(hasFocus, waitedMs, MODE_SWITCH_SOURCE_FOCUS_WAIT_MS)) {
+                return false
+            }
+            delay(MODE_SWITCH_FOCUS_POLL_MS)
+        }
+    }
+
     private suspend fun restoreSourceModeAfterFailedSwitch(
         context: Context,
         modeManager: ModeManager,
@@ -279,6 +322,8 @@ object V9Engine {
     const val EXTRA_ADVANCE_INTRO = "v9_advance_intro"
 
     private const val MODE_SWITCH_BRIDGE_FOCUS_TIMEOUT_MS = 8_000L
+    private const val MODE_SWITCH_SOURCE_FOCUS_WAIT_MS = 2_500L
+    private const val MODE_SWITCH_FOCUS_POLL_MS = 50L
     private const val LEGACY_RESTART_REQUEST_CODE = 9001
 
 }

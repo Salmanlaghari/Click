@@ -5077,6 +5077,16 @@ class MainActivity : FragmentActivity() {
                                                                                 )
                                                                             failedTab.isPageLoading = false
                                                                             failedTab.loadProgress = 0
+                                                                            // A crashed/killed renderer ends any video
+                                                                            // fullscreen session without firing the
+                                                                            // fullscreen-exit callback. Clear the stale
+                                                                            // flag for the visible tab so the system
+                                                                            // bars, bottom nav and the "Normal view"
+                                                                            // exit cannot stay hidden forever.
+                                                                            if (failedTab === tabs.getOrNull(activeTabIndex) && videoFullscreenActive) {
+                                                                                videoFullscreenActive = false
+                                                                                exitFullscreenVideo = null
+                                                                            }
                                                                         }
                                                                         val code = when (event) {
                                                                             GeckoRenderEvent.PROCESS_CRASHED ->
@@ -6669,7 +6679,14 @@ class MainActivity : FragmentActivity() {
                                 )
                             }
 
-                            if (immersiveMode && !videoFullscreenActive) {
+                            // The "Normal view" exit must stay reachable for the
+                            // whole time immersive mode is on: the drawer cannot be
+                            // gesture-opened and the bars are hidden, so this chip
+                            // (and Back) are the only exits. It is intentionally
+                            // NOT hidden while a video is fullscreen — the bars
+                            // stay hidden until the video exits, but the user is
+                            // never left without a visible way back to normal.
+                            if (immersiveMode) {
                                 Surface(
                                     modifier = Modifier
                                         .align(Alignment.TopEnd)
