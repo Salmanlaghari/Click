@@ -328,6 +328,7 @@ class MainActivity : FragmentActivity() {
     // DNT + GPC privacy signals (opt-in, default off).
     private var liveDntEnabled = false
     private var liveGpcEnabled = false
+    private var liveWebRtcBlocked = false
     // Live copy of explicit per-site wide-layout preferences. Updating this
     // immediately after a DataStore write prevents reloads from seeing stale state.
     private var liveDesktopOverrides: Map<String, Boolean> = emptyMap()
@@ -2314,6 +2315,8 @@ class MainActivity : FragmentActivity() {
             // DNT + GPC privacy signals (opt-in, default off).
             var dntEnabled by remember { mutableStateOf(false) }
             var gpcEnabled by remember { mutableStateOf(false) }
+            // Block WebRTC (opt-in, default off — see AppSettings.WEBRTC_BLOCKED).
+            var webrtcBlocked by remember { mutableStateOf(false) }
             var secureDnsEnabled by remember { mutableStateOf(false) }
             // Biometric private-tab lock + text scaling (accessibility).
             var biometricLockEnabled by remember { mutableStateOf(false) }
@@ -2890,6 +2893,12 @@ class MainActivity : FragmentActivity() {
             LaunchedEffect(httpsStrictExceptions) { liveHttpsStrictExceptions = httpsStrictExceptions.toSet() }
             LaunchedEffect(dntEnabled) { liveDntEnabled = dntEnabled }
             LaunchedEffect(gpcEnabled) { liveGpcEnabled = gpcEnabled }
+            // WebRTC block: keep the WebViewClient-safe flag current and sync
+            // the built-in GeckoView guard extension with the setting.
+            LaunchedEffect(webrtcBlocked) {
+                liveWebRtcBlocked = webrtcBlocked
+                com.click.browser.engine.WebRtcGuard.sync(this@MainActivity, webrtcBlocked)
+            }
             LaunchedEffect(forceNightModeWebsites) { liveNightMode = forceNightModeWebsites }
             LaunchedEffect(dataSaverEnabled) { liveDataSaver = dataSaverEnabled }
             LaunchedEffect(advanceIntroEnabled) { liveAdvanceIntroEnabled = advanceIntroEnabled }
@@ -2974,6 +2983,7 @@ class MainActivity : FragmentActivity() {
                     httpsStrictExceptions = AppSettings.parseHostList(prefs[AppSettings.HTTPS_STRICT_EXCEPTIONS])
                     dntEnabled = prefs[AppSettings.DNT_ENABLED] == true || prefs[ExperimentalFlags.K_DNT_HEADER] == true
                     gpcEnabled = prefs[AppSettings.GPC_ENABLED] == true
+                    webrtcBlocked = prefs[AppSettings.WEBRTC_BLOCKED] == true
                     secureDnsEnabled = prefs[AppSettings.SECURE_DNS_ENABLED] == true
                     backgroundAudioEnabled = prefs[AppSettings.BACKGROUND_AUDIO_ENABLED] == true
                     // Home feed: opt-in, separate from background notifications.
@@ -5436,6 +5446,15 @@ class MainActivity : FragmentActivity() {
 
                                                                     override fun onPageStarted(view: WebView?, url: String?, favicon: Bitmap?) {
                                                                 super.onPageStarted(view, url, favicon)
+                                                                // Block WebRTC in WebView (private) tabs:
+                                                                // earliest hook WebView offers. GeckoView
+                                                                // tabs are covered by the built-in guard
+                                                                // extension instead (see WebRtcGuard).
+                                                                if (liveWebRtcBlocked) {
+                                                                    view?.evaluateJavascript(
+                                                                        com.click.browser.engine.PrivacyGuards.WEBRTC_BLOCK_JS, null
+                                                                    )
+                                                                }
                                                                 val loadingTab = view?.let { target -> tabs.firstOrNull { it.webView === target } } ?: return
                                                                 loadingTab.passwordAutofillPromptGuard.onNavigationStarted()
                                                                 loadingTab.url = url ?: ""
@@ -8939,6 +8958,11 @@ class MainActivity : FragmentActivity() {
                                     onToggleSecureDns = { value ->
                                         secureDnsEnabled = value
                                         scope.launch { dataStore.edit { prefs -> prefs[AppSettings.SECURE_DNS_ENABLED] = value } }
+                                    },
+                                    webrtcBlocked = webrtcBlocked,
+                                    onToggleWebrtcBlocked = { value ->
+                                        webrtcBlocked = value
+                                        scope.launch { dataStore.edit { prefs -> prefs[AppSettings.WEBRTC_BLOCKED] = value } }
                                     },
                                     webrtcRunning = webrtcTestRunning,
                                     webrtcResult = webrtcResult,
