@@ -13,7 +13,9 @@ import java.net.URI
  * - The `dns.servers` entries use `"detour": "proxy"`, so DoH queries to
  *   1.1.1.1 / 8.8.8.8 travel INSIDE the encrypted tunnel, never on the raw
  *   network.
- * - A route rule sends all `protocol: dns` traffic to the `dns-out` outbound.
+ * - `route.default_domain_resolver` points outbound server-name resolution
+ *   at the same in-tunnel DoH server, so proxy hostnames never resolve on
+ *   the raw network either.
  * - The TUN inbound sets `auto_route: true`, capturing ALL device traffic
  *   (0.0.0.0/0 + ::/0), unlike V9 Shield's DNS-only design.
  *
@@ -65,6 +67,11 @@ object VpnConfigBuilder {
         // DNS: everything through the tunnel via DoH.
         // NOTE (sing-box >= 1.12): legacy "address"-string server entries
         // were removed — servers now need an explicit "type".
+        // NOTE (sing-box >= 1.14): the "outbound" DNS rule item was
+        // REMOVED — outbound server-name resolution is now configured via
+        // route "default_domain_resolver" (see route block below), not a
+        // DNS rule. Emitting the old rule makes the core reject the whole
+        // config on any build without deprecated-feature support.
         config.put("dns", JSONObject()
             .put("servers", JSONArray()
                 .put(JSONObject()
@@ -77,10 +84,6 @@ object VpnConfigBuilder {
                     .put("type", "https")
                     .put("server", "8.8.8.8")
                     .put("detour", "proxy")))
-            .put("rules", JSONArray()
-                .put(JSONObject()
-                    .put("outbound", "any")
-                    .put("server", "cf-doh")))
             .put("final", "cf-doh")
             .put("strategy", "prefer_ipv4"))
 
@@ -112,12 +115,20 @@ object VpnConfigBuilder {
         // REMOVED — sniffing is now the route rule action below (see the
         // sing-box migration guide: migrate legacy inbound fields to
         // rule actions). Without this the core rejects the whole config.
+        // The rule intentionally has NO match criteria: it sniffs ALL
+        // traffic, exactly the scope the legacy "sniff": true had.
+        // "default_domain_resolver" (sing-box >= 1.12, REQUIRED since
+        // 1.14): dial fields resolve server hostnames through cf-doh —
+        // which itself detours through the tunnel — replacing the removed
+        // "outbound" DNS rule item. Same cf-doh the old rule selected.
         config.put("route", JSONObject()
             .put("rules", JSONArray()
                 .put(JSONObject()
                     .put("action", "sniff")))
             .put("final", "proxy")
-            .put("auto_detect_interface", true))
+            .put("auto_detect_interface", true)
+            .put("default_domain_resolver", JSONObject()
+                .put("server", "cf-doh")))
 
         return config.toString()
     }
