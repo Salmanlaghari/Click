@@ -18,7 +18,11 @@ import com.google.android.play.core.appupdate.AppUpdateOptions
 import com.google.android.play.core.install.model.AppUpdateType
 import com.google.android.play.core.install.model.InstallStatus
 import com.google.android.play.core.install.model.UpdateAvailability
+import android.widget.Toast
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.launch
 import kotlin.coroutines.resume
 
 /**
@@ -67,7 +71,7 @@ object AppUpdateChecker {
     /** Automatic check, called from MainActivity.onCreate. Fire-and-forget. */
     fun checkOnStart(activity: Activity) {
         val appContext = activity.applicationContext
-        kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.IO).launch {
+        CoroutineScope(Dispatchers.IO).launch {
             try {
                 val prefs = appContext.dataStore.data.first()
                 val lastCheck = prefs[AppSettings.UPDATE_LAST_CHECK_MS] ?: 0L
@@ -103,10 +107,10 @@ object AppUpdateChecker {
     /** Starts Play's flexible update flow when an update is available. */
     fun startFlexibleFlow(activity: Activity) {
         val appContext = activity.applicationContext
-        kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.Main).launch {
+        CoroutineScope(Dispatchers.Main).launch {
             try {
                 val info = awaitUpdateInfo(appContext) ?: run {
-                    android.widget.Toast.makeText(
+                    Toast.makeText(
                         activity,
                         "Update check is unavailable on this device.",
                         Toast.LENGTH_SHORT
@@ -127,7 +131,7 @@ object AppUpdateChecker {
                         )
                     }
                     else -> {
-                        android.widget.Toast.makeText(
+                        Toast.makeText(
                             activity,
                             "Click is up to date.",
                             Toast.LENGTH_SHORT
@@ -136,7 +140,7 @@ object AppUpdateChecker {
                 }
             } catch (e: Exception) {
                 Log.w(TAG, "startFlexibleFlow failed", e)
-                android.widget.Toast.makeText(
+                Toast.makeText(
                     activity,
                     "Update check is unavailable on this device.",
                     Toast.LENGTH_SHORT
@@ -148,7 +152,7 @@ object AppUpdateChecker {
     /** Manual check for Settings → About. Reports through [onResult]. */
     fun manualCheck(activity: Activity, onResult: (String) -> Unit) {
         val appContext = activity.applicationContext
-        kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.Main).launch {
+        CoroutineScope(Dispatchers.Main).launch {
             try {
                 appContext.dataStore.edit {
                     it[AppSettings.UPDATE_LAST_CHECK_MS] = System.currentTimeMillis()

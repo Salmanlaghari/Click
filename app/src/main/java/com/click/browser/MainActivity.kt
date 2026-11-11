@@ -9883,7 +9883,7 @@ fun DownloadActivityIndicator(
             verticalAlignment = Alignment.CenterVertically
         ) {
             Icon(
-                androidx.compose.material.icons.filled.Download,
+                Icons.Default.Download,
                 contentDescription = null,
                 modifier = Modifier
                     .size(15.dp)

@@ -33,6 +33,7 @@ import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.rememberModalBottomSheetState
 import android.graphics.Bitmap
 import android.graphics.Canvas
+import androidx.core.graphics.drawable.toBitmap
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -1056,7 +1057,7 @@ private fun queryOpenHandlers(context: Context, target: OpenWithTarget): List<Op
     return resolved.mapNotNull { info ->
         runCatching {
             val label = info.loadLabel(context.packageManager).toString()
-            val icon = androidx.core.graphics.drawable.toBitmap(info.loadIcon(context.packageManager), 96, 96)
+            val icon = info.loadIcon(context.packageManager).toBitmap(96, 96)
                 .asImageBitmap()
             OpenHandler(
                 label = label,
