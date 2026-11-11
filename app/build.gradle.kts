@@ -51,8 +51,8 @@ android {
         applicationId = "com.teampkai.clickbrowser"
         minSdk = 26
         targetSdk = 36
-        versionCode = 16
-        versionName = "1.5.0"
+        versionCode = 17
+        versionName = "1.6.0"
 
         // Built-in Groq key for AI chat, injected at build time from the
         // GROQ_API_KEY env var (GitHub Actions secret in CI). The key is
@@ -215,6 +215,10 @@ dependencies {
     // NOT in WebView — Google blocks OAuth in embedded WebViews. Custom Tabs
     // share cookies with Chrome, so the user stays signed in.
     implementation(libs.androidx.browser)
+    // Google Play Core In-App Updates: official update-availability check +
+    // flexible update flow (AppUpdateManager). No third-party update checks.
+    implementation(libs.play.app.update)
+    implementation(libs.play.app.update.ktx)
 
     testImplementation(libs.junit)
     testImplementation("org.json:json:20240303")

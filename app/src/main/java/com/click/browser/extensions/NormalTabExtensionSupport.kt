@@ -65,6 +65,61 @@ internal fun canRetryNormalTabExtensionPopup(
     isPopupFailed: Boolean = true
 ): Boolean = isPopupFailed && isOwnerSelected && hasAvailableAction && supportsNormalTabExtensionActions(currentUrl)
 
+/** Events that can move a popup's render state. */
+internal enum class NormalTabExtensionPopupEvent {
+    PAGE_START,
+    PAGE_STOP_SUCCESS,
+    PAGE_STOP_FAILURE,
+    FIRST_COMPOSITE,
+    PROCESS_GONE,
+    TIMEOUT
+}
+
+/**
+ * Popup render-state machine.
+ *
+ * Root cause of the "add-on popup stopped loading" dead-end (2026-11-11):
+ * READY was reachable ONLY via onFirstComposite, but MainActivity composed
+ * the popup's GeckoView only after READY — and a GeckoSession cannot
+ * composite before it is attached to a GeckoView. Every popup therefore sat
+ * in LOADING until the render timeout flipped it to FAILED. The view is now
+ * attached from LOADING onward; this machine stays the single source of
+ * truth for transitions. FAILED is terminal: a late success/composite from
+ * the (already closed) failed session must never resurrect it.
+ */
+internal fun popupRenderStateAfter(
+    current: NormalTabExtensionPopupRenderState,
+    event: NormalTabExtensionPopupEvent
+): NormalTabExtensionPopupRenderState = when (current) {
+    NormalTabExtensionPopupRenderState.FAILED -> NormalTabExtensionPopupRenderState.FAILED
+    NormalTabExtensionPopupRenderState.LOADING -> when (event) {
+        NormalTabExtensionPopupEvent.FIRST_COMPOSITE -> NormalTabExtensionPopupRenderState.READY
+        NormalTabExtensionPopupEvent.PAGE_STOP_FAILURE,
+        NormalTabExtensionPopupEvent.PROCESS_GONE,
+        NormalTabExtensionPopupEvent.TIMEOUT -> NormalTabExtensionPopupRenderState.FAILED
+        NormalTabExtensionPopupEvent.PAGE_START,
+        NormalTabExtensionPopupEvent.PAGE_STOP_SUCCESS -> NormalTabExtensionPopupRenderState.LOADING
+    }
+    NormalTabExtensionPopupRenderState.READY -> when (event) {
+        NormalTabExtensionPopupEvent.PROCESS_GONE,
+        NormalTabExtensionPopupEvent.PAGE_STOP_FAILURE -> NormalTabExtensionPopupRenderState.FAILED
+        NormalTabExtensionPopupEvent.PAGE_START -> NormalTabExtensionPopupRenderState.LOADING
+        NormalTabExtensionPopupEvent.FIRST_COMPOSITE,
+        NormalTabExtensionPopupEvent.PAGE_STOP_SUCCESS,
+        NormalTabExtensionPopupEvent.TIMEOUT -> NormalTabExtensionPopupRenderState.READY
+    }
+}
+
+/**
+ * A FAILED popup's session is closed immediately (its renderer is dead or
+ * never rendered); keeping it open would leak a zombie session that the
+ * next open/retry would have to fight. LOADING/READY sessions stay open —
+ * they are the live popup. "Try again" always builds a brand-new session
+ * via a fresh action click; it never reuses the closed one.
+ */
+internal fun popupSessionMustClose(state: NormalTabExtensionPopupRenderState): Boolean =
+    state == NormalTabExtensionPopupRenderState.FAILED
+
 /**
  * Routes GeckoView's runtime-wide ActionDelegate callbacks to the currently active
  * normal tab. Action.click() does not carry a session ID, so the active-tab state
@@ -83,6 +138,9 @@ internal class NormalTabExtensionRouter(
     private var activeTabId: String? = null
     private var popup: NormalTabExtensionPopup? = null
     private var popupTimeout: Runnable? = null
+    /** True once the current popup's session resources were released (either
+     *  by failure cleanup or by closePopup) — prevents double-close. */
+    private var popupSessionClosed = false
 
     fun attach(tabId: String, session: GeckoSession) {
         sessions[tabId] = session
@@ -190,8 +248,7 @@ internal class NormalTabExtensionRouter(
         popupTimeout = null
         popup = null
         onPopupChanged(null)
-        runCatching { current.session.setActive(false) }
-        runCatching { current.session.close() }
+        closePopupSessionResources(current.session)
     }
 
     private fun createPopup(extension: WebExtension): GeckoResult<GeckoSession>? {
@@ -207,28 +264,33 @@ internal class NormalTabExtensionRouter(
         popupSession.setPermissionDelegate(DenyNormalTabExtensionDevicePermissions)
         popupSession.setProgressDelegate(object : GeckoSession.ProgressDelegate {
             override fun onPageStart(session: GeckoSession, url: String) {
-                updatePopupState(session, NormalTabExtensionPopupRenderState.LOADING)
+                handlePopupEvent(session, NormalTabExtensionPopupEvent.PAGE_START)
             }
 
             override fun onPageStop(session: GeckoSession, success: Boolean) {
-                if (!success) updatePopupState(session, NormalTabExtensionPopupRenderState.FAILED)
+                handlePopupEvent(
+                    session,
+                    if (success) NormalTabExtensionPopupEvent.PAGE_STOP_SUCCESS
+                    else NormalTabExtensionPopupEvent.PAGE_STOP_FAILURE
+                )
             }
         })
         popupSession.setContentDelegate(object : GeckoSession.ContentDelegate {
             override fun onFirstComposite(session: GeckoSession) {
-                updatePopupState(session, NormalTabExtensionPopupRenderState.READY)
+                handlePopupEvent(session, NormalTabExtensionPopupEvent.FIRST_COMPOSITE)
             }
 
             override fun onCrash(session: GeckoSession) {
-                updatePopupState(session, NormalTabExtensionPopupRenderState.FAILED)
+                handlePopupEvent(session, NormalTabExtensionPopupEvent.PROCESS_GONE)
             }
 
             override fun onKill(session: GeckoSession) {
-                updatePopupState(session, NormalTabExtensionPopupRenderState.FAILED)
+                handlePopupEvent(session, NormalTabExtensionPopupEvent.PROCESS_GONE)
             }
         })
         popupSession.open(runtime)
         popupSession.setActive(true)
+        popupSessionClosed = false
         popup = NormalTabExtensionPopup(
             ownerTabId = owner,
             extensionId = extension.id,
@@ -238,20 +300,43 @@ internal class NormalTabExtensionRouter(
         onPopupChanged(popup)
         popupTimeout?.let(mainHandler::removeCallbacks)
         popupTimeout = Runnable {
-            updatePopupState(popupSession, NormalTabExtensionPopupRenderState.FAILED)
+            handlePopupEvent(popupSession, NormalTabExtensionPopupEvent.TIMEOUT)
         }.also { mainHandler.postDelayed(it, POPUP_RENDER_TIMEOUT_MS) }
         return GeckoResult.fromValue(popupSession)
     }
 
-    private fun updatePopupState(session: GeckoSession, state: NormalTabExtensionPopupRenderState) {
+    private fun handlePopupEvent(session: GeckoSession, event: NormalTabExtensionPopupEvent) {
         val current = popup ?: return
-        if (current.session !== session || current.renderState == state) return
-        popup = current.copy(renderState = state)
+        if (current.session !== session) return
+        val next = popupRenderStateAfter(current.renderState, event)
+        if (next == current.renderState) return
+        popup = current.copy(renderState = next)
         onPopupChanged(popup)
-        if (state != NormalTabExtensionPopupRenderState.LOADING) {
+        if (next != NormalTabExtensionPopupRenderState.LOADING) {
             popupTimeout?.let(mainHandler::removeCallbacks)
             popupTimeout = null
+        } else {
+            // (Re-)entering LOADING — e.g. the popup page navigates — re-arms
+            // the render timeout so a hung navigation still fails honestly.
+            popupTimeout?.let(mainHandler::removeCallbacks)
+            popupTimeout = Runnable {
+                handlePopupEvent(session, NormalTabExtensionPopupEvent.TIMEOUT)
+            }.also { mainHandler.postDelayed(it, POPUP_RENDER_TIMEOUT_MS) }
         }
+        if (popupSessionMustClose(next)) {
+            // Failure cleanup: kill the dead renderer now instead of leaving
+            // a zombie session open behind the error card. The popup STATE
+            // is kept so the card (and its identity-checked retry) survives;
+            // retry builds a fresh session via a new action click.
+            closePopupSessionResources(current.session)
+        }
+    }
+
+    private fun closePopupSessionResources(session: GeckoSession) {
+        if (popupSessionClosed) return
+        popupSessionClosed = true
+        runCatching { session.setActive(false) }
+        runCatching { session.close() }
     }
 
     private fun actionFor(

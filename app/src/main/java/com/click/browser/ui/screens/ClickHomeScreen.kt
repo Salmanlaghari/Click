@@ -72,6 +72,7 @@ import androidx.compose.material.icons.filled.Shield
 import androidx.compose.material.icons.filled.Tab
 import androidx.compose.material.icons.filled.Translate
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Checkbox
 import androidx.compose.material3.Badge
 import androidx.compose.material3.BadgedBox
 import androidx.compose.material3.Card
@@ -115,6 +116,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.withContext
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -122,8 +124,11 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
+import androidx.datastore.preferences.core.edit
+import com.click.browser.engine.AppSettings
 import com.click.browser.engine.BrowserMode
 import com.click.browser.engine.ClosedTab
+import com.click.browser.engine.dataStore
 import com.click.browser.engine.ConnectionSecurityInfo
 import com.click.browser.engine.ConnectionSecurityPolicy
 import com.click.browser.engine.ConnectionSecurityStatus
@@ -258,21 +263,41 @@ fun ClickHomeScreen(
     ) {
         Spacer(modifier = Modifier.height(6.dp))
 
-        HomeTopRow(
-            theme = theme,
-            activeMode = activeMode,
-            adBlockStatusLabel = adBlockStatusLabel,
-            adBlockStatusActive = adBlockStatusActive,
-            neon = false,
-            onProfileClick = onProfileClick
-        )
+        // Simple mode (Prince's rule): the address/search bar sits at the very
+        // TOP of the dashboard, above the greeting row — first thing the user
+        // sees and can tap. Other modes keep the greeting-then-search order.
+        if (activeMode == BrowserMode.SIMPLE) {
+            SmartSearchBar(
+                theme = theme,
+                activeMode = activeMode,
+                searchEngine = searchEngine,
+                onNavigate = onNavigate
+            )
+            HomeTopRow(
+                theme = theme,
+                activeMode = activeMode,
+                adBlockStatusLabel = adBlockStatusLabel,
+                adBlockStatusActive = adBlockStatusActive,
+                neon = false,
+                onProfileClick = onProfileClick
+            )
+        } else {
+            HomeTopRow(
+                theme = theme,
+                activeMode = activeMode,
+                adBlockStatusLabel = adBlockStatusLabel,
+                adBlockStatusActive = adBlockStatusActive,
+                neon = false,
+                onProfileClick = onProfileClick
+            )
 
-        SmartSearchBar(
-            theme = theme,
-            activeMode = activeMode,
-            searchEngine = searchEngine,
-            onNavigate = onNavigate
-        )
+            SmartSearchBar(
+                theme = theme,
+                activeMode = activeMode,
+                searchEngine = searchEngine,
+                onNavigate = onNavigate
+            )
+        }
 
         for (section in homeContentSections(activeMode)) {
             when (section) {
@@ -1198,6 +1223,17 @@ private fun NewsSection(
     var refreshKey by remember { mutableStateOf(0) }
     var result by remember { mutableStateOf<NewsResult?>(null) }
     var loading by remember { mutableStateOf(true) }
+    // User's news interests (NewsCategory names). The "All" view is filtered
+    // to these when set; empty = no filtering (show everything).
+    var interests by remember { mutableStateOf<Set<String>>(emptySet()) }
+    var showInterestsDialog by remember { mutableStateOf(false) }
+    LaunchedEffect(Unit) {
+        interests = try {
+            context.dataStore.data.first()[AppSettings.HOME_NEWS_INTERESTS].orEmpty()
+        } catch (_: Exception) {
+            emptySet()
+        }
+    }
     val visibleCategories = remember(activeMode) {
         NewsCategory.values().filter { activeMode == BrowserMode.ADVANCED || it != NewsCategory.RESEARCH }
     }
@@ -1226,6 +1262,9 @@ private fun NewsSection(
                 fontSize = 15.sp,
                 modifier = Modifier.weight(1f)
             )
+            TextButton(onClick = { showInterestsDialog = true }) {
+                Text("Interests", color = theme.primary)
+            }
             TextButton(onClick = onDismiss) {
                 Text("Hide news", color = theme.primary)
             }
@@ -1239,13 +1278,25 @@ private fun NewsSection(
         }
         CategoryTabs(selected = category, categories = visibleCategories, onSelect = { category = it }, theme = theme)
 
+        // "All" + chosen interests = a personalised front page: only the
+        // categories the user picked. A specific tab always shows its own
+        // category unfiltered.
+        val interestCategories = com.click.browser.engine.NewsNotifications.categoriesForTopics(interests)
+        val displayArticles = result?.articles.orEmpty().let { all ->
+            if (category == NewsCategory.ALL && interestCategories.isNotEmpty()) {
+                all.filter { it.category in interestCategories }
+            } else {
+                all
+            }
+        }
+
         when {
             loading -> {
                 Box(modifier = Modifier.fillMaxWidth().height(120.dp), contentAlignment = Alignment.Center) {
                     CircularProgressIndicator(color = theme.primary, modifier = Modifier.size(28.dp))
                 }
             }
-            result == null || result!!.articles.isEmpty() -> {
+            result == null || displayArticles.isEmpty() -> {
                 Card(
                     shape = RoundedCornerShape(14.dp),
                     colors = CardDefaults.cardColors(containerColor = cardBg),
@@ -1297,7 +1348,7 @@ private fun NewsSection(
                 }
             }
             else -> {
-                val articles = result!!.articles
+                val articles = displayArticles
                 // Hero card: big 16:9 image + bold title + source · time + ⋮
                 val hero = articles.first()
                 Card(
@@ -1390,6 +1441,58 @@ private fun NewsSection(
                 }
             }
         }
+    }
+
+    if (showInterestsDialog) {
+        var draft by remember(showInterestsDialog) { mutableStateOf(interests) }
+        AlertDialog(
+            onDismissRequest = { showInterestsDialog = false },
+            title = { Text("Your news interests") },
+            text = {
+                Column {
+                    Text(
+                        "Pick the topics for your personalised front page. Leave all off to see every topic.",
+                        fontSize = 13.sp
+                    )
+                    Spacer(modifier = Modifier.height(10.dp))
+                    visibleCategories.filter { it != NewsCategory.ALL }.forEach { cat ->
+                        val selected = cat.name in draft
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable {
+                                    draft = if (selected) draft - cat.name else draft + cat.name
+                                }
+                                .padding(vertical = 6.dp)
+                        ) {
+                            Checkbox(
+                                checked = selected,
+                                onCheckedChange = { checked ->
+                                    draft = if (checked) draft + cat.name else draft - cat.name
+                                }
+                            )
+                            Text(cat.label, fontSize = 14.sp)
+                        }
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    val chosen = draft
+                    interests = chosen
+                    showInterestsDialog = false
+                    scope.launch {
+                        context.dataStore.edit { prefs ->
+                            prefs[AppSettings.HOME_NEWS_INTERESTS] = chosen
+                        }
+                    }
+                }) { Text("Save") }
+            },
+            dismissButton = {
+                TextButton(onClick = { showInterestsDialog = false }) { Text("Cancel") }
+            }
+        )
     }
 }
 
@@ -1901,8 +2004,23 @@ fun CompactBrowseBar(
             }
 
             if (currentUrl.isNotBlank()) {
+                // Per-mode address-bar styling (Prince: every mode's bar must
+                // look different): Simple = tall full pill with large touch
+                // targets, Developer = compact squared technical bar,
+                // Power = desktop-style slab, Advance = the standard pill.
+                val barShape = when (theme.addressBarStyle) {
+                    com.click.browser.engine.ModeAddressBarStyle.PILL_LARGE -> RoundedCornerShape(27.dp)
+                    com.click.browser.engine.ModeAddressBarStyle.TECHNICAL -> RoundedCornerShape(8.dp)
+                    com.click.browser.engine.ModeAddressBarStyle.DESKTOP -> RoundedCornerShape(10.dp)
+                    com.click.browser.engine.ModeAddressBarStyle.STANDARD -> RoundedCornerShape(14.dp)
+                }
+                val barHeight = when (theme.addressBarStyle) {
+                    com.click.browser.engine.ModeAddressBarStyle.PILL_LARGE -> 54.dp
+                    com.click.browser.engine.ModeAddressBarStyle.TECHNICAL -> 42.dp
+                    else -> 46.dp
+                }
                 Surface(
-                    shape = RoundedCornerShape(14.dp),
+                    shape = barShape,
                     color = theme.surfaceVariant,
                     shadowElevation = 2.dp,
                     border = androidx.compose.foundation.BorderStroke(
@@ -1910,7 +2028,7 @@ fun CompactBrowseBar(
                     ),
                     modifier = Modifier
                         .fillMaxWidth()
-                        .height(46.dp)
+                        .height(barHeight)
                 ) {
                     Row(
                         modifier = Modifier

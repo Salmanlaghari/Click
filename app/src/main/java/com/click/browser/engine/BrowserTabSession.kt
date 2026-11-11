@@ -21,7 +21,11 @@ internal enum class GeckoRenderEvent {
     RECOVERY_STARTED,
     RECOVERY_RELOAD_STARTED,
     RECOVERY_FAILED,
-    RECOVERY_RETRY_THROTTLED
+    RECOVERY_RETRY_THROTTLED,
+    /** An automatic (no user tap) recovery attempt began. The recovery card
+     *  must NOT appear for this — it only shows when automatic recovery is
+     *  exhausted or genuinely fails. */
+    AUTO_RECOVERY_STARTED
 }
 
 internal fun geckoRendererRecoveryRequired(
@@ -35,7 +39,55 @@ internal fun geckoRendererRecoveryRequired(
     GeckoRenderEvent.RECOVERY_RELOAD_STARTED,
     GeckoRenderEvent.RECOVERY_FAILED,
     GeckoRenderEvent.RECOVERY_RETRY_THROTTLED -> true
-    GeckoRenderEvent.LOAD_STARTED -> currentlyRequired
+    GeckoRenderEvent.LOAD_STARTED,
+    GeckoRenderEvent.AUTO_RECOVERY_STARTED -> currentlyRequired
+}
+
+/**
+ * Automatic recovery policy (Prince's 2026-11-11 "page stopped rendering"
+ * dead-end): when a tab's content process dies, Click first tries to rebuild
+ * the session and restore the page BY ITSELF — the error card is a last
+ * resort, not the first response. Attempts are capped so a page that keeps
+ * killing its renderer cannot loop forever; once the cap is hit the card
+ * shows and the user decides (Reload / Back / close).
+ */
+internal const val GECKO_AUTO_RECOVERY_MAX_ATTEMPTS = 2
+internal const val GECKO_AUTO_RECOVERY_DELAY_MS = 600L
+
+internal fun geckoAutoRecoveryAllowed(
+    attemptsUsed: Int,
+    sessionDestroyed: Boolean,
+    recoveryInProgress: Boolean
+): Boolean =
+    !sessionDestroyed && !recoveryInProgress && attemptsUsed < GECKO_AUTO_RECOVERY_MAX_ATTEMPTS
+
+/** What one recovery attempt should do with the tab's GeckoSession. */
+internal enum class GeckoRecoveryPlan {
+    IN_PROGRESS,
+    /** Healthy session, ordinary reload — no rebuild needed. */
+    RELOAD_SESSION,
+    /** Session still reports open but its renderer is dead: reload() on it is
+     *  a silent no-op, so close + reopen the same session object and restore
+     *  its saved state (page + history stack) instead. */
+    REBUILD_AND_RESTORE,
+    REOPEN_AND_RESTORE_STATE,
+    REOPEN_AND_LOAD_CURRENT_URL,
+    REOPEN_BLANK
+}
+
+internal fun geckoRecoveryPlan(
+    sessionIsOpen: Boolean,
+    recoveryRequired: Boolean,
+    recoveryInProgress: Boolean,
+    hasSavedState: Boolean,
+    hasCurrentUrl: Boolean
+): GeckoRecoveryPlan = when {
+    recoveryInProgress -> GeckoRecoveryPlan.IN_PROGRESS
+    sessionIsOpen && recoveryRequired -> GeckoRecoveryPlan.REBUILD_AND_RESTORE
+    sessionIsOpen -> GeckoRecoveryPlan.RELOAD_SESSION
+    hasSavedState -> GeckoRecoveryPlan.REOPEN_AND_RESTORE_STATE
+    hasCurrentUrl -> GeckoRecoveryPlan.REOPEN_AND_LOAD_CURRENT_URL
+    else -> GeckoRecoveryPlan.REOPEN_BLANK
 }
 
 internal const val GECKO_RECOVERY_FAILURE_WINDOW_MS = 60_000L

@@ -352,6 +352,14 @@ class MainActivity : FragmentActivity() {
     // first-launch prompt.
     private val pendingExternalUrl = MutableStateFlow<String?>(null)
     private val pendingOpenDownloads = MutableStateFlow(false)
+    /** Completed engine download to open-with when Downloads opens (from the
+     *  completion notification's tap). */
+    private val pendingOpenDownloadRecord = MutableStateFlow<String?>(null)
+    /** Set by the update-available notification tap; drained in onResume. */
+    private val pendingAppUpdate = MutableStateFlow(false)
+    private var downloadNotifPermissionRequestedThisSession = false
+    private val downloadNotificationPermissionLauncher: ActivityResultLauncher<String> =
+        registerForActivityResult(ActivityResultContracts.RequestPermission()) { }
     private val activityResumeCount = MutableStateFlow(0L)
     private val isDefaultBrowserState = MutableStateFlow(false)
     private val defaultBrowserLauncher: ActivityResultLauncher<Intent> =
@@ -631,6 +639,11 @@ class MainActivity : FragmentActivity() {
     override fun onResume() {
         super.onResume()
         activityResumeCount.value += 1L
+        // Update-available notification tap: offer Play's flexible update flow.
+        if (pendingAppUpdate.value) {
+            pendingAppUpdate.value = false
+            com.click.browser.engine.AppUpdateChecker.startFlexibleFlow(this)
+        }
         // The fallback default-apps page (pre-Android 10) does not return an
         // ActivityResult, so always refresh the role state when we come back.
         isDefaultBrowserState.value = DefaultBrowserHelper.isDefaultBrowser(this)
@@ -675,11 +688,20 @@ class MainActivity : FragmentActivity() {
     }
 
     private fun consumeOpenDownloadsIntent(intent: Intent) {
-        if (!intent.getBooleanExtra(com.click.browser.engine.CustomDownloadNotifications.EXTRA_OPEN_DOWNLOADS, false)) {
-            return
+        if (intent.getBooleanExtra(com.click.browser.engine.CustomDownloadNotifications.EXTRA_OPEN_DOWNLOADS, false)) {
+            intent.removeExtra(com.click.browser.engine.CustomDownloadNotifications.EXTRA_OPEN_DOWNLOADS)
+            pendingOpenDownloads.value = true
+            intent.getStringExtra(com.click.browser.engine.ClickDownloadNotifications.EXTRA_OPEN_WITH_RECORD)
+                ?.takeIf { it.isNotBlank() }
+                ?.let { recordId ->
+                    intent.removeExtra(com.click.browser.engine.ClickDownloadNotifications.EXTRA_OPEN_WITH_RECORD)
+                    pendingOpenDownloadRecord.value = recordId
+                }
         }
-        intent.removeExtra(com.click.browser.engine.CustomDownloadNotifications.EXTRA_OPEN_DOWNLOADS)
-        pendingOpenDownloads.value = true
+        if (intent.getBooleanExtra(com.click.browser.engine.AppUpdateChecker.EXTRA_OPEN_UPDATE, false)) {
+            intent.removeExtra(com.click.browser.engine.AppUpdateChecker.EXTRA_OPEN_UPDATE)
+            pendingAppUpdate.value = true
+        }
     }
 
     /**
@@ -807,6 +829,18 @@ class MainActivity : FragmentActivity() {
         mode: BrowserMode = liveMode,
         mimeType: String? = null
     ) {
+        // Download notifications are ON by default in Click; Android 13+
+        // still requires the runtime grant. Ask once per session, in the
+        // context of the user's first download — downloads proceed either way.
+        if (!downloadNotifPermissionRequestedThisSession &&
+            android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU &&
+            !com.click.browser.engine.ClickDownloadNotifications.hasRuntimePermission(this)
+        ) {
+            downloadNotifPermissionRequestedThisSession = true
+            runCatching {
+                downloadNotificationPermissionLauncher.launch(android.Manifest.permission.POST_NOTIFICATIONS)
+            }
+        }
         val saved = DownloadHelper.enqueue(
             context = this,
             url = url,
@@ -1343,6 +1377,10 @@ class MainActivity : FragmentActivity() {
 
         consumeOpenDownloadsIntent(intent)
 
+        // Play in-app update availability check (throttled to once a day;
+        // posts the update-available notification Prince asked for).
+        com.click.browser.engine.AppUpdateChecker.checkOnStart(this)
+
         // News notification deep link (cold start): consume the article URL
         // once so the composable below opens it in a new tab. Skipped on
         // recreation (rotation / process death) — the URL was already
@@ -1738,6 +1776,14 @@ class MainActivity : FragmentActivity() {
                 if (openDownloadsRequested) {
                     showDownloads = true
                     pendingOpenDownloads.value = false
+                }
+            }
+            val openDownloadRecordRequested by pendingOpenDownloadRecord.collectAsState()
+            var downloadsOpenWithRecordId by remember { mutableStateOf<String?>(null) }
+            LaunchedEffect(openDownloadRecordRequested) {
+                if (openDownloadRecordRequested != null) {
+                    downloadsOpenWithRecordId = openDownloadRecordRequested
+                    pendingOpenDownloadRecord.value = null
                 }
             }
             var showPlaylist by remember { mutableStateOf(false) }
@@ -4580,7 +4626,9 @@ class MainActivity : FragmentActivity() {
                                 val showExtensionButton = currentTab.engine == BrowserTabEngine.GECKOVIEW &&
                                     !currentTab.isIncognito && !showOverlays
                                 Column {
-                                    if (!immersiveMode && showOverlays) {
+                                    // Power (desktop) mode keeps its tab strip visible
+                                    // while browsing too — desktop-style chrome.
+                                    if (!immersiveMode && (showOverlays || activeMode == BrowserMode.HACK)) {
                                         TabStrip(
                                             tabs = tabs,
                                             activeTabIndex = activeTabIndex,
@@ -4699,8 +4747,22 @@ class MainActivity : FragmentActivity() {
                                 // The home screen owns its primary search field. Keep the tab
                                 // strip there, but show the browser omnibox only on open pages
                                 // (or at the bottom when that setting is selected).
-                                if (!videoFullscreenActive && (!flagsUi.bottomAddressBar || showOverlays)) {
+                                // Simple mode ALWAYS keeps the bar at the top (Prince's
+                                // rule) — the bottom-bar preference is ignored there.
+                                if (!videoFullscreenActive &&
+                                    (!(flagsUi.bottomAddressBar && activeMode != BrowserMode.SIMPLE) || showOverlays)
+                                ) {
                                     BrowseTopBarBlock(showAddressBar = !showOverlays)
+                                }
+
+                                // Slim animated download strip under the toolbar while
+                                // any Click-engine or response download is active.
+                                if (!immersiveMode) {
+                                    DownloadActivityIndicator(
+                                        mode = activeMode,
+                                        theme = theme,
+                                        onOpenDownloads = { showDownloads = true }
+                                    )
                                 }
 
                                 // 4. MAIN CONTENT CONTAINER (WIDGET-STYLE DASHBOARD OR WEBVIEW)
@@ -5100,9 +5162,9 @@ class MainActivity : FragmentActivity() {
                                                                         if (code != null) {
                                                                             val details = when (event) {
                                                                                 GeckoRenderEvent.PROCESS_CRASHED ->
-                                                                                    "GeckoSession.ContentDelegate.onCrash; session is closed; retry will reopen and restore saved state."
+                                                                                    "GeckoSession.ContentDelegate.onCrash; automatic recovery exhausted or unavailable; manual retry reopens and restores saved state."
                                                                                 GeckoRenderEvent.PROCESS_KILLED ->
-                                                                                    "GeckoSession.ContentDelegate.onKill; session is closed; retry will reopen and restore saved state."
+                                                                                    "GeckoSession.ContentDelegate.onKill; automatic recovery exhausted or unavailable; manual retry reopens and restores saved state."
                                                                                 else ->
                                                                                     "Session reopen, state restore, or reload failed; bounded exception class/cause and stack frames captured, messages omitted."
                                                                             }
@@ -6615,7 +6677,8 @@ class MainActivity : FragmentActivity() {
                             // Polish: one-shot theme crossfade (battery-safe).
                             // Bottom-address-bar option: bar renders below the page,
                             // padded above the overlaid bottom nav so they never overlap.
-                            if (flagsUi.bottomAddressBar && showBrowseBottomNav) {
+                            // (Never in Simple mode — its bar stays at the top.)
+                            if (flagsUi.bottomAddressBar && activeMode != BrowserMode.SIMPLE && showBrowseBottomNav) {
                                 Box(
                                     modifier = Modifier
                                         .align(Alignment.BottomCenter)
@@ -6780,7 +6843,9 @@ class MainActivity : FragmentActivity() {
                                     repository = repository,
                                     mode = activeMode,
                                     resumeSignal = appResumeCount,
-                                    onClose = { showDownloads = false }
+                                    onClose = { showDownloads = false },
+                                    openWithRecordId = downloadsOpenWithRecordId,
+                                    onOpenWithConsumed = { downloadsOpenWithRecordId = null }
                                 )
                             }
 
@@ -6941,25 +7006,39 @@ class MainActivity : FragmentActivity() {
                                                 }
                                             }
                                             when (extensionPopup.renderState) {
-                                                com.click.browser.extensions.NormalTabExtensionPopupRenderState.LOADING -> {
-                                                    Row(
-                                                        modifier = Modifier.fillMaxWidth().height(220.dp),
-                                                        verticalAlignment = Alignment.CenterVertically,
-                                                        horizontalArrangement = Arrangement.Center
-                                                    ) {
-                                                        CircularProgressIndicator()
-                                                        Text("Loading add-on action…", modifier = Modifier.padding(start = 12.dp), color = theme.onSurface)
-                                                    }
-                                                }
-                                                com.click.browser.extensions.NormalTabExtensionPopupRenderState.READY -> key(extensionPopup.session) {
-                                                    AndroidView(
-                                                        modifier = Modifier.fillMaxWidth().height(420.dp),
-                                                        factory = { popupContext ->
-                                                            org.mozilla.geckoview.GeckoView(popupContext).apply {
-                                                                setSession(extensionPopup.session)
+                                                // The GeckoView must exist from LOADING onward:
+                                                // a GeckoSession cannot composite (onFirstComposite
+                                                // -> READY) until it is attached to a view. Gating
+                                                // the view on READY deadlocked every popup into
+                                                // the FAILED card after the render timeout.
+                                                com.click.browser.extensions.NormalTabExtensionPopupRenderState.LOADING,
+                                                com.click.browser.extensions.NormalTabExtensionPopupRenderState.READY -> {
+                                                    Box(modifier = Modifier.fillMaxWidth().height(420.dp)) {
+                                                        key(extensionPopup.session) {
+                                                            AndroidView(
+                                                                modifier = Modifier.fillMaxSize(),
+                                                                factory = { popupContext ->
+                                                                    org.mozilla.geckoview.GeckoView(popupContext).apply {
+                                                                        setSession(extensionPopup.session)
+                                                                    }
+                                                                }
+                                                            )
+                                                        }
+                                                        if (extensionPopup.renderState ==
+                                                            com.click.browser.extensions.NormalTabExtensionPopupRenderState.LOADING
+                                                        ) {
+                                                            Row(
+                                                                modifier = Modifier
+                                                                    .fillMaxSize()
+                                                                    .background(theme.surface),
+                                                                verticalAlignment = Alignment.CenterVertically,
+                                                                horizontalArrangement = Arrangement.Center
+                                                            ) {
+                                                                CircularProgressIndicator()
+                                                                Text("Loading add-on action…", modifier = Modifier.padding(start = 12.dp), color = theme.onSurface)
                                                             }
                                                         }
-                                                    )
+                                                    }
                                                 }
                                                 com.click.browser.extensions.NormalTabExtensionPopupRenderState.FAILED -> Column(
                                                     modifier = Modifier.fillMaxWidth().heightIn(min = 220.dp).padding(20.dp),
@@ -7018,17 +7097,22 @@ class MainActivity : FragmentActivity() {
                                                                     Toast.LENGTH_SHORT
                                                                 ).show()
                                                             } else if (
-                                                                routerAtClick.clickAction(tabAtClick.id, actionAtClick, tabAtClick.url) ==
+                                                                routerAtClick.clickAction(tabAtClick.id, actionAtClick, tabAtClick.url) !=
                                                                 com.click.browser.extensions.NormalTabActionDispatchResult.REQUESTED
                                                             ) {
-                                                                routerAtClick.closePopup(popupAtClick.session)
-                                                            } else {
                                                                 Toast.makeText(
                                                                     this@MainActivity,
                                                                     "This add-on action could not be retried. Your webpage is still open.",
                                                                     Toast.LENGTH_SHORT
                                                                 ).show()
                                                             }
+                                                            // On REQUESTED there is deliberately nothing
+                                                            // else to do here: GeckoView answers the click
+                                                            // asynchronously and the router builds a FRESH
+                                                            // popup session, disposing this failed popup's
+                                                            // state itself. Closing the old popup here
+                                                            // raced that callback and could dismiss the
+                                                            // brand-new popup instead of the failed one.
                                                         }
                                                     ) { Text("Try again") }
                                                 }
@@ -9734,6 +9818,119 @@ fun DrawerItem(
  * The large mode button is gone — the profile shows only as the small pill,
  * like the "SIMPLE MODE" pill in the approved Simple design.
  */
+/**
+ * Slim animated download strip shown under the toolbar while downloads are
+ * active (Click's own engine + streamed response downloads). Pulsing icon +
+ * live aggregate progress; tap opens the Downloads screen.
+ */
+@Composable
+fun DownloadActivityIndicator(
+    mode: BrowserMode,
+    theme: com.click.browser.engine.ModeTheme,
+    onOpenDownloads: () -> Unit
+) {
+    val context = LocalContext.current
+    val store = remember { com.click.browser.data.ClickDownloadStore(context) }
+    val records by remember(mode) { store.flowFor(mode) }.collectAsState(initial = emptyList())
+    val responses by com.click.browser.engine.ActiveResponseDownloads.active.collectAsState()
+    val runningRecords = records.filter {
+        it.state == com.click.browser.engine.ClickDownloadState.RUNNING
+    }
+    val waitingRecords = records.filter {
+        it.state == com.click.browser.engine.ClickDownloadState.QUEUED ||
+            it.state == com.click.browser.engine.ClickDownloadState.PAUSED
+    }
+    if (runningRecords.isEmpty() && waitingRecords.isEmpty() && responses.isEmpty()) return
+
+    val activeCount = runningRecords.size + waitingRecords.size + responses.size
+    val knownTotals = (runningRecords.map { it.bytesDownloaded to it.totalBytes } +
+        responses.map { it.downloadedBytes to it.totalBytes }).filter { it.second > 0L }
+    val aggregate = if (knownTotals.isNotEmpty()) {
+        val downloaded = knownTotals.sumOf { it.first }
+        val total = knownTotals.sumOf { it.second }
+        if (total > 0L) (downloaded.toFloat() / total.toFloat()).coerceIn(0f, 1f) else null
+    } else null
+    val animatedAggregate by androidx.compose.animation.core.animateFloatAsState(
+        targetValue = aggregate ?: 0f,
+        animationSpec = androidx.compose.animation.core.tween(400),
+        label = "download-strip-progress"
+    )
+    val pulse = androidx.compose.animation.core.rememberInfiniteTransition(label = "download-strip-pulse")
+    val pulseAlpha by pulse.animateFloat(
+        initialValue = 0.35f,
+        targetValue = 1f,
+        animationSpec = androidx.compose.animation.core.infiniteRepeatable(
+            animation = androidx.compose.animation.core.tween(650),
+            repeatMode = androidx.compose.animation.core.RepeatMode.Reverse
+        ),
+        label = "download-strip-pulse-alpha"
+    )
+    val label = when {
+        runningRecords.isNotEmpty() -> "Downloading ${runningRecords.first().fileName}"
+        responses.isNotEmpty() -> "Downloading ${responses.first().fileName}"
+        else -> "Downloads paused or waiting"
+    }
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .background(theme.surfaceVariant)
+            .clickable { onOpenDownloads() }
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 12.dp, vertical = 5.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Icon(
+                androidx.compose.material.icons.filled.Download,
+                contentDescription = null,
+                modifier = Modifier
+                    .size(15.dp)
+                    .then(
+                        if (runningRecords.isNotEmpty() || responses.isNotEmpty()) {
+                            Modifier.graphicsLayer { alpha = pulseAlpha }
+                        } else Modifier
+                    ),
+                tint = theme.primary
+            )
+            Spacer(modifier = Modifier.width(8.dp))
+            Text(
+                label,
+                color = theme.onSurface,
+                fontSize = 11.5.sp,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f)
+            )
+            if (activeCount > 1) {
+                Text(
+                    "$activeCount active",
+                    color = theme.onSurface.copy(alpha = 0.65f),
+                    fontSize = 11.sp
+                )
+                Spacer(modifier = Modifier.width(8.dp))
+            }
+            if (aggregate != null) {
+                Text(
+                    "${(aggregate * 100).toInt()}%",
+                    color = theme.primary,
+                    fontSize = 11.5.sp,
+                    fontWeight = FontWeight.Bold
+                )
+            }
+        }
+        if (aggregate != null) {
+            LinearProgressIndicator(
+                progress = { animatedAggregate },
+                modifier = Modifier.fillMaxWidth().height(2.dp),
+                color = theme.primary,
+                trackColor = theme.surfaceVariant
+            )
+        }
+    }
+}
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun BrowserTopBar(

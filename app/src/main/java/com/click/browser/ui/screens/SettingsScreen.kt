@@ -814,10 +814,19 @@ fun SettingsScreen(
                 CardRow(theme) {
                     ActionRow(
                         "Check for updates",
-                        "Open Google Play; Click does not check versions in the background",
+                        "Official Google Play update check — also checked automatically once a day",
                         Icons.Default.Refresh,
                         theme
-                    ) { SafetyCheck.openPlayListing(context) }
+                    ) {
+                        val activity = context as? android.app.Activity
+                        if (activity == null) {
+                            SafetyCheck.openPlayListing(context)
+                        } else {
+                            com.click.browser.engine.AppUpdateChecker.manualCheck(activity) { message ->
+                                android.widget.Toast.makeText(context, message, android.widget.Toast.LENGTH_LONG).show()
+                            }
+                        }
+                    }
                     HorizontalDivider(color = theme.onSurface.copy(alpha = 0.1f))
                     ActionRow(
                         "Open-source licenses",

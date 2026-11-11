@@ -12,7 +12,7 @@ class ExtensionManagerPaletteTest {
     @Test
     fun paletteMatchesTheLightCreamModeWithBronzeAndCharcoalRoles() {
         val cream = ModeThemes.forMode(
-            mode = BrowserMode.SIMPLE,
+            mode = BrowserMode.ADVANCED,
             dark = false,
             lightVariant = LightThemeVariant.CREAM
         )

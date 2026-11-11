@@ -51,6 +51,11 @@
         <receiver
             android:name=".engine.CustomDownloadCancelReceiver"
             android:exported="false" />
+        <!-- Pause / Resume / Cancel actions from Click's own download
+             notifications. Only reachable via our own PendingIntents. -->
+        <receiver
+            android:name=".engine.ClickDownloadActionReceiver"
+            android:exported="false" />
         <service
             android:name="androidx.work.impl.foreground.SystemForegroundService"
             android:foregroundServiceType="dataSync"

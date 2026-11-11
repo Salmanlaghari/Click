@@ -46,6 +46,12 @@
 -keep class com.click.browser.engine.NewsNotificationWorker {
     public <init>(android.content.Context, androidx.work.WorkerParameters);
 }
+# Click's own download engine: WorkManager instantiates the worker by class
+# name; the action receiver is declared in the manifest.
+-keep class com.click.browser.engine.ClickDownloadWorker {
+    public <init>(android.content.Context, androidx.work.WorkerParameters);
+}
+-keep class com.click.browser.engine.ClickDownloadActionReceiver { *; }
 -keep class com.google.mlkit.nl.translate.Translator { *; }
 -keep class com.google.mlkit.nl.translate.TranslatorOptions { *; }
 -keep class com.google.mlkit.nl.translate.TranslatorOptions$Builder { *; }

@@ -107,7 +107,14 @@ object DownloadHelper {
         }
         return when (location) {
             DownloadSettings.LOCATION_APP -> {
-                if (enqueueViaDownloadManager(
+                // Click's own engine (pause/resume + Click notifications);
+                // DownloadManager remains only as a failure fallback.
+                if (enqueueViaClickEngine(
+                        context, url, safeName, actualMimeType, DownloadSettings.LOCATION_APP, userAgent, mode
+                    )
+                ) {
+                    null // engine records the file itself when the transfer completes
+                } else if (enqueueViaDownloadManager(
                         context, url, safeName, appPrivate = true, userAgent = userAgent, mimeType = actualMimeType
                     )
                 ) {
@@ -174,13 +181,53 @@ object DownloadHelper {
                 }
             }
             else -> {
-                if (enqueueViaDownloadManager(
+                if (enqueueViaClickEngine(
+                        context, url, safeName, actualMimeType, DownloadSettings.LOCATION_PHONE, userAgent, mode
+                    )
+                ) {
+                    null // engine records the file itself when the transfer completes
+                } else if (enqueueViaDownloadManager(
                         context, url, safeName, appPrivate = false, userAgent = userAgent, mimeType = actualMimeType
                     )
                 ) {
                     SavedDownload(safeName, publicDownloadPath(safeName))
                 } else null
             }
+        }
+    }
+
+    /**
+     * Starts a download in Click's own engine (progress notification with
+     * Pause/Resume/Cancel, real resume, durable record). Returns false when
+     * the engine could not even queue the record so the caller can fall back
+     * to DownloadManager. The engine adds the saved-file record on completion,
+     * so callers must NOT record anything for engine-routed downloads.
+     */
+    private suspend fun enqueueViaClickEngine(
+        context: Context,
+        url: String,
+        safeName: String,
+        mimeType: String,
+        destination: String,
+        userAgent: String?,
+        mode: BrowserMode
+    ): Boolean {
+        return try {
+            ClickDownloadEngine.enqueue(
+                context = context,
+                url = url,
+                fileName = safeName,
+                mimeType = mimeType,
+                mode = mode,
+                destination = destination,
+                userAgent = userAgent
+            )
+            withContext(Dispatchers.Main) {
+                Toast.makeText(context, "Download started — $safeName", Toast.LENGTH_SHORT).show()
+            }
+            true
+        } catch (_: Exception) {
+            false
         }
     }
 
@@ -255,9 +302,15 @@ object DownloadHelper {
         }
         val registryId = ActiveResponseDownloads.begin(safeName, destinationLabel, totalBytes)
         return try {
-            enqueueResponseInternal(
+            val saved = enqueueResponseInternal(
                 context, responseBody, url, safeName, actualMimeType, location, mode
             ) { bytes -> ActiveResponseDownloads.updateProgress(registryId, bytes) }
+            if (saved != null) {
+                // Response downloads stream outside the engine; still give the
+                // user the completion alert in the notification bar.
+                ClickDownloadNotifications.showResponseSaved(context, safeName)
+            }
+            saved
         } finally {
             ActiveResponseDownloads.end(registryId)
         }

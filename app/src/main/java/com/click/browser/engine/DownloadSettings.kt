@@ -49,6 +49,21 @@ object DownloadSettings {
         }
     }
 
+    /** Download notifications master toggle for Click's own engine. Default ON. */
+    suspend fun notificationsEnabled(context: Context): Boolean = try {
+        context.dataStore.data.map { it[AppSettings.DOWNLOAD_NOTIFICATIONS_ENABLED] }.first() ?: true
+    } catch (e: Exception) {
+        Log.w(TAG, "notifications read failed", e); true
+    }
+
+    suspend fun setNotificationsEnabled(context: Context, enabled: Boolean) {
+        try {
+            context.dataStore.edit { it[AppSettings.DOWNLOAD_NOTIFICATIONS_ENABLED] = enabled }
+        } catch (e: Exception) {
+            Log.w(TAG, "notifications write failed", e)
+        }
+    }
+
     suspend fun customUri(context: Context): Uri? = try {
         context.dataStore.data.map { it[AppSettings.DOWNLOAD_CUSTOM_URI] }.first()
             ?.takeIf { it.isNotBlank() }?.let { Uri.parse(it) }
