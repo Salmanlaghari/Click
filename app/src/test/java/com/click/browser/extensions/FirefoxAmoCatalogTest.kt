@@ -58,7 +58,7 @@ class FirefoxAmoCatalogTest {
         val asset = listOf(
             "src/main/assets/extensions/amo_safe_catalog.json",
             "app/src/main/assets/extensions/amo_safe_catalog.json"
-        ).map(::java.io.File).firstOrNull { it.isFile }
+        ).map { java.io.File(it) }.firstOrNull { it.isFile }
             ?: error("Bundled AMO catalog asset not found from the test working directory")
         val parsed = parseBundledAmoCatalog(asset.readText()) { _, _ -> 1 }
         // The asset ships 520 entries; the two underscore-slug entries
