@@ -291,6 +291,9 @@ object V9Engine {
         while (true) {
             val hasFocus = activity.hasWindowFocus()
             if (hasFocus) return true
+            // Bail out immediately if the Activity went away during the wait
+            // instead of polling until the budget is exhausted.
+            if (activity.isFinishing || activity.isDestroyed) return false
             val waitedMs = SystemClock.elapsedRealtime() - startedAt
             if (!shouldKeepWaitingForSourceWindowFocus(hasFocus, waitedMs, MODE_SWITCH_SOURCE_FOCUS_WAIT_MS)) {
                 return false
