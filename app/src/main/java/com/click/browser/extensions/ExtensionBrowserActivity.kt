@@ -1146,7 +1146,7 @@ private fun ExtensionManagerDialog(
     }
     AlertDialog(
         onDismissRequest = onClose,
-        title = { Text("Installed Add-ons & AMO Quick Picks", fontWeight = FontWeight.Bold) },
+        title = { Text("Installed Add-ons & AMO Catalog", fontWeight = FontWeight.Bold) },
         text = {
             LazyColumn(
                 modifier = Modifier.heightIn(max = 520.dp),
@@ -1155,7 +1155,7 @@ private fun ExtensionManagerDialog(
                 item(key = "header") {
                     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                         Text(
-                            "${filteredEntries.size} safe quick picks. Browse Mozilla's full Android catalog from the store page.",
+                            "${filteredEntries.size} add-ons in Click's catalog. Every install is re-checked against Mozilla's live AMO record first; you can also browse Mozilla's full Android catalog from the store page.",
                             fontWeight = FontWeight.SemiBold,
                             fontSize = 13.sp
                         )
@@ -1174,7 +1174,7 @@ private fun ExtensionManagerDialog(
                             onValueChange = { searchQuery = it },
                             modifier = Modifier.fillMaxWidth(),
                             singleLine = true,
-                            label = { Text("Search quick picks…") }
+                            label = { Text("Search the catalog…") }
                         )
                         Row(
                             modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
