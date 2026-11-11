@@ -96,8 +96,7 @@ object VpnConfigBuilder {
                 .put("mtu", DEFAULT_TUN_MTU)
                 .put("auto_route", true)
                 .put("strict_route", true)
-                .put("stack", "gvisor")
-                .put("sniff", true)))
+                .put("stack", "gvisor")))
 
         // NOTE (sing-box >= 1.13): the "dns" outbound type was removed —
         // DNS now travels via the servers' "detour", and plain port-53
@@ -109,8 +108,14 @@ object VpnConfigBuilder {
 
         // Route: everything unmatched goes through the proxy (including
         // plain DNS, which then exits at the server — no leak).
+        // NOTE (sing-box >= 1.13): the legacy inbound "sniff" field was
+        // REMOVED — sniffing is now the route rule action below (see the
+        // sing-box migration guide: migrate legacy inbound fields to
+        // rule actions). Without this the core rejects the whole config.
         config.put("route", JSONObject()
-            .put("rules", JSONArray())
+            .put("rules", JSONArray()
+                .put(JSONObject()
+                    .put("action", "sniff")))
             .put("final", "proxy")
             .put("auto_detect_interface", true))
 
