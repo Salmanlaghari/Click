@@ -47,6 +47,41 @@ object PrivacyGuards {
     }
 
     /**
+     * WebRTC block script for WebView (private) tabs, injected at
+     * onPageStarted while the user has "Block WebRTC" on. It replaces
+     * RTCPeerConnection with a stub whose constructor throws, so page
+     * scripts cannot create peer connections or start STUN/ICE gathering.
+     * Best-effort by construction: WebView offers no document-start hook,
+     * so a page script that captured the original constructor before this
+     * runs is out of reach. The GeckoView equivalent is the bundled
+     * built-in extension in assets/webrtc_guard (see WebRtcGuard), which
+     * does run at document_start. Keep the stub text in sync with
+     * assets/webrtc_guard/guard.js. getUserMedia / enumerateDevices are
+     * deliberately untouched: camera/mic stays governed by Click's
+     * per-site permission prompts.
+     */
+    const val WEBRTC_BLOCK_JS = """
+        (function() {
+            try {
+                if (!/^https?:$/.test(window.location.protocol)) return;
+                function BlockedRTCPeerConnection() {
+                    throw new DOMException(
+                        "WebRTC is disabled by Click's Block WebRTC setting.",
+                        'NotSupportedError'
+                    );
+                }
+                ['RTCPeerConnection', 'webkitRTCPeerConnection'].forEach(function(prop) {
+                    try {
+                        Object.defineProperty(window, prop, {
+                            configurable: true, writable: true, value: BlockedRTCPeerConnection
+                        });
+                    } catch (e) {}
+                });
+            } catch (e) {}
+        })();
+    """
+
+    /**
      * Real WebRTC leak TEST. Gathers ICE candidates via a STUN server and
      * reports the discovered IPs back through the WebRtcTestBridge.
      * This is a TEST, not a blocker — WebView offers no API to disable

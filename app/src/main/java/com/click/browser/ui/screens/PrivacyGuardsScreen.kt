@@ -45,8 +45,9 @@ import com.click.browser.engine.WebRtcTestPresentation
 import com.click.browser.engine.WebRtcTestResult
 /**
  * Privacy controls with clear behavior: optional DNT/GPC request signals,
- * DNS-over-HTTPS for the app's AI requests, and a WebRTC visibility test.
- * This screen does not change page identity or run user-provided scripts.
+ * DNS-over-HTTPS for the app's AI requests, an opt-in WebRTC block, and a
+ * WebRTC visibility test. This screen does not change page identity or run
+ * user-provided scripts; the WebRTC block is Click's own bundled code.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -57,6 +58,8 @@ fun PrivacyGuardsScreen(
     onToggleGpc: (Boolean) -> Unit,
     secureDns: Boolean,
     onToggleSecureDns: (Boolean) -> Unit,
+    webrtcBlocked: Boolean,
+    onToggleWebrtcBlocked: (Boolean) -> Unit,
     webrtcRunning: Boolean,
     webrtcResult: WebRtcTestResult?,
     onRunWebrtcTest: () -> Unit,
@@ -112,6 +115,24 @@ fun PrivacyGuardsScreen(
                     subtitle = PrivacyDisclosurePolicy.aiChatDnsDescription(secureDns),
                     checked = secureDns,
                     onCheckedChange = onToggleSecureDns
+                )
+            }
+
+            // ---- Block WebRTC ----
+            item {
+                GuardToggleRow(
+                    title = "Block WebRTC",
+                    subtitle = "WebRTC off: sites cannot open WebRTC peer " +
+                        "connections, so the STUN/ICE path that can reveal " +
+                        "your IP address stays closed. GeckoView tabs are " +
+                        "covered by Click's bundled built-in guard extension; " +
+                        "private (WebView) tabs by a script injected at page " +
+                        "start. Honest trade-off: this breaks in-browser " +
+                        "video/voice calls and some games, so it is off by " +
+                        "default — WebRTC stays available until you turn " +
+                        "blocking on.",
+                    checked = webrtcBlocked,
+                    onCheckedChange = onToggleWebrtcBlocked
                 )
             }
 

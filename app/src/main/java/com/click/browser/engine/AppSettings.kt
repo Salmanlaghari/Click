@@ -42,6 +42,11 @@ object AppSettings {
     // them; they are requests, not enforcement.
     val DNT_ENABLED = booleanPreferencesKey("dnt_enabled")
     val GPC_ENABLED = booleanPreferencesKey("gpc_enabled")
+    // Block WebRTC (Privacy Guards). OPT-IN, default OFF: WebRTC stays
+    // available until the user turns blocking on, because blocking breaks
+    // legitimate in-browser calls. Enforced by WebRtcGuard (GeckoView tabs)
+    // and a page-start script (WebView/private tabs).
+    val WEBRTC_BLOCKED = booleanPreferencesKey("webrtc_blocked")
     val UI_DARK_MODE = booleanPreferencesKey("ui_dark_mode")
     val WALLPAPER_URI = stringPreferencesKey("wallpaper_uri")
     /**
