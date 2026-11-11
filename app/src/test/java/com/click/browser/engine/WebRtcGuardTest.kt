@@ -61,13 +61,17 @@ class WebRtcGuardTest {
 
         // The extension script and the WebView script must stay in sync: both
         // stub the same constructors with the same message, neither touches
-        // media-device APIs.
+        // media-device APIs. Scope is asserted on executable code only —
+        // comment lines may legitimately name the APIs they explain avoiding.
         val guardScript = guardFile.readText()
         assertTrue(guardScript.contains("RTCPeerConnection"))
         assertTrue(guardScript.contains("webkitRTCPeerConnection"))
         assertTrue(guardScript.contains("WebRTC is disabled by Click's Block WebRTC setting."))
-        assertFalse(guardScript.contains("getUserMedia"))
-        assertFalse(guardScript.contains("enumerateDevices"))
+        val guardCode = guardScript.lineSequence()
+            .filterNot { it.trimStart().startsWith("//") }
+            .joinToString("\n")
+        assertFalse(guardCode.contains("getUserMedia"))
+        assertFalse(guardCode.contains("enumerateDevices"))
     }
 
     private fun assetFile(relativePath: String): File = listOf(
