@@ -46,6 +46,9 @@ class ClickApplication : Application() {
         // Crash + OOM reports: capture to files dir, user sends them from
         // Settings → Reports. Never uploads silently.
         com.click.browser.engine.CrashReporter.install(this)
+        // Load the bundled AMO catalog asset once so the Extensions hub shows
+        // the full browsable catalog, not only the two curated quick picks.
+        runCatching { com.click.browser.extensions.FirefoxAmoCatalog.initialize(this) }
         // Background news alerts: re-schedule the battery-friendly periodic
         // check if the user previously opted in (default OFF).
         CoroutineScope(Dispatchers.IO).launch {

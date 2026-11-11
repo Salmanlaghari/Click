@@ -1,5 +1,6 @@
 package com.click.browser.extensions
 
+import android.content.Context
 import com.click.browser.R
 import org.json.JSONArray
 import org.json.JSONObject
@@ -35,18 +36,121 @@ internal data class VerifiedAmoCatalogRecord(
     val packageInfo: VerifiedAmoPackage
 )
 
+/** The parsed bundled catalog asset: browsable entries plus its category list. */
+internal data class BundledAmoCatalog(
+    val entries: List<FirefoxAmoCatalogEntry>,
+    val categories: List<String>
+)
+
 /**
- * The in-app shortcut list stays intentionally small. The store itself is Mozilla's complete
- * Firefox-for-Android AMO catalog; each selected package is live-checked before GeckoView install.
+ * Parses the bundled AMO catalog asset into browsable entries. An entry is
+ * only kept when it can pass the same official-listing gate the installer
+ * applies (valid slug, official AMO listing whose slug round-trips, complete
+ * display fields), so every card shown can actually reach the live AMO
+ * verification in `ExtensionBrowserActivity.beginCatalogInstall`.
+ * [iconFor] resolves the card icon from the entry category and the optional
+ * bundled-icon name stored in the asset (`fallbackIcon`).
+ */
+internal fun parseBundledAmoCatalog(
+    json: String,
+    iconFor: (category: String, bundledIconName: String?) -> Int
+): BundledAmoCatalog = runCatching {
+    val root = JSONObject(json)
+    val categories = FirefoxAmoCatalog.jsonStrings(root.optJSONArray("categories")).filter(String::isNotBlank)
+    val rawEntries = root.optJSONArray("entries") ?: JSONArray()
+    val parsed = buildList {
+        for (index in 0 until rawEntries.length()) {
+            val item = rawEntries.optJSONObject(index) ?: continue
+            val slug = item.optString("slug").trim().lowercase()
+            val name = item.optString("name").trim()
+            val summary = item.optString("summary").trim()
+            val version = item.optString("version").trim()
+            val minimumAndroidVersion = item.optString("minimumAndroidVersion").trim()
+            val listingUrl = item.optString("listingUrl").trim()
+            val category = item.optString("category").trim().ifBlank { "Utilities" }
+            if (!slug.matches(Regex("^[a-z0-9][a-z0-9_~-]{0,127}$")) ||
+                name.isBlank() || summary.isBlank() || version.isBlank() ||
+                minimumAndroidVersion.isBlank() ||
+                FirefoxAmoCatalog.slugFromOfficialListing(listingUrl) != slug
+            ) continue
+            val iconUrl = item.optString("iconUrl").trim()
+                .takeIf { it.startsWith("https://addons.mozilla.org/") }.orEmpty()
+            val bundledIconName = item.optString("fallbackIcon")
+                .substringAfterLast('/').substringBeforeLast('.')
+                .takeIf(String::isNotBlank)
+            add(
+                FirefoxAmoCatalogEntry(
+                    slug = slug,
+                    extensionId = item.optString("guid").trim(),
+                    name = name,
+                    category = category,
+                    summary = summary,
+                    version = version,
+                    minimumAndroidVersion = minimumAndroidVersion,
+                    listingUrl = listingUrl,
+                    iconUrl = iconUrl,
+                    iconResource = iconFor(category, bundledIconName),
+                    isRecommended = item.optBoolean("isRecommended", false),
+                    requiredPermissions = FirefoxAmoCatalog.jsonStrings(item.optJSONArray("requiredPermissions")),
+                    requiredOrigins = FirefoxAmoCatalog.jsonStrings(item.optJSONArray("requiredOrigins"))
+                )
+            )
+        }
+    }
+    BundledAmoCatalog(entries = parsed, categories = categories)
+}.getOrElse { BundledAmoCatalog(emptyList(), emptyList()) }
+
+/** Quick picks first, then bundled entries whose slug is not already a quick pick. */
+internal fun mergeAmoCatalogEntries(
+    quickPicks: List<FirefoxAmoCatalogEntry>,
+    bundled: List<FirefoxAmoCatalogEntry>
+): List<FirefoxAmoCatalogEntry> {
+    if (bundled.isEmpty()) return quickPicks
+    val quickSlugs = quickPicks.mapTo(mutableSetOf()) { it.slug.lowercase() }
+    return quickPicks + bundled.filterNot { it.slug.lowercase() in quickSlugs }
+}
+
+/**
+ * The two curated quick picks stay hardcoded (with their real bundled icons).
+ * The full browsable catalog ships inside the APK as
+ * `assets/extensions/amo_safe_catalog.json` and is loaded once via
+ * [initialize]; every install still live-checks the official AMO record
+ * before GeckoView sees the package, exactly like the quick picks.
  */
 internal object FirefoxAmoCatalog {
     const val ANDROID_STORE_URL = "https://addons.mozilla.org/en-US/android/"
     /** Keep aligned with the GeckoView 153 runtime pin in gradle/libs.versions.toml. */
     const val GECKOVIEW_ANDROID_COMPAT_VERSION = "153.0"
+    const val CATALOG_ASSET_PATH = "extensions/amo_safe_catalog.json"
 
-    val categories: List<String> = listOf("All", "Productivity", "Notes & Study")
+    @Volatile
+    private var bundledCatalog: BundledAmoCatalog = BundledAmoCatalog(emptyList(), emptyList())
 
-    val entries: List<FirefoxAmoCatalogEntry> by lazy {
+    /** Loads the bundled catalog asset once; safe to call again (no-op after success). */
+    fun initialize(context: Context) {
+        if (bundledCatalog.entries.isNotEmpty()) return
+        val parsed = runCatching {
+            val json = context.assets.open(CATALOG_ASSET_PATH).bufferedReader().use { it.readText() }
+            parseBundledAmoCatalog(json, ::bundledIconResource)
+        }.getOrNull() ?: return
+        if (parsed.entries.isNotEmpty()) bundledCatalog = parsed
+    }
+
+    val categories: List<String>
+        get() {
+            val bundled = bundledCatalog.categories
+            return when {
+                bundled.isEmpty() -> listOf("All", "Productivity", "Notes & Study")
+                bundled.first().equals("All", ignoreCase = true) -> bundled
+                else -> listOf("All") + bundled
+            }
+        }
+
+    /** All browsable catalog entries: curated quick picks first, then the bundled catalog. */
+    val entries: List<FirefoxAmoCatalogEntry>
+        get() = mergeAmoCatalogEntries(quickPicks, bundledCatalog.entries)
+
+    val quickPicks: List<FirefoxAmoCatalogEntry> by lazy {
         listOf(
             amoEntry(
                 slug = "tomato-clock",
@@ -207,7 +311,7 @@ internal object FirefoxAmoCatalog {
         return 0
     }
 
-    private fun jsonStrings(array: JSONArray?): List<String> = buildList {
+    internal fun jsonStrings(array: JSONArray?): List<String> = buildList {
         if (array == null) return@buildList
         for (index in 0 until array.length()) {
             array.optString(index).takeIf { it.isNotBlank() && it != "null" }?.let(::add)
@@ -238,6 +342,28 @@ internal object FirefoxAmoCatalog {
             (0 until apps.length()).any { apps.optString(it) == "android" }
         }
     }
+
+    /**
+     * Card icon for a bundled-catalog entry: the entry's own bundled icon when
+     * the asset names one that ships in the APK, otherwise the category icon —
+     * the same fallback scheme the original in-code catalog used.
+     */
+    private fun bundledIconResource(category: String, bundledIconName: String?): Int =
+        when (bundledIconName) {
+            "amo_tomato_clock" -> R.drawable.amo_tomato_clock
+            "amo_websites_notes" -> R.drawable.amo_websites_notes
+            "amo_tabliss" -> R.drawable.amo_tabliss
+            "amo_tineye_search" -> R.drawable.amo_tineye_search
+            "amo_emoji_sav" -> R.drawable.amo_emoji_sav
+            else -> when (category) {
+                "Productivity" -> R.drawable.ic_amo_cat_productivity
+                "Developer & Design" -> R.drawable.ic_amo_cat_dev
+                "Image & Research" -> R.drawable.ic_amo_cat_research
+                "Notes & Study" -> R.drawable.ic_amo_cat_notes
+                "Writing & Language" -> R.drawable.ic_amo_cat_writing
+                else -> R.drawable.ic_amo_cat_utilities
+            }
+        }
 
     private fun amoEntry(
         slug: String,
