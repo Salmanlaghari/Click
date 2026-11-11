@@ -26,7 +26,7 @@ class AppUpdatePolicyTest {
             AppUpdateChecker.shouldNotifyUpdate(
                 updateAvailable = true,
                 availableVersionCode = 18,
-                currentVersionCode = 17,
+                installedVersionCode = 17,
                 lastNotifiedVersionCode = 0
             )
         )
@@ -34,7 +34,7 @@ class AppUpdatePolicyTest {
             AppUpdateChecker.shouldNotifyUpdate(
                 updateAvailable = true,
                 availableVersionCode = 18,
-                currentVersionCode = 17,
+                installedVersionCode = 17,
                 lastNotifiedVersionCode = 18
             )
         )
@@ -46,7 +46,7 @@ class AppUpdatePolicyTest {
             AppUpdateChecker.shouldNotifyUpdate(
                 updateAvailable = false,
                 availableVersionCode = 17,
-                currentVersionCode = 17,
+                installedVersionCode = 17,
                 lastNotifiedVersionCode = 0
             )
         )
@@ -54,7 +54,7 @@ class AppUpdatePolicyTest {
             AppUpdateChecker.shouldNotifyUpdate(
                 updateAvailable = true,
                 availableVersionCode = 17,
-                currentVersionCode = 17,
+                installedVersionCode = 17,
                 lastNotifiedVersionCode = 0
             )
         )
