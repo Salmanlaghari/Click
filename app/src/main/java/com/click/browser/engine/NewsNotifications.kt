@@ -34,19 +34,31 @@ object NewsNotifications {
     const val CHANNEL_ID = "news"
     private const val CHANNEL_NAME = "News Alerts"
 
-    /** Default topics when the user opted in but never picked any. */
+    /** Default topics when the user opted in but never picked any —
+     *  Prince's core set: Latest News, Gossip, Songs. */
     val DEFAULT_TOPICS: Set<String> = setOf(
         NewsCategory.NEWS.name,
-        NewsCategory.TECH.name
+        NewsCategory.ENTERTAINMENT.name,
+        NewsCategory.MUSIC.name
     )
 
     /** Topic chips shown in Settings (category name -> display label). */
     val TOPIC_CHOICES: List<Pair<String, String>> = listOf(
         NewsCategory.NEWS.name to NewsCategory.NEWS.label,
+        NewsCategory.ENTERTAINMENT.name to NewsCategory.ENTERTAINMENT.label,
+        NewsCategory.MUSIC.name to NewsCategory.MUSIC.label,
         NewsCategory.TECH.name to NewsCategory.TECH.label,
         NewsCategory.AI.name to NewsCategory.AI.label,
         NewsCategory.SPORTS.name to NewsCategory.SPORTS.label
     )
+
+    /** Pure mapping from stored topic names to categories (unknown names and
+     *  the ALL aggregate are dropped). Used by the notification worker and
+     *  the home feed's interest filter. */
+    fun categoriesForTopics(topics: Set<String>): List<NewsCategory> =
+        topics.mapNotNull { name -> runCatching { NewsCategory.valueOf(name) }.getOrNull() }
+            .filter { it != NewsCategory.ALL }
+            .distinct()
 
     /**
      * Creates the "News Alerts" channel if missing. Safe to call any time —

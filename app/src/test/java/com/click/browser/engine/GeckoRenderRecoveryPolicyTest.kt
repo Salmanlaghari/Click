@@ -77,6 +77,91 @@ class GeckoRenderRecoveryPolicyTest {
     }
 
     @Test
+    fun autoRecoveryStartNeverShowsOrHidesTheCardByItself() {
+        // Card hidden + auto attempt starts: stays hidden (recovery is silent).
+        assertFalse(geckoRendererRecoveryRequired(false, GeckoRenderEvent.AUTO_RECOVERY_STARTED))
+        // Card already visible + another attempt starts: stays visible.
+        assertTrue(geckoRendererRecoveryRequired(true, GeckoRenderEvent.AUTO_RECOVERY_STARTED))
+    }
+
+    @Test
+    fun automaticRecoveryIsBoundedAndStopsWhenSessionIsGoneOrBusy() {
+        assertTrue(geckoAutoRecoveryAllowed(attemptsUsed = 0, sessionDestroyed = false, recoveryInProgress = false))
+        assertTrue(geckoAutoRecoveryAllowed(attemptsUsed = 1, sessionDestroyed = false, recoveryInProgress = false))
+        assertFalse(geckoAutoRecoveryAllowed(attemptsUsed = 2, sessionDestroyed = false, recoveryInProgress = false))
+        assertFalse(geckoAutoRecoveryAllowed(attemptsUsed = 0, sessionDestroyed = true, recoveryInProgress = false))
+        assertFalse(geckoAutoRecoveryAllowed(attemptsUsed = 0, sessionDestroyed = false, recoveryInProgress = true))
+    }
+
+    @Test
+    fun recoveryPlanRebuildsOpenButDeadSessionsInsteadOfNoOpReload() {
+        // Open session + renderer dead: plain reload() would silently no-op,
+        // so the plan must close + reopen + restore.
+        assertEquals(
+            GeckoRecoveryPlan.REBUILD_AND_RESTORE,
+            geckoRecoveryPlan(
+                sessionIsOpen = true,
+                recoveryRequired = true,
+                recoveryInProgress = false,
+                hasSavedState = true,
+                hasCurrentUrl = true
+            )
+        )
+        // Open + healthy: ordinary reload, no rebuild.
+        assertEquals(
+            GeckoRecoveryPlan.RELOAD_SESSION,
+            geckoRecoveryPlan(
+                sessionIsOpen = true,
+                recoveryRequired = false,
+                recoveryInProgress = false,
+                hasSavedState = true,
+                hasCurrentUrl = true
+            )
+        )
+        // Closed session: reopen with saved state first, URL second, blank last.
+        assertEquals(
+            GeckoRecoveryPlan.REOPEN_AND_RESTORE_STATE,
+            geckoRecoveryPlan(
+                sessionIsOpen = false,
+                recoveryRequired = true,
+                recoveryInProgress = false,
+                hasSavedState = true,
+                hasCurrentUrl = true
+            )
+        )
+        assertEquals(
+            GeckoRecoveryPlan.REOPEN_AND_LOAD_CURRENT_URL,
+            geckoRecoveryPlan(
+                sessionIsOpen = false,
+                recoveryRequired = true,
+                recoveryInProgress = false,
+                hasSavedState = false,
+                hasCurrentUrl = true
+            )
+        )
+        assertEquals(
+            GeckoRecoveryPlan.REOPEN_BLANK,
+            geckoRecoveryPlan(
+                sessionIsOpen = false,
+                recoveryRequired = true,
+                recoveryInProgress = false,
+                hasSavedState = false,
+                hasCurrentUrl = false
+            )
+        )
+        assertEquals(
+            GeckoRecoveryPlan.IN_PROGRESS,
+            geckoRecoveryPlan(
+                sessionIsOpen = true,
+                recoveryRequired = true,
+                recoveryInProgress = true,
+                hasSavedState = true,
+                hasCurrentUrl = true
+            )
+        )
+    }
+
+    @Test
     fun recoveryAvoidsDuplicateOpenAndConcurrentRetries() {
         assertEquals(
             GeckoSessionRecoveryAction.RELOAD_OPEN_SESSION,

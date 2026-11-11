@@ -12,15 +12,34 @@ import android.widget.Toast
 import android.webkit.MimeTypeMap
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.tween
+import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Download
+import androidx.compose.material.icons.filled.ErrorOutline
+import androidx.compose.material.icons.filled.Pause
+import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.material3.rememberModalBottomSheetState
+import android.graphics.Bitmap
+import android.graphics.Canvas
+import androidx.core.graphics.drawable.toBitmap
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -58,18 +77,35 @@ fun DownloadsScreen(
     repository: BrowserRepository,
     mode: BrowserMode,
     resumeSignal: Long,
-    onClose: () -> Unit
+    onClose: () -> Unit,
+    openWithRecordId: String? = null,
+    onOpenWithConsumed: () -> Unit = {}
 ) {
     val context = LocalContext.current
     val downloadsFlow = remember(mode) { repository.downloadsFlowFor(mode) }
     val customDownloadsFlow = remember(mode) { repository.customDownloadsFlowFor(mode) }
     val downloads by downloadsFlow.collectAsState(initial = emptyList())
     val customDownloads by customDownloadsFlow.collectAsState(initial = emptyList())
+    // Click's own download engine records (phone/app destinations).
+    val clickDownloadStore = remember { com.click.browser.data.ClickDownloadStore(context) }
+    val clickDownloadsFlow = remember(mode) { clickDownloadStore.flowFor(mode) }
+    val clickDownloads by clickDownloadsFlow.collectAsState(initial = emptyList())
     // Response-body downloads are streamed by Click itself (no DownloadManager
     // entry exists for them); this registry is the only live view of them.
     val activeResponseDownloads by ActiveResponseDownloads.active.collectAsState()
+    // Premium open-with sheet target (engine record or saved file).
+    var openWithTarget by remember { mutableStateOf<OpenWithTarget?>(null) }
     LaunchedEffect(mode) {
         CustomDownloadScheduler.reconcile(context, mode)
+        com.click.browser.engine.ClickDownloadEngine.reconcile(context, mode)
+    }
+    LaunchedEffect(openWithRecordId, clickDownloads) {
+        val recordId = openWithRecordId ?: return@LaunchedEffect
+        val record = clickDownloads.firstOrNull { it.id == recordId } ?: return@LaunchedEffect
+        if (record.state == com.click.browser.engine.ClickDownloadState.COMPLETED) {
+            openWithTarget = openWithTargetForRecord(context, record)
+            onOpenWithConsumed()
+        }
     }
     var notificationsEnabled by remember {
         mutableStateOf(CustomDownloadNotifications.canPostNotifications(context))
@@ -114,8 +150,19 @@ fun DownloadsScreen(
     val failed = managedDownloads.filter { it.state == ManagedDownloadState.FAILED }
     val activeCustom = customDownloads.filter { it.canCancel }
     val activeCustomIds = activeCustom.mapTo(mutableSetOf()) { it.id }
+    val activeClick = clickDownloads.filter {
+        it.isActive || it.state == com.click.browser.engine.ClickDownloadState.PAUSED
+    }
+    val completedClick = clickDownloads.filter {
+        it.state == com.click.browser.engine.ClickDownloadState.COMPLETED
+    }
+    val failedClick = clickDownloads.filter {
+        it.state == com.click.browser.engine.ClickDownloadState.FAILED ||
+            it.state == com.click.browser.engine.ClickDownloadState.CANCELED
+    }
+    val activeClickIds = activeClick.mapTo(mutableSetOf()) { it.id }
     val savedDownloads = downloads.filter {
-        (it.transferId == null || it.transferId !in activeCustomIds) &&
+        (it.transferId == null || (it.transferId !in activeCustomIds && it.transferId !in activeClickIds)) &&
             !isSavedRecordDuplicatedByManaged(it.fileName, it.url, managedDownloads)
     }
     val failedCustom = customDownloads.filter {
@@ -230,12 +277,32 @@ fun DownloadsScreen(
                 is DownloadCenterQueryState.Loaded -> Unit
             }
 
-            if (active.isNotEmpty() || activeCustom.isNotEmpty() || activeResponseDownloads.isNotEmpty()) {
+            if (active.isNotEmpty() || activeCustom.isNotEmpty() || activeResponseDownloads.isNotEmpty() || activeClick.isNotEmpty()) {
                 item {
                     Text(
                         "In progress",
                         style = MaterialTheme.typography.titleMedium,
                         modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)
+                    )
+                }
+                items(activeClick, key = { "click-${it.id}" }) { record ->
+                    ClickDownloadRow(
+                        record = record,
+                        onPause = {
+                            scope.launch {
+                                com.click.browser.engine.ClickDownloadEngine.pause(context, mode, record.id)
+                            }
+                        },
+                        onResume = {
+                            scope.launch {
+                                com.click.browser.engine.ClickDownloadEngine.resume(context, mode, record.id)
+                            }
+                        },
+                        onCancel = {
+                            scope.launch {
+                                com.click.browser.engine.ClickDownloadEngine.cancel(context, mode, record.id)
+                            }
+                        }
                     )
                 }
                 items(active, key = { it.id }) { item ->
@@ -264,12 +331,23 @@ fun DownloadsScreen(
                 item { HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp)) }
             }
 
-            if (completed.isNotEmpty()) {
+            if (completed.isNotEmpty() || completedClick.isNotEmpty()) {
                 item {
                     Text(
                         "Completed",
                         style = MaterialTheme.typography.titleMedium,
                         modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)
+                    )
+                }
+                items(completedClick, key = { "click-done-${it.id}" }) { record ->
+                    ClickDownloadRow(
+                        record = record,
+                        onOpen = { openWithTarget = openWithTargetForRecord(context, record) },
+                        onDismiss = {
+                            scope.launch {
+                                com.click.browser.engine.ClickDownloadEngine.dismiss(context, mode, record.id)
+                            }
+                        }
                     )
                 }
                 items(completed, key = { it.id }) { item ->
@@ -281,12 +359,27 @@ fun DownloadsScreen(
                 }
             }
 
-            if (failed.isNotEmpty()) {
+            if (failed.isNotEmpty() || failedClick.isNotEmpty()) {
                 item {
                     Text(
                         "Failed",
                         style = MaterialTheme.typography.titleMedium,
                         modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)
+                    )
+                }
+                items(failedClick, key = { "click-failed-${it.id}" }) { record ->
+                    ClickDownloadRow(
+                        record = record,
+                        onResume = {
+                            scope.launch {
+                                com.click.browser.engine.ClickDownloadEngine.resume(context, mode, record.id)
+                            }
+                        },
+                        onDismiss = {
+                            scope.launch {
+                                com.click.browser.engine.ClickDownloadEngine.dismiss(context, mode, record.id)
+                            }
+                        }
                     )
                 }
                 items(failed, key = { it.id }) { item ->
@@ -341,12 +434,18 @@ fun DownloadsScreen(
                         modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)
                     )
                 }
-                items(savedDownloads) { item -> SavedDownloadRow(context, item) }
+                items(savedDownloads) { item ->
+                    SavedDownloadRow(
+                        context = context,
+                        item = item,
+                        onOpen = { openWithTarget = openWithTargetForSaved(context, item) }
+                    )
+                }
             }
 
             if (queryState.shouldShowEmptyState(
                     savedFileCount = savedDownloads.size + activeCustom.size + failedCustom.size +
-                        activeResponseDownloads.size
+                        activeResponseDownloads.size + activeClick.size + completedClick.size + failedClick.size
                 )
             ) {
                 item {
@@ -362,6 +461,10 @@ fun DownloadsScreen(
             }
         }
     }
+
+    openWithTarget?.let { target ->
+        OpenWithSheet(target = target, onDismiss = { openWithTarget = null })
+    }
 }
 
 /** Live row for a response-body download Click is streaming to storage itself. */
@@ -370,6 +473,11 @@ private fun ActiveResponseDownloadRow(item: ActiveResponseDownload) {
     val progress = if (item.totalBytes > 0) {
         (item.downloadedBytes.toFloat() / item.totalBytes.toFloat()).coerceIn(0f, 1f)
     } else null
+    val animatedProgress by androidx.compose.animation.core.animateFloatAsState(
+        targetValue = progress ?: 0f,
+        animationSpec = androidx.compose.animation.core.tween(400),
+        label = "response-download-progress"
+    )
     val sizeText = if (item.totalBytes > 0) {
         "${formatBytes(item.downloadedBytes)} of ${formatBytes(item.totalBytes)}"
     } else {
@@ -380,10 +488,14 @@ private fun ActiveResponseDownloadRow(item: ActiveResponseDownload) {
             .fillMaxWidth()
             .padding(horizontal = 16.dp, vertical = 8.dp)
     ) {
-        Text(item.fileName, style = MaterialTheme.typography.bodyMedium)
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            PulsingDownloadIcon(running = true)
+            Spacer(Modifier.width(8.dp))
+            Text(item.fileName, style = MaterialTheme.typography.bodyMedium)
+        }
         if (progress != null) {
             LinearProgressIndicator(
-                progress = { progress },
+                progress = { animatedProgress },
                 modifier = Modifier.fillMaxWidth()
             )
         } else {
@@ -554,7 +666,7 @@ private fun FailedDownloadRow(item: ManagedDownload, onRetry: () -> Unit) {
 }
 
 @Composable
-private fun SavedDownloadRow(context: Context, item: DownloadItem) {
+private fun SavedDownloadRow(context: Context, item: DownloadItem, onOpen: () -> Unit) {
     val dateStr = DateFormat.getDateTimeInstance().format(Date(item.timestamp))
     val location = parseSavedDownloadLocation(item.path)
     val available = when (location) {
@@ -585,7 +697,7 @@ private fun SavedDownloadRow(context: Context, item: DownloadItem) {
         )
         Text("Date: $dateStr", style = MaterialTheme.typography.bodySmall)
         Row {
-            TextButton(onClick = { openSavedDownload(context, item) }, enabled = available) {
+            TextButton(onClick = onOpen, enabled = available) {
                 Text("Open")
             }
             TextButton(onClick = { shareSavedDownload(context, item) }, enabled = available) {
@@ -762,4 +874,278 @@ private fun formatBytes(bytes: Long): String {
         unit++
     }
     return if (unit == 0) "${bytes} B" else "%.1f %s".format(value, units[unit])
+}
+
+/** Animated download glyph: pulses while a transfer is actually running. */
+@Composable
+private fun PulsingDownloadIcon(running: Boolean) {
+    val transition = androidx.compose.animation.core.rememberInfiniteTransition(label = "download-pulse")
+    val alpha by transition.animateFloat(
+        initialValue = 0.35f,
+        targetValue = 1f,
+        animationSpec = androidx.compose.animation.core.infiniteRepeatable(
+            animation = androidx.compose.animation.core.tween(650),
+            repeatMode = androidx.compose.animation.core.RepeatMode.Reverse
+        ),
+        label = "download-pulse-alpha"
+    )
+    Icon(
+        Icons.Default.Download,
+        contentDescription = null,
+        modifier = Modifier
+            .size(18.dp)
+            .then(if (running) Modifier.graphicsLayer { this.alpha = alpha } else Modifier),
+        tint = MaterialTheme.colorScheme.primary
+    )
+}
+
+/** Row for one of Click's own engine downloads, in any lifecycle state. */
+@Composable
+private fun ClickDownloadRow(
+    record: com.click.browser.engine.ClickDownloadRecord,
+    onPause: (() -> Unit)? = null,
+    onResume: (() -> Unit)? = null,
+    onCancel: (() -> Unit)? = null,
+    onOpen: (() -> Unit)? = null,
+    onDismiss: (() -> Unit)? = null
+) {
+    val state = record.state
+    val progress = com.click.browser.data.customDownloadProgress(record.bytesDownloaded, record.totalBytes)
+    val animatedProgress by androidx.compose.animation.core.animateFloatAsState(
+        targetValue = progress ?: 0f,
+        animationSpec = androidx.compose.animation.core.tween(400),
+        label = "click-download-progress"
+    )
+    val sizeText = if (record.totalBytes > 0L) {
+        "${formatBytes(record.bytesDownloaded)} of ${formatBytes(record.totalBytes)}"
+    } else if (record.bytesDownloaded > 0L) {
+        formatBytes(record.bytesDownloaded)
+    } else {
+        ""
+    }
+    val statusText = when (state) {
+        com.click.browser.engine.ClickDownloadState.QUEUED -> "Waiting to start…"
+        com.click.browser.engine.ClickDownloadState.RUNNING -> "Downloading…"
+        com.click.browser.engine.ClickDownloadState.PAUSED ->
+            record.errorMessage ?: "Paused"
+        com.click.browser.engine.ClickDownloadState.FAILED ->
+            record.errorMessage ?: "Download failed."
+        com.click.browser.engine.ClickDownloadState.CANCELED -> "Canceled."
+        com.click.browser.engine.ClickDownloadState.COMPLETED -> "Saved."
+    }
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp, vertical = 8.dp)
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            if (state == com.click.browser.engine.ClickDownloadState.RUNNING ||
+                state == com.click.browser.engine.ClickDownloadState.QUEUED
+            ) {
+                PulsingDownloadIcon(running = state == com.click.browser.engine.ClickDownloadState.RUNNING)
+                Spacer(Modifier.width(8.dp))
+            }
+            Text(
+                record.fileName,
+                style = MaterialTheme.typography.bodyMedium,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+        }
+        if (record.isActive || state == com.click.browser.engine.ClickDownloadState.PAUSED) {
+            if (progress != null) {
+                LinearProgressIndicator(
+                    progress = { animatedProgress },
+                    modifier = Modifier.fillMaxWidth()
+                )
+            } else {
+                LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+            }
+        }
+        Text(
+            listOf(statusText, sizeText).filter { it.isNotBlank() }.joinToString(" · "),
+            style = MaterialTheme.typography.bodySmall,
+            color = if (state == com.click.browser.engine.ClickDownloadState.FAILED) {
+                MaterialTheme.colorScheme.error
+            } else {
+                MaterialTheme.colorScheme.onSurfaceVariant
+            }
+        )
+        Row {
+            if (state == com.click.browser.engine.ClickDownloadState.RUNNING ||
+                state == com.click.browser.engine.ClickDownloadState.QUEUED
+            ) {
+                if (onPause != null) TextButton(onClick = onPause) { Text("Pause") }
+                if (onCancel != null) TextButton(onClick = onCancel) { Text("Cancel") }
+            }
+            if (state == com.click.browser.engine.ClickDownloadState.PAUSED && onResume != null) {
+                TextButton(onClick = onResume) { Text("Resume") }
+                if (onCancel != null) TextButton(onClick = onCancel) { Text("Cancel") }
+            }
+            if (state == com.click.browser.engine.ClickDownloadState.FAILED && onResume != null) {
+                TextButton(onClick = onResume) { Text("Resume") }
+            }
+            if (state == com.click.browser.engine.ClickDownloadState.COMPLETED && onOpen != null) {
+                TextButton(onClick = onOpen) { Text("Open") }
+            }
+            if (onDismiss != null &&
+                (state == com.click.browser.engine.ClickDownloadState.COMPLETED ||
+                    state == com.click.browser.engine.ClickDownloadState.FAILED ||
+                    state == com.click.browser.engine.ClickDownloadState.CANCELED)
+            ) {
+                TextButton(onClick = onDismiss) { Text("Remove") }
+            }
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Premium open-with sheet: lists the device apps that can open a file
+// (PackageManager query, real icons + names) instead of jumping straight
+// into a single handler. Falls back to the system chooser when no handler
+// is found.
+// ---------------------------------------------------------------------------
+
+private data class OpenWithTarget(
+    val uri: Uri,
+    val mimeType: String,
+    val fileName: String
+)
+
+private fun openWithTargetForRecord(
+    context: Context,
+    record: com.click.browser.engine.ClickDownloadRecord
+): OpenWithTarget? {
+    val location = record.finalLocation?.takeIf { it.isNotBlank() } ?: return null
+    val uri = if (location.startsWith("content://")) {
+        Uri.parse(location)
+    } else {
+        val file = File(location)
+        if (!file.isFile) return null
+        runCatching {
+            FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", file)
+        }.getOrNull() ?: return null
+    }
+    val mimeType = record.mimeType?.takeIf { it.isNotBlank() }
+        ?: runCatching { context.contentResolver.getType(uri) }.getOrNull()
+        ?: MimeTypeMap.getSingleton()
+            .getMimeTypeFromExtension(record.fileName.substringAfterLast('.', "").lowercase())
+        ?: "*/*"
+    return OpenWithTarget(uri, mimeType, record.fileName)
+}
+
+private fun openWithTargetForSaved(context: Context, item: DownloadItem): OpenWithTarget? {
+    val uri = savedDownloadUri(context, item) ?: return null
+    return OpenWithTarget(uri, savedDownloadMimeType(context, item, uri), item.fileName)
+}
+
+private data class OpenHandler(
+    val label: String,
+    val iconBitmap: androidx.compose.ui.graphics.ImageBitmap,
+    val component: android.content.ComponentName
+)
+
+private fun queryOpenHandlers(context: Context, target: OpenWithTarget): List<OpenHandler> {
+    val intent = Intent(Intent.ACTION_VIEW).apply {
+        setDataAndType(target.uri, target.mimeType)
+        addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+    }
+    @Suppress("DEPRECATION")
+    val resolved = runCatching {
+        context.packageManager.queryIntentActivities(intent, android.content.pm.PackageManager.MATCH_DEFAULT_ONLY)
+    }.getOrDefault(emptyList())
+    return resolved.mapNotNull { info ->
+        runCatching {
+            val label = info.loadLabel(context.packageManager).toString()
+            val icon = info.loadIcon(context.packageManager).toBitmap(96, 96)
+                .asImageBitmap()
+            OpenHandler(
+                label = label,
+                iconBitmap = icon,
+                component = android.content.ComponentName(info.activityInfo.packageName, info.activityInfo.name)
+            )
+        }.getOrNull()
+    }.distinctBy { it.component }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun OpenWithSheet(target: OpenWithTarget, onDismiss: () -> Unit) {
+    val context = LocalContext.current
+    val handlers = remember(target) { queryOpenHandlers(context, target) }
+    ModalBottomSheet(onDismissRequest = onDismiss) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 20.dp)
+                .padding(bottom = 28.dp)
+        ) {
+            Text(
+                "Open with",
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = androidx.compose.ui.text.font.FontWeight.Bold
+            )
+            Text(
+                target.fileName,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+            Spacer(Modifier.height(12.dp))
+            if (handlers.isEmpty()) {
+                Text(
+                    "No app on this device can open this file.",
+                    style = MaterialTheme.typography.bodyMedium
+                )
+                Spacer(Modifier.height(8.dp))
+                TextButton(onClick = {
+                    val intent = Intent(Intent.ACTION_VIEW).apply {
+                        setDataAndType(target.uri, target.mimeType)
+                        addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                    }
+                    try {
+                        context.startActivity(Intent.createChooser(intent, "Open ${target.fileName}"))
+                        onDismiss()
+                    } catch (_: Exception) {
+                        Toast.makeText(context, "No app can open this file.", Toast.LENGTH_SHORT).show()
+                    }
+                }) { Text("Try system chooser") }
+            } else {
+                handlers.forEach { handler ->
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable {
+                                val intent = Intent(Intent.ACTION_VIEW).apply {
+                                    setDataAndType(target.uri, target.mimeType)
+                                    component = handler.component
+                                    addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                                }
+                                try {
+                                    context.startActivity(intent)
+                                } catch (_: Exception) {
+                                    Toast.makeText(
+                                        context,
+                                        "Couldn't open with ${handler.label}.",
+                                        Toast.LENGTH_SHORT
+                                    ).show()
+                                }
+                                onDismiss()
+                            }
+                            .padding(vertical = 10.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        androidx.compose.foundation.Image(
+                            bitmap = handler.iconBitmap,
+                            contentDescription = null,
+                            modifier = Modifier.size(36.dp)
+                        )
+                        Spacer(Modifier.width(14.dp))
+                        Text(handler.label, style = MaterialTheme.typography.bodyLarge)
+                    }
+                }
+            }
+        }
+    }
 }

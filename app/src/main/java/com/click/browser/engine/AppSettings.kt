@@ -90,6 +90,19 @@ object AppSettings {
     /** Downloads: "phone" (public Downloads, default) | "app" (private) | "custom" (SAF tree). */
     val DOWNLOAD_LOCATION = stringPreferencesKey("download_location")
     val DOWNLOAD_CUSTOM_URI = stringPreferencesKey("download_custom_uri")
+    /** Download progress/completion notifications for Click's own download
+     *  engine. Default ON (Prince's requirement); the user can turn them off
+     *  in Settings → Downloads. Downloads still work silently when off or
+     *  when the Android 13+ runtime permission is denied. */
+    val DOWNLOAD_NOTIFICATIONS_ENABLED = booleanPreferencesKey("download_notifications_enabled")
+    /** Home news feed interests: NewsCategory names the user picked.
+     *  Empty/unset = show everything (the home feed itself stays opt-in). */
+    val HOME_NEWS_INTERESTS = stringSetPreferencesKey("home_news_interests")
+    /** Wall-clock ms of the last Play in-app-update availability check. */
+    val UPDATE_LAST_CHECK_MS = longPreferencesKey("update_last_check_ms")
+    /** versionCode an "update available" notification was last posted for,
+     *  so the same update is not re-notified on every app start. */
+    val UPDATE_NOTIFIED_VERSION = intPreferencesKey("update_notified_version")
     /** Tab groups JSON: [{id,name,color,tabIds[]}]. */
     val TAB_GROUPS_JSON = stringPreferencesKey("tab_groups_json")
 

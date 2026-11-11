@@ -148,4 +148,75 @@ class NormalTabExtensionSupportTest {
             )
         )
     }
+
+    @Test
+    fun popupBecomesReadyOnlyOnFirstCompositeNotOnPageStop() {
+        // Page load finishing is not proof anything rendered — the popup view
+        // is attached from LOADING, and only the first composite proves it.
+        assertEquals(
+            NormalTabExtensionPopupRenderState.LOADING,
+            popupRenderStateAfter(
+                NormalTabExtensionPopupRenderState.LOADING,
+                NormalTabExtensionPopupEvent.PAGE_STOP_SUCCESS
+            )
+        )
+        assertEquals(
+            NormalTabExtensionPopupRenderState.READY,
+            popupRenderStateAfter(
+                NormalTabExtensionPopupRenderState.LOADING,
+                NormalTabExtensionPopupEvent.FIRST_COMPOSITE
+            )
+        )
+    }
+
+    @Test
+    fun popupFailuresAreTerminalAndCloseTheSession() {
+        for (event in listOf(
+            NormalTabExtensionPopupEvent.PAGE_STOP_FAILURE,
+            NormalTabExtensionPopupEvent.PROCESS_GONE,
+            NormalTabExtensionPopupEvent.TIMEOUT
+        )) {
+            assertEquals(
+                NormalTabExtensionPopupRenderState.FAILED,
+                popupRenderStateAfter(NormalTabExtensionPopupRenderState.LOADING, event)
+            )
+        }
+        // A late composite from the dead session must not resurrect it.
+        assertEquals(
+            NormalTabExtensionPopupRenderState.FAILED,
+            popupRenderStateAfter(
+                NormalTabExtensionPopupRenderState.FAILED,
+                NormalTabExtensionPopupEvent.FIRST_COMPOSITE
+            )
+        )
+        assertTrue(popupSessionMustClose(NormalTabExtensionPopupRenderState.FAILED))
+        assertFalse(popupSessionMustClose(NormalTabExtensionPopupRenderState.LOADING))
+        assertFalse(popupSessionMustClose(NormalTabExtensionPopupRenderState.READY))
+    }
+
+    @Test
+    fun readyPopupSurvivesTimeoutButNotRendererDeath() {
+        assertEquals(
+            NormalTabExtensionPopupRenderState.READY,
+            popupRenderStateAfter(
+                NormalTabExtensionPopupRenderState.READY,
+                NormalTabExtensionPopupEvent.TIMEOUT
+            )
+        )
+        assertEquals(
+            NormalTabExtensionPopupRenderState.FAILED,
+            popupRenderStateAfter(
+                NormalTabExtensionPopupRenderState.READY,
+                NormalTabExtensionPopupEvent.PROCESS_GONE
+            )
+        )
+        // Popup-internal navigation goes back to LOADING (timeout re-arms).
+        assertEquals(
+            NormalTabExtensionPopupRenderState.LOADING,
+            popupRenderStateAfter(
+                NormalTabExtensionPopupRenderState.READY,
+                NormalTabExtensionPopupEvent.PAGE_START
+            )
+        )
+    }
 }

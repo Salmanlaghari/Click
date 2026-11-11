@@ -54,6 +54,10 @@ internal fun geckoSessionStartupPlan(
     else -> GeckoSessionStartupPlan(true, false, false)
 }
 
+/** Grace period after which a recovery that produced neither a composite nor
+ *  a new crash is treated as a silent no-op and Reload is re-enabled. */
+private const val RECOVERY_WATCHDOG_MS = 12_000L
+
 private const val GECKO_ACTION_EXPLAIN_SELECTED_TEXT = "com.click.browser.EXPLAIN_SELECTED_TEXT"
 private const val GECKO_ACTION_TRANSLATE_SELECTED_TEXT = "com.click.browser.TRANSLATE_SELECTED_TEXT"
 
@@ -133,6 +137,11 @@ internal class GeckoBrowserTabSession(
     @Volatile private var latestSessionState: String? = initialSessionState
     @Volatile private var rendererRecoveryRequired = false
     @Volatile private var rendererRecoveryInProgress = false
+    /** Automatic recovery attempts since the last healthy composite. */
+    @Volatile private var autoRecoveryAttempts = 0
+    /** Incremented per recovery dispatch; a stale watchdog must never clear
+     *  the in-progress flag of a newer attempt. */
+    @Volatile private var recoveryWatchdogToken = 0L
     @Volatile private var pendingSafeRetryUrl: String? = null
     private val navigationTracker = GeckoNavigationTracker()
     private val recoveryFailureLock = Any()
@@ -399,23 +408,17 @@ internal class GeckoBrowserTabSession(
             }
 
             override fun onCrash(session: GeckoSession) {
-                recordRendererRecoveryFailure()
-                rendererRecoveryRequired = true
-                rendererRecoveryInProgress = false
-                detachExtensionRouterAfterRendererFailure()
-                onRendererFailure(GeckoRenderEvent.PROCESS_CRASHED, null)
+                handleRendererProcessGone(GeckoRenderEvent.PROCESS_CRASHED)
             }
 
             override fun onKill(session: GeckoSession) {
-                recordRendererRecoveryFailure()
-                rendererRecoveryRequired = true
-                rendererRecoveryInProgress = false
-                detachExtensionRouterAfterRendererFailure()
-                onRendererFailure(GeckoRenderEvent.PROCESS_KILLED, null)
+                handleRendererProcessGone(GeckoRenderEvent.PROCESS_KILLED)
             }
 
             override fun onFirstComposite(session: GeckoSession) {
                 clearRendererRecoveryFailures()
+                autoRecoveryAttempts = 0
+                recoveryWatchdogToken += 1
                 rendererRecoveryRequired = false
                 rendererRecoveryInProgress = false
                 onRendererRecovery(GeckoRenderEvent.FIRST_COMPOSITE)
@@ -554,48 +557,126 @@ internal class GeckoBrowserTabSession(
             onRendererRecovery(GeckoRenderEvent.RECOVERY_RETRY_THROTTLED)
             return
         }
-        val action = geckoSessionRecoveryAction(
-            sessionIsOpen = session.isOpen,
-            recoveryInProgress = rendererRecoveryInProgress,
-            hasSavedState = !latestSessionState.isNullOrBlank(),
-            hasCurrentUrl = lastKnownPageUrl.isNotBlank() && lastKnownPageUrl != "about:blank"
-        )
-        if (action == GeckoSessionRecoveryAction.RELOAD_OPEN_SESSION) {
-            if (rendererRecoveryRequired) {
-                beginRendererRecovery(GeckoRenderEvent.RECOVERY_RELOAD_STARTED)
-            }
-            try {
-                session.reload()
-                updateActiveState()
-            } catch (error: Exception) {
-                reportRecoveryFailure(error)
-            }
-            return
+        val plan = currentRecoveryPlan()
+        if (plan == GeckoRecoveryPlan.IN_PROGRESS) return
+        if (rendererRecoveryRequired) {
+            beginRendererRecovery(
+                if (plan == GeckoRecoveryPlan.REBUILD_AND_RESTORE) {
+                    GeckoRenderEvent.RECOVERY_STARTED
+                } else {
+                    GeckoRenderEvent.RECOVERY_RELOAD_STARTED
+                }
+            )
         }
-        if (action == GeckoSessionRecoveryAction.IGNORE_IN_PROGRESS) return
-
-        beginRendererRecovery()
         try {
-            when (action) {
-                GeckoSessionRecoveryAction.IGNORE_IN_PROGRESS -> return
-                GeckoSessionRecoveryAction.RELOAD_OPEN_SESSION -> session.reload()
-                GeckoSessionRecoveryAction.REOPEN_AND_RESTORE_STATE -> {
-                    session.open(runtime)
-                    restoreLatestStateOrLoad(lastKnownPageUrl)
-                }
-                GeckoSessionRecoveryAction.REOPEN_AND_LOAD_CURRENT_URL -> {
-                    session.open(runtime)
-                    session.loadUri(lastKnownPageUrl)
-                }
-                GeckoSessionRecoveryAction.REOPEN_BLANK_SESSION -> {
-                    session.open(runtime)
-                    session.loadUri("about:blank")
-                }
-            }
+            executeRecoveryPlan(plan)
             updateActiveState()
+            if (rendererRecoveryRequired) armRecoveryWatchdog()
         } catch (error: Exception) {
             reportRecoveryFailure(error)
         }
+    }
+
+    private fun currentRecoveryPlan(): GeckoRecoveryPlan = geckoRecoveryPlan(
+        sessionIsOpen = session.isOpen,
+        recoveryRequired = rendererRecoveryRequired,
+        recoveryInProgress = rendererRecoveryInProgress,
+        hasSavedState = !latestSessionState.isNullOrBlank(),
+        hasCurrentUrl = lastKnownPageUrl.isNotBlank() && lastKnownPageUrl != "about:blank"
+    )
+
+    /**
+     * Executes one recovery attempt. The plan decides between a plain reload
+     * (healthy session), a close + reopen + restore (session open but its
+     * renderer died — reload() there is a silent no-op), and reopening a
+     * closed session with its saved state so the page AND its history stack
+     * come back. Other tabs are never touched.
+     */
+    private fun executeRecoveryPlan(plan: GeckoRecoveryPlan) {
+        when (plan) {
+            GeckoRecoveryPlan.IN_PROGRESS -> Unit
+            GeckoRecoveryPlan.RELOAD_SESSION -> session.reload()
+            GeckoRecoveryPlan.REBUILD_AND_RESTORE -> {
+                runCatching { session.close() }
+                session.open(runtime)
+                restoreLatestStateOrLoad(lastKnownPageUrl)
+            }
+            GeckoRecoveryPlan.REOPEN_AND_RESTORE_STATE -> {
+                session.open(runtime)
+                restoreLatestStateOrLoad(lastKnownPageUrl)
+            }
+            GeckoRecoveryPlan.REOPEN_AND_LOAD_CURRENT_URL -> {
+                session.open(runtime)
+                session.loadUri(lastKnownPageUrl)
+            }
+            GeckoRecoveryPlan.REOPEN_BLANK -> {
+                session.open(runtime)
+                session.loadUri("about:blank")
+            }
+        }
+    }
+
+    /**
+     * Content process died (crash or system kill). Root cause of the old
+     * dead-end: this used to surface the "This page stopped rendering" card
+     * IMMEDIATELY and wait for a manual Reload — and if that reload hit a
+     * still-open-but-dead session it silently did nothing while the
+     * in-progress flag stayed set, so every later Reload was ignored too.
+     * Now Click first tries automatic recovery (bounded); the failure event
+     * (and therefore the card) fires only when attempts are exhausted.
+     */
+    private fun handleRendererProcessGone(event: GeckoRenderEvent) {
+        recordRendererRecoveryFailure()
+        rendererRecoveryRequired = true
+        rendererRecoveryInProgress = false
+        detachExtensionRouterAfterRendererFailure()
+        if (!scheduleAutomaticRecovery()) {
+            onRendererFailure(event, null)
+        }
+    }
+
+    /** Returns false when no automatic attempt is allowed (cap reached,
+     *  session destroyed, or an attempt is already running). */
+    private fun scheduleAutomaticRecovery(): Boolean {
+        if (!geckoAutoRecoveryAllowed(autoRecoveryAttempts, destroyed, rendererRecoveryInProgress)) {
+            return false
+        }
+        autoRecoveryAttempts += 1
+        geckoView.postDelayed({
+            if (!destroyed && rendererRecoveryRequired) performAutomaticRecovery()
+        }, GECKO_AUTO_RECOVERY_DELAY_MS)
+        return true
+    }
+
+    private fun performAutomaticRecovery() {
+        if (destroyed || !rendererRecoveryRequired || rendererRecoveryInProgress) return
+        val plan = currentRecoveryPlan()
+        if (plan == GeckoRecoveryPlan.IN_PROGRESS) return
+        beginRendererRecovery(GeckoRenderEvent.AUTO_RECOVERY_STARTED)
+        try {
+            executeRecoveryPlan(plan)
+            updateActiveState()
+            armRecoveryWatchdog()
+        } catch (error: Exception) {
+            // Automatic attempts must not eat the user's manual-retry budget:
+            // the throttle window counts crashes and manual failures, so a
+            // working Reload stays available when the card finally shows.
+            reportRecoveryFailure(error, recordForThrottle = false)
+        }
+    }
+
+    /**
+     * Safety net for a recovery dispatch that neither composites nor crashes
+     * again (silent no-op): release the in-progress flag after a grace period
+     * so the card's Reload button can never wedge permanently.
+     */
+    private fun armRecoveryWatchdog() {
+        val token = ++recoveryWatchdogToken
+        geckoView.postDelayed({
+            if (!destroyed && rendererRecoveryInProgress && recoveryWatchdogToken == token) {
+                rendererRecoveryInProgress = false
+            }
+        }, RECOVERY_WATCHDOG_MS)
     }
     override fun stopLoading() {
         if (destroyed) return
@@ -688,8 +769,8 @@ internal class GeckoBrowserTabSession(
         return false
     }
 
-    private fun reportRecoveryFailure(error: Exception) {
-        recordRendererRecoveryFailure()
+    private fun reportRecoveryFailure(error: Exception, recordForThrottle: Boolean = true) {
+        if (recordForThrottle) recordRendererRecoveryFailure()
         rendererRecoveryRequired = true
         rendererRecoveryInProgress = false
         onRendererFailure(GeckoRenderEvent.RECOVERY_FAILED, error)

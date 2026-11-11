@@ -52,9 +52,11 @@ class LightThemeVariantTest {
 
     @Test
     fun allSelectableSurfacePalettesRemainWarmLightAndDistinct() {
+        // The selectable warm variants now drive the ADVANCED profile (the
+        // standard premium look); other modes have fixed identities.
         val variants = LightThemeVariant.values().toList()
         val themes = variants.map { variant ->
-            ModeThemes.forMode(BrowserMode.SIMPLE, dark = true, lightVariant = variant)
+            ModeThemes.forMode(BrowserMode.ADVANCED, dark = true, lightVariant = variant)
         }
         val expectedBackgrounds = listOf(
             Color(0xFFFBF8F1),
@@ -96,47 +98,59 @@ class LightThemeVariantTest {
     }
 
     @Test
-    fun everyModeHasDistinctWarmAccentsWhileRespectingTheSelectedSurfacePalette() {
-        val variants = LightThemeVariant.values().toList()
+    fun everyModeHasAGenuinelyDistinctVisualIdentity() {
+        // Prince's 2026-11-11 directive supersedes the old "all modes share
+        // one light palette" design: each mode now has its own palette,
+        // accent pair, address-bar style and (for Developer) dark surfaces.
         val modes = BrowserMode.values().toList()
+        val themes = modes.map { mode ->
+            ModeThemes.forMode(mode, dark = false, lightVariant = LightThemeVariant.CREAM)
+        }
+        val expectedBackgrounds = listOf(
+            Color(0xFFF4F9FC), // Simple: clean sky light
+            Color(0xFF0D1117), // Developer: dark technical
+            Color(0xFFEDF0F5), // Power: cool slate desktop
+            Color(0xFFFBF8F1)  // Advance: warm cream (selected variant)
+        )
         val expectedPrimaries = listOf(
-            Color(0xFF66533F), // Simple: bronze
-            Color(0xFF70563A), // Developer: aged bronze
-            Color(0xFF81552F), // Power: copper-brown
-            Color(0xFF594738)  // Advance: charcoal-brown
+            Color(0xFF0B6E8C),
+            Color(0xFF3FB950),
+            Color(0xFF4338CA),
+            Color(0xFF594738)
         )
         val expectedSecondaries = listOf(
-            Color(0xFF8B6A46),
-            Color(0xFF8D6B46),
-            Color(0xFF935F33),
+            Color(0xFF2563EB),
+            Color(0xFF58A6FF),
+            Color(0xFF0F766E),
             Color(0xFF80684E)
         )
+        val expectedStyles = listOf(
+            ModeAddressBarStyle.PILL_LARGE,
+            ModeAddressBarStyle.TECHNICAL,
+            ModeAddressBarStyle.DESKTOP,
+            ModeAddressBarStyle.STANDARD
+        )
 
-        variants.forEach { variant ->
-            val themes = modes.map { mode ->
-                // Legacy dark input must not make any profile dark.
-                ModeThemes.forMode(mode, dark = true, lightVariant = variant)
-            }
-            val selectedSurfacePalette = themes.first()
+        assertEquals(expectedBackgrounds, themes.map { it.background })
+        assertEquals(expectedPrimaries, themes.map { it.primary })
+        assertEquals(expectedSecondaries, themes.map { it.secondary })
+        assertEquals(expectedStyles, themes.map { it.addressBarStyle })
+        assertEquals(modes.size, themes.map { it.background }.distinct().size)
+        assertEquals(modes.size, themes.map { it.primary }.distinct().size)
+        assertEquals(modes.size, themes.map { it.modePillText }.distinct().size)
 
-            assertEquals(expectedPrimaries, themes.map { it.primary })
-            assertEquals(expectedSecondaries, themes.map { it.secondary })
-            assertEquals(modes.size, themes.map { it.primary }.distinct().size)
-            assertEquals(modes.size, themes.map { it.modePillText }.distinct().size)
-
-            modes.zip(themes).forEach { (mode, theme) ->
-                assertEquals(mode, theme.mode)
+        modes.zip(themes).forEach { (mode, theme) ->
+            assertEquals(mode, theme.mode)
+            // Developer is the one dark mode; the rest stay light.
+            if (mode == BrowserMode.DEVELOPER) {
+                assertTrue("Developer is dark", theme.dark)
+            } else {
                 assertFalse("$mode stays light", theme.dark)
-                assertEquals(selectedSurfacePalette.background, theme.background)
-                assertEquals(selectedSurfacePalette.surface, theme.surface)
-                assertEquals(selectedSurfacePalette.surfaceVariant, theme.surfaceVariant)
-                assertEquals(Color(0xFF302A22), theme.onBackground)
-                assertEquals(theme.primary, theme.modeAccent)
-                assertTrue("$mode primary contrast", contrastRatio(theme.primary, theme.background) >= 4.5)
-                assertTrue("$mode secondary contrast", contrastRatio(theme.secondary, theme.background) >= 4.5)
-                assertTrue("$mode secondary has white-button contrast", contrastRatio(theme.secondary, Color.White) >= 4.5)
-                assertTrue(theme.modePillText.isNotBlank())
             }
+            assertEquals(theme.primary, theme.modeAccent)
+            assertTrue("$mode primary contrast", contrastRatio(theme.primary, theme.background) >= 4.5)
+            assertTrue("$mode secondary contrast", contrastRatio(theme.secondary, theme.background) >= 4.5)
+            assertTrue(theme.modePillText.isNotBlank())
         }
     }
 

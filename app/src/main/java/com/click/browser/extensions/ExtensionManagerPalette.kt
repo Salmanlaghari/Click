@@ -6,10 +6,12 @@ import com.click.browser.engine.BrowserMode
 import com.click.browser.engine.LightThemeVariant
 import com.click.browser.engine.ModeThemes
 
-/** Light-only palette for the separate GeckoView extension manager. */
+/** Light-only palette for the separate GeckoView extension manager. Uses the
+ *  ADVANCED profile's CREAM variant — the standard warm premium palette —
+ *  so the manager looks the same regardless of per-mode identities. */
 internal object ExtensionManagerPalette {
     private val cream = ModeThemes.forMode(
-        mode = BrowserMode.SIMPLE,
+        mode = BrowserMode.ADVANCED,
         dark = false,
         lightVariant = LightThemeVariant.CREAM
     )

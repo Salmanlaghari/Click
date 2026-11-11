@@ -40,11 +40,16 @@ fun DownloadSettingsScreen(
     var location by remember { mutableStateOf(DownloadSettings.LOCATION_PHONE) }
     var displayPath by remember { mutableStateOf("") }
     var loaded by remember { mutableStateOf(false) }
+    var notificationsOn by remember { mutableStateOf(true) }
+    val notificationPermissionLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { /* state re-read in refresh() */ }
 
     fun refresh() {
         scope.launch {
             location = DownloadSettings.location(context)
             displayPath = try { DownloadSettings.displayPath(context) } catch (_: Exception) { "" }
+            notificationsOn = DownloadSettings.notificationsEnabled(context)
             loaded = true
         }
     }
@@ -155,6 +160,41 @@ fun DownloadSettingsScreen(
                     if (loaded) displayPath else "Loading…",
                     fontSize = 13.sp, color = theme.onSurface.copy(alpha = 0.7f)
                 )
+            }
+            DlCard(theme) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Column(Modifier.weight(1f)) {
+                        Text(
+                            "Download notifications",
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 15.sp,
+                            color = theme.onSurface
+                        )
+                        Text(
+                            "Progress in the notification bar with Pause, Resume and Cancel, plus an alert when a download finishes. Turning this off never stops downloads — they just run silently.",
+                            fontSize = 12.sp,
+                            color = theme.onSurface.copy(alpha = 0.6f)
+                        )
+                    }
+                    Switch(
+                        checked = notificationsOn,
+                        enabled = loaded,
+                        onCheckedChange = { enabled ->
+                            notificationsOn = enabled
+                            scope.launch {
+                                DownloadSettings.setNotificationsEnabled(context, enabled)
+                            }
+                            if (enabled &&
+                                android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU &&
+                                !com.click.browser.engine.ClickDownloadNotifications.hasRuntimePermission(context)
+                            ) {
+                                notificationPermissionLauncher.launch(
+                                    android.Manifest.permission.POST_NOTIFICATIONS
+                                )
+                            }
+                        }
+                    )
+                }
             }
             Spacer(Modifier.height(24.dp))
         }

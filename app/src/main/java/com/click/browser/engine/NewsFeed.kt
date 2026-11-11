@@ -38,6 +38,10 @@ import java.util.concurrent.TimeUnit
 enum class NewsCategory(val label: String) {
     ALL("All"),
     NEWS("News"),
+    /** Entertainment / celebrity gossip (Prince's "Latest Gossip"). */
+    ENTERTAINMENT("Gossip"),
+    /** Music industry news (Prince's "Songs"). */
+    MUSIC("Songs"),
     TECH("Tech"),
     AI("AI"),
     RESEARCH("Research"),
@@ -66,7 +70,7 @@ data class NewsResult(
  */
 enum class NewsStatus { OK, OFFLINE, ERROR }
 
-private data class FeedDef(
+internal data class FeedDef(
     val url: String,
     val source: String,
     val category: NewsCategory
@@ -101,12 +105,20 @@ object NewsFeed {
             .build()
     }
 
-    private val feeds = listOf(
+    internal val feeds = listOf(
         FeedDef("https://feeds.bbci.co.uk/news/rss.xml", "BBC News", NewsCategory.NEWS),
         // NOTE: https://www.dawn.com/feed 301-redirects to http:// (cleartext),
         // which Android 9+ blocks. Use the direct HTTPS URL instead.
         FeedDef("https://www.dawn.com/feeds/home", "Dawn", NewsCategory.NEWS),
         FeedDef("https://news.google.com/rss?hl=en-US&gl=US&ceid=US:en", "Google News", NewsCategory.NEWS),
+        // Gossip / entertainment — every URL verified to return RSS on 2026-11-11.
+        FeedDef("https://feeds.bbci.co.uk/news/entertainment_and_arts/rss.xml", "BBC Entertainment", NewsCategory.ENTERTAINMENT),
+        FeedDef("https://arynews.tv/feed/", "ARY Showbiz", NewsCategory.ENTERTAINMENT),
+        FeedDef("https://news.google.com/rss/search?q=pakistan%20showbiz&hl=en-PK&gl=PK&ceid=PK:en", "Google Showbiz PK", NewsCategory.ENTERTAINMENT),
+        // Songs / music — every URL verified to return RSS on 2026-11-11.
+        FeedDef("https://www.billboard.com/feed/", "Billboard", NewsCategory.MUSIC),
+        FeedDef("https://pitchfork.com/rss/news/", "Pitchfork", NewsCategory.MUSIC),
+        FeedDef("https://news.google.com/rss/search?q=music&hl=en-US&gl=US&ceid=US:en", "Google Music", NewsCategory.MUSIC),
         FeedDef("https://feeds.bbci.co.uk/news/technology/rss.xml", "BBC Tech", NewsCategory.TECH),
         FeedDef("https://techcrunch.com/feed/", "TechCrunch", NewsCategory.TECH),
         FeedDef("https://news.google.com/rss/search?q=technology&hl=en-US&gl=US&ceid=US:en", "Google Tech", NewsCategory.TECH),
