@@ -227,3 +227,67 @@ class ClickDiagnosticsLogTest {
         org.junit.Assert.assertTrue(export.length <= CLICK_DIAGNOSTIC_EXPORT_MAX_CHARS)
     }
 }
+
+class RecentErrorSummariesTest {
+
+    private fun entry(
+        timestamp: Long,
+        code: ClickCatLogCode,
+        tabId: String? = null,
+        details: String? = null
+    ) = ClickCatLogEntry(
+        timestampMillis = timestamp,
+        code = code,
+        rendererDetails = tabId?.let {
+            ClickRendererDiagnosticDetails(
+                tabId = it,
+                url = null,
+                geckoViewVersion = "153.0",
+                androidVersion = "15",
+                availableMemoryMb = 512L,
+                eventDetails = details.orEmpty()
+            )
+        }
+    )
+
+    @Test
+    fun onlyErrorCodesAreSummarizedNewestFirst() {
+        val summaries = recentErrorSummaries(
+            listOf(
+                entry(100L, ClickCatLogCode.GECKO_RENDERER_CRASHED, tabId = "tab-1", details = "Renderer process gone code=42"),
+                entry(200L, ClickCatLogCode.PROCESS_STARTED),
+                entry(300L, ClickCatLogCode.EXTENSION_POPUP_FAILED, tabId = "tab-2", details = "Extension popup failed to render: uBlock Origin"),
+                entry(400L, ClickCatLogCode.MODE_SWITCH_STARTED)
+            )
+        )
+        assertEquals(2, summaries.size)
+        assertEquals(300L, summaries[0].timestampMillis)
+        assertEquals(
+            "Extension popup failed to render: uBlock Origin",
+            summaries[0].detail
+        )
+        assertEquals("ERR_RENDERER_GONE tab=tab-1", summaries[1].headline)
+        assertEquals("Renderer process gone code=42", summaries[1].detail)
+    }
+
+    @Test
+    fun recoveryFailuresAreErrorsButSuccessesAndNoiseAreNotSurfaced() {
+        val summaries = recentErrorSummaries(
+            listOf(
+                entry(1L, ClickCatLogCode.GECKO_RECOVERY_SUCCEEDED, tabId = "t"),
+                entry(2L, ClickCatLogCode.GECKO_RECOVERY_FAILED, tabId = "t", details = "Rebuilt session failed")
+            )
+        )
+        assertEquals(1, summaries.size)
+        assertEquals("ERR_RECOVERY_FAILED tab=t", summaries[0].headline)
+    }
+
+    @Test
+    fun limitCapsTheList() {
+        val entries = (1L..8L).map {
+            entry(it, ClickCatLogCode.GECKO_RENDERER_KILLED, tabId = "t$it")
+        }
+        assertEquals(5, recentErrorSummaries(entries).size)
+        assertEquals(8L, recentErrorSummaries(entries).first().timestampMillis)
+    }
+}

@@ -27,7 +27,8 @@ internal enum class ClickCatLogCode(val label: String) {
     GECKO_RECOVERY_RELOAD_STARTED("Open GeckoView session reload started"),
     GECKO_RECOVERY_SUCCEEDED("GeckoView renderer produced a recovery frame"),
     GECKO_RECOVERY_FAILED("GeckoView session recovery failed"),
-    GECKO_RECOVERY_RETRY_THROTTLED("GeckoView recovery retry was temporarily paused")
+    GECKO_RECOVERY_RETRY_THROTTLED("GeckoView recovery retry was temporarily paused"),
+    EXTENSION_POPUP_FAILED("Extension popup failed to render")
 }
 
 internal data class ClickRendererDiagnosticDetails(
@@ -163,6 +164,52 @@ internal fun appendClickCatLogEntry(
     entry: ClickCatLogEntry,
     maxEntries: Int = CLICK_CAT_LOG_MAX_ENTRIES
 ): List<ClickCatLogEntry> = (existing + entry).takeLast(maxEntries.coerceAtLeast(1))
+
+/** One row of the Developer dashboard's Recent Errors card. */
+internal data class RecentErrorSummary(
+    val timestampMillis: Long,
+    val headline: String,
+    val detail: String?
+)
+
+/** Log codes that count as errors/recoveries for the Recent Errors card. */
+private val RECENT_ERROR_CODES = setOf(
+    ClickCatLogCode.GECKO_RENDERER_CRASHED,
+    ClickCatLogCode.GECKO_RENDERER_KILLED,
+    ClickCatLogCode.GECKO_RECOVERY_SUCCEEDED,
+    ClickCatLogCode.GECKO_RECOVERY_FAILED,
+    ClickCatLogCode.EXTENSION_POPUP_FAILED
+)
+
+/**
+ * Newest-first error/recovery rows for the Developer dashboard, derived only
+ * from events the diagnostics log actually recorded (renderer crashes and
+ * recoveries from the session layer, extension popup failures from the popup
+ * router). Mode switches and other bookkeeping codes never appear here.
+ */
+internal fun recentErrorSummaries(
+    entries: List<ClickCatLogEntry>,
+    limit: Int = 5
+): List<RecentErrorSummary> = entries
+    .filter { it.code in RECENT_ERROR_CODES }
+    .takeLast(limit.coerceAtLeast(0))
+    .reversed()
+    .map { entry ->
+        val tabSuffix = entry.rendererDetails?.tabId
+            ?.takeIf { it.isNotBlank() }?.let { " tab=$it" } ?: ""
+        RecentErrorSummary(
+            timestampMillis = entry.timestampMillis,
+            headline = when (entry.code) {
+                ClickCatLogCode.GECKO_RENDERER_CRASHED,
+                ClickCatLogCode.GECKO_RENDERER_KILLED -> "ERR_RENDERER_GONE$tabSuffix"
+                ClickCatLogCode.GECKO_RECOVERY_SUCCEEDED -> "Renderer recovered$tabSuffix"
+                ClickCatLogCode.GECKO_RECOVERY_FAILED -> "Renderer recovery failed$tabSuffix"
+                ClickCatLogCode.EXTENSION_POPUP_FAILED -> "Extension popup failed to render"
+                else -> entry.code.label
+            },
+            detail = entry.rendererDetails?.eventDetails?.takeIf { it.isNotBlank() }
+        )
+    }
 
 internal fun resolveClickModeSwitchOutcome(
     pending: PendingClickModeSwitch?,

@@ -546,6 +546,16 @@ class MainActivity : FragmentActivity() {
                     } else {
                         runOnUiThread { geckoTabPopupState.value = popup }
                     }
+                },
+                onPopupFailed = { popup ->
+                    // Feed the Developer dashboard's Recent Errors card: the
+                    // popup router reports each FAILED transition exactly once.
+                    recordGeckoRendererDiagnostic(
+                        tabId = popup.ownerTabId,
+                        url = null,
+                        code = com.click.browser.engine.ClickCatLogCode.EXTENSION_POPUP_FAILED,
+                        eventDetails = "Extension popup failed to render: ${popup.title}"
+                    )
                 }
             ).also { normalTabExtensionRouter = it }
         }
@@ -4636,9 +4646,13 @@ class MainActivity : FragmentActivity() {
                                 val showExtensionButton = currentTab.engine == BrowserTabEngine.GECKOVIEW &&
                                     !currentTab.isIncognito && !showOverlays
                                 Column {
-                                    // Power (desktop) mode keeps its tab strip visible
-                                    // while browsing too — desktop-style chrome.
-                                    if (!immersiveMode && (showOverlays || activeMode == BrowserMode.HACK)) {
+                                    // The tab strip is Power's desktop chrome ONLY —
+                                    // on its dashboard and while browsing. Every other
+                                    // mode starts with the address bar alone (Prince's
+                                    // rule for Simple, and the approved per-mode
+                                    // dashboards for Advance/Developer show no strip);
+                                    // their tabs live behind the bottom Tabs button.
+                                    if (!immersiveMode && activeMode == BrowserMode.HACK) {
                                         TabStrip(
                                             tabs = tabs,
                                             activeTabIndex = activeTabIndex,
@@ -4815,7 +4829,13 @@ class MainActivity : FragmentActivity() {
                                             onReaderMode = { handleFeature(FeatureId.READER) },
                                             onProfileClick = { showSettings = true },
                                             recentlyClosedTabs = RecentlyClosedTabs.list(activeMode),
-                                            onReopenRecentTab = { reopenClosedTab(it) }
+                                            onReopenRecentTab = { reopenClosedTab(it) },
+                                            tabCount = tabs.size,
+                                            onOpenDownloads = { showDownloads = true },
+                                            onOpenDevToolsTab = { tab -> openDevToolsTab(tab) },
+                                            onOpenCookieManager = { showCookieManager = true },
+                                            onOpenPrivacyGuards = { showPrivacyGuards = true },
+                                            onOpenDiagnostics = { showClickDiagnostics = true }
                                         )
                                     } else {
                                         // Pull-to-refresh flag: when off, the page renders
