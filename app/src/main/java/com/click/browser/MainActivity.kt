@@ -6484,7 +6484,7 @@ class MainActivity : FragmentActivity() {
                                                         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                                                             if (currentTab.canGoBack) {
                                                             TextButton(onClick = {
-                                                                    currentTab.browserSession.goBackIfPossible()
+                                                                    currentTab.browserSession?.goBackIfPossible()
                                                                 }) {
                                                                     Text("Back")
                                                                 }
@@ -6536,7 +6536,7 @@ class MainActivity : FragmentActivity() {
                                                         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                                                             if (currentTab.canGoBack) {
                                                                 TextButton(onClick = {
-                                                                    currentTab.browserSession.goBackIfPossible()
+                                                                    currentTab.browserSession?.goBackIfPossible()
                                                                 }) {
                                                                     Text("Back")
                                                                 }
