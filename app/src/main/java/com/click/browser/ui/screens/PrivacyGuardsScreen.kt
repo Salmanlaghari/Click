@@ -122,11 +122,11 @@ fun PrivacyGuardsScreen(
             item {
                 GuardToggleRow(
                     title = "Block WebRTC",
-                    subtitle = "WebRTC off: sites cannot open WebRTC peer " +
+                    subtitle = "When on, sites cannot open WebRTC peer " +
                         "connections, so the STUN/ICE path that can reveal " +
                         "your IP address stays closed. GeckoView tabs are " +
                         "covered by Click's bundled built-in guard extension; " +
-                        "private (WebView) tabs by a script injected at page " +
+                        "WebView tabs by a script injected at page " +
                         "start. Honest trade-off: this breaks in-browser " +
                         "video/voice calls and some games, so it is off by " +
                         "default — WebRTC stays available until you turn " +

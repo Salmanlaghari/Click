@@ -29,6 +29,68 @@ class WebRtcGuardTest {
     }
 
     @Test
+    fun noToggleIsIssuedFromStaleStateWhileAToggleIsInFlight() {
+        // While an enable/disable GeckoResult is pending, metaData.enabled
+        // is stale; every combination must defer (NONE) and let the
+        // completion handler reconcile against the latest intent instead.
+        for (blocked in listOf(true, false)) {
+            for (enabled in listOf(true, false)) {
+                assertEquals(
+                    WebRtcGuardSyncAction.NONE,
+                    webRtcGuardSyncAction(blocked, enabled, toggleInFlight = true)
+                )
+                assertEquals(
+                    webRtcGuardSyncAction(blocked, enabled),
+                    webRtcGuardSyncAction(blocked, enabled, toggleInFlight = false)
+                )
+            }
+        }
+    }
+
+    @Test
+    fun schemePatternMatchesRealPageProtocolsOnly() {
+        // The guard scripts test window.location.protocol, which includes
+        // the trailing colon. Kilo's review of PR #211 flagged the
+        // end-anchored pattern as never matching; that premise did not
+        // survive verification — the colon sits INSIDE the pattern
+        // ("https?:" = http + optional s + ':'), so the anchored form
+        // matched real protocols too (asserted below for the record).
+        // The prefix form the scripts use now is equivalent for every
+        // real protocol value; the contract locked in here is the
+        // behavior: match http:/https:, reject everything else.
+        val pattern = Regex("^https?:")
+        assertTrue(pattern.containsMatchIn("http:"))
+        assertTrue(pattern.containsMatchIn("https:"))
+        assertFalse(pattern.containsMatchIn("about:"))
+        assertFalse(pattern.containsMatchIn("file:"))
+        assertFalse(pattern.containsMatchIn("chrome:"))
+        assertFalse(pattern.containsMatchIn("data:"))
+        assertTrue(Regex("^https?:$").containsMatchIn("https:"))
+        for (script in bothBlockScripts()) {
+            assertTrue(script.contains("/^https?:/"))
+        }
+    }
+
+    @Test
+    fun stubDescriptorIsLockedSoPagesCannotUndoTheBlock() {
+        // writable/configurable MUST stay false in both copies: a writable
+        // stub can be replaced by any page script, silently re-enabling
+        // RTCPeerConnection behind the user's back.
+        for (script in bothBlockScripts()) {
+            assertTrue(script.contains("writable: false"))
+            assertTrue(script.contains("configurable: false"))
+            assertFalse(script.contains("writable: true"))
+            assertFalse(script.contains("configurable: true"))
+        }
+    }
+
+    /** The WebView script (Kotlin) and the GeckoView extension script (asset). */
+    private fun bothBlockScripts(): List<String> = listOf(
+        PrivacyGuards.WEBRTC_BLOCK_JS,
+        assetFile("webrtc_guard/guard.js").readText()
+    )
+
+    @Test
     fun blockScriptStubsPeerConnectionOnly() {
         val script = PrivacyGuards.WEBRTC_BLOCK_JS
         assertTrue(script.contains("RTCPeerConnection"))

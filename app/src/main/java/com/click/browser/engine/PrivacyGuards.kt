@@ -47,8 +47,13 @@ object PrivacyGuards {
     }
 
     /**
-     * WebRTC block script for WebView (private) tabs, injected at
-     * onPageStarted while the user has "Block WebRTC" on. It replaces
+     * WebRTC block script for WebView tabs (private tabs use WebView by
+     * default, and any tab switched to the WebView engine gets it too),
+     * injected at onPageStarted while the user has "Block WebRTC" on. The
+     * scheme check matches the protocol prefix of
+     * `window.location.protocol` ("https:", colon included), and the stub
+     * is installed with a locked (non-writable, non-configurable)
+     * descriptor so page scripts cannot undo the block. It replaces
      * RTCPeerConnection with a stub whose constructor throws, so page
      * scripts cannot create peer connections or start STUN/ICE gathering.
      * Best-effort by construction: WebView offers no document-start hook,
@@ -63,7 +68,7 @@ object PrivacyGuards {
     const val WEBRTC_BLOCK_JS = """
         (function() {
             try {
-                if (!/^https?:$/.test(window.location.protocol)) return;
+                if (!/^https?:/.test(window.location.protocol)) return;
                 function BlockedRTCPeerConnection() {
                     throw new DOMException(
                         "WebRTC is disabled by Click's Block WebRTC setting.",
@@ -73,7 +78,7 @@ object PrivacyGuards {
                 ['RTCPeerConnection', 'webkitRTCPeerConnection'].forEach(function(prop) {
                     try {
                         Object.defineProperty(window, prop, {
-                            configurable: true, writable: true, value: BlockedRTCPeerConnection
+                            configurable: false, writable: false, value: BlockedRTCPeerConnection
                         });
                     } catch (e) {}
                 });

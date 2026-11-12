@@ -11,7 +11,9 @@
 // which applies the same block in WebView (private) tabs.
 (function () {
   try {
-    if (!/^https?:$/.test(window.location.protocol)) return;
+    // location.protocol includes the trailing colon ("https:"); match
+    // the scheme prefix directly.
+    if (!/^https?:/.test(window.location.protocol)) return;
     function BlockedRTCPeerConnection() {
       throw new DOMException(
         "WebRTC is disabled by Click's Block WebRTC setting.",
@@ -20,9 +22,15 @@
     }
     ['RTCPeerConnection', 'webkitRTCPeerConnection'].forEach(function (prop) {
       try {
+        // Locked descriptor (writable/configurable false) is deliberate:
+        // a writable stub could be replaced by any page script, silently
+        // undoing the block. Turning the setting off disables this
+        // extension entirely, so fresh page loads get the real
+        // RTCPeerConnection back — the lock only binds pages where the
+        // user asked for the block.
         Object.defineProperty(window, prop, {
-          configurable: true,
-          writable: true,
+          configurable: false,
+          writable: false,
           value: BlockedRTCPeerConnection
         });
       } catch (e) { /* never break the host page */ }
