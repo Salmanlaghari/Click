@@ -4,6 +4,7 @@ import com.click.browser.data.Bookmark
 import com.click.browser.engine.BrowserMode
 import com.click.browser.engine.ClickDownloadRecord
 import com.click.browser.engine.ClickDownloadState
+import com.click.browser.engine.DownloadSettings
 import com.click.browser.engine.ModePersonalization
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -103,9 +104,13 @@ class PowerDashboardWidgetsTest {
         mode = BrowserMode.HACK,
         url = "https://example.com/file.bin",
         fileName = "file.bin",
+        mimeType = "application/octet-stream",
+        destination = DownloadSettings.LOCATION_APP,
         state = state,
         bytesDownloaded = downloaded,
-        totalBytes = total
+        totalBytes = total,
+        createdAt = 1L,
+        updatedAt = 1L
     )
 
     @Test
