@@ -4762,6 +4762,1922 @@ class MainActivity : FragmentActivity() {
                                 }
                             }
 
+                            /**
+                             * The four-mode dashboard (home) branch of the main content
+                             * container, extracted from the onCreate composition: the full
+                             * inline tree pushed one onCreate lambda past the JVM 64 KB
+                             * method limit (MethodTooLargeException).
+                             */
+                            @Composable
+                            fun HomeDashboardContent() {
+                                // Overhauled premium dashboard home page
+                                ClickHomeScreen(
+                                    theme = theme,
+                                    activeMode = activeMode,
+                                    searchEngine = currentSearchEngineSetting,
+                                    adBlockStatusLabel = adBlockStatus.label,
+                                    adBlockStatusActive = adBlockStatus.active,
+                                    homeNewsFeedEnabled = homeNewsFeedEnabled,
+                                    onHomeNewsFeedEnabledChange = { enabled ->
+                                        setHomeNewsFeedEnabled(enabled)
+                                    },
+                                    wallpaperUri = wallpaperUri,
+                                    shieldActive = shieldActive,
+                                    onV9ShieldClick = { showV9Shield = true },
+                                    onShieldToggle = { toggleDnsShield() },
+                                    onGamesClick = { showClickPage = "games" },
+                                    onNavigate = { input ->
+                                        pendingKeyboardDismissTabId = currentTab.id.takeIf {
+                                            currentTab.engine == BrowserTabEngine.WEBVIEW
+                                        }
+                                        dismissBrowserKeyboard()
+                                        val destination = cleanTrackingUrl(formatUrl(input, currentSearchEngineSetting))
+                                        currentTab.url = destination
+                                        currentTab.browserSession?.loadUrl(destination)
+                                    },
+                                    onOpenAiChat = {
+                                        if (tamperBlocked) showTamperDialog = true else showAiChat = true
+                                    },
+                                    onTranslate = { handleFeature(FeatureId.TRANSLATE) },
+                                    onReaderMode = { handleFeature(FeatureId.READER) },
+                                    onProfileClick = { showSettings = true },
+                                    recentlyClosedTabs = RecentlyClosedTabs.list(activeMode),
+                                    onReopenRecentTab = { reopenClosedTab(it) },
+                                    tabCount = tabs.size,
+                                    onOpenDownloads = { showDownloads = true },
+                                    onOpenDevToolsTab = { tab -> openDevToolsTab(tab) },
+                                    onOpenCookieManager = { showCookieManager = true },
+                                    onOpenPrivacyGuards = { showPrivacyGuards = true },
+                                    onOpenDiagnostics = { showClickDiagnostics = true }
+                                )
+                            }
+
+                            /**
+                             * The web-page branch of the main content container (pull-to-
+                             * refresh wrapper, page transitions, the Gecko/WebView session
+                             * view and its failure/recovery UI, plus the page-only overlay
+                             * sections), extracted from the onCreate composition for the
+                             * same 64 KB method-limit reason as [HomeDashboardContent].
+                             * BoxScope receiver: the floating overlay aligns itself inside
+                             * the container Box.
+                             */
+                            @Composable
+                            fun BoxScope.WebPageContent() {
+                                    // Pull-to-refresh flag: when off, the page renders
+                                    // without the PullToRefreshBox wrapper at all.
+                                    @Composable
+                                    fun RefreshablePage(content: @Composable () -> Unit) {
+                                        val refreshAvailable = currentTab.browserSession != null &&
+                                            pullToRefreshGetUrl(currentTab.url) != null
+                                        if (flagsUi.pullToRefreshEnabled && refreshAvailable) {
+                                            // Start a fresh HTTP(S) GET; do not replay a prior form POST body.
+                                            // Nested-scroll aware: only triggers at the top of the page.
+                                            PullToRefreshBox(
+                                                isRefreshing = currentTab.id in refreshingTabIds,
+                                                onRefresh = {
+                                                    val refreshTab = tabs.getOrNull(activeTabIndex) ?: currentTab
+                                                    var refreshDispatchAccepted = false
+                                                    try {
+                                                        refreshDispatchAccepted = startPullToRefresh(
+                                                            navigation = refreshTab.browserSession,
+                                                            currentUrl = refreshTab.url
+                                                        ) {
+                                                            refreshingTabIds = refreshingTabIds + refreshTab.id
+                                                        }
+                                                    } finally {
+                                                        if (!refreshDispatchAccepted) {
+                                                            refreshingTabIds = refreshingTabIds - refreshTab.id
+                                                        }
+                                                    }
+                                                },
+                                                modifier = Modifier.fillMaxSize()
+                                            ) {
+                                                content()
+                                            }
+                                        } else {
+                                            Box(modifier = Modifier.fillMaxSize()) {
+                                                content()
+                                            }
+                                        }
+                                    }
+                                    RefreshablePage {
+                                    // Adaptive Layout Frame to mimic Laptop / Tablet viewports cleanly
+                                    val emulatorWidthModifier = when (deviceEmulatorMode) {
+                                        "Tablet" -> Modifier.fillMaxHeight().width(768.dp)
+                                        "Desktop" -> Modifier.fillMaxHeight().width(1024.dp)
+                                        else -> Modifier.fillMaxSize()
+                                    }
+
+                                    // Page transition: subtle fade + slide on every
+                                    // navigation start (see PageTransitionWrapper).
+                                    PageTransitionWrapper(
+                                        tick = pageTransitionTick,
+                                        animationsEnabled = flagsUi.tabAnimations
+                                    ) {
+                                    Box(
+                                        modifier = Modifier.fillMaxSize(),
+                                        contentAlignment = Alignment.Center
+                                    ) {
+                                        key(currentTab.id, currentTab.engine, browserSessionGeneration) {
+                                            AndroidView(
+                                                modifier = emulatorWidthModifier,
+                                                factory = { ctx ->
+                                                    val existingSession = currentTab.browserSession
+                                                    if (existingSession != null) {
+                                                        existingSession.detachFromParent()
+                                                        existingSession.view
+                                                    } else if (currentTab.engine == BrowserTabEngine.GECKOVIEW) {
+                                                        geckoContextIdsUsedInActivity +=
+                                                            currentTab.pendingGeckoSession?.settings?.contextId
+                                                                ?: geckoContextIdFor(activeMode)
+                                                        val tabId = currentTab.id
+                                                        var createdGeckoSession: GeckoBrowserTabSession? = null
+                                                        val geckoSession = GeckoBrowserTabSession(
+                                                            context = ctx,
+                                                            selectionActivity = this@MainActivity,
+                                                            runtime = ExtensionBrowserRuntime.get(applicationContext),
+                                                            tabId = tabId,
+                                                            isIncognito = currentTab.isIncognito,
+                                                            mode = activeMode,
+                                                            initialUrl = currentTab.url,
+                                                            initialSessionState = currentTab.geckoSessionState,
+                                                            extensionRouter = if (currentTab.isIncognito) null else normalTabExtensionRouter(),
+                                                            onWebsiteMicrophoneRequest = { requestTabId, origin, grant, reject ->
+                                                                runOnUiThread {
+                                                                    handleWebsiteMicrophoneRequest(
+                                                                        tab = tabs.firstOrNull { it.id == requestTabId },
+                                                                        requestedOrigin = origin,
+                                                                        grant = grant,
+                                                                        reject = reject
+                                                                    )
+                                                                }
+                                                            },
+                                                            initialGeckoSession = currentTab.takePendingGeckoSession(),
+                                                            initiallySelected = true,
+                                                            initiallyResumed = lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED),
+                                                            navigationTarget = navigation@{ requestedUrl ->
+                                                                var targetUrl = cleanTrackingUrl(requestedUrl)
+                                                                if (targetUrl == "about:blank") return@navigation targetUrl
+                                                                val approvedOptionsBase = approvedExtensionOptionsBasesByTab[tabId]
+                                                                if (approvedOptionsBase != null &&
+                                                                    ExtensionInstallPolicy.isSafeExtensionOptionsNavigation(
+                                                                        approvedOptionsBase,
+                                                                        targetUrl
+                                                                    )
+                                                                ) return@navigation targetUrl
+                                                                ClickInternalPages.interceptNavigation(targetUrl)?.let { pageKey ->
+                                                                    showClickPage = pageKey
+                                                                    return@navigation null
+                                                                }
+                                                                // Website sign-in/OAuth pages stay in this Click tab
+                                                                // (Prince, 2026-11-10): no Custom Tab / Chrome handoff.
+                                                                if (!targetUrl.startsWith("http://") && !targetUrl.startsWith("https://")) {
+                                                                    return@navigation null
+                                                                }
+                                                                if (targetUrl.startsWith("http://")) {
+                                                                    val host = hostOfUrl(targetUrl)
+                                                                    if (!isIpAddress(host)) {
+                                                                        when (liveHttpsMode) {
+                                                                            "strict" -> if (!liveHttpsStrictExceptions.contains(host)) {
+                                                                                return@navigation null
+                                                                            }
+                                                                            "standard" -> targetUrl = "https://" + targetUrl.removePrefix("http://")
+                                                                        }
+                                                                    }
+                                                                }
+                                                                if (liveMode == BrowserMode.HACK) targetUrl = forceDesktopHost(targetUrl)
+                                                                targetUrl
+                                                            },
+                                                            wideLayoutForUrl = ::wideLayoutEnabledForUrl,
+                                                            onNavigationBlocked = { blockedUrl ->
+                                                                val scheme = runCatching {
+                                                                    android.net.Uri.parse(blockedUrl).scheme?.lowercase()
+                                                                }.getOrNull()
+                                                                val message = when {
+                                                                    scheme == "http" && liveHttpsMode == "strict" ->
+                                                                        "Blocked by the current HTTPS policy."
+                                                                    scheme == "http" && liveHttpsMode == "standard" ->
+                                                                        "This new window needs a URL adjustment. Open the link in the current tab to apply browser rules."
+                                                                    else -> "This destination is not available in the Gecko tab."
+                                                                }
+                                                                Toast.makeText(this@MainActivity, message, Toast.LENGTH_SHORT).show()
+                                                            },
+                                                            onNewSession = { uri, childSession ->
+                                                                val scheme = runCatching {
+                                                                    android.net.Uri.parse(uri).scheme?.lowercase()
+                                                                }.getOrNull()
+                                                                if (scheme !in setOf("http", "https") && uri != "about:blank") {
+                                                                    childSession.close()
+                                                                    null
+                                                                } else {
+                                                                    val childTab = TabItem(
+                                                                        url = uri,
+                                                                        title = "New Tab",
+                                                                        isIncognito = currentTab.isIncognito,
+                                                                        initialEngine = BrowserTabEngine.GECKOVIEW,
+                                                                        initialGeckoSession = childSession
+                                                                    )
+                                                                    tabs.add(childTab)
+                                                                    activeTabIndex = tabs.lastIndex
+                                                                    org.mozilla.geckoview.GeckoResult.fromValue(childSession)
+                                                                }
+                                                            },
+                                                            onUrlChanged = { url ->
+                                                                tabs.firstOrNull { it.id == tabId }?.let { changedTab ->
+                                                                    changedTab.passwordAutofillPromptGuard.onNavigationStarted()
+                                                                    changedTab.url = url
+                                                                }
+                                                            },
+                                                            onConnectionSecurityChanged = { info ->
+                                                                val update = {
+                                                                    tabs.firstOrNull { it.id == tabId }
+                                                                        ?.connectionSecurity = info
+                                                                }
+                                                                if (android.os.Looper.myLooper() == android.os.Looper.getMainLooper()) update()
+                                                                else runOnUiThread { update() }
+                                                            },
+                                                            onTitleChanged = { title ->
+                                                                tabs.firstOrNull { it.id == tabId }?.title = title
+                                                            },
+                                                            onPageLoaded = { url ->
+                                                                val loadedTab = tabs.firstOrNull { it.id == tabId }
+                                                                if (loadedTab != null &&
+                                                                    (url.startsWith("http://") || url.startsWith("https://"))
+                                                                ) {
+                                                                    val title = loadedTab.title.ifBlank { url }
+                                                                    val isIncognitoTab = loadedTab.isIncognito
+                                                                    scope.launch {
+                                                                        repository.addHistoryItem(
+                                                                            HistoryItem(title, url, System.currentTimeMillis()),
+                                                                            isIncognitoTab = isIncognitoTab
+                                                                        )
+                                                                    }
+                                                                }
+                                                            },
+                                                            onSessionStateChanged = { encodedState ->
+                                                                val update = {
+                                                                    tabs.firstOrNull { it.id == tabId }
+                                                                        ?.geckoSessionState = encodedState
+                                                                }
+                                                                if (android.os.Looper.myLooper() == android.os.Looper.getMainLooper()) update()
+                                                                else runOnUiThread { update() }
+                                                            },
+                                                            onNavigationStarted = { url, generation ->
+                                                                val update = {
+                                                                    tabs.firstOrNull { it.id == tabId }?.let { tab ->
+                                                                        if (createdGeckoSession != null && tab.browserSession !== createdGeckoSession) {
+                                                                            return@let
+                                                                        }
+                                                                        if (generation < tab.geckoNavigationGeneration) return@let
+                                                                        tab.geckoNavigationGeneration = generation
+                                                                        tab.url = url
+                                                                        tab.loadProgress = 0
+                                                                        tab.isPageLoading = true
+                                                                        tab.hasCommittedContent = false
+                                                                        tab.geckoNavigationFailure = null
+                                                                    }
+                                                                }
+                                                                if (android.os.Looper.myLooper() == android.os.Looper.getMainLooper()) update()
+                                                                else runOnUiThread { update() }
+                                                            },
+                                                            onProgressChanged = { progress, generation ->
+                                                                val update = {
+                                                                    tabs.firstOrNull { it.id == tabId }?.let { tab ->
+                                                                        if (createdGeckoSession != null && tab.browserSession !== createdGeckoSession) {
+                                                                            return@let
+                                                                        }
+                                                                        if (tab.geckoNavigationGeneration != generation || !tab.isPageLoading) {
+                                                                            return@let
+                                                                        }
+                                                                        tab.loadProgress = progress
+                                                                    }
+                                                                }
+                                                                if (android.os.Looper.myLooper() == android.os.Looper.getMainLooper()) update()
+                                                                else runOnUiThread { update() }
+                                                            },
+                                                            onPageFirstContentfulPaint = { generation ->
+                                                                val update = {
+                                                                    tabs.firstOrNull { it.id == tabId }?.let { tab ->
+                                                                        if (createdGeckoSession != null && tab.browserSession !== createdGeckoSession) {
+                                                                            return@let
+                                                                        }
+                                                                        if (!com.click.browser.engine.shouldCommitGeckoContentOnFirstPaint(
+                                                                                activeGeneration = tab.geckoNavigationGeneration,
+                                                                                paintedGeneration = generation,
+                                                                                isLoading = tab.isPageLoading
+                                                                            )
+                                                                        ) return@let
+                                                                        // Keep navigation progress active, but stop covering
+                                                                        // content once Gecko has actually painted the page.
+                                                                        tab.hasCommittedContent = true
+                                                                    }
+                                                                }
+                                                                if (android.os.Looper.myLooper() == android.os.Looper.getMainLooper()) update()
+                                                                else runOnUiThread { update() }
+                                                            },
+                                                            onTabPreviewCaptured = { capturedUrl, bitmap ->
+                                                                runOnUiThread {
+                                                                    val previewTab = tabs.firstOrNull { it.id == tabId }
+                                                                    val expectedSession = createdGeckoSession
+                                                                    if (expectedSession != null &&
+                                                                        previewTab != null &&
+                                                                        previewTab.browserSession === expectedSession &&
+                                                                        previewTab.engine == BrowserTabEngine.GECKOVIEW &&
+                                                                        !previewTab.isIncognito &&
+                                                                        previewTab.url == capturedUrl
+                                                                    ) {
+                                                                        TabThumbnailStore.put(tabId, bitmap)
+                                                                        thumbnailVersion++
+                                                                    } else {
+                                                                        runCatching { bitmap.recycle() }
+                                                                    }
+                                                                }
+                                                            },
+                                                            onNavigationStopped = { completion ->
+                                                                val update = {
+                                                                    tabs.firstOrNull { it.id == tabId }?.let { tab ->
+                                                                        if (createdGeckoSession != null && tab.browserSession !== createdGeckoSession) {
+                                                                            return@let
+                                                                        }
+                                                                        val isCurrentCompletion = completion.isCurrent &&
+                                                                            tab.geckoNavigationGeneration == completion.generation
+                                                                        refreshingTabIds = refreshingTabIdsAfterNavigationEnd(
+                                                                            refreshingTabIds,
+                                                                            completedTabId = tab.id,
+                                                                            isCurrentNavigation = isCurrentCompletion
+                                                                        )
+                                                                        if (!isCurrentCompletion) {
+                                                                            return@let
+                                                                        }
+                                                                        val outcome = completion.outcome
+                                                                        tab.url = completion.url
+                                                                        tab.isPageLoading = false
+                                                                        tab.loadProgress = if (outcome.commitsContent) 100 else 0
+                                                                        tab.hasCommittedContent = outcome.commitsContent
+                                                                        tab.geckoNavigationFailure = outcome.failure
+                                                                    }
+                                                                }
+                                                                if (android.os.Looper.myLooper() == android.os.Looper.getMainLooper()) update()
+                                                                else runOnUiThread { update() }
+                                                            },
+                                                            onCanGoBackChanged = { canGoBack ->
+                                                                tabs.firstOrNull { it.id == tabId }?.canGoBack = canGoBack
+                                                            },
+                                                            onCanGoForwardChanged = { canGoForward ->
+                                                                tabs.firstOrNull { it.id == tabId }?.canGoForward = canGoForward
+                                                            },
+                                                            onFullscreenChanged = { active ->
+                                                                if (tabs.getOrNull(activeTabIndex)?.id == tabId) {
+                                                                    videoFullscreenActive = active
+                                                                    if (active) {
+                                                                        showFeatureMenu = false
+                                                                        showBrowserMenu = false
+                                                                    }
+                                                                    exitFullscreenVideo = if (active) {
+                                                                        { createdGeckoSession?.session?.exitFullScreen() }
+                                                                    } else null
+                                                                }
+                                                            },
+                                                            onRendererFailure = { event, error ->
+                                                                runOnUiThread {
+                                                                    val failedTab = tabs.firstOrNull { it.id == tabId }
+                                                                    if (failedTab != null) {
+                                                                        refreshingTabIds = refreshingTabIdsAfterNavigationEnd(
+                                                                            refreshingTabIds,
+                                                                            completedTabId = failedTab.id,
+                                                                            isCurrentNavigation = true
+                                                                        )
+                                                                        failedTab.rendererRecoveryRequired =
+                                                                            geckoRendererRecoveryRequired(
+                                                                                failedTab.rendererRecoveryRequired,
+                                                                                event
+                                                                            )
+                                                                        failedTab.isPageLoading = false
+                                                                        failedTab.loadProgress = 0
+                                                                        // A crashed/killed renderer ends any video
+                                                                        // fullscreen session without firing the
+                                                                        // fullscreen-exit callback. Clear the stale
+                                                                        // flag for the visible tab so the system
+                                                                        // bars, bottom nav and the "Normal view"
+                                                                        // exit cannot stay hidden forever.
+                                                                        if (failedTab === tabs.getOrNull(activeTabIndex) && videoFullscreenActive) {
+                                                                            videoFullscreenActive = false
+                                                                            exitFullscreenVideo = null
+                                                                        }
+                                                                    }
+                                                                    val code = when (event) {
+                                                                        GeckoRenderEvent.PROCESS_CRASHED ->
+                                                                            com.click.browser.engine.ClickCatLogCode.GECKO_RENDERER_CRASHED
+                                                                        GeckoRenderEvent.PROCESS_KILLED ->
+                                                                            com.click.browser.engine.ClickCatLogCode.GECKO_RENDERER_KILLED
+                                                                        GeckoRenderEvent.RECOVERY_FAILED ->
+                                                                            com.click.browser.engine.ClickCatLogCode.GECKO_RECOVERY_FAILED
+                                                                        else -> null
+                                                                    }
+                                                                    if (code != null) {
+                                                                        val details = when (event) {
+                                                                            GeckoRenderEvent.PROCESS_CRASHED ->
+                                                                                "GeckoSession.ContentDelegate.onCrash; automatic recovery exhausted or unavailable; manual retry reopens and restores saved state."
+                                                                            GeckoRenderEvent.PROCESS_KILLED ->
+                                                                                "GeckoSession.ContentDelegate.onKill; automatic recovery exhausted or unavailable; manual retry reopens and restores saved state."
+                                                                            else ->
+                                                                                "Session reopen, state restore, or reload failed; bounded exception class/cause and stack frames captured, messages omitted."
+                                                                        }
+                                                                        recordGeckoRendererDiagnostic(
+                                                                            tabId = tabId,
+                                                                            url = failedTab?.url,
+                                                                            code = code,
+                                                                            eventDetails = details,
+                                                                            error = error
+                                                                        )
+                                                                    }
+                                                                }
+                                                            },
+                                                            onRendererRecovery = { event ->
+                                                                runOnUiThread {
+                                                                    val recoveringTab = tabs.firstOrNull { it.id == tabId }
+                                                                    val wasRecoveryRequired =
+                                                                        recoveringTab?.rendererRecoveryRequired == true
+                                                                    if (recoveringTab != null) {
+                                                                        recoveringTab.rendererRecoveryRequired =
+                                                                            geckoRendererRecoveryRequired(
+                                                                                wasRecoveryRequired,
+                                                                                event
+                                                                            )
+                                                                        if (event == GeckoRenderEvent.FIRST_COMPOSITE && wasRecoveryRequired) {
+                                                                            recoveringTab.hasCommittedContent = true
+                                                                            recoveringTab.isPageLoading = false
+                                                                        }
+                                                                    }
+                                                                    if (event == GeckoRenderEvent.RECOVERY_RETRY_THROTTLED &&
+                                                                        tabs.getOrNull(activeTabIndex)?.id == tabId
+                                                                    ) {
+                                                                        Toast.makeText(
+                                                                            this@MainActivity,
+                                                                            "Repeated renderer failures. Retry is paused temporarily; use Back or close the tab, or try again later.",
+                                                                            Toast.LENGTH_LONG
+                                                                        ).show()
+                                                                    }
+                                                                    val diagnostic = when (event) {
+                                                                        GeckoRenderEvent.RECOVERY_STARTED ->
+                                                                            com.click.browser.engine.ClickCatLogCode.GECKO_RECOVERY_STARTED to
+                                                                                "Retry requested; reopen the closed GeckoSession, restore saved state, or load the remembered URL."
+                                                                        GeckoRenderEvent.RECOVERY_RELOAD_STARTED ->
+                                                                            com.click.browser.engine.ClickCatLogCode.GECKO_RECOVERY_RELOAD_STARTED to
+                                                                                "Retry requested on the already-open GeckoSession; a close/open recovery cycle was not needed."
+                                                                        GeckoRenderEvent.RECOVERY_RETRY_THROTTLED ->
+                                                                            com.click.browser.engine.ClickCatLogCode.GECKO_RECOVERY_RETRY_THROTTLED to
+                                                                                "Retry was withheld after three recent renderer/recovery failures in the rolling 60-second window."
+                                                                        GeckoRenderEvent.FIRST_COMPOSITE -> if (wasRecoveryRequired) {
+                                                                            com.click.browser.engine.ClickCatLogCode.GECKO_RECOVERY_SUCCEEDED to
+                                                                                "GeckoSession.ContentDelegate.onFirstComposite; recovery frame confirmed and overlay cleared."
+                                                                        } else null
+                                                                        else -> null
+                                                                    }
+                                                                    if (diagnostic != null) {
+                                                                        recordGeckoRendererDiagnostic(
+                                                                            tabId = tabId,
+                                                                            url = recoveringTab?.url,
+                                                                            code = diagnostic.first,
+                                                                            eventDetails = diagnostic.second
+                                                                        )
+                                                                    }
+                                                                }
+                                                            },
+                                                            onExternalResponse = { response ->
+                                                                val body = response.body
+                                                                val scheme = runCatching {
+                                                                    android.net.Uri.parse(response.uri).scheme?.lowercase()
+                                                                }.getOrNull()
+                                                                if (body == null || response.statusCode !in 200..299 ||
+                                                                    (scheme != "http" && scheme != "https")
+                                                                ) {
+                                                                    runCatching { body?.close() }
+                                                                    Toast.makeText(
+                                                                        this@MainActivity,
+                                                                        "This download response cannot be saved.",
+                                                                        Toast.LENGTH_SHORT
+                                                                    ).show()
+                                                                } else {
+                                                                    response.setReadTimeoutMillis(120_000)
+                                                                    val disposition = response.headers.entries
+                                                                        .firstOrNull { it.key.equals("content-disposition", true) }
+                                                                        ?.value
+                                                                    val mimeType = response.headers.entries
+                                                                        .firstOrNull { it.key.equals("content-type", true) }
+                                                                        ?.value?.substringBefore(';')?.trim()
+                                                                    val contentLengthBytes = response.headers.entries
+                                                                        .firstOrNull { it.key.equals("content-length", true) }
+                                                                        ?.value?.toLongOrNull() ?: -1L
+                                                                    val fileName = android.webkit.URLUtil.guessFileName(
+                                                                        response.uri, disposition, mimeType
+                                                                    )
+                                                                    val downloadMode = liveMode
+                                                                    val downloadContext = applicationContext
+                                                                    val downloadUrl = response.uri
+                                                                    val downloadRepository = BrowserRepository(downloadContext)
+                                                                    DownloadHelper.enqueueResponseInApplicationScope(
+                                                                        context = downloadContext,
+                                                                        responseBody = body,
+                                                                        url = downloadUrl,
+                                                                        fileName = fileName,
+                                                                        mimeType = mimeType,
+                                                                        mode = downloadMode,
+                                                                        totalBytes = contentLengthBytes,
+                                                                        onComplete = { saved ->
+                                                                            if (saved != null) {
+                                                                                downloadRepository.addDownloadItemFor(
+                                                                                    downloadMode,
+                                                                                    DownloadItem(
+                                                                                        saved.fileName,
+                                                                                        downloadUrl,
+                                                                                        saved.location,
+                                                                                        System.currentTimeMillis()
+                                                                                    )
+                                                                                )
+                                                                            }
+                                                                        }
+                                                                    )
+                                                                }
+                                                            },
+                                                            onSelectedText = { selection, pageUrl ->
+                                                                openSelectedTextForAi(
+                                                                    selection = selection,
+                                                                    sourceTabId = tabId,
+                                                                    sourcePageUrl = pageUrl
+                                                                )
+                                                            },
+                                                            onTranslateSelectedText = { selection, pageUrl ->
+                                                                openSelectedTextForTranslation(
+                                                                    selection = selection,
+                                                                    sourceTabId = tabId,
+                                                                    sourcePageUrl = pageUrl
+                                                                )
+                                                            },
+                                                            onLoginSavePrompt = { promptTabId, promptSession, request ->
+                                                                val completion = org.mozilla.geckoview.GeckoResult<org.mozilla.geckoview.GeckoSession.PromptDelegate.PromptResponse>()
+                                                                val option = request.options.firstOrNull()
+                                                                val login = option?.value
+                                                                val candidate = login?.let {
+                                                                    com.click.browser.engine.geckoLoginSaveCandidate(
+                                                                        it.origin, it.username, it.password
+                                                                    )
+                                                                }
+                                                                if (option == null || candidate == null) {
+                                                                    org.mozilla.geckoview.GeckoResult.fromValue(request.dismiss())
+                                                                } else {
+                                                                    scope.launch {
+                                                                        val managerEnabled = try {
+                                                                            com.click.browser.engine.PasswordManager.isEnabled(this@MainActivity)
+                                                                        } catch (_: Exception) { false }
+                                                                        val offerTab = tabs.firstOrNull { it.id == promptTabId }
+                                                                        val liveSession = offerTab?.browserSession as? GeckoBrowserTabSession
+                                                                        val activeRegularTab = offerTab != null &&
+                                                                            offerTab.engine == BrowserTabEngine.GECKOVIEW &&
+                                                                            !offerTab.isIncognito &&
+                                                                            currentTab.id == promptTabId &&
+                                                                            tabs.indexOf(offerTab) == activeTabIndex &&
+                                                                            liveSession?.session === promptSession
+                                                                        val canOffer = com.click.browser.engine.shouldOfferGeckoLoginSave(
+                                                                            managerEnabled, activeRegularTab, candidate
+                                                                        ) && !showPasswordSaveDialog &&
+                                                                            pendingPasswordSave == null &&
+                                                                            pendingGeckoPasswordSave == null
+                                                                        if (canOffer) {
+                                                                            pendingGeckoPasswordSave = PendingGeckoPasswordSaveOffer(
+                                                                                tabId = promptTabId,
+                                                                                session = promptSession,
+                                                                                request = request,
+                                                                                option = option,
+                                                                                completion = completion,
+                                                                                credential = com.click.browser.engine.SavedPassword(
+                                                                                    host = candidate.host,
+                                                                                    username = candidate.username,
+                                                                                    password = candidate.password,
+                                                                                    origin = candidate.origin
+                                                                                )
+                                                                            )
+                                                                            showPasswordSaveDialog = true
+                                                                        } else {
+                                                                            completion.complete(request.dismiss())
+                                                                        }
+                                                                    }
+                                                                    completion
+                                                                }
+                                                            }
+                                                        )
+                                                        createdGeckoSession = geckoSession
+                                                        currentTab.attachBrowserSession(geckoSession)
+                                                        if (!liveBrowserSessions.contains(geckoSession)) {
+                                                            liveBrowserSessions.add(geckoSession)
+                                                        }
+                                                        geckoSession.setSelected(true)
+                                                        geckoSession.view
+                                                    } else {
+                                                        WebView(ctx).apply {
+                                                            webViewClient = object : WebViewClient() {
+                                                                // Safe Browsing interstitial (Click's own premium UI).
+                                                                // Framework API 27+; kept on plain WebViewClient (NOT the
+                                                                // Compat wrapper — Compat's SHOULD_OVERRIDE_WITH_REDIRECTS
+                                                                // caused redirect reload loops that broke page scrolling).
+                                                                @RequiresApi(android.os.Build.VERSION_CODES.O_MR1)
+                                                                override fun onSafeBrowsingHit(
+                                                                    view: WebView,
+                                                                    request: WebResourceRequest,
+                                                                    threatType: Int,
+                                                                    callback: android.webkit.SafeBrowsingResponse
+                                                                ) {
+                                                                    val url = request.url?.toString() ?: ""
+                                                                    com.click.browser.engine.SafeBrowsingManager.reportHit(
+                                                                        url, threatType, callback
+                                                                    )
+                                                                }
+
+                                                                override fun shouldOverrideUrlLoading(view: WebView?, request: WebResourceRequest?): Boolean {
+                                                                    // Never hijack subframes; never manually re-load a redirect
+                                                                    // (reload loops reset scroll position — page feels unscrollable).
+                                                                    if (request != null && !request.isForMainFrame) return false
+                                                                    var urlStr = request?.url?.toString() ?: ""
+                                                                    // Query-param stripping (Brave-style): drop tracking
+                                                                    // params before anything else touches the URL.
+                                                                    urlStr = cleanTrackingUrl(urlStr)
+                                                                    // PDF: offer in-app viewing instead of navigating.
+                                                                    if (isPdfUrl(urlStr)) {
+                                                                        pdfOfferUrl = urlStr
+                                                                        return true
+                                                                    }
+                                                                    // Website sign-in/OAuth pages load in this tab like any
+                                                                    // other page (no Chrome/Custom Tab handoff).
+                                                                    if (request != null && request.isRedirect) return false
+                                                                    // HTTPS mode handling FIRST (so http://click://
+                                                                    // can't bypass it). Standard upgrades http->https;
+                                                                    // Strict BLOCKS plain-http unless the host is
+                                                                    // in the per-site exception list; Off allows it.
+                                                                    // IP-ADDRESS hosts are NEVER upgraded or blocked:
+                                                                    // most IP servers (e.g. 182.180.50.52) have no TLS
+                                                                    // cert, so upgrading breaks them. HTTP loads directly.
+                                                                    if (urlStr.startsWith("http://")) {
+                                                                        val ipHost = hostOfUrl(urlStr)
+                                                                        if (!isIpAddress(ipHost)) {
+                                                                            when (liveHttpsMode) {
+                                                                                "strict" -> {
+                                                                                    val host = ipHost
+                                                                                    if (!liveHttpsStrictExceptions.contains(host)) {
+                                                                                        showHttpsBlockedPage(view, urlStr, host)
+                                                                                        return true
+                                                                                    }
+                                                                                }
+                                                                                "standard" -> {
+                                                                                    urlStr = "https://" + urlStr.removePrefix("http://")
+                                                                                }
+                                                                            }
+                                                                        }
+                                                                    }
+                                                                    // Power mode host preference: some sites redirect to a
+                                                                    // mobile-specific subdomain. Keep the selected host; wide
+                                                                    // layout does not change the WebView identity.
+                                                                    // so Power mode stays on the desktop host.
+                                                                    if (liveMode == BrowserMode.HACK) {
+                                                                        urlStr = forceDesktopHost(urlStr)
+                                                                    }
+                                                                    // click:// internal pages (chrome://-style): open natively.
+                                                                    ClickInternalPages.interceptNavigation(urlStr)?.let { pageKey ->
+                                                                        showClickPage = pageKey
+                                                                        return true
+                                                                    }
+                                                                    if (urlStr.startsWith("http://") || urlStr.startsWith("https://")) {
+                                                                        // Apply viewport/layout settings before loading the page.
+                                                                        if (view != null) this@MainActivity.applyPerSiteDesktop(view, urlStr)
+                                                                        if (view != null) this@MainActivity.applyPerSiteSettings(view, urlStr)
+                                                                        // Optional DNT/GPC privacy signals ride on
+                                                                        // navigations when enabled.
+                                                                        val navHeaders = mutableMapOf<String, String>()
+                                                                        if (liveFlags.dntHeader || liveDntEnabled) navHeaders["DNT"] = "1"
+                                                                        if (liveGpcEnabled) navHeaders["Sec-GPC"] = "1"
+                                                                        if (navHeaders.isNotEmpty()) {
+                                                                            view?.loadUrl(urlStr, navHeaders)
+                                                                        } else {
+                                                                            view?.loadUrl(urlStr)
+                                                                        }
+                                                                        return true
+                                                                    }
+                                                                    return false
+                                                                }
+
+                                                                @Suppress("Deprecated")
+                                                                override fun shouldOverrideUrlLoading(view: WebView?, url: String?): Boolean {
+                                                                    var urlStr = url ?: ""
+                                                                    // Query-param stripping (Brave-style).
+                                                                    urlStr = cleanTrackingUrl(urlStr)
+                                                                    // Sign-in/OAuth pages stay in this tab (no handoff).
+                                                                    // HTTPS mode handling FIRST (see above).
+                                                                    // PDF: offer in-app viewing instead of navigating.
+                                                                    if (isPdfUrl(urlStr)) {
+                                                                        pdfOfferUrl = urlStr
+                                                                        return true
+                                                                    }
+                                                                    if (urlStr.startsWith("http://")) {
+                                                                        // IP hosts never upgraded/blocked (see above).
+                                                                        val ipHost2 = hostOfUrl(urlStr)
+                                                                        if (!isIpAddress(ipHost2)) {
+                                                                            when (liveHttpsMode) {
+                                                                                "strict" -> {
+                                                                                    val host = ipHost2
+                                                                                    if (!liveHttpsStrictExceptions.contains(host)) {
+                                                                                        showHttpsBlockedPage(view, urlStr, host)
+                                                                                        return true
+                                                                                    }
+                                                                                }
+                                                                                "standard" -> {
+                                                                                    urlStr = "https://" + urlStr.removePrefix("http://")
+                                                                                }
+                                                                            }
+                                                                        }
+                                                                    }
+                                                                    // Power mode desktop host preference (see above).
+                                                                    if (liveMode == BrowserMode.HACK) {
+                                                                        urlStr = forceDesktopHost(urlStr)
+                                                                    }
+                                                                    // click:// internal pages (chrome://-style): open natively.
+                                                                    ClickInternalPages.interceptNavigation(urlStr)?.let { pageKey ->
+                                                                        showClickPage = pageKey
+                                                                        return true
+                                                                    }
+                                                                    if (urlStr.startsWith("http://") || urlStr.startsWith("https://")) {
+                                                                        if (view != null) this@MainActivity.applyPerSiteDesktop(view, urlStr)
+                                                                        if (view != null) this@MainActivity.applyPerSiteSettings(view, urlStr)
+                                                                        // Optional DNT/GPC signals ride on navigations
+                                                                        // whenever enabled.
+                                                                        val navHeaders = mutableMapOf<String, String>()
+                                                                        if (liveFlags.dntHeader || liveDntEnabled) navHeaders["DNT"] = "1"
+                                                                        if (liveGpcEnabled) navHeaders["Sec-GPC"] = "1"
+                                                                        if (navHeaders.isNotEmpty()) {
+                                                                            view?.loadUrl(urlStr, navHeaders)
+                                                                        } else {
+                                                                            view?.loadUrl(urlStr)
+                                                                        }
+                                                                        return true
+                                                                    }
+                                                                    return false
+                                                                }
+
+                                                                override fun onPageStarted(view: WebView?, url: String?, favicon: Bitmap?) {
+                                                            super.onPageStarted(view, url, favicon)
+                                                            // Block WebRTC in WebView tabs (private
+                                                            // tabs use WebView by default; any tab
+                                                            // switched to the WebView engine lands
+                                                            // here too): earliest hook WebView
+                                                            // offers. GeckoView tabs are covered by
+                                                            // the built-in guard extension instead
+                                                            // (see WebRtcGuard). The script itself
+                                                            // bails on non-http(s) schemes, so skip
+                                                            // evaluating it there entirely.
+                                                            if (liveWebRtcBlocked &&
+                                                                (url?.startsWith("http://") == true ||
+                                                                    url?.startsWith("https://") == true)
+                                                            ) {
+                                                                view?.evaluateJavascript(
+                                                                    com.click.browser.engine.PrivacyGuards.WEBRTC_BLOCK_JS, null
+                                                                )
+                                                            }
+                                                            val loadingTab = view?.let { target -> tabs.firstOrNull { it.webView === target } } ?: return
+                                                            loadingTab.passwordAutofillPromptGuard.onNavigationStarted()
+                                                            loadingTab.url = url ?: ""
+                                                            loadingTab.connectionSecurity = ConnectionSecurityPolicy.checking(loadingTab.url)
+                                                            loadingTab.isPageLoading = true
+                                                            loadingTab.hasCommittedContent = false
+                                                            loadingTab.webViewNavigationStopRecovery = false
+                                                            loadingTab.loadProgress = 0
+                                                            loadingTab.canGoBack = view?.canGoBack() == true
+                                                            loadingTab.canGoForward = view?.canGoForward() == true
+                                                            if (loadingTab === currentTab) {
+                                                                invalidateDevToolsSession()
+                                                                devToolsConsoleMessagesConsent = false
+                                                                lastPageStart = System.currentTimeMillis()
+                                                                pageTransitionTick++
+                                                                networkRequests.clear()
+                                                                logs.clear()
+                                                                sourcesList.clear()
+                                                                devToolsLogs.clear()
+                                                                devToolsNetwork.clear()
+                                                                devToolsSources.clear()
+                                                                devToolsCaptureEnabled = false
+                                                                devToolsConsoleCaptureEnabled = false
+                                                                devToolsTargetWebView = null
+                                                                devToolsDomSnapshot = null
+                                                                devToolsSelectedNodePath = null
+                                                                devToolsSelectedStyles = null
+                                                            }
+                                                        }
+
+                                                        override fun onPageCommitVisible(view: WebView?, url: String?) {
+                                                            super.onPageCommitVisible(view, url)
+                                                            view?.let { target ->
+                                                                tabs.firstOrNull { it.webView === target }?.let { committedTab ->
+                                                                    committedTab.hasCommittedContent = true
+                                                                    committedTab.webViewNavigationStopRecovery = false
+                                                                }
+                                                            }
+                                                        }
+
+                                                        override fun doUpdateVisitedHistory(
+                                                            view: WebView?,
+                                                            url: String?,
+                                                            isReload: Boolean
+                                                        ) {
+                                                            super.doUpdateVisitedHistory(view, url, isReload)
+                                                            val target = view ?: return
+                                                            val updatedTab = tabs.firstOrNull { it.webView === target } ?: return
+                                                            val updatedUrl = url ?: target.url.orEmpty()
+                                                            if (!DevToolsInspectionPolicy.shouldResetPageSessionForUrlChange(updatedTab.url, updatedUrl)) return
+                                                            if (updatedTab === currentTab && showDevToolsSheet) {
+                                                                invalidateDevToolsSession()
+                                                                devToolsConsoleMessagesConsent = false
+                                                                devToolsCaptureEnabled = false
+                                                                devToolsConsoleCaptureEnabled = false
+                                                                devToolsTargetWebView = null
+                                                                devToolsLogs.clear()
+                                                                devToolsNetwork.clear()
+                                                                devToolsSources.clear()
+                                                                devToolsDomSnapshot = null
+                                                                devToolsSelectedNodePath = null
+                                                                devToolsSelectedStyles = null
+                                                                devToolsDeviceInfo = null
+                                                            }
+                                                            updatedTab.url = updatedUrl
+                                                            updatedTab.canGoBack = target.canGoBack()
+                                                            updatedTab.canGoForward = target.canGoForward()
+                                                        }
+
+                                                        override fun onPageFinished(view: WebView?, url: String?) {
+                                                            super.onPageFinished(view, url)
+                                                            val finishedTab = view?.let { target -> tabs.firstOrNull { it.webView === target } } ?: return
+                                                            finishedTab.url = url ?: finishedTab.url
+                                                            refreshingTabIds = refreshingTabIdsAfterNavigationEnd(
+                                                                refreshingTabIds,
+                                                                completedTabId = finishedTab.id,
+                                                                isCurrentNavigation = true
+                                                            )
+                                                            if (finishedTab.connectionSecurity.status == ConnectionSecurityStatus.CHECKING) {
+                                                                @Suppress("DEPRECATION")
+                                                                val certificate = view?.certificate
+                                                                finishedTab.connectionSecurity = ConnectionSecurityPolicy.fromWebView(
+                                                                    url = view?.url ?: url ?: finishedTab.url,
+                                                                    pageFinished = true,
+                                                                    certificatePresent = certificate != null,
+                                                                    sslErrorObserved = false,
+                                                                    certificateSubject = certificate?.issuedTo?.cName
+                                                                        ?: certificate?.issuedTo?.dName,
+                                                                    certificateIssuer = certificate?.issuedBy?.cName
+                                                                        ?: certificate?.issuedBy?.dName
+                                                                )
+                                                            }
+                                                            finishedTab.title = view.title ?: "Page"
+                                                            finishedTab.isPageLoading = false
+                                                            finishedTab.hasCommittedContent = true
+                                                            finishedTab.webViewNavigationStopRecovery = false
+                                                            finishedTab.loadProgress = 100
+                                                            finishedTab.canGoBack = view?.canGoBack() == true
+                                                            finishedTab.canGoForward = view?.canGoForward() == true
+                                                            if (finishedTab === currentTab) {
+                                                                pageLoadTime = System.currentTimeMillis() - lastPageStart
+                                                            }
+                                                            if (pendingKeyboardDismissTabId == finishedTab.id) {
+                                                                pendingKeyboardDismissTabId = null
+                                                                if (finishedTab === currentTab) {
+                                                                    WindowInsetsControllerCompat(
+                                                                        this@MainActivity.window,
+                                                                        this@MainActivity.window.decorView
+                                                                    ).hide(WindowInsetsCompat.Type.ime())
+                                                                }
+                                                            }
+
+                                                            // Password manager: inspect only secure pages; authenticate
+                                                            // before displaying or sending a saved login to the page.
+                                                            view?.let { wv ->
+                                                                val pageUrl = wv.url.orEmpty()
+                                                                val pageOrigin = com.click.browser.engine.PasswordOriginPolicy.securePageOrigin(pageUrl)
+                                                                val callbackMatchesPage =
+                                                                    com.click.browser.engine.PasswordOriginPolicy.isSameSecureOrigin(
+                                                                        url.orEmpty(), pageUrl
+                                                                    )
+                                                                if (pageOrigin != null && callbackMatchesPage && !finishedTab.isIncognito) {
+                                                                    wv.evaluateJavascript(
+                                                                        com.click.browser.engine.PasswordDetector.PASSWORD_DETECT_JS,
+                                                                        null
+                                                                    )
+                                                                    scope.launch {
+                                                                        val managerEnabled = try {
+                                                                            com.click.browser.engine.PasswordManager.isEnabled(this@MainActivity)
+                                                                        } catch (_: Exception) { false }
+                                                                        if (!managerEnabled) return@launch
+                                                                        val hasCredential = com.click.browser.engine.PasswordManager.hasForOrigin(
+                                                                            this@MainActivity, pageOrigin
+                                                                        )
+                                                                        if (!hasCredential) return@launch
+                                                                        val isActiveTarget =
+                                                                            finishedTab.webView === wv &&
+                                                                                finishedTab === currentTab &&
+                                                                                tabs.indexOf(finishedTab) == activeTabIndex &&
+                                                                                hasWindowFocus()
+                                                                        val requestContext =
+                                                                            com.click.browser.engine.PasswordAccessPolicy.AutofillContext(
+                                                                                passwordManagerEnabled = managerEnabled,
+                                                                                hasSavedCredential = hasCredential,
+                                                                                isPrivateTab = finishedTab.isIncognito,
+                                                                                isActiveTab = isActiveTarget,
+                                                                                isSecurePage = pageOrigin != null,
+                                                                                isSameOrigin = com.click.browser.engine.PasswordOriginPolicy.isSameSecureOrigin(
+                                                                                    pageUrl, wv.url.orEmpty()
+                                                                                ),
+                                                                                deviceAuthenticationAvailable =
+                                                                                    com.click.browser.engine.PrivateTabLock.canLock(this@MainActivity),
+                                                                                deviceAuthenticated = false
+                                                                            )
+                                                                        if (!com.click.browser.engine.PasswordAccessPolicy
+                                                                                .shouldRequestAutofillAuthentication(requestContext)
+                                                                        ) return@launch
+                                                                        if (!finishedTab.passwordAutofillPromptGuard.markIfNewOrigin(pageOrigin)) {
+                                                                            return@launch
+                                                                        }
+
+                                                                        fun launchAutofillPrompt(manualRetry: Boolean = false) {
+                                                                        val promptStarted = promptPasswordAction(
+                                                                            title = "Use saved password?",
+                                                                            subtitle = "Authenticate to fill the login for ${pageOrigin.removePrefix("https://")}",
+                                                                            onCancelled = {
+                                                                                scope.launch {
+                                                                                    val result = snackbarHostState.showSnackbar(
+                                                                                        message = "Authentication canceled; no password was filled.",
+                                                                                        actionLabel = "Retry",
+                                                                                        duration = SnackbarDuration.Long
+                                                                                    )
+                                                                                    if (result != SnackbarResult.ActionPerformed) return@launch
+                                                                                    if (finishedTab.webView !== wv || finishedTab !== currentTab ||
+                                                                                        tabs.indexOf(finishedTab) != activeTabIndex || !hasWindowFocus()
+                                                                                    ) {
+                                                                                        Toast.makeText(
+                                                                                            this@MainActivity,
+                                                                                            "Switch back to the login tab to retry.",
+                                                                                            Toast.LENGTH_SHORT
+                                                                                        ).show()
+                                                                                        return@launch
+                                                                                    }
+                                                                                    val retryManagerEnabled = try {
+                                                                                        com.click.browser.engine.PasswordManager.isEnabled(this@MainActivity)
+                                                                                    } catch (_: Exception) { false }
+                                                                                    val retryHasCredential = if (retryManagerEnabled) {
+                                                                                        try {
+                                                                                            com.click.browser.engine.PasswordManager.hasForOrigin(
+                                                                                                this@MainActivity, pageOrigin
+                                                                                            )
+                                                                                        } catch (_: Exception) { false }
+                                                                                    } else false
+                                                                                    if (finishedTab.webView !== wv || finishedTab !== currentTab ||
+                                                                                        tabs.indexOf(finishedTab) != activeTabIndex || !hasWindowFocus()
+                                                                                    ) return@launch
+                                                                                    val retryUrl = wv.url.orEmpty()
+                                                                                    val retryContext = requestContext.copy(
+                                                                                        passwordManagerEnabled = retryManagerEnabled,
+                                                                                        hasSavedCredential = retryHasCredential,
+                                                                                        isPrivateTab = finishedTab.isIncognito,
+                                                                                        isActiveTab =
+                                                                                            finishedTab.webView === wv &&
+                                                                                                finishedTab === currentTab &&
+                                                                                                tabs.indexOf(finishedTab) == activeTabIndex &&
+                                                                                                hasWindowFocus(),
+                                                                                        isSecurePage =
+                                                                                            com.click.browser.engine.PasswordOriginPolicy.securePageOrigin(retryUrl) != null,
+                                                                                        isSameOrigin =
+                                                                                            com.click.browser.engine.PasswordOriginPolicy.isSameSecureOrigin(
+                                                                                                pageUrl, retryUrl
+                                                                                            ),
+                                                                                        deviceAuthenticationAvailable =
+                                                                                            com.click.browser.engine.PrivateTabLock.canLock(this@MainActivity)
+                                                                                    )
+                                                                                    if (com.click.browser.engine.PasswordAccessPolicy
+                                                                                            .shouldRequestAutofillAuthentication(retryContext)
+                                                                                    ) {
+                                                                                        launchAutofillPrompt(manualRetry = true)
+                                                                                    } else {
+                                                                                        Toast.makeText(
+                                                                                            this@MainActivity,
+                                                                                            "Page changed or saved login is unavailable.",
+                                                                                            Toast.LENGTH_SHORT
+                                                                                        ).show()
+                                                                                    }
+                                                                                }
+                                                                            }
+                                                                        ) {
+                                                                            scope.launch {
+                                                                                val enabledAfterAuth = try {
+                                                                                    com.click.browser.engine.PasswordManager.isEnabled(this@MainActivity)
+                                                                                } catch (_: Exception) { false }
+                                                                                if (!enabledAfterAuth) return@launch
+                                                                                if (finishedTab.webView !== wv) return@launch
+                                                                                val saved = try {
+                                                                                    com.click.browser.engine.PasswordManager.getForOrigin(
+                                                                                        this@MainActivity, pageOrigin
+                                                                                    )
+                                                                                } catch (_: Exception) { null } ?: return@launch
+                                                                                if (finishedTab.webView !== wv) return@launch
+                                                                                val authContext =
+                                                                                    com.click.browser.engine.PasswordAccessPolicy.AutofillContext(
+                                                                                        passwordManagerEnabled = enabledAfterAuth,
+                                                                                        hasSavedCredential = true,
+                                                                                        isPrivateTab = finishedTab.isIncognito,
+                                                                                        isActiveTab =
+                                                                                            finishedTab.webView === wv &&
+                                                                                                finishedTab === currentTab &&
+                                                                                                tabs.indexOf(finishedTab) == activeTabIndex &&
+                                                                                                hasWindowFocus(),
+                                                                                        isSecurePage =
+                                                                                            com.click.browser.engine.PasswordOriginPolicy.securePageOrigin(
+                                                                                                wv.url.orEmpty()
+                                                                                            ) != null,
+                                                                                        isSameOrigin =
+                                                                                            com.click.browser.engine.PasswordOriginPolicy.isSameSecureOrigin(
+                                                                                                pageUrl, wv.url.orEmpty()
+                                                                                            ),
+                                                                                        deviceAuthenticationAvailable =
+                                                                                            com.click.browser.engine.PrivateTabLock.canLock(this@MainActivity),
+                                                                                        deviceAuthenticated = true
+                                                                                    )
+                                                                                    if (!com.click.browser.engine.PasswordAccessPolicy.mayAutofill(authContext)) {
+                                                                                        return@launch
+                                                                                    }
+                                                                                val js = "(function(expectedOrigin, username, password) {" +
+                                                                                    "if (window.location.origin !== expectedOrigin || window.top !== window) return;" +
+                                                                                    "if (typeof window.__clickFillLogin !== 'function') return;" +
+                                                                                    "window.__clickFillLogin(username, password);" +
+                                                                                    "})(${org.json.JSONObject.quote(pageOrigin)}, " +
+                                                                                    "${org.json.JSONObject.quote(saved.username)}, " +
+                                                                                    "${org.json.JSONObject.quote(saved.password)});"
+                                                                                fun fillIfStillEligible(managerIsEnabled: Boolean) {
+                                                                                    if (finishedTab.webView !== wv) return
+                                                                                    val latestUrl = wv.url.orEmpty()
+                                                                                    val latestContext =
+                                                                                        com.click.browser.engine.PasswordAccessPolicy.AutofillContext(
+                                                                                            passwordManagerEnabled = managerIsEnabled,
+                                                                                            hasSavedCredential = true,
+                                                                                            isPrivateTab = finishedTab.isIncognito,
+                                                                                            isActiveTab =
+                                                                                                finishedTab.webView === wv &&
+                                                                                                    finishedTab === currentTab &&
+                                                                                                    tabs.indexOf(finishedTab) == activeTabIndex &&
+                                                                                                    hasWindowFocus(),
+                                                                                            isSecurePage =
+                                                                                                com.click.browser.engine.PasswordOriginPolicy.securePageOrigin(latestUrl) != null,
+                                                                                            isSameOrigin =
+                                                                                                com.click.browser.engine.PasswordOriginPolicy.isSameSecureOrigin(
+                                                                                                    pageUrl, latestUrl
+                                                                                                ),
+                                                                                            deviceAuthenticationAvailable =
+                                                                                                com.click.browser.engine.PrivateTabLock.canLock(this@MainActivity),
+                                                                                            deviceAuthenticated = true
+                                                                                        )
+                                                                                    if (finishedTab.webView === wv &&
+                                                                                        com.click.browser.engine.PasswordAccessPolicy.mayAutofill(latestContext)
+                                                                                    ) {
+                                                                                        wv.evaluateJavascript(js, null)
+                                                                                    }
+                                                                                }
+                                                                                // Fill now, then retry after a delay for SPA login forms.
+                                                                                wv.post { fillIfStillEligible(enabledAfterAuth) }
+                                                                                wv.postDelayed({
+                                                                                    scope.launch {
+                                                                                        val enabledLater = try {
+                                                                                            com.click.browser.engine.PasswordManager.isEnabled(this@MainActivity)
+                                                                                        } catch (_: Exception) { false }
+                                                                                        if (enabledLater) {
+                                                                                            wv.post { fillIfStillEligible(enabledLater) }
+                                                                                        }
+                                                                                    }
+                                                                                }, 1500)
+                                                                            }
+                                                                        }
+                                                                        if (!promptStarted) {
+                                                                            if (manualRetry) {
+                                                                                Toast.makeText(
+                                                                                    this@MainActivity,
+                                                                                    "Could not start authentication; no password was filled.",
+                                                                                    Toast.LENGTH_SHORT
+                                                                                ).show()
+                                                                            } else {
+                                                                                finishedTab.passwordAutofillPromptGuard.clearIfNotStarted(pageOrigin)
+                                                                            }
+                                                                        }
+                                                                        }
+                                                                        launchAutofillPrompt()
+                                                                    }
+                                                                }
+                                                            }
+
+                                                            // History persistence enforces the captured private-mode flag.
+                                                            if (url != null && url != "about:blank") {
+                                                                val isIncognitoTab = finishedTab.isIncognito
+                                                                scope.launch {
+                                                                    repository.addHistoryItem(
+                                                                        HistoryItem(finishedTab.title, url, System.currentTimeMillis()),
+                                                                        isIncognitoTab = isIncognitoTab
+                                                                    )
+                                                                }
+                                                            }
+
+                                                            // Text scaling (accessibility): apply the per-host
+                                                            // override for this host, else the global default.
+                                                            view?.let { wv ->
+                                                                val host = try {
+                                                                    android.net.Uri.parse(url.orEmpty()).host.orEmpty().lowercase()
+                                                                } catch (_: Exception) { "" }
+                                                                wv.settings.textZoom =
+                                                                    liveHostTextScales[host] ?: liveGlobalTextScale
+                                                                // Accessibility injections: force zoom,
+                                                                // reduced motion, reader mode (opt-in toggles).
+                                                                try {
+                                                                    if (liveForceZoom) {
+                                                                        wv.evaluateJavascript(
+                                                                            com.click.browser.engine.AccessibilityJs.FORCE_ZOOM_JS,
+                                                                            null
+                                                                        )
+                                                                    }
+                                                                    if (liveReducedMotion) {
+                                                                        wv.evaluateJavascript(
+                                                                            com.click.browser.engine.AccessibilityJs.REDUCED_MOTION_JS,
+                                                                            null
+                                                                        )
+                                                                    }
+                                                                    if (liveReaderMode) {
+                                                                        wv.evaluateJavascript(
+                                                                            com.click.browser.engine.AccessibilityJs.READER_MODE_JS,
+                                                                            null
+                                                                        )
+                                                                    }
+                                                                } catch (_: Exception) { /* non-fatal */ }
+                                                            }
+
+                                                            // Visual tab switcher thumbnails: capture the visible
+                                                            // viewport ONCE per page finish, scaled down (360px).
+                                                            // Never continuous, never for incognito tabs (privacy).
+                                                            view?.let { wv ->
+                                                                val finishedTab = tabs.firstOrNull { it.webView === wv }
+                                                                if (finishedTab != null && !finishedTab.isIncognito
+                                                                    && (url == null || !url.startsWith("about:"))
+                                                                ) {
+                                                                    wv.post {
+                                                                        TabThumbnailStore.capture(wv)?.let { bmp ->
+                                                                            // Keep only if this WebView still
+                                                                            // belongs to the same tab.
+                                                                            if (finishedTab.webView === wv) {
+                                                                                TabThumbnailStore.put(finishedTab.id, bmp)
+                                                                                thumbnailVersion++
+                                                                            } else {
+                                                                                bmp.recycle()
+                                                                            }
+                                                                        }
+                                                                    }
+                                                                }
+                                                            }
+
+                                                        }
+
+                                                        override fun shouldInterceptRequest(view: WebView?, request: WebResourceRequest?): WebResourceResponse? {
+                                                            // Passive DevTools observation only; normal requests still
+                                                            // continue through WebView unless Click's existing ad filter blocks them.
+                                                            val shouldBlock = request != null &&
+                                                                this@MainActivity.isAdBlockEnabledForHost(
+                                                                    try { android.net.Uri.parse(view?.url ?: "").host } catch (_: Exception) { null }
+                                                                ) && AdBlocker.shouldBlock(request.url.toString())
+                                                            recordDevToolsRequest(view, request, blockedByClick = shouldBlock)
+                                                            if (shouldBlock) {
+                                                                return WebResourceResponse("text/plain", "UTF-8", null)
+                                                            }
+                                                            return super.shouldInterceptRequest(view, request)
+                                                        }
+
+                                                        override fun onReceivedError(
+                                                            view: WebView?,
+                                                            request: WebResourceRequest?,
+                                                            error: WebResourceError?
+                                                        ) {
+                                                            super.onReceivedError(view, request, error)
+                                                            recordDevToolsLoadError(view, request, error)
+                                                            if (request?.isForMainFrame != true) return
+                                                            val failedTab = view?.let { target -> tabs.firstOrNull { it.webView === target } } ?: return
+                                                            refreshingTabIds = refreshingTabIdsAfterNavigationEnd(
+                                                                refreshingTabIds,
+                                                                completedTabId = failedTab.id,
+                                                                isCurrentNavigation = true
+                                                            )
+                                                            failedTab.connectionSecurity = ConnectionSecurityPolicy.afterWebViewLoadError(
+                                                                failedTab.url, failedTab.connectionSecurity
+                                                            )
+                                                            failedTab.isPageLoading = false
+                                                            failedTab.hasCommittedContent = true
+                                                            failedTab.webViewNavigationStopRecovery = false
+                                                            failedTab.loadProgress = 0
+                                                            val retryUrl = request?.let { browserRetryUrl(it.method, it.url.toString()) }
+                                                            this@MainActivity.showBrowserErrorPage(view, error?.description?.toString(), retryUrl)
+                                                        }
+
+                                                        override fun onReceivedSslError(
+                                                            view: WebView?,
+                                                            handler: android.webkit.SslErrorHandler?,
+                                                            error: android.net.http.SslError?
+                                                        ) {
+                                                            val affectedTab = view?.let { target ->
+                                                                tabs.firstOrNull { it.webView === target }
+                                                            }
+                                                            if (affectedTab != null) {
+                                                                refreshingTabIds = refreshingTabIdsAfterNavigationEnd(
+                                                                    refreshingTabIds,
+                                                                    completedTabId = affectedTab.id,
+                                                                    isCurrentNavigation = true
+                                                                )
+                                                                affectedTab.connectionSecurity = ConnectionSecurityPolicy.fromWebView(
+                                                                    url = affectedTab.url.takeIf { it.isNotBlank() }
+                                                                        ?: view?.url ?: error?.url ?: "",
+                                                                    pageFinished = false,
+                                                                    certificatePresent = false,
+                                                                    sslErrorObserved = true
+                                                                )
+                                                            }
+                                                            // Never bypass an invalid certificate. The default WebView behavior
+                                                            // is to cancel; keep that explicit while surfacing the warning.
+                                                            handler?.cancel()
+                                                        }
+
+                                                        override fun onReceivedHttpError(
+                                                            view: WebView?,
+                                                            request: WebResourceRequest?,
+                                                            errorResponse: WebResourceResponse?
+                                                        ) {
+                                                            super.onReceivedHttpError(view, request, errorResponse)
+                                                            recordDevToolsHttpError(view, request, errorResponse)
+                                                        }
+
+                                                    }
+
+                                                    val devToolsOwnerWebView = this
+                                                    webChromeClient = object : WebChromeClient() {
+
+                                                        // Capture page console output only while the user has selected
+                                                        // Console and explicitly enabled page-message capture. Never write page text to Logcat.
+                                                        override fun onConsoleMessage(consoleMessage: ConsoleMessage?): Boolean {
+                                                            val msg = consoleMessage ?: return true
+                                                            val captureGeneration = devToolsConsoleCaptureGeneration
+                                                            if (!devToolsConsoleCaptureEnabled || devToolsTargetWebView !== devToolsOwnerWebView) return true
+                                                            val type = when (msg.messageLevel()) {
+                                                                ConsoleMessage.MessageLevel.ERROR -> "error"
+                                                                ConsoleMessage.MessageLevel.WARNING -> "warning"
+                                                                ConsoleMessage.MessageLevel.LOG -> "success"
+                                                                // TIP = developer tips from the page, not a
+                                                                // success signal — show as neutral info.
+                                                                ConsoleMessage.MessageLevel.TIP -> "info"
+                                                                ConsoleMessage.MessageLevel.DEBUG -> "info"
+                                                                else -> "info"
+                                                            }
+                                                            // sourceId can be a URL, a filename, or a pseudo-
+                                                            // source like "console-api". Only show it when it
+                                                            // looks like a real file (has an extension).
+                                                            // Strip query params (?a=b) and hash fragments
+                                                            // (#section) — they're noise in a log line.
+                                                            val rawSrc = msg.sourceId()
+                                                                ?.substringAfterLast('/')
+                                                                ?.substringBefore('?')
+                                                                ?.substringBefore('#')
+                                                            val src = rawSrc?.takeIf { it.isNotBlank() && it.contains('.') }
+                                                            val loc = if (src != null) " ($src:${msg.lineNumber()})" else ""
+                                                            // Cap message length so a spammy page can't OOM the log list.
+                                                            val text = msg.message().take(500)
+                                                            addDevToolsLog(
+                                                                LogEntry(type, "$text$loc"),
+                                                                expectedTarget = devToolsOwnerWebView,
+                                                                captureGeneration = captureGeneration
+                                                            )
+                                                            return true
+                                                        }
+
+                                                        // Fullscreen video support (YouTube, Facebook, etc.):
+                                                        // when a page requests fullscreen video, show the
+                                                        // custom view full-screen; hide it when done.
+                                                        private var customView: android.view.View? = null
+                                                        private var customViewCallback: CustomViewCallback? = null
+
+                                                        override fun onShowCustomView(
+                                                            view: android.view.View?,
+                                                            callback: CustomViewCallback?
+                                                        ) {
+                                                            if (view == null) {
+                                                                callback?.onCustomViewHidden()
+                                                                return
+                                                            }
+                                                            if (customView != null) {
+                                                                callback?.onCustomViewHidden()
+                                                                return
+                                                            }
+                                                            val decor = this@MainActivity.window.decorView as? android.view.ViewGroup
+                                                            if (decor == null) {
+                                                                callback?.onCustomViewHidden()
+                                                                return
+                                                            }
+                                                            val params = android.widget.FrameLayout.LayoutParams(
+                                                                android.widget.FrameLayout.LayoutParams.MATCH_PARENT,
+                                                                android.widget.FrameLayout.LayoutParams.MATCH_PARENT
+                                                            )
+                                                            try {
+                                                                decor.addView(view, params)
+                                                            } catch (_: Exception) {
+                                                                callback?.onCustomViewHidden()
+                                                                return
+                                                            }
+                                                            customView = view
+                                                            customViewCallback = callback
+                                                            videoFullscreenActive = true
+                                                            // Register the back-press exit hook.
+                                                            this@MainActivity.exitFullscreenVideo = {
+                                                                onHideCustomView()
+                                                            }
+                                                        }
+
+                                                        override fun onHideCustomView() {
+                                                            customView?.let { v ->
+                                                                (this@MainActivity.window.decorView as? android.view.ViewGroup)?.removeView(v)
+                                                            }
+                                                            customView = null
+                                                            videoFullscreenActive = false
+                                                            this@MainActivity.exitFullscreenVideo = null
+                                                            customViewCallback?.onCustomViewHidden()
+                                                            customViewCallback = null
+
+                                                        }
+
+                                                        override fun onReceivedTitle(view: WebView?, title: String?) {
+                                                            super.onReceivedTitle(view, title)
+                                                            view?.let { target -> tabs.firstOrNull { it.webView === target }?.title = title ?: "Page" }
+                                                        }
+
+                                                        // Page-load progress → thin progress bar under the
+                                                        // top bar (battery-safe: only fires while loading).
+                                                        override fun onProgressChanged(view: WebView?, newProgress: Int) {
+                                                            super.onProgressChanged(view, newProgress)
+                                                            tabs.firstOrNull { it.webView === view }?.loadProgress = newProgress
+                                                        }
+
+                                                        // Click does not request Android location permission.
+                                                        // Fail closed for every origin; no fake coordinates or Allow UI.
+                                                        override fun onGeolocationPermissionsShowPrompt(
+                                                            origin: String?,
+                                                            callback: GeolocationPermissions.Callback?
+                                                        ) {
+                                                            callback?.invoke(origin, false, false)
+                                                        }
+
+                                                        override fun onGeolocationPermissionsHidePrompt() {
+                                                            super.onGeolocationPermissionsHidePrompt()
+                                                        }
+
+                                                        // Only audio capture can enter the per-site microphone
+                                                        // consent flow. Every camera or mixed request remains denied.
+                                                        override fun onPermissionRequest(request: android.webkit.PermissionRequest?) {
+                                                            val permissionRequest = request ?: return
+                                                            val ownerTab = tabs.firstOrNull {
+                                                                it.webView === devToolsOwnerWebView
+                                                            }
+                                                            val resources = permissionRequest.resources?.toSet().orEmpty()
+                                                            if (ownerTab == null ||
+                                                                resources != setOf(android.webkit.PermissionRequest.RESOURCE_AUDIO_CAPTURE)
+                                                            ) {
+                                                                permissionRequest.deny()
+                                                                return
+                                                            }
+                                                            val requestId = java.util.UUID.randomUUID().toString()
+                                                            pendingWebViewMicrophoneRequestIds[permissionRequest] = requestId
+                                                            handleWebsiteMicrophoneRequest(
+                                                                tab = ownerTab,
+                                                                requestedOrigin = permissionRequest.origin.toString(),
+                                                                grant = {
+                                                                    permissionRequest.grant(
+                                                                        arrayOf(android.webkit.PermissionRequest.RESOURCE_AUDIO_CAPTURE)
+                                                                    )
+                                                                },
+                                                                reject = { permissionRequest.deny() },
+                                                                requestId = requestId
+                                                            )
+                                                        }
+
+                                                        override fun onPermissionRequestCanceled(
+                                                            request: android.webkit.PermissionRequest?
+                                                        ) {
+                                                            if (request != null) {
+                                                                pendingWebViewMicrophoneRequestIds
+                                                                    .remove(request)
+                                                                    ?.let(::cancelWebsiteMicrophoneRequest)
+                                                            }
+                                                        }
+                                                    }
+
+                                                    // The DevTools panel does not expose a JavaScript bridge to page content.
+                                                    // This separate legacy bridge is limited to the built-in WebRTC check.
+                                                    addJavascriptInterface(
+                                                        WebRtcTestBridge(
+                                                            onResultCallback = { runId, result ->
+                                                                scope.launch {
+                                                                    if (webrtcRunId == runId) {
+                                                                        webrtcResult = result
+                                                                        webrtcRunId = null
+                                                                        webrtcTestRunning = false
+                                                                    }
+                                                                }
+                                                            }
+                                                        ),
+                                                        "WebRtcTestBridge"
+                                                    )
+
+
+                                                    // Password manager: accept messages only from HTTPS origins.
+                                                    // Unlike addJavascriptInterface, WebMessageListener supplies
+                                                    // the browser-verified source origin and frame status.
+                                                    try {
+                                                        if (WebViewFeature.isFeatureSupported(WebViewFeature.WEB_MESSAGE_LISTENER)) {
+                                                            val passwordWebView = this
+                                                            val passwordBridge = com.click.browser.engine.PasswordBridge { sourceOrigin, credentialOrigin, username, password ->
+                                                                runOnUiThread {
+                                                                    val offerTab = tabs.firstOrNull { it.webView === passwordWebView }
+                                                                        ?: return@runOnUiThread
+                                                                    if (offerTab.isIncognito || tabs.indexOf(offerTab) != activeTabIndex) return@runOnUiThread
+                                                                    if (!com.click.browser.engine.PasswordOriginPolicy.isSameSecureOrigin(
+                                                                            sourceOrigin, passwordWebView.url.orEmpty()
+                                                                        )
+                                                                    ) return@runOnUiThread
+                                                                    if (showPasswordSaveDialog || pendingPasswordSave != null || pendingGeckoPasswordSave != null) return@runOnUiThread
+                                                                    val credentialHost = com.click.browser.engine.PasswordOriginPolicy.hostFromSecureOrigin(
+                                                                        credentialOrigin
+                                                                    ) ?: return@runOnUiThread
+                                                                    scope.launch {
+                                                                        val managerEnabled = try {
+                                                                            com.click.browser.engine.PasswordManager.isEnabled(this@MainActivity)
+                                                                        } catch (_: Exception) { false }
+                                                                        if (!managerEnabled) return@launch
+                                                                        val currentOfferTab = tabs.firstOrNull { it.id == offerTab.id }
+                                                                            ?: return@launch
+                                                                        if (currentOfferTab.isIncognito ||
+                                                                            tabs.indexOf(currentOfferTab) != activeTabIndex ||
+                                                                            !com.click.browser.engine.PasswordOriginPolicy.isSameSecureOrigin(
+                                                                                sourceOrigin, passwordWebView.url.orEmpty()
+                                                                            ) || showPasswordSaveDialog || pendingPasswordSave != null || pendingGeckoPasswordSave != null
+                                                                        ) return@launch
+                                                                        pendingPasswordSave = PendingPasswordSaveOffer(
+                                                                            tabId = currentOfferTab.id,
+                                                                            sourceOrigin = sourceOrigin,
+                                                                            credential = com.click.browser.engine.SavedPassword(
+                                                                                host = credentialHost,
+                                                                                username = username,
+                                                                                password = password,
+                                                                                origin = credentialOrigin
+                                                                            )
+                                                                        )
+                                                                        showPasswordSaveDialog = true
+                                                                    }
+                                                                }
+                                                            }
+                                                            WebViewCompat.addWebMessageListener(
+                                                                this,
+                                                                "PasswordBridge",
+                                                                setOf("https://*"),
+                                                                WebViewCompat.WebMessageListener { messageView, message, sourceOrigin, isMainFrame, _ ->
+                                                                    val origin = sourceOrigin.toString()
+                                                                    if (com.click.browser.engine.PasswordOriginPolicy.isSameSecureOrigin(
+                                                                            origin, messageView.url.orEmpty()
+                                                                        )
+                                                                    ) {
+                                                                        passwordBridge.onMessage(origin, isMainFrame, message)
+                                                                    }
+                                                                }
+                                                            )
+                                                        }
+                                                    } catch (e: Exception) {
+                                                        android.util.Log.w("PasswordManager", "Secure password bridge unavailable", e)
+                                                    }
+
+                                                    // Config settings
+                                                    settings.javaScriptEnabled = javaScriptEnabledGlobal
+                                                    settings.domStorageEnabled = true
+                                                    // Privacy toggles (HTTPS-Only / night mode / data saver);
+                                                    // MIXED_CONTENT_ALWAYS_ALLOW was removed — it contradicted HTTPS-Only.
+                                                    this@MainActivity.applyPrivacyToggles(this)
+                                                    settings.supportZoom()
+                                                    settings.builtInZoomControls = true
+                                                    settings.displayZoomControls = false
+
+                                                            modeManager.applySettings(this, activeMode, forceDesktopMode || liveFlags.desktopDefault)
+                                                            // Sharp View: full-density rendering
+                                                            // (no artificial scale-down) so text
+                                                            // & images stay crisp on high-DPI
+                                                            // screens. Vector icons are already
+                                                            // used throughout the UI.
+                                                            if (liveSharpViewEnabled) setInitialScale(0)
+                                                            // Experimental flags (click://flags) — AFTER mode settings
+                                                            // so user-selected layout/zoom options override mode defaults.
+                                                            // Consistent with the desktopDefault OR above: the flag
+                                                            // participates in the mode decision, then fine-tunes it.
+                                                            this@MainActivity.applyExperimentalFlags(this)
+                                                            // Per-site desktop override for the initial URL.
+                                                            this@MainActivity.applyPerSiteDesktop(this, currentTab.url)
+                                                            this@MainActivity.applyPerSiteSettings(this, currentTab.url)
+                                                            currentTab.webView = this
+                                                            currentTab.browserSession?.let { session ->
+                                                                if (!this@MainActivity.liveBrowserSessions.contains(session)) {
+                                                                    this@MainActivity.liveBrowserSessions.add(session)
+                                                                }
+                                                            }
+                                                            if (!this@MainActivity.liveWebViews.contains(this)) {
+                                                                this@MainActivity.liveWebViews.add(this)
+                                                            }
+
+                                                            setDownloadListener { url, userAgent, contentDisposition, mimeType, _ ->
+                                                                val scheme = try {
+                                                                    android.net.Uri.parse(url).scheme?.lowercase()
+                                                                } catch (_: Exception) { null }
+                                                                if (scheme != "http" && scheme != "https") {
+                                                                    Toast.makeText(this@MainActivity, "This download link is not supported.", Toast.LENGTH_SHORT).show()
+                                                                } else {
+                                                                    val fileName = android.webkit.URLUtil.guessFileName(
+                                                                        url, contentDisposition, mimeType
+                                                                    )
+                                                                    val downloadMode = liveMode
+                                                                    scope.launch {
+                                                                        enqueueAndRecordDownload(
+                                                                            url = url,
+                                                                            fileName = fileName,
+                                                                            userAgent = userAgent,
+                                                                            mode = downloadMode,
+                                                                            mimeType = mimeType
+                                                                        )
+                                                                    }
+                                                                }
+                                                            }
+
+                                                            // WebView has no public native selection-action callback, so it
+                                                            // deliberately offers no selected-text AI action.
+
+                                                            // Long-press context menu (links + images).
+                                                            // Attached once at WebView creation, so it works in
+                                                            // every mode (Simple / Developer / Power / Advance).
+                                                            // requestFocusNodeHref gives both the anchor URL
+                                                            // ("url") and the image source ("src") for the
+                                                            // long-pressed node; HitTestResult is the fallback.
+                                                            // Returning false for plain text keeps the default
+                                                            // text-selection behavior intact.
+                                                            setOnLongClickListener { v ->
+                                                                val wv = v as WebView
+                                                                try {
+                                                                    val handler = android.os.Handler(
+                                                                        android.os.Looper.getMainLooper()
+                                                                    )
+                                                                    val msg = handler.obtainMessage()
+                                                                    wv.requestFocusNodeHref(msg)
+                                                                    val data = msg.data
+                                                                    val hrefUrl = data.getString("url")
+                                                                        ?.takeIf { it.isNotBlank() }
+                                                                    val hrefSrc = data.getString("src")
+                                                                        ?.takeIf { it.isNotBlank() }
+                                                                    if (hrefUrl != null || hrefSrc != null) {
+                                                                        longPressLinkUrl = hrefUrl
+                                                                        longPressImageUrl = hrefSrc
+                                                                        showLongPressMenu = true
+                                                                        true
+                                                                    } else {
+                                                                        val result = wv.hitTestResult
+                                                                        val extra = result.extra
+                                                                            ?.takeIf { it.isNotBlank() }
+                                                                        when (result.type) {
+                                                                            WebView.HitTestResult.SRC_ANCHOR_TYPE -> {
+                                                                                longPressLinkUrl = extra
+                                                                                longPressImageUrl = null
+                                                                                showLongPressMenu = true
+                                                                                true
+                                                                            }
+                                                                            WebView.HitTestResult.IMAGE_TYPE,
+                                                                            WebView.HitTestResult.SRC_IMAGE_ANCHOR_TYPE -> {
+                                                                                longPressImageUrl = extra
+                                                                                longPressLinkUrl = null
+                                                                                showLongPressMenu = true
+                                                                                true
+                                                                            }
+                                                                            else -> false
+                                                                        }
+                                                                    }
+                                                                } catch (_: Exception) {
+                                                                    false
+                                                                }
+                                                            }
+
+                                                            if (currentTab.url != "about:blank") {
+                                                                loadUrl(currentTab.url)
+                                                            }
+                                                        }
+                                                    }
+                                                },
+                                                update = { browserView ->
+                                                    (browserView as? WebView)?.let { webView ->
+                                                        webView.settings.javaScriptEnabled = javaScriptEnabledGlobal
+                                                        // Re-apply privacy toggles with the freshest state on every recomposition
+                                                        this@MainActivity.applyPrivacyToggles(
+                                                            webView,
+                                                            httpsMode,
+                                                            forceNightModeWebsites,
+                                                            dataSaverEnabled
+                                                        )
+                                                        // Re-apply experimental flags too.
+                                                        this@MainActivity.applyExperimentalFlags(webView)
+                                                    }
+                                                }
+                                            )
+                                            if (currentTab.url != "about:blank" && currentTab.isPageLoading && !currentTab.hasCommittedContent) {
+                                                WebsiteProcessingOverlay(
+                                                    theme = theme,
+                                                    site = hostOfUrl(currentTab.url),
+                                                    progress = currentTab.loadProgress,
+                                                    animationsEnabled = flagsUi.tabAnimations && !liveReducedMotion,
+                                                    onCancel = { stopCurrentTabLoading() }
+                                                )
+                                            }
+                                            if (
+                                                currentTab.engine == BrowserTabEngine.WEBVIEW &&
+                                                currentTab.webViewNavigationStopRecovery &&
+                                                !currentTab.hasCommittedContent
+                                            ) {
+                                                Surface(
+                                                    modifier = Modifier
+                                                        .align(Alignment.Center)
+                                                        .padding(horizontal = 20.dp)
+                                                        .fillMaxWidth(),
+                                                    shape = RoundedCornerShape(20.dp),
+                                                    color = theme.surface,
+                                                    tonalElevation = 8.dp
+                                                ) {
+                                                    Column(
+                                                        modifier = Modifier.padding(20.dp),
+                                                        verticalArrangement = Arrangement.spacedBy(10.dp)
+                                                    ) {
+                                                        Text(
+                                                            "Loading stopped",
+                                                            color = theme.onSurface,
+                                                            fontWeight = FontWeight.SemiBold
+                                                        )
+                                                        Text(
+                                                            "Loading stopped before content appeared. Use Back or enter another address; retry isn't offered because the request type is unknown.",
+                                                            color = theme.onSurface.copy(alpha = 0.8f)
+                                                        )
+                                                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                                            if (currentTab.browserSession?.canGoBack() == true) {
+                                                                TextButton(onClick = {
+                                                                    currentTab.webViewNavigationStopRecovery = false
+                                                                    currentTab.browserSession?.goBackIfPossible()
+                                                                }) {
+                                                                    Text("Back")
+                                                                }
+                                                            }
+                                                            TextButton(onClick = {
+                                                                currentTab.webViewNavigationStopRecovery = false
+                                                                val homeDestination = homeUrl()
+                                                                currentTab.url = homeDestination
+                                                                currentTab.browserSession?.loadUrl(homeDestination)
+                                                            }) {
+                                                                Text("Home")
+                                                            }
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                            if (currentTab.engine == BrowserTabEngine.GECKOVIEW &&
+                                                currentTab.rendererRecoveryRequired
+                                            ) {
+                                                Surface(
+                                                    modifier = Modifier
+                                                        .align(Alignment.Center)
+                                                        .padding(horizontal = 20.dp)
+                                                        .fillMaxWidth(),
+                                                    shape = RoundedCornerShape(20.dp),
+                                                    color = theme.surface,
+                                                    tonalElevation = 8.dp
+                                                ) {
+                                                    Column(
+                                                        modifier = Modifier.padding(20.dp),
+                                                        verticalArrangement = Arrangement.spacedBy(10.dp)
+                                                    ) {
+                                                        Text(
+                                                            "This page stopped rendering",
+                                                            color = theme.onSurface,
+                                                            fontWeight = FontWeight.SemiBold
+                                                        )
+                                                        val isExtensionOptionsPage = currentTab.url.startsWith("moz-extension://", ignoreCase = true)
+                                                        Text(
+                                                            if (isExtensionOptionsPage) {
+                                                                "This add-on settings page stopped rendering. Your previous webpage stays open in its own tab; close this tab or reload the settings page."
+                                                            } else {
+                                                                "The page address and browser history are still available. Reload the page or return to the previous page."
+                                                            },
+                                                            color = theme.onSurface.copy(alpha = 0.8f)
+                                                        )
+                                                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                                            if (currentTab.canGoBack) {
+                                                            TextButton(onClick = {
+                                                                    currentTab.browserSession.goBackIfPossible()
+                                                                }) {
+                                                                    Text("Back")
+                                                                }
+                                                            }
+                                                            if (isExtensionOptionsPage && tabs.size > 1) {
+                                                                TextButton(onClick = { closeTabAt(activeTabIndex) }) {
+                                                                    Text("Close tab")
+                                                                }
+                                                            }
+                                                            Button(onClick = {
+                                                                currentTab.browserSession?.reload()
+                                                            }) {
+                                                                Text("Reload")
+                                                            }
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                            val navigationFailure = currentTab.geckoNavigationFailure
+                                            if (currentTab.engine == BrowserTabEngine.GECKOVIEW &&
+                                                !currentTab.rendererRecoveryRequired && navigationFailure != null
+                                            ) {
+                                                Surface(
+                                                    modifier = Modifier
+                                                        .align(Alignment.Center)
+                                                        .padding(horizontal = 20.dp)
+                                                        .fillMaxWidth(),
+                                                    shape = RoundedCornerShape(20.dp),
+                                                    color = theme.surface,
+                                                    tonalElevation = 8.dp
+                                                ) {
+                                                    Column(
+                                                        modifier = Modifier.padding(20.dp),
+                                                        verticalArrangement = Arrangement.spacedBy(10.dp)
+                                                    ) {
+                                                        Text(
+                                                            if (navigationFailure.wasCancelled) "Loading stopped" else "Page couldn't load",
+                                                            color = theme.onSurface,
+                                                            fontWeight = FontWeight.SemiBold
+                                                        )
+                                                        Text(
+                                                            if (navigationFailure.wasCancelled) {
+                                                                "This page did not finish loading, so Click hasn't marked it as loaded. You can go back, open Home, or enter another address."
+                                                            } else {
+                                                                "The page did not finish loading. Check your connection or return to the previous page."
+                                                            },
+                                                            color = theme.onSurface.copy(alpha = 0.8f)
+                                                        )
+                                                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                                            if (currentTab.canGoBack) {
+                                                                TextButton(onClick = {
+                                                                    currentTab.browserSession.goBackIfPossible()
+                                                                }) {
+                                                                    Text("Back")
+                                                                }
+                                                            }
+                                                            navigationFailure.retryUrl?.let { retryUrl ->
+                                                                Button(onClick = {
+                                                                    currentTab.geckoNavigationFailure = null
+                                                                    currentTab.browserSession?.loadUrl(retryUrl)
+                                                                }) {
+                                                                    Text("Retry")
+                                                                }
+                                                            }
+                                                            TextButton(onClick = {
+                                                                currentTab.geckoNavigationFailure = null
+                                                                currentTab.browserSession?.loadUrl(homeUrl())
+                                                            }) {
+                                                                Text("Home")
+                                                            }
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                    }
+                                    } // PageTransitionWrapper
+
+                                // 5. FLOATING DEV DEBUG STATUS OVERLAY + DevTools toggle
+                                // DevTools icon sits at the TOP-RIGHT corner (Prince's
+                                // request); the diagnostics overlay hangs below it.
+                                if (activeMode == BrowserMode.DEVELOPER &&
+                                    currentTab.url.isNotBlank() && currentTab.url != "about:blank" &&
+                                    ModeCapabilityRegistry.availability(
+                                        feature = FeatureId.DEVTOOLS,
+                                        mode = activeMode,
+                                        engine = currentTab.engine,
+                                        hasLoadedPage = currentTabHasLoadedWebPage()
+                                    ).enabled
+                                ) {
+                                    Column(
+                                        modifier = Modifier
+                                            .align(Alignment.TopEnd)
+                                            .padding(12.dp),
+                                        horizontalAlignment = Alignment.End
+                                    ) {
+                                        // DevTools panel toggle — top-right corner.
+                                        IconButton(
+                                            onClick = {
+                                                if (showDevToolsSheet) closeDevToolsPanel()
+                                                else requestDevToolsForCurrentTab()
+                                            },
+                                            modifier = Modifier
+                                                .size(44.dp)
+                                                .background(
+                                                    if (showDevToolsSheet) DevToolsPalette.selected
+                                                    else DevToolsPalette.surface,
+                                                    shape = RoundedCornerShape(12.dp)
+                                                )
+                                        ) {
+                                            Icon(
+                                                Icons.Default.Code,
+                                                contentDescription = "DevTools",
+                                                tint = DevToolsPalette.accent,
+                                                modifier = Modifier.size(22.dp)
+                                            )
+                                        }
+                                        if (showDebugOverlay) {
+                                            Spacer(modifier = Modifier.height(8.dp))
+                                            FloatingDebugOverlay(
+                                                pageLoadTime = pageLoadTime
+                                            )
+                                        }
+                                    }
+                                }
+
+                                // Browsing surface: floating glowing AI button (bottom-right)
+                                // with quick popup (Ask Click AI · Summarize · Translate).
+                                // Hidden in immersive fullscreen and on the home surface.
+                                if (!immersiveMode && !showOverlays) {
+                                    AiQuickFab(
+                                        theme = theme,
+                                        onAskAi = { if (tamperBlocked) showTamperDialog = true else showAiChat = true },
+                                        onSummarize = { if (tamperBlocked) showTamperDialog = true else showAiChat = true },
+                                        onTranslate = { handleFeature(FeatureId.TRANSLATE) },
+                                        modifier = Modifier
+                                            .align(Alignment.BottomEnd)
+                                            .padding(end = 16.dp, bottom = 16.dp)
+                                    )
+                                }
+
+                                // Periodic verified protection-status popup (top-center). One-shot
+                                // fade in/out every ~18s; browsing surface only.
+                                androidx.compose.animation.AnimatedVisibility(
+                                    visible = showPrivacyPopup && !immersiveMode && !showOverlays,
+                                    enter = androidx.compose.animation.fadeIn() +
+                                        androidx.compose.animation.slideInVertically { -it / 2 },
+                                    exit = androidx.compose.animation.fadeOut(),
+                                    modifier = Modifier
+                                        .align(Alignment.TopCenter)
+                                        .windowInsetsPadding(WindowInsets.statusBars)
+                                        .padding(top = 12.dp)
+                                ) {
+                                    Surface(
+                                        shape = RoundedCornerShape(20.dp),
+                                        color = theme.surface.copy(alpha = 0.88f),
+                                        border = BorderStroke(
+                                            1.dp,
+                                            theme.primary.copy(alpha = 0.35f)
+                                        ),
+                                        shadowElevation = 8.dp
+                                    ) {
+                                        Row(
+                                            modifier = Modifier.padding(
+                                                horizontal = 14.dp,
+                                                vertical = 8.dp
+                                            ),
+                                            verticalAlignment = Alignment.CenterVertically
+                                        ) {
+                                            Icon(
+                                                Icons.Default.Shield,
+                                                contentDescription = null,
+                                                tint = if (adBlockStatus.active) {
+                                                    Color(0xFF22C55E)
+                                                } else {
+                                                    theme.onSurface.copy(alpha = 0.45f)
+                                                },
+                                                modifier = Modifier.size(15.dp)
+                                            )
+                                            Spacer(modifier = Modifier.width(6.dp))
+                                            Text(
+                                                adBlockStatus.label,
+                                                color = theme.onSurface,
+                                                fontSize = 12.sp,
+                                                fontWeight = FontWeight.SemiBold
+                                            )
+                                        }
+                                    }
+                                }
+
+                            }
+
                             Column(
                                 modifier = Modifier
                                     .fillMaxSize()
@@ -4797,1901 +6713,10 @@ class MainActivity : FragmentActivity() {
                                         .nestedScroll(toolbarScrollConnection)
                                 ) {
                                     if (currentTab.url == "about:blank") {
-                                        // Overhauled premium dashboard home page
-                                        ClickHomeScreen(
-                                            theme = theme,
-                                            activeMode = activeMode,
-                                            searchEngine = currentSearchEngineSetting,
-                                            adBlockStatusLabel = adBlockStatus.label,
-                                            adBlockStatusActive = adBlockStatus.active,
-                                            homeNewsFeedEnabled = homeNewsFeedEnabled,
-                                            onHomeNewsFeedEnabledChange = { enabled ->
-                                                setHomeNewsFeedEnabled(enabled)
-                                            },
-                                            wallpaperUri = wallpaperUri,
-                                            shieldActive = shieldActive,
-                                            onV9ShieldClick = { showV9Shield = true },
-                                            onShieldToggle = { toggleDnsShield() },
-                                            onGamesClick = { showClickPage = "games" },
-                                            onNavigate = { input ->
-                                                pendingKeyboardDismissTabId = currentTab.id.takeIf {
-                                                    currentTab.engine == BrowserTabEngine.WEBVIEW
-                                                }
-                                                dismissBrowserKeyboard()
-                                                val destination = cleanTrackingUrl(formatUrl(input, currentSearchEngineSetting))
-                                                currentTab.url = destination
-                                                currentTab.browserSession?.loadUrl(destination)
-                                            },
-                                            onOpenAiChat = {
-                                                if (tamperBlocked) showTamperDialog = true else showAiChat = true
-                                            },
-                                            onTranslate = { handleFeature(FeatureId.TRANSLATE) },
-                                            onReaderMode = { handleFeature(FeatureId.READER) },
-                                            onProfileClick = { showSettings = true },
-                                            recentlyClosedTabs = RecentlyClosedTabs.list(activeMode),
-                                            onReopenRecentTab = { reopenClosedTab(it) },
-                                            tabCount = tabs.size,
-                                            onOpenDownloads = { showDownloads = true },
-                                            onOpenDevToolsTab = { tab -> openDevToolsTab(tab) },
-                                            onOpenCookieManager = { showCookieManager = true },
-                                            onOpenPrivacyGuards = { showPrivacyGuards = true },
-                                            onOpenDiagnostics = { showClickDiagnostics = true }
-                                        )
+                                        HomeDashboardContent()
                                     } else {
-                                        // Pull-to-refresh flag: when off, the page renders
-                                        // without the PullToRefreshBox wrapper at all.
-                                        @Composable
-                                        fun RefreshablePage(content: @Composable () -> Unit) {
-                                            val refreshAvailable = currentTab.browserSession != null &&
-                                                pullToRefreshGetUrl(currentTab.url) != null
-                                            if (flagsUi.pullToRefreshEnabled && refreshAvailable) {
-                                                // Start a fresh HTTP(S) GET; do not replay a prior form POST body.
-                                                // Nested-scroll aware: only triggers at the top of the page.
-                                                PullToRefreshBox(
-                                                    isRefreshing = currentTab.id in refreshingTabIds,
-                                                    onRefresh = {
-                                                        val refreshTab = tabs.getOrNull(activeTabIndex) ?: currentTab
-                                                        var refreshDispatchAccepted = false
-                                                        try {
-                                                            refreshDispatchAccepted = startPullToRefresh(
-                                                                navigation = refreshTab.browserSession,
-                                                                currentUrl = refreshTab.url
-                                                            ) {
-                                                                refreshingTabIds = refreshingTabIds + refreshTab.id
-                                                            }
-                                                        } finally {
-                                                            if (!refreshDispatchAccepted) {
-                                                                refreshingTabIds = refreshingTabIds - refreshTab.id
-                                                            }
-                                                        }
-                                                    },
-                                                    modifier = Modifier.fillMaxSize()
-                                                ) {
-                                                    content()
-                                                }
-                                            } else {
-                                                Box(modifier = Modifier.fillMaxSize()) {
-                                                    content()
-                                                }
-                                            }
-                                        }
-                                        RefreshablePage {
-                                        // Adaptive Layout Frame to mimic Laptop / Tablet viewports cleanly
-                                        val emulatorWidthModifier = when (deviceEmulatorMode) {
-                                            "Tablet" -> Modifier.fillMaxHeight().width(768.dp)
-                                            "Desktop" -> Modifier.fillMaxHeight().width(1024.dp)
-                                            else -> Modifier.fillMaxSize()
-                                        }
-
-                                        // Page transition: subtle fade + slide on every
-                                        // navigation start (see PageTransitionWrapper).
-                                        PageTransitionWrapper(
-                                            tick = pageTransitionTick,
-                                            animationsEnabled = flagsUi.tabAnimations
-                                        ) {
-                                        Box(
-                                            modifier = Modifier.fillMaxSize(),
-                                            contentAlignment = Alignment.Center
-                                        ) {
-                                            key(currentTab.id, currentTab.engine, browserSessionGeneration) {
-                                                AndroidView(
-                                                    modifier = emulatorWidthModifier,
-                                                    factory = { ctx ->
-                                                        val existingSession = currentTab.browserSession
-                                                        if (existingSession != null) {
-                                                            existingSession.detachFromParent()
-                                                            existingSession.view
-                                                        } else if (currentTab.engine == BrowserTabEngine.GECKOVIEW) {
-                                                            geckoContextIdsUsedInActivity +=
-                                                                currentTab.pendingGeckoSession?.settings?.contextId
-                                                                    ?: geckoContextIdFor(activeMode)
-                                                            val tabId = currentTab.id
-                                                            var createdGeckoSession: GeckoBrowserTabSession? = null
-                                                            val geckoSession = GeckoBrowserTabSession(
-                                                                context = ctx,
-                                                                selectionActivity = this@MainActivity,
-                                                                runtime = ExtensionBrowserRuntime.get(applicationContext),
-                                                                tabId = tabId,
-                                                                isIncognito = currentTab.isIncognito,
-                                                                mode = activeMode,
-                                                                initialUrl = currentTab.url,
-                                                                initialSessionState = currentTab.geckoSessionState,
-                                                                extensionRouter = if (currentTab.isIncognito) null else normalTabExtensionRouter(),
-                                                                onWebsiteMicrophoneRequest = { requestTabId, origin, grant, reject ->
-                                                                    runOnUiThread {
-                                                                        handleWebsiteMicrophoneRequest(
-                                                                            tab = tabs.firstOrNull { it.id == requestTabId },
-                                                                            requestedOrigin = origin,
-                                                                            grant = grant,
-                                                                            reject = reject
-                                                                        )
-                                                                    }
-                                                                },
-                                                                initialGeckoSession = currentTab.takePendingGeckoSession(),
-                                                                initiallySelected = true,
-                                                                initiallyResumed = lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED),
-                                                                navigationTarget = navigation@{ requestedUrl ->
-                                                                    var targetUrl = cleanTrackingUrl(requestedUrl)
-                                                                    if (targetUrl == "about:blank") return@navigation targetUrl
-                                                                    val approvedOptionsBase = approvedExtensionOptionsBasesByTab[tabId]
-                                                                    if (approvedOptionsBase != null &&
-                                                                        ExtensionInstallPolicy.isSafeExtensionOptionsNavigation(
-                                                                            approvedOptionsBase,
-                                                                            targetUrl
-                                                                        )
-                                                                    ) return@navigation targetUrl
-                                                                    ClickInternalPages.interceptNavigation(targetUrl)?.let { pageKey ->
-                                                                        showClickPage = pageKey
-                                                                        return@navigation null
-                                                                    }
-                                                                    // Website sign-in/OAuth pages stay in this Click tab
-                                                                    // (Prince, 2026-11-10): no Custom Tab / Chrome handoff.
-                                                                    if (!targetUrl.startsWith("http://") && !targetUrl.startsWith("https://")) {
-                                                                        return@navigation null
-                                                                    }
-                                                                    if (targetUrl.startsWith("http://")) {
-                                                                        val host = hostOfUrl(targetUrl)
-                                                                        if (!isIpAddress(host)) {
-                                                                            when (liveHttpsMode) {
-                                                                                "strict" -> if (!liveHttpsStrictExceptions.contains(host)) {
-                                                                                    return@navigation null
-                                                                                }
-                                                                                "standard" -> targetUrl = "https://" + targetUrl.removePrefix("http://")
-                                                                            }
-                                                                        }
-                                                                    }
-                                                                    if (liveMode == BrowserMode.HACK) targetUrl = forceDesktopHost(targetUrl)
-                                                                    targetUrl
-                                                                },
-                                                                wideLayoutForUrl = ::wideLayoutEnabledForUrl,
-                                                                onNavigationBlocked = { blockedUrl ->
-                                                                    val scheme = runCatching {
-                                                                        android.net.Uri.parse(blockedUrl).scheme?.lowercase()
-                                                                    }.getOrNull()
-                                                                    val message = when {
-                                                                        scheme == "http" && liveHttpsMode == "strict" ->
-                                                                            "Blocked by the current HTTPS policy."
-                                                                        scheme == "http" && liveHttpsMode == "standard" ->
-                                                                            "This new window needs a URL adjustment. Open the link in the current tab to apply browser rules."
-                                                                        else -> "This destination is not available in the Gecko tab."
-                                                                    }
-                                                                    Toast.makeText(this@MainActivity, message, Toast.LENGTH_SHORT).show()
-                                                                },
-                                                                onNewSession = { uri, childSession ->
-                                                                    val scheme = runCatching {
-                                                                        android.net.Uri.parse(uri).scheme?.lowercase()
-                                                                    }.getOrNull()
-                                                                    if (scheme !in setOf("http", "https") && uri != "about:blank") {
-                                                                        childSession.close()
-                                                                        null
-                                                                    } else {
-                                                                        val childTab = TabItem(
-                                                                            url = uri,
-                                                                            title = "New Tab",
-                                                                            isIncognito = currentTab.isIncognito,
-                                                                            initialEngine = BrowserTabEngine.GECKOVIEW,
-                                                                            initialGeckoSession = childSession
-                                                                        )
-                                                                        tabs.add(childTab)
-                                                                        activeTabIndex = tabs.lastIndex
-                                                                        org.mozilla.geckoview.GeckoResult.fromValue(childSession)
-                                                                    }
-                                                                },
-                                                                onUrlChanged = { url ->
-                                                                    tabs.firstOrNull { it.id == tabId }?.let { changedTab ->
-                                                                        changedTab.passwordAutofillPromptGuard.onNavigationStarted()
-                                                                        changedTab.url = url
-                                                                    }
-                                                                },
-                                                                onConnectionSecurityChanged = { info ->
-                                                                    val update = {
-                                                                        tabs.firstOrNull { it.id == tabId }
-                                                                            ?.connectionSecurity = info
-                                                                    }
-                                                                    if (android.os.Looper.myLooper() == android.os.Looper.getMainLooper()) update()
-                                                                    else runOnUiThread { update() }
-                                                                },
-                                                                onTitleChanged = { title ->
-                                                                    tabs.firstOrNull { it.id == tabId }?.title = title
-                                                                },
-                                                                onPageLoaded = { url ->
-                                                                    val loadedTab = tabs.firstOrNull { it.id == tabId }
-                                                                    if (loadedTab != null &&
-                                                                        (url.startsWith("http://") || url.startsWith("https://"))
-                                                                    ) {
-                                                                        val title = loadedTab.title.ifBlank { url }
-                                                                        val isIncognitoTab = loadedTab.isIncognito
-                                                                        scope.launch {
-                                                                            repository.addHistoryItem(
-                                                                                HistoryItem(title, url, System.currentTimeMillis()),
-                                                                                isIncognitoTab = isIncognitoTab
-                                                                            )
-                                                                        }
-                                                                    }
-                                                                },
-                                                                onSessionStateChanged = { encodedState ->
-                                                                    val update = {
-                                                                        tabs.firstOrNull { it.id == tabId }
-                                                                            ?.geckoSessionState = encodedState
-                                                                    }
-                                                                    if (android.os.Looper.myLooper() == android.os.Looper.getMainLooper()) update()
-                                                                    else runOnUiThread { update() }
-                                                                },
-                                                                onNavigationStarted = { url, generation ->
-                                                                    val update = {
-                                                                        tabs.firstOrNull { it.id == tabId }?.let { tab ->
-                                                                            if (createdGeckoSession != null && tab.browserSession !== createdGeckoSession) {
-                                                                                return@let
-                                                                            }
-                                                                            if (generation < tab.geckoNavigationGeneration) return@let
-                                                                            tab.geckoNavigationGeneration = generation
-                                                                            tab.url = url
-                                                                            tab.loadProgress = 0
-                                                                            tab.isPageLoading = true
-                                                                            tab.hasCommittedContent = false
-                                                                            tab.geckoNavigationFailure = null
-                                                                        }
-                                                                    }
-                                                                    if (android.os.Looper.myLooper() == android.os.Looper.getMainLooper()) update()
-                                                                    else runOnUiThread { update() }
-                                                                },
-                                                                onProgressChanged = { progress, generation ->
-                                                                    val update = {
-                                                                        tabs.firstOrNull { it.id == tabId }?.let { tab ->
-                                                                            if (createdGeckoSession != null && tab.browserSession !== createdGeckoSession) {
-                                                                                return@let
-                                                                            }
-                                                                            if (tab.geckoNavigationGeneration != generation || !tab.isPageLoading) {
-                                                                                return@let
-                                                                            }
-                                                                            tab.loadProgress = progress
-                                                                        }
-                                                                    }
-                                                                    if (android.os.Looper.myLooper() == android.os.Looper.getMainLooper()) update()
-                                                                    else runOnUiThread { update() }
-                                                                },
-                                                                onPageFirstContentfulPaint = { generation ->
-                                                                    val update = {
-                                                                        tabs.firstOrNull { it.id == tabId }?.let { tab ->
-                                                                            if (createdGeckoSession != null && tab.browserSession !== createdGeckoSession) {
-                                                                                return@let
-                                                                            }
-                                                                            if (!com.click.browser.engine.shouldCommitGeckoContentOnFirstPaint(
-                                                                                    activeGeneration = tab.geckoNavigationGeneration,
-                                                                                    paintedGeneration = generation,
-                                                                                    isLoading = tab.isPageLoading
-                                                                                )
-                                                                            ) return@let
-                                                                            // Keep navigation progress active, but stop covering
-                                                                            // content once Gecko has actually painted the page.
-                                                                            tab.hasCommittedContent = true
-                                                                        }
-                                                                    }
-                                                                    if (android.os.Looper.myLooper() == android.os.Looper.getMainLooper()) update()
-                                                                    else runOnUiThread { update() }
-                                                                },
-                                                                onTabPreviewCaptured = { capturedUrl, bitmap ->
-                                                                    runOnUiThread {
-                                                                        val previewTab = tabs.firstOrNull { it.id == tabId }
-                                                                        val expectedSession = createdGeckoSession
-                                                                        if (expectedSession != null &&
-                                                                            previewTab != null &&
-                                                                            previewTab.browserSession === expectedSession &&
-                                                                            previewTab.engine == BrowserTabEngine.GECKOVIEW &&
-                                                                            !previewTab.isIncognito &&
-                                                                            previewTab.url == capturedUrl
-                                                                        ) {
-                                                                            TabThumbnailStore.put(tabId, bitmap)
-                                                                            thumbnailVersion++
-                                                                        } else {
-                                                                            runCatching { bitmap.recycle() }
-                                                                        }
-                                                                    }
-                                                                },
-                                                                onNavigationStopped = { completion ->
-                                                                    val update = {
-                                                                        tabs.firstOrNull { it.id == tabId }?.let { tab ->
-                                                                            if (createdGeckoSession != null && tab.browserSession !== createdGeckoSession) {
-                                                                                return@let
-                                                                            }
-                                                                            val isCurrentCompletion = completion.isCurrent &&
-                                                                                tab.geckoNavigationGeneration == completion.generation
-                                                                            refreshingTabIds = refreshingTabIdsAfterNavigationEnd(
-                                                                                refreshingTabIds,
-                                                                                completedTabId = tab.id,
-                                                                                isCurrentNavigation = isCurrentCompletion
-                                                                            )
-                                                                            if (!isCurrentCompletion) {
-                                                                                return@let
-                                                                            }
-                                                                            val outcome = completion.outcome
-                                                                            tab.url = completion.url
-                                                                            tab.isPageLoading = false
-                                                                            tab.loadProgress = if (outcome.commitsContent) 100 else 0
-                                                                            tab.hasCommittedContent = outcome.commitsContent
-                                                                            tab.geckoNavigationFailure = outcome.failure
-                                                                        }
-                                                                    }
-                                                                    if (android.os.Looper.myLooper() == android.os.Looper.getMainLooper()) update()
-                                                                    else runOnUiThread { update() }
-                                                                },
-                                                                onCanGoBackChanged = { canGoBack ->
-                                                                    tabs.firstOrNull { it.id == tabId }?.canGoBack = canGoBack
-                                                                },
-                                                                onCanGoForwardChanged = { canGoForward ->
-                                                                    tabs.firstOrNull { it.id == tabId }?.canGoForward = canGoForward
-                                                                },
-                                                                onFullscreenChanged = { active ->
-                                                                    if (tabs.getOrNull(activeTabIndex)?.id == tabId) {
-                                                                        videoFullscreenActive = active
-                                                                        if (active) {
-                                                                            showFeatureMenu = false
-                                                                            showBrowserMenu = false
-                                                                        }
-                                                                        exitFullscreenVideo = if (active) {
-                                                                            { createdGeckoSession?.session?.exitFullScreen() }
-                                                                        } else null
-                                                                    }
-                                                                },
-                                                                onRendererFailure = { event, error ->
-                                                                    runOnUiThread {
-                                                                        val failedTab = tabs.firstOrNull { it.id == tabId }
-                                                                        if (failedTab != null) {
-                                                                            refreshingTabIds = refreshingTabIdsAfterNavigationEnd(
-                                                                                refreshingTabIds,
-                                                                                completedTabId = failedTab.id,
-                                                                                isCurrentNavigation = true
-                                                                            )
-                                                                            failedTab.rendererRecoveryRequired =
-                                                                                geckoRendererRecoveryRequired(
-                                                                                    failedTab.rendererRecoveryRequired,
-                                                                                    event
-                                                                                )
-                                                                            failedTab.isPageLoading = false
-                                                                            failedTab.loadProgress = 0
-                                                                            // A crashed/killed renderer ends any video
-                                                                            // fullscreen session without firing the
-                                                                            // fullscreen-exit callback. Clear the stale
-                                                                            // flag for the visible tab so the system
-                                                                            // bars, bottom nav and the "Normal view"
-                                                                            // exit cannot stay hidden forever.
-                                                                            if (failedTab === tabs.getOrNull(activeTabIndex) && videoFullscreenActive) {
-                                                                                videoFullscreenActive = false
-                                                                                exitFullscreenVideo = null
-                                                                            }
-                                                                        }
-                                                                        val code = when (event) {
-                                                                            GeckoRenderEvent.PROCESS_CRASHED ->
-                                                                                com.click.browser.engine.ClickCatLogCode.GECKO_RENDERER_CRASHED
-                                                                            GeckoRenderEvent.PROCESS_KILLED ->
-                                                                                com.click.browser.engine.ClickCatLogCode.GECKO_RENDERER_KILLED
-                                                                            GeckoRenderEvent.RECOVERY_FAILED ->
-                                                                                com.click.browser.engine.ClickCatLogCode.GECKO_RECOVERY_FAILED
-                                                                            else -> null
-                                                                        }
-                                                                        if (code != null) {
-                                                                            val details = when (event) {
-                                                                                GeckoRenderEvent.PROCESS_CRASHED ->
-                                                                                    "GeckoSession.ContentDelegate.onCrash; automatic recovery exhausted or unavailable; manual retry reopens and restores saved state."
-                                                                                GeckoRenderEvent.PROCESS_KILLED ->
-                                                                                    "GeckoSession.ContentDelegate.onKill; automatic recovery exhausted or unavailable; manual retry reopens and restores saved state."
-                                                                                else ->
-                                                                                    "Session reopen, state restore, or reload failed; bounded exception class/cause and stack frames captured, messages omitted."
-                                                                            }
-                                                                            recordGeckoRendererDiagnostic(
-                                                                                tabId = tabId,
-                                                                                url = failedTab?.url,
-                                                                                code = code,
-                                                                                eventDetails = details,
-                                                                                error = error
-                                                                            )
-                                                                        }
-                                                                    }
-                                                                },
-                                                                onRendererRecovery = { event ->
-                                                                    runOnUiThread {
-                                                                        val recoveringTab = tabs.firstOrNull { it.id == tabId }
-                                                                        val wasRecoveryRequired =
-                                                                            recoveringTab?.rendererRecoveryRequired == true
-                                                                        if (recoveringTab != null) {
-                                                                            recoveringTab.rendererRecoveryRequired =
-                                                                                geckoRendererRecoveryRequired(
-                                                                                    wasRecoveryRequired,
-                                                                                    event
-                                                                                )
-                                                                            if (event == GeckoRenderEvent.FIRST_COMPOSITE && wasRecoveryRequired) {
-                                                                                recoveringTab.hasCommittedContent = true
-                                                                                recoveringTab.isPageLoading = false
-                                                                            }
-                                                                        }
-                                                                        if (event == GeckoRenderEvent.RECOVERY_RETRY_THROTTLED &&
-                                                                            tabs.getOrNull(activeTabIndex)?.id == tabId
-                                                                        ) {
-                                                                            Toast.makeText(
-                                                                                this@MainActivity,
-                                                                                "Repeated renderer failures. Retry is paused temporarily; use Back or close the tab, or try again later.",
-                                                                                Toast.LENGTH_LONG
-                                                                            ).show()
-                                                                        }
-                                                                        val diagnostic = when (event) {
-                                                                            GeckoRenderEvent.RECOVERY_STARTED ->
-                                                                                com.click.browser.engine.ClickCatLogCode.GECKO_RECOVERY_STARTED to
-                                                                                    "Retry requested; reopen the closed GeckoSession, restore saved state, or load the remembered URL."
-                                                                            GeckoRenderEvent.RECOVERY_RELOAD_STARTED ->
-                                                                                com.click.browser.engine.ClickCatLogCode.GECKO_RECOVERY_RELOAD_STARTED to
-                                                                                    "Retry requested on the already-open GeckoSession; a close/open recovery cycle was not needed."
-                                                                            GeckoRenderEvent.RECOVERY_RETRY_THROTTLED ->
-                                                                                com.click.browser.engine.ClickCatLogCode.GECKO_RECOVERY_RETRY_THROTTLED to
-                                                                                    "Retry was withheld after three recent renderer/recovery failures in the rolling 60-second window."
-                                                                            GeckoRenderEvent.FIRST_COMPOSITE -> if (wasRecoveryRequired) {
-                                                                                com.click.browser.engine.ClickCatLogCode.GECKO_RECOVERY_SUCCEEDED to
-                                                                                    "GeckoSession.ContentDelegate.onFirstComposite; recovery frame confirmed and overlay cleared."
-                                                                            } else null
-                                                                            else -> null
-                                                                        }
-                                                                        if (diagnostic != null) {
-                                                                            recordGeckoRendererDiagnostic(
-                                                                                tabId = tabId,
-                                                                                url = recoveringTab?.url,
-                                                                                code = diagnostic.first,
-                                                                                eventDetails = diagnostic.second
-                                                                            )
-                                                                        }
-                                                                    }
-                                                                },
-                                                                onExternalResponse = { response ->
-                                                                    val body = response.body
-                                                                    val scheme = runCatching {
-                                                                        android.net.Uri.parse(response.uri).scheme?.lowercase()
-                                                                    }.getOrNull()
-                                                                    if (body == null || response.statusCode !in 200..299 ||
-                                                                        (scheme != "http" && scheme != "https")
-                                                                    ) {
-                                                                        runCatching { body?.close() }
-                                                                        Toast.makeText(
-                                                                            this@MainActivity,
-                                                                            "This download response cannot be saved.",
-                                                                            Toast.LENGTH_SHORT
-                                                                        ).show()
-                                                                    } else {
-                                                                        response.setReadTimeoutMillis(120_000)
-                                                                        val disposition = response.headers.entries
-                                                                            .firstOrNull { it.key.equals("content-disposition", true) }
-                                                                            ?.value
-                                                                        val mimeType = response.headers.entries
-                                                                            .firstOrNull { it.key.equals("content-type", true) }
-                                                                            ?.value?.substringBefore(';')?.trim()
-                                                                        val contentLengthBytes = response.headers.entries
-                                                                            .firstOrNull { it.key.equals("content-length", true) }
-                                                                            ?.value?.toLongOrNull() ?: -1L
-                                                                        val fileName = android.webkit.URLUtil.guessFileName(
-                                                                            response.uri, disposition, mimeType
-                                                                        )
-                                                                        val downloadMode = liveMode
-                                                                        val downloadContext = applicationContext
-                                                                        val downloadUrl = response.uri
-                                                                        val downloadRepository = BrowserRepository(downloadContext)
-                                                                        DownloadHelper.enqueueResponseInApplicationScope(
-                                                                            context = downloadContext,
-                                                                            responseBody = body,
-                                                                            url = downloadUrl,
-                                                                            fileName = fileName,
-                                                                            mimeType = mimeType,
-                                                                            mode = downloadMode,
-                                                                            totalBytes = contentLengthBytes,
-                                                                            onComplete = { saved ->
-                                                                                if (saved != null) {
-                                                                                    downloadRepository.addDownloadItemFor(
-                                                                                        downloadMode,
-                                                                                        DownloadItem(
-                                                                                            saved.fileName,
-                                                                                            downloadUrl,
-                                                                                            saved.location,
-                                                                                            System.currentTimeMillis()
-                                                                                        )
-                                                                                    )
-                                                                                }
-                                                                            }
-                                                                        )
-                                                                    }
-                                                                },
-                                                                onSelectedText = { selection, pageUrl ->
-                                                                    openSelectedTextForAi(
-                                                                        selection = selection,
-                                                                        sourceTabId = tabId,
-                                                                        sourcePageUrl = pageUrl
-                                                                    )
-                                                                },
-                                                                onTranslateSelectedText = { selection, pageUrl ->
-                                                                    openSelectedTextForTranslation(
-                                                                        selection = selection,
-                                                                        sourceTabId = tabId,
-                                                                        sourcePageUrl = pageUrl
-                                                                    )
-                                                                },
-                                                                onLoginSavePrompt = { promptTabId, promptSession, request ->
-                                                                    val completion = org.mozilla.geckoview.GeckoResult<org.mozilla.geckoview.GeckoSession.PromptDelegate.PromptResponse>()
-                                                                    val option = request.options.firstOrNull()
-                                                                    val login = option?.value
-                                                                    val candidate = login?.let {
-                                                                        com.click.browser.engine.geckoLoginSaveCandidate(
-                                                                            it.origin, it.username, it.password
-                                                                        )
-                                                                    }
-                                                                    if (option == null || candidate == null) {
-                                                                        org.mozilla.geckoview.GeckoResult.fromValue(request.dismiss())
-                                                                    } else {
-                                                                        scope.launch {
-                                                                            val managerEnabled = try {
-                                                                                com.click.browser.engine.PasswordManager.isEnabled(this@MainActivity)
-                                                                            } catch (_: Exception) { false }
-                                                                            val offerTab = tabs.firstOrNull { it.id == promptTabId }
-                                                                            val liveSession = offerTab?.browserSession as? GeckoBrowserTabSession
-                                                                            val activeRegularTab = offerTab != null &&
-                                                                                offerTab.engine == BrowserTabEngine.GECKOVIEW &&
-                                                                                !offerTab.isIncognito &&
-                                                                                currentTab.id == promptTabId &&
-                                                                                tabs.indexOf(offerTab) == activeTabIndex &&
-                                                                                liveSession?.session === promptSession
-                                                                            val canOffer = com.click.browser.engine.shouldOfferGeckoLoginSave(
-                                                                                managerEnabled, activeRegularTab, candidate
-                                                                            ) && !showPasswordSaveDialog &&
-                                                                                pendingPasswordSave == null &&
-                                                                                pendingGeckoPasswordSave == null
-                                                                            if (canOffer) {
-                                                                                pendingGeckoPasswordSave = PendingGeckoPasswordSaveOffer(
-                                                                                    tabId = promptTabId,
-                                                                                    session = promptSession,
-                                                                                    request = request,
-                                                                                    option = option,
-                                                                                    completion = completion,
-                                                                                    credential = com.click.browser.engine.SavedPassword(
-                                                                                        host = candidate.host,
-                                                                                        username = candidate.username,
-                                                                                        password = candidate.password,
-                                                                                        origin = candidate.origin
-                                                                                    )
-                                                                                )
-                                                                                showPasswordSaveDialog = true
-                                                                            } else {
-                                                                                completion.complete(request.dismiss())
-                                                                            }
-                                                                        }
-                                                                        completion
-                                                                    }
-                                                                }
-                                                            )
-                                                            createdGeckoSession = geckoSession
-                                                            currentTab.attachBrowserSession(geckoSession)
-                                                            if (!liveBrowserSessions.contains(geckoSession)) {
-                                                                liveBrowserSessions.add(geckoSession)
-                                                            }
-                                                            geckoSession.setSelected(true)
-                                                            geckoSession.view
-                                                        } else {
-                                                            WebView(ctx).apply {
-                                                                webViewClient = object : WebViewClient() {
-                                                                    // Safe Browsing interstitial (Click's own premium UI).
-                                                                    // Framework API 27+; kept on plain WebViewClient (NOT the
-                                                                    // Compat wrapper — Compat's SHOULD_OVERRIDE_WITH_REDIRECTS
-                                                                    // caused redirect reload loops that broke page scrolling).
-                                                                    @RequiresApi(android.os.Build.VERSION_CODES.O_MR1)
-                                                                    override fun onSafeBrowsingHit(
-                                                                        view: WebView,
-                                                                        request: WebResourceRequest,
-                                                                        threatType: Int,
-                                                                        callback: android.webkit.SafeBrowsingResponse
-                                                                    ) {
-                                                                        val url = request.url?.toString() ?: ""
-                                                                        com.click.browser.engine.SafeBrowsingManager.reportHit(
-                                                                            url, threatType, callback
-                                                                        )
-                                                                    }
-
-                                                                    override fun shouldOverrideUrlLoading(view: WebView?, request: WebResourceRequest?): Boolean {
-                                                                        // Never hijack subframes; never manually re-load a redirect
-                                                                        // (reload loops reset scroll position — page feels unscrollable).
-                                                                        if (request != null && !request.isForMainFrame) return false
-                                                                        var urlStr = request?.url?.toString() ?: ""
-                                                                        // Query-param stripping (Brave-style): drop tracking
-                                                                        // params before anything else touches the URL.
-                                                                        urlStr = cleanTrackingUrl(urlStr)
-                                                                        // PDF: offer in-app viewing instead of navigating.
-                                                                        if (isPdfUrl(urlStr)) {
-                                                                            pdfOfferUrl = urlStr
-                                                                            return true
-                                                                        }
-                                                                        // Website sign-in/OAuth pages load in this tab like any
-                                                                        // other page (no Chrome/Custom Tab handoff).
-                                                                        if (request != null && request.isRedirect) return false
-                                                                        // HTTPS mode handling FIRST (so http://click://
-                                                                        // can't bypass it). Standard upgrades http->https;
-                                                                        // Strict BLOCKS plain-http unless the host is
-                                                                        // in the per-site exception list; Off allows it.
-                                                                        // IP-ADDRESS hosts are NEVER upgraded or blocked:
-                                                                        // most IP servers (e.g. 182.180.50.52) have no TLS
-                                                                        // cert, so upgrading breaks them. HTTP loads directly.
-                                                                        if (urlStr.startsWith("http://")) {
-                                                                            val ipHost = hostOfUrl(urlStr)
-                                                                            if (!isIpAddress(ipHost)) {
-                                                                                when (liveHttpsMode) {
-                                                                                    "strict" -> {
-                                                                                        val host = ipHost
-                                                                                        if (!liveHttpsStrictExceptions.contains(host)) {
-                                                                                            showHttpsBlockedPage(view, urlStr, host)
-                                                                                            return true
-                                                                                        }
-                                                                                    }
-                                                                                    "standard" -> {
-                                                                                        urlStr = "https://" + urlStr.removePrefix("http://")
-                                                                                    }
-                                                                                }
-                                                                            }
-                                                                        }
-                                                                        // Power mode host preference: some sites redirect to a
-                                                                        // mobile-specific subdomain. Keep the selected host; wide
-                                                                        // layout does not change the WebView identity.
-                                                                        // so Power mode stays on the desktop host.
-                                                                        if (liveMode == BrowserMode.HACK) {
-                                                                            urlStr = forceDesktopHost(urlStr)
-                                                                        }
-                                                                        // click:// internal pages (chrome://-style): open natively.
-                                                                        ClickInternalPages.interceptNavigation(urlStr)?.let { pageKey ->
-                                                                            showClickPage = pageKey
-                                                                            return true
-                                                                        }
-                                                                        if (urlStr.startsWith("http://") || urlStr.startsWith("https://")) {
-                                                                            // Apply viewport/layout settings before loading the page.
-                                                                            if (view != null) this@MainActivity.applyPerSiteDesktop(view, urlStr)
-                                                                            if (view != null) this@MainActivity.applyPerSiteSettings(view, urlStr)
-                                                                            // Optional DNT/GPC privacy signals ride on
-                                                                            // navigations when enabled.
-                                                                            val navHeaders = mutableMapOf<String, String>()
-                                                                            if (liveFlags.dntHeader || liveDntEnabled) navHeaders["DNT"] = "1"
-                                                                            if (liveGpcEnabled) navHeaders["Sec-GPC"] = "1"
-                                                                            if (navHeaders.isNotEmpty()) {
-                                                                                view?.loadUrl(urlStr, navHeaders)
-                                                                            } else {
-                                                                                view?.loadUrl(urlStr)
-                                                                            }
-                                                                            return true
-                                                                        }
-                                                                        return false
-                                                                    }
-
-                                                                    @Suppress("Deprecated")
-                                                                    override fun shouldOverrideUrlLoading(view: WebView?, url: String?): Boolean {
-                                                                        var urlStr = url ?: ""
-                                                                        // Query-param stripping (Brave-style).
-                                                                        urlStr = cleanTrackingUrl(urlStr)
-                                                                        // Sign-in/OAuth pages stay in this tab (no handoff).
-                                                                        // HTTPS mode handling FIRST (see above).
-                                                                        // PDF: offer in-app viewing instead of navigating.
-                                                                        if (isPdfUrl(urlStr)) {
-                                                                            pdfOfferUrl = urlStr
-                                                                            return true
-                                                                        }
-                                                                        if (urlStr.startsWith("http://")) {
-                                                                            // IP hosts never upgraded/blocked (see above).
-                                                                            val ipHost2 = hostOfUrl(urlStr)
-                                                                            if (!isIpAddress(ipHost2)) {
-                                                                                when (liveHttpsMode) {
-                                                                                    "strict" -> {
-                                                                                        val host = ipHost2
-                                                                                        if (!liveHttpsStrictExceptions.contains(host)) {
-                                                                                            showHttpsBlockedPage(view, urlStr, host)
-                                                                                            return true
-                                                                                        }
-                                                                                    }
-                                                                                    "standard" -> {
-                                                                                        urlStr = "https://" + urlStr.removePrefix("http://")
-                                                                                    }
-                                                                                }
-                                                                            }
-                                                                        }
-                                                                        // Power mode desktop host preference (see above).
-                                                                        if (liveMode == BrowserMode.HACK) {
-                                                                            urlStr = forceDesktopHost(urlStr)
-                                                                        }
-                                                                        // click:// internal pages (chrome://-style): open natively.
-                                                                        ClickInternalPages.interceptNavigation(urlStr)?.let { pageKey ->
-                                                                            showClickPage = pageKey
-                                                                            return true
-                                                                        }
-                                                                        if (urlStr.startsWith("http://") || urlStr.startsWith("https://")) {
-                                                                            if (view != null) this@MainActivity.applyPerSiteDesktop(view, urlStr)
-                                                                            if (view != null) this@MainActivity.applyPerSiteSettings(view, urlStr)
-                                                                            // Optional DNT/GPC signals ride on navigations
-                                                                            // whenever enabled.
-                                                                            val navHeaders = mutableMapOf<String, String>()
-                                                                            if (liveFlags.dntHeader || liveDntEnabled) navHeaders["DNT"] = "1"
-                                                                            if (liveGpcEnabled) navHeaders["Sec-GPC"] = "1"
-                                                                            if (navHeaders.isNotEmpty()) {
-                                                                                view?.loadUrl(urlStr, navHeaders)
-                                                                            } else {
-                                                                                view?.loadUrl(urlStr)
-                                                                            }
-                                                                            return true
-                                                                        }
-                                                                        return false
-                                                                    }
-
-                                                                    override fun onPageStarted(view: WebView?, url: String?, favicon: Bitmap?) {
-                                                                super.onPageStarted(view, url, favicon)
-                                                                // Block WebRTC in WebView tabs (private
-                                                                // tabs use WebView by default; any tab
-                                                                // switched to the WebView engine lands
-                                                                // here too): earliest hook WebView
-                                                                // offers. GeckoView tabs are covered by
-                                                                // the built-in guard extension instead
-                                                                // (see WebRtcGuard). The script itself
-                                                                // bails on non-http(s) schemes, so skip
-                                                                // evaluating it there entirely.
-                                                                if (liveWebRtcBlocked &&
-                                                                    (url?.startsWith("http://") == true ||
-                                                                        url?.startsWith("https://") == true)
-                                                                ) {
-                                                                    view?.evaluateJavascript(
-                                                                        com.click.browser.engine.PrivacyGuards.WEBRTC_BLOCK_JS, null
-                                                                    )
-                                                                }
-                                                                val loadingTab = view?.let { target -> tabs.firstOrNull { it.webView === target } } ?: return
-                                                                loadingTab.passwordAutofillPromptGuard.onNavigationStarted()
-                                                                loadingTab.url = url ?: ""
-                                                                loadingTab.connectionSecurity = ConnectionSecurityPolicy.checking(loadingTab.url)
-                                                                loadingTab.isPageLoading = true
-                                                                loadingTab.hasCommittedContent = false
-                                                                loadingTab.webViewNavigationStopRecovery = false
-                                                                loadingTab.loadProgress = 0
-                                                                loadingTab.canGoBack = view?.canGoBack() == true
-                                                                loadingTab.canGoForward = view?.canGoForward() == true
-                                                                if (loadingTab === currentTab) {
-                                                                    invalidateDevToolsSession()
-                                                                    devToolsConsoleMessagesConsent = false
-                                                                    lastPageStart = System.currentTimeMillis()
-                                                                    pageTransitionTick++
-                                                                    networkRequests.clear()
-                                                                    logs.clear()
-                                                                    sourcesList.clear()
-                                                                    devToolsLogs.clear()
-                                                                    devToolsNetwork.clear()
-                                                                    devToolsSources.clear()
-                                                                    devToolsCaptureEnabled = false
-                                                                    devToolsConsoleCaptureEnabled = false
-                                                                    devToolsTargetWebView = null
-                                                                    devToolsDomSnapshot = null
-                                                                    devToolsSelectedNodePath = null
-                                                                    devToolsSelectedStyles = null
-                                                                }
-                                                            }
-
-                                                            override fun onPageCommitVisible(view: WebView?, url: String?) {
-                                                                super.onPageCommitVisible(view, url)
-                                                                view?.let { target ->
-                                                                    tabs.firstOrNull { it.webView === target }?.let { committedTab ->
-                                                                        committedTab.hasCommittedContent = true
-                                                                        committedTab.webViewNavigationStopRecovery = false
-                                                                    }
-                                                                }
-                                                            }
-
-                                                            override fun doUpdateVisitedHistory(
-                                                                view: WebView?,
-                                                                url: String?,
-                                                                isReload: Boolean
-                                                            ) {
-                                                                super.doUpdateVisitedHistory(view, url, isReload)
-                                                                val target = view ?: return
-                                                                val updatedTab = tabs.firstOrNull { it.webView === target } ?: return
-                                                                val updatedUrl = url ?: target.url.orEmpty()
-                                                                if (!DevToolsInspectionPolicy.shouldResetPageSessionForUrlChange(updatedTab.url, updatedUrl)) return
-                                                                if (updatedTab === currentTab && showDevToolsSheet) {
-                                                                    invalidateDevToolsSession()
-                                                                    devToolsConsoleMessagesConsent = false
-                                                                    devToolsCaptureEnabled = false
-                                                                    devToolsConsoleCaptureEnabled = false
-                                                                    devToolsTargetWebView = null
-                                                                    devToolsLogs.clear()
-                                                                    devToolsNetwork.clear()
-                                                                    devToolsSources.clear()
-                                                                    devToolsDomSnapshot = null
-                                                                    devToolsSelectedNodePath = null
-                                                                    devToolsSelectedStyles = null
-                                                                    devToolsDeviceInfo = null
-                                                                }
-                                                                updatedTab.url = updatedUrl
-                                                                updatedTab.canGoBack = target.canGoBack()
-                                                                updatedTab.canGoForward = target.canGoForward()
-                                                            }
-
-                                                            override fun onPageFinished(view: WebView?, url: String?) {
-                                                                super.onPageFinished(view, url)
-                                                                val finishedTab = view?.let { target -> tabs.firstOrNull { it.webView === target } } ?: return
-                                                                finishedTab.url = url ?: finishedTab.url
-                                                                refreshingTabIds = refreshingTabIdsAfterNavigationEnd(
-                                                                    refreshingTabIds,
-                                                                    completedTabId = finishedTab.id,
-                                                                    isCurrentNavigation = true
-                                                                )
-                                                                if (finishedTab.connectionSecurity.status == ConnectionSecurityStatus.CHECKING) {
-                                                                    @Suppress("DEPRECATION")
-                                                                    val certificate = view?.certificate
-                                                                    finishedTab.connectionSecurity = ConnectionSecurityPolicy.fromWebView(
-                                                                        url = view?.url ?: url ?: finishedTab.url,
-                                                                        pageFinished = true,
-                                                                        certificatePresent = certificate != null,
-                                                                        sslErrorObserved = false,
-                                                                        certificateSubject = certificate?.issuedTo?.cName
-                                                                            ?: certificate?.issuedTo?.dName,
-                                                                        certificateIssuer = certificate?.issuedBy?.cName
-                                                                            ?: certificate?.issuedBy?.dName
-                                                                    )
-                                                                }
-                                                                finishedTab.title = view.title ?: "Page"
-                                                                finishedTab.isPageLoading = false
-                                                                finishedTab.hasCommittedContent = true
-                                                                finishedTab.webViewNavigationStopRecovery = false
-                                                                finishedTab.loadProgress = 100
-                                                                finishedTab.canGoBack = view?.canGoBack() == true
-                                                                finishedTab.canGoForward = view?.canGoForward() == true
-                                                                if (finishedTab === currentTab) {
-                                                                    pageLoadTime = System.currentTimeMillis() - lastPageStart
-                                                                }
-                                                                if (pendingKeyboardDismissTabId == finishedTab.id) {
-                                                                    pendingKeyboardDismissTabId = null
-                                                                    if (finishedTab === currentTab) {
-                                                                        WindowInsetsControllerCompat(
-                                                                            this@MainActivity.window,
-                                                                            this@MainActivity.window.decorView
-                                                                        ).hide(WindowInsetsCompat.Type.ime())
-                                                                    }
-                                                                }
-
-                                                                // Password manager: inspect only secure pages; authenticate
-                                                                // before displaying or sending a saved login to the page.
-                                                                view?.let { wv ->
-                                                                    val pageUrl = wv.url.orEmpty()
-                                                                    val pageOrigin = com.click.browser.engine.PasswordOriginPolicy.securePageOrigin(pageUrl)
-                                                                    val callbackMatchesPage =
-                                                                        com.click.browser.engine.PasswordOriginPolicy.isSameSecureOrigin(
-                                                                            url.orEmpty(), pageUrl
-                                                                        )
-                                                                    if (pageOrigin != null && callbackMatchesPage && !finishedTab.isIncognito) {
-                                                                        wv.evaluateJavascript(
-                                                                            com.click.browser.engine.PasswordDetector.PASSWORD_DETECT_JS,
-                                                                            null
-                                                                        )
-                                                                        scope.launch {
-                                                                            val managerEnabled = try {
-                                                                                com.click.browser.engine.PasswordManager.isEnabled(this@MainActivity)
-                                                                            } catch (_: Exception) { false }
-                                                                            if (!managerEnabled) return@launch
-                                                                            val hasCredential = com.click.browser.engine.PasswordManager.hasForOrigin(
-                                                                                this@MainActivity, pageOrigin
-                                                                            )
-                                                                            if (!hasCredential) return@launch
-                                                                            val isActiveTarget =
-                                                                                finishedTab.webView === wv &&
-                                                                                    finishedTab === currentTab &&
-                                                                                    tabs.indexOf(finishedTab) == activeTabIndex &&
-                                                                                    hasWindowFocus()
-                                                                            val requestContext =
-                                                                                com.click.browser.engine.PasswordAccessPolicy.AutofillContext(
-                                                                                    passwordManagerEnabled = managerEnabled,
-                                                                                    hasSavedCredential = hasCredential,
-                                                                                    isPrivateTab = finishedTab.isIncognito,
-                                                                                    isActiveTab = isActiveTarget,
-                                                                                    isSecurePage = pageOrigin != null,
-                                                                                    isSameOrigin = com.click.browser.engine.PasswordOriginPolicy.isSameSecureOrigin(
-                                                                                        pageUrl, wv.url.orEmpty()
-                                                                                    ),
-                                                                                    deviceAuthenticationAvailable =
-                                                                                        com.click.browser.engine.PrivateTabLock.canLock(this@MainActivity),
-                                                                                    deviceAuthenticated = false
-                                                                                )
-                                                                            if (!com.click.browser.engine.PasswordAccessPolicy
-                                                                                    .shouldRequestAutofillAuthentication(requestContext)
-                                                                            ) return@launch
-                                                                            if (!finishedTab.passwordAutofillPromptGuard.markIfNewOrigin(pageOrigin)) {
-                                                                                return@launch
-                                                                            }
-
-                                                                            fun launchAutofillPrompt(manualRetry: Boolean = false) {
-                                                                            val promptStarted = promptPasswordAction(
-                                                                                title = "Use saved password?",
-                                                                                subtitle = "Authenticate to fill the login for ${pageOrigin.removePrefix("https://")}",
-                                                                                onCancelled = {
-                                                                                    scope.launch {
-                                                                                        val result = snackbarHostState.showSnackbar(
-                                                                                            message = "Authentication canceled; no password was filled.",
-                                                                                            actionLabel = "Retry",
-                                                                                            duration = SnackbarDuration.Long
-                                                                                        )
-                                                                                        if (result != SnackbarResult.ActionPerformed) return@launch
-                                                                                        if (finishedTab.webView !== wv || finishedTab !== currentTab ||
-                                                                                            tabs.indexOf(finishedTab) != activeTabIndex || !hasWindowFocus()
-                                                                                        ) {
-                                                                                            Toast.makeText(
-                                                                                                this@MainActivity,
-                                                                                                "Switch back to the login tab to retry.",
-                                                                                                Toast.LENGTH_SHORT
-                                                                                            ).show()
-                                                                                            return@launch
-                                                                                        }
-                                                                                        val retryManagerEnabled = try {
-                                                                                            com.click.browser.engine.PasswordManager.isEnabled(this@MainActivity)
-                                                                                        } catch (_: Exception) { false }
-                                                                                        val retryHasCredential = if (retryManagerEnabled) {
-                                                                                            try {
-                                                                                                com.click.browser.engine.PasswordManager.hasForOrigin(
-                                                                                                    this@MainActivity, pageOrigin
-                                                                                                )
-                                                                                            } catch (_: Exception) { false }
-                                                                                        } else false
-                                                                                        if (finishedTab.webView !== wv || finishedTab !== currentTab ||
-                                                                                            tabs.indexOf(finishedTab) != activeTabIndex || !hasWindowFocus()
-                                                                                        ) return@launch
-                                                                                        val retryUrl = wv.url.orEmpty()
-                                                                                        val retryContext = requestContext.copy(
-                                                                                            passwordManagerEnabled = retryManagerEnabled,
-                                                                                            hasSavedCredential = retryHasCredential,
-                                                                                            isPrivateTab = finishedTab.isIncognito,
-                                                                                            isActiveTab =
-                                                                                                finishedTab.webView === wv &&
-                                                                                                    finishedTab === currentTab &&
-                                                                                                    tabs.indexOf(finishedTab) == activeTabIndex &&
-                                                                                                    hasWindowFocus(),
-                                                                                            isSecurePage =
-                                                                                                com.click.browser.engine.PasswordOriginPolicy.securePageOrigin(retryUrl) != null,
-                                                                                            isSameOrigin =
-                                                                                                com.click.browser.engine.PasswordOriginPolicy.isSameSecureOrigin(
-                                                                                                    pageUrl, retryUrl
-                                                                                                ),
-                                                                                            deviceAuthenticationAvailable =
-                                                                                                com.click.browser.engine.PrivateTabLock.canLock(this@MainActivity)
-                                                                                        )
-                                                                                        if (com.click.browser.engine.PasswordAccessPolicy
-                                                                                                .shouldRequestAutofillAuthentication(retryContext)
-                                                                                        ) {
-                                                                                            launchAutofillPrompt(manualRetry = true)
-                                                                                        } else {
-                                                                                            Toast.makeText(
-                                                                                                this@MainActivity,
-                                                                                                "Page changed or saved login is unavailable.",
-                                                                                                Toast.LENGTH_SHORT
-                                                                                            ).show()
-                                                                                        }
-                                                                                    }
-                                                                                }
-                                                                            ) {
-                                                                                scope.launch {
-                                                                                    val enabledAfterAuth = try {
-                                                                                        com.click.browser.engine.PasswordManager.isEnabled(this@MainActivity)
-                                                                                    } catch (_: Exception) { false }
-                                                                                    if (!enabledAfterAuth) return@launch
-                                                                                    if (finishedTab.webView !== wv) return@launch
-                                                                                    val saved = try {
-                                                                                        com.click.browser.engine.PasswordManager.getForOrigin(
-                                                                                            this@MainActivity, pageOrigin
-                                                                                        )
-                                                                                    } catch (_: Exception) { null } ?: return@launch
-                                                                                    if (finishedTab.webView !== wv) return@launch
-                                                                                    val authContext =
-                                                                                        com.click.browser.engine.PasswordAccessPolicy.AutofillContext(
-                                                                                            passwordManagerEnabled = enabledAfterAuth,
-                                                                                            hasSavedCredential = true,
-                                                                                            isPrivateTab = finishedTab.isIncognito,
-                                                                                            isActiveTab =
-                                                                                                finishedTab.webView === wv &&
-                                                                                                    finishedTab === currentTab &&
-                                                                                                    tabs.indexOf(finishedTab) == activeTabIndex &&
-                                                                                                    hasWindowFocus(),
-                                                                                            isSecurePage =
-                                                                                                com.click.browser.engine.PasswordOriginPolicy.securePageOrigin(
-                                                                                                    wv.url.orEmpty()
-                                                                                                ) != null,
-                                                                                            isSameOrigin =
-                                                                                                com.click.browser.engine.PasswordOriginPolicy.isSameSecureOrigin(
-                                                                                                    pageUrl, wv.url.orEmpty()
-                                                                                                ),
-                                                                                            deviceAuthenticationAvailable =
-                                                                                                com.click.browser.engine.PrivateTabLock.canLock(this@MainActivity),
-                                                                                            deviceAuthenticated = true
-                                                                                        )
-                                                                                        if (!com.click.browser.engine.PasswordAccessPolicy.mayAutofill(authContext)) {
-                                                                                            return@launch
-                                                                                        }
-                                                                                    val js = "(function(expectedOrigin, username, password) {" +
-                                                                                        "if (window.location.origin !== expectedOrigin || window.top !== window) return;" +
-                                                                                        "if (typeof window.__clickFillLogin !== 'function') return;" +
-                                                                                        "window.__clickFillLogin(username, password);" +
-                                                                                        "})(${org.json.JSONObject.quote(pageOrigin)}, " +
-                                                                                        "${org.json.JSONObject.quote(saved.username)}, " +
-                                                                                        "${org.json.JSONObject.quote(saved.password)});"
-                                                                                    fun fillIfStillEligible(managerIsEnabled: Boolean) {
-                                                                                        if (finishedTab.webView !== wv) return
-                                                                                        val latestUrl = wv.url.orEmpty()
-                                                                                        val latestContext =
-                                                                                            com.click.browser.engine.PasswordAccessPolicy.AutofillContext(
-                                                                                                passwordManagerEnabled = managerIsEnabled,
-                                                                                                hasSavedCredential = true,
-                                                                                                isPrivateTab = finishedTab.isIncognito,
-                                                                                                isActiveTab =
-                                                                                                    finishedTab.webView === wv &&
-                                                                                                        finishedTab === currentTab &&
-                                                                                                        tabs.indexOf(finishedTab) == activeTabIndex &&
-                                                                                                        hasWindowFocus(),
-                                                                                                isSecurePage =
-                                                                                                    com.click.browser.engine.PasswordOriginPolicy.securePageOrigin(latestUrl) != null,
-                                                                                                isSameOrigin =
-                                                                                                    com.click.browser.engine.PasswordOriginPolicy.isSameSecureOrigin(
-                                                                                                        pageUrl, latestUrl
-                                                                                                    ),
-                                                                                                deviceAuthenticationAvailable =
-                                                                                                    com.click.browser.engine.PrivateTabLock.canLock(this@MainActivity),
-                                                                                                deviceAuthenticated = true
-                                                                                            )
-                                                                                        if (finishedTab.webView === wv &&
-                                                                                            com.click.browser.engine.PasswordAccessPolicy.mayAutofill(latestContext)
-                                                                                        ) {
-                                                                                            wv.evaluateJavascript(js, null)
-                                                                                        }
-                                                                                    }
-                                                                                    // Fill now, then retry after a delay for SPA login forms.
-                                                                                    wv.post { fillIfStillEligible(enabledAfterAuth) }
-                                                                                    wv.postDelayed({
-                                                                                        scope.launch {
-                                                                                            val enabledLater = try {
-                                                                                                com.click.browser.engine.PasswordManager.isEnabled(this@MainActivity)
-                                                                                            } catch (_: Exception) { false }
-                                                                                            if (enabledLater) {
-                                                                                                wv.post { fillIfStillEligible(enabledLater) }
-                                                                                            }
-                                                                                        }
-                                                                                    }, 1500)
-                                                                                }
-                                                                            }
-                                                                            if (!promptStarted) {
-                                                                                if (manualRetry) {
-                                                                                    Toast.makeText(
-                                                                                        this@MainActivity,
-                                                                                        "Could not start authentication; no password was filled.",
-                                                                                        Toast.LENGTH_SHORT
-                                                                                    ).show()
-                                                                                } else {
-                                                                                    finishedTab.passwordAutofillPromptGuard.clearIfNotStarted(pageOrigin)
-                                                                                }
-                                                                            }
-                                                                            }
-                                                                            launchAutofillPrompt()
-                                                                        }
-                                                                    }
-                                                                }
-
-                                                                // History persistence enforces the captured private-mode flag.
-                                                                if (url != null && url != "about:blank") {
-                                                                    val isIncognitoTab = finishedTab.isIncognito
-                                                                    scope.launch {
-                                                                        repository.addHistoryItem(
-                                                                            HistoryItem(finishedTab.title, url, System.currentTimeMillis()),
-                                                                            isIncognitoTab = isIncognitoTab
-                                                                        )
-                                                                    }
-                                                                }
-
-                                                                // Text scaling (accessibility): apply the per-host
-                                                                // override for this host, else the global default.
-                                                                view?.let { wv ->
-                                                                    val host = try {
-                                                                        android.net.Uri.parse(url.orEmpty()).host.orEmpty().lowercase()
-                                                                    } catch (_: Exception) { "" }
-                                                                    wv.settings.textZoom =
-                                                                        liveHostTextScales[host] ?: liveGlobalTextScale
-                                                                    // Accessibility injections: force zoom,
-                                                                    // reduced motion, reader mode (opt-in toggles).
-                                                                    try {
-                                                                        if (liveForceZoom) {
-                                                                            wv.evaluateJavascript(
-                                                                                com.click.browser.engine.AccessibilityJs.FORCE_ZOOM_JS,
-                                                                                null
-                                                                            )
-                                                                        }
-                                                                        if (liveReducedMotion) {
-                                                                            wv.evaluateJavascript(
-                                                                                com.click.browser.engine.AccessibilityJs.REDUCED_MOTION_JS,
-                                                                                null
-                                                                            )
-                                                                        }
-                                                                        if (liveReaderMode) {
-                                                                            wv.evaluateJavascript(
-                                                                                com.click.browser.engine.AccessibilityJs.READER_MODE_JS,
-                                                                                null
-                                                                            )
-                                                                        }
-                                                                    } catch (_: Exception) { /* non-fatal */ }
-                                                                }
-
-                                                                // Visual tab switcher thumbnails: capture the visible
-                                                                // viewport ONCE per page finish, scaled down (360px).
-                                                                // Never continuous, never for incognito tabs (privacy).
-                                                                view?.let { wv ->
-                                                                    val finishedTab = tabs.firstOrNull { it.webView === wv }
-                                                                    if (finishedTab != null && !finishedTab.isIncognito
-                                                                        && (url == null || !url.startsWith("about:"))
-                                                                    ) {
-                                                                        wv.post {
-                                                                            TabThumbnailStore.capture(wv)?.let { bmp ->
-                                                                                // Keep only if this WebView still
-                                                                                // belongs to the same tab.
-                                                                                if (finishedTab.webView === wv) {
-                                                                                    TabThumbnailStore.put(finishedTab.id, bmp)
-                                                                                    thumbnailVersion++
-                                                                                } else {
-                                                                                    bmp.recycle()
-                                                                                }
-                                                                            }
-                                                                        }
-                                                                    }
-                                                                }
-
-                                                            }
-
-                                                            override fun shouldInterceptRequest(view: WebView?, request: WebResourceRequest?): WebResourceResponse? {
-                                                                // Passive DevTools observation only; normal requests still
-                                                                // continue through WebView unless Click's existing ad filter blocks them.
-                                                                val shouldBlock = request != null &&
-                                                                    this@MainActivity.isAdBlockEnabledForHost(
-                                                                        try { android.net.Uri.parse(view?.url ?: "").host } catch (_: Exception) { null }
-                                                                    ) && AdBlocker.shouldBlock(request.url.toString())
-                                                                recordDevToolsRequest(view, request, blockedByClick = shouldBlock)
-                                                                if (shouldBlock) {
-                                                                    return WebResourceResponse("text/plain", "UTF-8", null)
-                                                                }
-                                                                return super.shouldInterceptRequest(view, request)
-                                                            }
-
-                                                            override fun onReceivedError(
-                                                                view: WebView?,
-                                                                request: WebResourceRequest?,
-                                                                error: WebResourceError?
-                                                            ) {
-                                                                super.onReceivedError(view, request, error)
-                                                                recordDevToolsLoadError(view, request, error)
-                                                                if (request?.isForMainFrame != true) return
-                                                                val failedTab = view?.let { target -> tabs.firstOrNull { it.webView === target } } ?: return
-                                                                refreshingTabIds = refreshingTabIdsAfterNavigationEnd(
-                                                                    refreshingTabIds,
-                                                                    completedTabId = failedTab.id,
-                                                                    isCurrentNavigation = true
-                                                                )
-                                                                failedTab.connectionSecurity = ConnectionSecurityPolicy.afterWebViewLoadError(
-                                                                    failedTab.url, failedTab.connectionSecurity
-                                                                )
-                                                                failedTab.isPageLoading = false
-                                                                failedTab.hasCommittedContent = true
-                                                                failedTab.webViewNavigationStopRecovery = false
-                                                                failedTab.loadProgress = 0
-                                                                val retryUrl = request?.let { browserRetryUrl(it.method, it.url.toString()) }
-                                                                this@MainActivity.showBrowserErrorPage(view, error?.description?.toString(), retryUrl)
-                                                            }
-
-                                                            override fun onReceivedSslError(
-                                                                view: WebView?,
-                                                                handler: android.webkit.SslErrorHandler?,
-                                                                error: android.net.http.SslError?
-                                                            ) {
-                                                                val affectedTab = view?.let { target ->
-                                                                    tabs.firstOrNull { it.webView === target }
-                                                                }
-                                                                if (affectedTab != null) {
-                                                                    refreshingTabIds = refreshingTabIdsAfterNavigationEnd(
-                                                                        refreshingTabIds,
-                                                                        completedTabId = affectedTab.id,
-                                                                        isCurrentNavigation = true
-                                                                    )
-                                                                    affectedTab.connectionSecurity = ConnectionSecurityPolicy.fromWebView(
-                                                                        url = affectedTab.url.takeIf { it.isNotBlank() }
-                                                                            ?: view?.url ?: error?.url ?: "",
-                                                                        pageFinished = false,
-                                                                        certificatePresent = false,
-                                                                        sslErrorObserved = true
-                                                                    )
-                                                                }
-                                                                // Never bypass an invalid certificate. The default WebView behavior
-                                                                // is to cancel; keep that explicit while surfacing the warning.
-                                                                handler?.cancel()
-                                                            }
-
-                                                            override fun onReceivedHttpError(
-                                                                view: WebView?,
-                                                                request: WebResourceRequest?,
-                                                                errorResponse: WebResourceResponse?
-                                                            ) {
-                                                                super.onReceivedHttpError(view, request, errorResponse)
-                                                                recordDevToolsHttpError(view, request, errorResponse)
-                                                            }
-
-                                                        }
-
-                                                        val devToolsOwnerWebView = this
-                                                        webChromeClient = object : WebChromeClient() {
-
-                                                            // Capture page console output only while the user has selected
-                                                            // Console and explicitly enabled page-message capture. Never write page text to Logcat.
-                                                            override fun onConsoleMessage(consoleMessage: ConsoleMessage?): Boolean {
-                                                                val msg = consoleMessage ?: return true
-                                                                val captureGeneration = devToolsConsoleCaptureGeneration
-                                                                if (!devToolsConsoleCaptureEnabled || devToolsTargetWebView !== devToolsOwnerWebView) return true
-                                                                val type = when (msg.messageLevel()) {
-                                                                    ConsoleMessage.MessageLevel.ERROR -> "error"
-                                                                    ConsoleMessage.MessageLevel.WARNING -> "warning"
-                                                                    ConsoleMessage.MessageLevel.LOG -> "success"
-                                                                    // TIP = developer tips from the page, not a
-                                                                    // success signal — show as neutral info.
-                                                                    ConsoleMessage.MessageLevel.TIP -> "info"
-                                                                    ConsoleMessage.MessageLevel.DEBUG -> "info"
-                                                                    else -> "info"
-                                                                }
-                                                                // sourceId can be a URL, a filename, or a pseudo-
-                                                                // source like "console-api". Only show it when it
-                                                                // looks like a real file (has an extension).
-                                                                // Strip query params (?a=b) and hash fragments
-                                                                // (#section) — they're noise in a log line.
-                                                                val rawSrc = msg.sourceId()
-                                                                    ?.substringAfterLast('/')
-                                                                    ?.substringBefore('?')
-                                                                    ?.substringBefore('#')
-                                                                val src = rawSrc?.takeIf { it.isNotBlank() && it.contains('.') }
-                                                                val loc = if (src != null) " ($src:${msg.lineNumber()})" else ""
-                                                                // Cap message length so a spammy page can't OOM the log list.
-                                                                val text = msg.message().take(500)
-                                                                addDevToolsLog(
-                                                                    LogEntry(type, "$text$loc"),
-                                                                    expectedTarget = devToolsOwnerWebView,
-                                                                    captureGeneration = captureGeneration
-                                                                )
-                                                                return true
-                                                            }
-
-                                                            // Fullscreen video support (YouTube, Facebook, etc.):
-                                                            // when a page requests fullscreen video, show the
-                                                            // custom view full-screen; hide it when done.
-                                                            private var customView: android.view.View? = null
-                                                            private var customViewCallback: CustomViewCallback? = null
-
-                                                            override fun onShowCustomView(
-                                                                view: android.view.View?,
-                                                                callback: CustomViewCallback?
-                                                            ) {
-                                                                if (view == null) {
-                                                                    callback?.onCustomViewHidden()
-                                                                    return
-                                                                }
-                                                                if (customView != null) {
-                                                                    callback?.onCustomViewHidden()
-                                                                    return
-                                                                }
-                                                                val decor = this@MainActivity.window.decorView as? android.view.ViewGroup
-                                                                if (decor == null) {
-                                                                    callback?.onCustomViewHidden()
-                                                                    return
-                                                                }
-                                                                val params = android.widget.FrameLayout.LayoutParams(
-                                                                    android.widget.FrameLayout.LayoutParams.MATCH_PARENT,
-                                                                    android.widget.FrameLayout.LayoutParams.MATCH_PARENT
-                                                                )
-                                                                try {
-                                                                    decor.addView(view, params)
-                                                                } catch (_: Exception) {
-                                                                    callback?.onCustomViewHidden()
-                                                                    return
-                                                                }
-                                                                customView = view
-                                                                customViewCallback = callback
-                                                                videoFullscreenActive = true
-                                                                // Register the back-press exit hook.
-                                                                this@MainActivity.exitFullscreenVideo = {
-                                                                    onHideCustomView()
-                                                                }
-                                                            }
-
-                                                            override fun onHideCustomView() {
-                                                                customView?.let { v ->
-                                                                    (this@MainActivity.window.decorView as? android.view.ViewGroup)?.removeView(v)
-                                                                }
-                                                                customView = null
-                                                                videoFullscreenActive = false
-                                                                this@MainActivity.exitFullscreenVideo = null
-                                                                customViewCallback?.onCustomViewHidden()
-                                                                customViewCallback = null
-
-                                                            }
-
-                                                            override fun onReceivedTitle(view: WebView?, title: String?) {
-                                                                super.onReceivedTitle(view, title)
-                                                                view?.let { target -> tabs.firstOrNull { it.webView === target }?.title = title ?: "Page" }
-                                                            }
-
-                                                            // Page-load progress → thin progress bar under the
-                                                            // top bar (battery-safe: only fires while loading).
-                                                            override fun onProgressChanged(view: WebView?, newProgress: Int) {
-                                                                super.onProgressChanged(view, newProgress)
-                                                                tabs.firstOrNull { it.webView === view }?.loadProgress = newProgress
-                                                            }
-
-                                                            // Click does not request Android location permission.
-                                                            // Fail closed for every origin; no fake coordinates or Allow UI.
-                                                            override fun onGeolocationPermissionsShowPrompt(
-                                                                origin: String?,
-                                                                callback: GeolocationPermissions.Callback?
-                                                            ) {
-                                                                callback?.invoke(origin, false, false)
-                                                            }
-
-                                                            override fun onGeolocationPermissionsHidePrompt() {
-                                                                super.onGeolocationPermissionsHidePrompt()
-                                                            }
-
-                                                            // Only audio capture can enter the per-site microphone
-                                                            // consent flow. Every camera or mixed request remains denied.
-                                                            override fun onPermissionRequest(request: android.webkit.PermissionRequest?) {
-                                                                val permissionRequest = request ?: return
-                                                                val ownerTab = tabs.firstOrNull {
-                                                                    it.webView === devToolsOwnerWebView
-                                                                }
-                                                                val resources = permissionRequest.resources?.toSet().orEmpty()
-                                                                if (ownerTab == null ||
-                                                                    resources != setOf(android.webkit.PermissionRequest.RESOURCE_AUDIO_CAPTURE)
-                                                                ) {
-                                                                    permissionRequest.deny()
-                                                                    return
-                                                                }
-                                                                val requestId = java.util.UUID.randomUUID().toString()
-                                                                pendingWebViewMicrophoneRequestIds[permissionRequest] = requestId
-                                                                handleWebsiteMicrophoneRequest(
-                                                                    tab = ownerTab,
-                                                                    requestedOrigin = permissionRequest.origin.toString(),
-                                                                    grant = {
-                                                                        permissionRequest.grant(
-                                                                            arrayOf(android.webkit.PermissionRequest.RESOURCE_AUDIO_CAPTURE)
-                                                                        )
-                                                                    },
-                                                                    reject = { permissionRequest.deny() },
-                                                                    requestId = requestId
-                                                                )
-                                                            }
-
-                                                            override fun onPermissionRequestCanceled(
-                                                                request: android.webkit.PermissionRequest?
-                                                            ) {
-                                                                if (request != null) {
-                                                                    pendingWebViewMicrophoneRequestIds
-                                                                        .remove(request)
-                                                                        ?.let(::cancelWebsiteMicrophoneRequest)
-                                                                }
-                                                            }
-                                                        }
-
-                                                        // The DevTools panel does not expose a JavaScript bridge to page content.
-                                                        // This separate legacy bridge is limited to the built-in WebRTC check.
-                                                        addJavascriptInterface(
-                                                            WebRtcTestBridge(
-                                                                onResultCallback = { runId, result ->
-                                                                    scope.launch {
-                                                                        if (webrtcRunId == runId) {
-                                                                            webrtcResult = result
-                                                                            webrtcRunId = null
-                                                                            webrtcTestRunning = false
-                                                                        }
-                                                                    }
-                                                                }
-                                                            ),
-                                                            "WebRtcTestBridge"
-                                                        )
-
-
-                                                        // Password manager: accept messages only from HTTPS origins.
-                                                        // Unlike addJavascriptInterface, WebMessageListener supplies
-                                                        // the browser-verified source origin and frame status.
-                                                        try {
-                                                            if (WebViewFeature.isFeatureSupported(WebViewFeature.WEB_MESSAGE_LISTENER)) {
-                                                                val passwordWebView = this
-                                                                val passwordBridge = com.click.browser.engine.PasswordBridge { sourceOrigin, credentialOrigin, username, password ->
-                                                                    runOnUiThread {
-                                                                        val offerTab = tabs.firstOrNull { it.webView === passwordWebView }
-                                                                            ?: return@runOnUiThread
-                                                                        if (offerTab.isIncognito || tabs.indexOf(offerTab) != activeTabIndex) return@runOnUiThread
-                                                                        if (!com.click.browser.engine.PasswordOriginPolicy.isSameSecureOrigin(
-                                                                                sourceOrigin, passwordWebView.url.orEmpty()
-                                                                            )
-                                                                        ) return@runOnUiThread
-                                                                        if (showPasswordSaveDialog || pendingPasswordSave != null || pendingGeckoPasswordSave != null) return@runOnUiThread
-                                                                        val credentialHost = com.click.browser.engine.PasswordOriginPolicy.hostFromSecureOrigin(
-                                                                            credentialOrigin
-                                                                        ) ?: return@runOnUiThread
-                                                                        scope.launch {
-                                                                            val managerEnabled = try {
-                                                                                com.click.browser.engine.PasswordManager.isEnabled(this@MainActivity)
-                                                                            } catch (_: Exception) { false }
-                                                                            if (!managerEnabled) return@launch
-                                                                            val currentOfferTab = tabs.firstOrNull { it.id == offerTab.id }
-                                                                                ?: return@launch
-                                                                            if (currentOfferTab.isIncognito ||
-                                                                                tabs.indexOf(currentOfferTab) != activeTabIndex ||
-                                                                                !com.click.browser.engine.PasswordOriginPolicy.isSameSecureOrigin(
-                                                                                    sourceOrigin, passwordWebView.url.orEmpty()
-                                                                                ) || showPasswordSaveDialog || pendingPasswordSave != null || pendingGeckoPasswordSave != null
-                                                                            ) return@launch
-                                                                            pendingPasswordSave = PendingPasswordSaveOffer(
-                                                                                tabId = currentOfferTab.id,
-                                                                                sourceOrigin = sourceOrigin,
-                                                                                credential = com.click.browser.engine.SavedPassword(
-                                                                                    host = credentialHost,
-                                                                                    username = username,
-                                                                                    password = password,
-                                                                                    origin = credentialOrigin
-                                                                                )
-                                                                            )
-                                                                            showPasswordSaveDialog = true
-                                                                        }
-                                                                    }
-                                                                }
-                                                                WebViewCompat.addWebMessageListener(
-                                                                    this,
-                                                                    "PasswordBridge",
-                                                                    setOf("https://*"),
-                                                                    WebViewCompat.WebMessageListener { messageView, message, sourceOrigin, isMainFrame, _ ->
-                                                                        val origin = sourceOrigin.toString()
-                                                                        if (com.click.browser.engine.PasswordOriginPolicy.isSameSecureOrigin(
-                                                                                origin, messageView.url.orEmpty()
-                                                                            )
-                                                                        ) {
-                                                                            passwordBridge.onMessage(origin, isMainFrame, message)
-                                                                        }
-                                                                    }
-                                                                )
-                                                            }
-                                                        } catch (e: Exception) {
-                                                            android.util.Log.w("PasswordManager", "Secure password bridge unavailable", e)
-                                                        }
-
-                                                        // Config settings
-                                                        settings.javaScriptEnabled = javaScriptEnabledGlobal
-                                                        settings.domStorageEnabled = true
-                                                        // Privacy toggles (HTTPS-Only / night mode / data saver);
-                                                        // MIXED_CONTENT_ALWAYS_ALLOW was removed — it contradicted HTTPS-Only.
-                                                        this@MainActivity.applyPrivacyToggles(this)
-                                                        settings.supportZoom()
-                                                        settings.builtInZoomControls = true
-                                                        settings.displayZoomControls = false
-
-                                                                modeManager.applySettings(this, activeMode, forceDesktopMode || liveFlags.desktopDefault)
-                                                                // Sharp View: full-density rendering
-                                                                // (no artificial scale-down) so text
-                                                                // & images stay crisp on high-DPI
-                                                                // screens. Vector icons are already
-                                                                // used throughout the UI.
-                                                                if (liveSharpViewEnabled) setInitialScale(0)
-                                                                // Experimental flags (click://flags) — AFTER mode settings
-                                                                // so user-selected layout/zoom options override mode defaults.
-                                                                // Consistent with the desktopDefault OR above: the flag
-                                                                // participates in the mode decision, then fine-tunes it.
-                                                                this@MainActivity.applyExperimentalFlags(this)
-                                                                // Per-site desktop override for the initial URL.
-                                                                this@MainActivity.applyPerSiteDesktop(this, currentTab.url)
-                                                                this@MainActivity.applyPerSiteSettings(this, currentTab.url)
-                                                                currentTab.webView = this
-                                                                currentTab.browserSession?.let { session ->
-                                                                    if (!this@MainActivity.liveBrowserSessions.contains(session)) {
-                                                                        this@MainActivity.liveBrowserSessions.add(session)
-                                                                    }
-                                                                }
-                                                                if (!this@MainActivity.liveWebViews.contains(this)) {
-                                                                    this@MainActivity.liveWebViews.add(this)
-                                                                }
-
-                                                                setDownloadListener { url, userAgent, contentDisposition, mimeType, _ ->
-                                                                    val scheme = try {
-                                                                        android.net.Uri.parse(url).scheme?.lowercase()
-                                                                    } catch (_: Exception) { null }
-                                                                    if (scheme != "http" && scheme != "https") {
-                                                                        Toast.makeText(this@MainActivity, "This download link is not supported.", Toast.LENGTH_SHORT).show()
-                                                                    } else {
-                                                                        val fileName = android.webkit.URLUtil.guessFileName(
-                                                                            url, contentDisposition, mimeType
-                                                                        )
-                                                                        val downloadMode = liveMode
-                                                                        scope.launch {
-                                                                            enqueueAndRecordDownload(
-                                                                                url = url,
-                                                                                fileName = fileName,
-                                                                                userAgent = userAgent,
-                                                                                mode = downloadMode,
-                                                                                mimeType = mimeType
-                                                                            )
-                                                                        }
-                                                                    }
-                                                                }
-
-                                                                // WebView has no public native selection-action callback, so it
-                                                                // deliberately offers no selected-text AI action.
-
-                                                                // Long-press context menu (links + images).
-                                                                // Attached once at WebView creation, so it works in
-                                                                // every mode (Simple / Developer / Power / Advance).
-                                                                // requestFocusNodeHref gives both the anchor URL
-                                                                // ("url") and the image source ("src") for the
-                                                                // long-pressed node; HitTestResult is the fallback.
-                                                                // Returning false for plain text keeps the default
-                                                                // text-selection behavior intact.
-                                                                setOnLongClickListener { v ->
-                                                                    val wv = v as WebView
-                                                                    try {
-                                                                        val handler = android.os.Handler(
-                                                                            android.os.Looper.getMainLooper()
-                                                                        )
-                                                                        val msg = handler.obtainMessage()
-                                                                        wv.requestFocusNodeHref(msg)
-                                                                        val data = msg.data
-                                                                        val hrefUrl = data.getString("url")
-                                                                            ?.takeIf { it.isNotBlank() }
-                                                                        val hrefSrc = data.getString("src")
-                                                                            ?.takeIf { it.isNotBlank() }
-                                                                        if (hrefUrl != null || hrefSrc != null) {
-                                                                            longPressLinkUrl = hrefUrl
-                                                                            longPressImageUrl = hrefSrc
-                                                                            showLongPressMenu = true
-                                                                            true
-                                                                        } else {
-                                                                            val result = wv.hitTestResult
-                                                                            val extra = result.extra
-                                                                                ?.takeIf { it.isNotBlank() }
-                                                                            when (result.type) {
-                                                                                WebView.HitTestResult.SRC_ANCHOR_TYPE -> {
-                                                                                    longPressLinkUrl = extra
-                                                                                    longPressImageUrl = null
-                                                                                    showLongPressMenu = true
-                                                                                    true
-                                                                                }
-                                                                                WebView.HitTestResult.IMAGE_TYPE,
-                                                                                WebView.HitTestResult.SRC_IMAGE_ANCHOR_TYPE -> {
-                                                                                    longPressImageUrl = extra
-                                                                                    longPressLinkUrl = null
-                                                                                    showLongPressMenu = true
-                                                                                    true
-                                                                                }
-                                                                                else -> false
-                                                                            }
-                                                                        }
-                                                                    } catch (_: Exception) {
-                                                                        false
-                                                                    }
-                                                                }
-
-                                                                if (currentTab.url != "about:blank") {
-                                                                    loadUrl(currentTab.url)
-                                                                }
-                                                            }
-                                                        }
-                                                    },
-                                                    update = { browserView ->
-                                                        (browserView as? WebView)?.let { webView ->
-                                                            webView.settings.javaScriptEnabled = javaScriptEnabledGlobal
-                                                            // Re-apply privacy toggles with the freshest state on every recomposition
-                                                            this@MainActivity.applyPrivacyToggles(
-                                                                webView,
-                                                                httpsMode,
-                                                                forceNightModeWebsites,
-                                                                dataSaverEnabled
-                                                            )
-                                                            // Re-apply experimental flags too.
-                                                            this@MainActivity.applyExperimentalFlags(webView)
-                                                        }
-                                                    }
-                                                )
-                                                if (currentTab.url != "about:blank" && currentTab.isPageLoading && !currentTab.hasCommittedContent) {
-                                                    WebsiteProcessingOverlay(
-                                                        theme = theme,
-                                                        site = hostOfUrl(currentTab.url),
-                                                        progress = currentTab.loadProgress,
-                                                        animationsEnabled = flagsUi.tabAnimations && !liveReducedMotion,
-                                                        onCancel = { stopCurrentTabLoading() }
-                                                    )
-                                                }
-                                                if (
-                                                    currentTab.engine == BrowserTabEngine.WEBVIEW &&
-                                                    currentTab.webViewNavigationStopRecovery &&
-                                                    !currentTab.hasCommittedContent
-                                                ) {
-                                                    Surface(
-                                                        modifier = Modifier
-                                                            .align(Alignment.Center)
-                                                            .padding(horizontal = 20.dp)
-                                                            .fillMaxWidth(),
-                                                        shape = RoundedCornerShape(20.dp),
-                                                        color = theme.surface,
-                                                        tonalElevation = 8.dp
-                                                    ) {
-                                                        Column(
-                                                            modifier = Modifier.padding(20.dp),
-                                                            verticalArrangement = Arrangement.spacedBy(10.dp)
-                                                        ) {
-                                                            Text(
-                                                                "Loading stopped",
-                                                                color = theme.onSurface,
-                                                                fontWeight = FontWeight.SemiBold
-                                                            )
-                                                            Text(
-                                                                "Loading stopped before content appeared. Use Back or enter another address; retry isn't offered because the request type is unknown.",
-                                                                color = theme.onSurface.copy(alpha = 0.8f)
-                                                            )
-                                                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                                                if (currentTab.browserSession?.canGoBack() == true) {
-                                                                    TextButton(onClick = {
-                                                                        currentTab.webViewNavigationStopRecovery = false
-                                                                        currentTab.browserSession?.goBackIfPossible()
-                                                                    }) {
-                                                                        Text("Back")
-                                                                    }
-                                                                }
-                                                                TextButton(onClick = {
-                                                                    currentTab.webViewNavigationStopRecovery = false
-                                                                    val homeDestination = homeUrl()
-                                                                    currentTab.url = homeDestination
-                                                                    currentTab.browserSession?.loadUrl(homeDestination)
-                                                                }) {
-                                                                    Text("Home")
-                                                                }
-                                                            }
-                                                        }
-                                                    }
-                                                }
-                                                if (currentTab.engine == BrowserTabEngine.GECKOVIEW &&
-                                                    currentTab.rendererRecoveryRequired
-                                                ) {
-                                                    Surface(
-                                                        modifier = Modifier
-                                                            .align(Alignment.Center)
-                                                            .padding(horizontal = 20.dp)
-                                                            .fillMaxWidth(),
-                                                        shape = RoundedCornerShape(20.dp),
-                                                        color = theme.surface,
-                                                        tonalElevation = 8.dp
-                                                    ) {
-                                                        Column(
-                                                            modifier = Modifier.padding(20.dp),
-                                                            verticalArrangement = Arrangement.spacedBy(10.dp)
-                                                        ) {
-                                                            Text(
-                                                                "This page stopped rendering",
-                                                                color = theme.onSurface,
-                                                                fontWeight = FontWeight.SemiBold
-                                                            )
-                                                            val isExtensionOptionsPage = currentTab.url.startsWith("moz-extension://", ignoreCase = true)
-                                                            Text(
-                                                                if (isExtensionOptionsPage) {
-                                                                    "This add-on settings page stopped rendering. Your previous webpage stays open in its own tab; close this tab or reload the settings page."
-                                                                } else {
-                                                                    "The page address and browser history are still available. Reload the page or return to the previous page."
-                                                                },
-                                                                color = theme.onSurface.copy(alpha = 0.8f)
-                                                            )
-                                                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                                                if (currentTab.canGoBack) {
-                                                                TextButton(onClick = {
-                                                                        currentTab.browserSession.goBackIfPossible()
-                                                                    }) {
-                                                                        Text("Back")
-                                                                    }
-                                                                }
-                                                                if (isExtensionOptionsPage && tabs.size > 1) {
-                                                                    TextButton(onClick = { closeTabAt(activeTabIndex) }) {
-                                                                        Text("Close tab")
-                                                                    }
-                                                                }
-                                                                Button(onClick = {
-                                                                    currentTab.browserSession?.reload()
-                                                                }) {
-                                                                    Text("Reload")
-                                                                }
-                                                            }
-                                                        }
-                                                    }
-                                                }
-                                                val navigationFailure = currentTab.geckoNavigationFailure
-                                                if (currentTab.engine == BrowserTabEngine.GECKOVIEW &&
-                                                    !currentTab.rendererRecoveryRequired && navigationFailure != null
-                                                ) {
-                                                    Surface(
-                                                        modifier = Modifier
-                                                            .align(Alignment.Center)
-                                                            .padding(horizontal = 20.dp)
-                                                            .fillMaxWidth(),
-                                                        shape = RoundedCornerShape(20.dp),
-                                                        color = theme.surface,
-                                                        tonalElevation = 8.dp
-                                                    ) {
-                                                        Column(
-                                                            modifier = Modifier.padding(20.dp),
-                                                            verticalArrangement = Arrangement.spacedBy(10.dp)
-                                                        ) {
-                                                            Text(
-                                                                if (navigationFailure.wasCancelled) "Loading stopped" else "Page couldn't load",
-                                                                color = theme.onSurface,
-                                                                fontWeight = FontWeight.SemiBold
-                                                            )
-                                                            Text(
-                                                                if (navigationFailure.wasCancelled) {
-                                                                    "This page did not finish loading, so Click hasn't marked it as loaded. You can go back, open Home, or enter another address."
-                                                                } else {
-                                                                    "The page did not finish loading. Check your connection or return to the previous page."
-                                                                },
-                                                                color = theme.onSurface.copy(alpha = 0.8f)
-                                                            )
-                                                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                                                if (currentTab.canGoBack) {
-                                                                    TextButton(onClick = {
-                                                                        currentTab.browserSession.goBackIfPossible()
-                                                                    }) {
-                                                                        Text("Back")
-                                                                    }
-                                                                }
-                                                                navigationFailure.retryUrl?.let { retryUrl ->
-                                                                    Button(onClick = {
-                                                                        currentTab.geckoNavigationFailure = null
-                                                                        currentTab.browserSession?.loadUrl(retryUrl)
-                                                                    }) {
-                                                                        Text("Retry")
-                                                                    }
-                                                                }
-                                                                TextButton(onClick = {
-                                                                    currentTab.geckoNavigationFailure = null
-                                                                    currentTab.browserSession?.loadUrl(homeUrl())
-                                                                }) {
-                                                                    Text("Home")
-                                                                }
-                                                            }
-                                                        }
-                                                    }
-                                                }
-                                            }
-                                        }
-                                        }
-                                        } // PageTransitionWrapper
-
-                                    // 5. FLOATING DEV DEBUG STATUS OVERLAY + DevTools toggle
-                                    // DevTools icon sits at the TOP-RIGHT corner (Prince's
-                                    // request); the diagnostics overlay hangs below it.
-                                    if (activeMode == BrowserMode.DEVELOPER &&
-                                        currentTab.url.isNotBlank() && currentTab.url != "about:blank" &&
-                                        ModeCapabilityRegistry.availability(
-                                            feature = FeatureId.DEVTOOLS,
-                                            mode = activeMode,
-                                            engine = currentTab.engine,
-                                            hasLoadedPage = currentTabHasLoadedWebPage()
-                                        ).enabled
-                                    ) {
-                                        Column(
-                                            modifier = Modifier
-                                                .align(Alignment.TopEnd)
-                                                .padding(12.dp),
-                                            horizontalAlignment = Alignment.End
-                                        ) {
-                                            // DevTools panel toggle — top-right corner.
-                                            IconButton(
-                                                onClick = {
-                                                    if (showDevToolsSheet) closeDevToolsPanel()
-                                                    else requestDevToolsForCurrentTab()
-                                                },
-                                                modifier = Modifier
-                                                    .size(44.dp)
-                                                    .background(
-                                                        if (showDevToolsSheet) DevToolsPalette.selected
-                                                        else DevToolsPalette.surface,
-                                                        shape = RoundedCornerShape(12.dp)
-                                                    )
-                                            ) {
-                                                Icon(
-                                                    Icons.Default.Code,
-                                                    contentDescription = "DevTools",
-                                                    tint = DevToolsPalette.accent,
-                                                    modifier = Modifier.size(22.dp)
-                                                )
-                                            }
-                                            if (showDebugOverlay) {
-                                                Spacer(modifier = Modifier.height(8.dp))
-                                                FloatingDebugOverlay(
-                                                    pageLoadTime = pageLoadTime
-                                                )
-                                            }
-                                        }
+                                        WebPageContent()
                                     }
-
-                                    // Browsing surface: floating glowing AI button (bottom-right)
-                                    // with quick popup (Ask Click AI · Summarize · Translate).
-                                    // Hidden in immersive fullscreen and on the home surface.
-                                    if (!immersiveMode && !showOverlays) {
-                                        AiQuickFab(
-                                            theme = theme,
-                                            onAskAi = { if (tamperBlocked) showTamperDialog = true else showAiChat = true },
-                                            onSummarize = { if (tamperBlocked) showTamperDialog = true else showAiChat = true },
-                                            onTranslate = { handleFeature(FeatureId.TRANSLATE) },
-                                            modifier = Modifier
-                                                .align(Alignment.BottomEnd)
-                                                .padding(end = 16.dp, bottom = 16.dp)
-                                        )
-                                    }
-
-                                    // Periodic verified protection-status popup (top-center). One-shot
-                                    // fade in/out every ~18s; browsing surface only.
-                                    androidx.compose.animation.AnimatedVisibility(
-                                        visible = showPrivacyPopup && !immersiveMode && !showOverlays,
-                                        enter = androidx.compose.animation.fadeIn() +
-                                            androidx.compose.animation.slideInVertically { -it / 2 },
-                                        exit = androidx.compose.animation.fadeOut(),
-                                        modifier = Modifier
-                                            .align(Alignment.TopCenter)
-                                            .windowInsetsPadding(WindowInsets.statusBars)
-                                            .padding(top = 12.dp)
-                                    ) {
-                                        Surface(
-                                            shape = RoundedCornerShape(20.dp),
-                                            color = theme.surface.copy(alpha = 0.88f),
-                                            border = BorderStroke(
-                                                1.dp,
-                                                theme.primary.copy(alpha = 0.35f)
-                                            ),
-                                            shadowElevation = 8.dp
-                                        ) {
-                                            Row(
-                                                modifier = Modifier.padding(
-                                                    horizontal = 14.dp,
-                                                    vertical = 8.dp
-                                                ),
-                                                verticalAlignment = Alignment.CenterVertically
-                                            ) {
-                                                Icon(
-                                                    Icons.Default.Shield,
-                                                    contentDescription = null,
-                                                    tint = if (adBlockStatus.active) {
-                                                        Color(0xFF22C55E)
-                                                    } else {
-                                                        theme.onSurface.copy(alpha = 0.45f)
-                                                    },
-                                                    modifier = Modifier.size(15.dp)
-                                                )
-                                                Spacer(modifier = Modifier.width(6.dp))
-                                                Text(
-                                                    adBlockStatus.label,
-                                                    color = theme.onSurface,
-                                                    fontSize = 12.sp,
-                                                    fontWeight = FontWeight.SemiBold
-                                                )
-                                            }
-                                        }
-                                    }
-
-                                }
 
                                 // 7. DevTools lives in a dismissible bottom sheet now
                                 // (see overlay screens below) — the website is never

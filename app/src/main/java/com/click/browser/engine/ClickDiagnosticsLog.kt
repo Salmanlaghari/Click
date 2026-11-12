@@ -172,20 +172,20 @@ internal data class RecentErrorSummary(
     val detail: String?
 )
 
-/** Log codes that count as errors/recoveries for the Recent Errors card. */
+/** Log codes that count as errors for the Recent Errors card. */
 private val RECENT_ERROR_CODES = setOf(
     ClickCatLogCode.GECKO_RENDERER_CRASHED,
     ClickCatLogCode.GECKO_RENDERER_KILLED,
-    ClickCatLogCode.GECKO_RECOVERY_SUCCEEDED,
     ClickCatLogCode.GECKO_RECOVERY_FAILED,
     ClickCatLogCode.EXTENSION_POPUP_FAILED
 )
 
 /**
- * Newest-first error/recovery rows for the Developer dashboard, derived only
- * from events the diagnostics log actually recorded (renderer crashes and
+ * Newest-first error rows for the Developer dashboard, derived only from
+ * events the diagnostics log actually recorded (renderer crashes and failed
  * recoveries from the session layer, extension popup failures from the popup
- * router). Mode switches and other bookkeeping codes never appear here.
+ * router). Successful recoveries are good news, not errors, and mode switches
+ * and other bookkeeping codes never appear here either.
  */
 internal fun recentErrorSummaries(
     entries: List<ClickCatLogEntry>,
@@ -202,8 +202,7 @@ internal fun recentErrorSummaries(
             headline = when (entry.code) {
                 ClickCatLogCode.GECKO_RENDERER_CRASHED,
                 ClickCatLogCode.GECKO_RENDERER_KILLED -> "ERR_RENDERER_GONE$tabSuffix"
-                ClickCatLogCode.GECKO_RECOVERY_SUCCEEDED -> "Renderer recovered$tabSuffix"
-                ClickCatLogCode.GECKO_RECOVERY_FAILED -> "Renderer recovery failed$tabSuffix"
+                ClickCatLogCode.GECKO_RECOVERY_FAILED -> "ERR_RECOVERY_FAILED$tabSuffix"
                 ClickCatLogCode.EXTENSION_POPUP_FAILED -> "Extension popup failed to render"
                 else -> entry.code.label
             },

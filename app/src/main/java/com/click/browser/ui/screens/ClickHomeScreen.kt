@@ -122,6 +122,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.withContext
 import androidx.compose.ui.text.style.TextAlign
@@ -1679,6 +1680,12 @@ internal fun bookmarksBarItems(
         fallbackSites.take(limit).map { BookmarksBarItem(it.label, it.url) }
     }
 
+/** Current app heap usage in MB (total − free), for the Developer status strip. */
+private fun sampleUsedMemoryMb(): Long {
+    val runtime = Runtime.getRuntime()
+    return (runtime.totalMemory() - runtime.freeMemory()) / (1024L * 1024L)
+}
+
 /** Developer status strip: GeckoView · open tabs · app heap · WebRTC guard. */
 @Composable
 private fun DeveloperStatusStrip(
@@ -1686,9 +1693,14 @@ private fun DeveloperStatusStrip(
     tabCount: Int,
     webrtcBlocked: Boolean
 ) {
-    val usedMemoryMb = remember {
-        val runtime = Runtime.getRuntime()
-        (runtime.totalMemory() - runtime.freeMemory()) / (1024L * 1024L)
+    // Re-sampled every few seconds while the strip is on screen — a single
+    // remembered sample would go stale within moments.
+    var usedMemoryMb by remember { mutableStateOf(sampleUsedMemoryMb()) }
+    LaunchedEffect(Unit) {
+        while (true) {
+            delay(5_000)
+            usedMemoryMb = sampleUsedMemoryMb()
+        }
     }
     Surface(
         shape = RoundedCornerShape(10.dp),
@@ -1784,9 +1796,10 @@ private fun QuickToolsGrid(
 }
 
 /**
- * Developer Recent Errors: the newest renderer-crash / recovery / popup
- * failure events from the local diagnostics log (which those paths already
- * record into). Empty state is honest — nothing is invented for the card.
+ * Developer Recent Errors: the newest renderer-crash / recovery-failure /
+ * popup failure events from the local diagnostics log (which those paths
+ * already record into). Empty state is honest — nothing is invented for the
+ * card.
  */
 @Composable
 private fun RecentErrorsCard(
@@ -1795,8 +1808,17 @@ private fun RecentErrorsCard(
     cardBorder: Color
 ) {
     val context = LocalContext.current
-    val summaries = remember {
-        com.click.browser.engine.recentErrorSummaries(ClickDiagnosticsLog.read(context))
+    // Read off the composition path, and re-read every time this card
+    // (re)enters composition: leaving for a page and coming back to the
+    // Developer dashboard is exactly when new errors may have been recorded,
+    // so a one-shot remembered read would silently go stale.
+    var summaries by remember {
+        mutableStateOf<List<com.click.browser.engine.RecentErrorSummary>>(emptyList())
+    }
+    LaunchedEffect(Unit) {
+        summaries = withContext(Dispatchers.IO) {
+            com.click.browser.engine.recentErrorSummaries(ClickDiagnosticsLog.read(context))
+        }
     }
     Card(
         shape = RoundedCornerShape(14.dp),
@@ -1817,7 +1839,7 @@ private fun RecentErrorsCard(
             )
             if (summaries.isEmpty()) {
                 Text(
-                    "No errors recorded yet. Renderer crashes, recoveries and add-on popup failures will appear here.",
+                    "No errors recorded yet. Renderer crashes, failed recoveries and add-on popup failures will appear here.",
                     color = theme.onSurface.copy(alpha = 0.65f),
                     fontSize = 12.sp
                 )
