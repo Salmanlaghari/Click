@@ -69,6 +69,10 @@ import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Shield
+import androidx.compose.material.icons.filled.Cookie
+import androidx.compose.material.icons.filled.List
+import androidx.compose.material.icons.filled.NetworkCheck
+import androidx.compose.material.icons.filled.Terminal
 import androidx.compose.material.icons.filled.Tab
 import androidx.compose.material.icons.filled.Translate
 import androidx.compose.material3.AlertDialog
@@ -83,6 +87,7 @@ import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
@@ -112,10 +117,12 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.withContext
 import androidx.compose.ui.text.style.TextAlign
@@ -125,8 +132,16 @@ import androidx.compose.ui.unit.sp
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
 import androidx.datastore.preferences.core.edit
+import com.click.browser.BuildConfig
+import com.click.browser.data.Bookmark
+import com.click.browser.data.BrowserRepository
+import com.click.browser.data.ClickDownloadStore
 import com.click.browser.engine.AppSettings
 import com.click.browser.engine.BrowserMode
+import com.click.browser.engine.ClickDiagnosticsLog
+import com.click.browser.engine.ClickDownloadRecord
+import com.click.browser.engine.ClickDownloadState
+import com.click.browser.engine.ModeAddressBarStyle
 import com.click.browser.engine.ClosedTab
 import com.click.browser.engine.dataStore
 import com.click.browser.engine.ConnectionSecurityInfo
@@ -146,33 +161,65 @@ import com.click.browser.engine.NewsStatus
 import java.util.Calendar
 
 /**
- * Ordered post-search Home sections. Keep privacy, quick sites, and browsing
- * continuation first, and place the optional feed or opt-in card last.
+ * Dashboard sections, composed per mode. Since the 2026-11-12 redesign each
+ * mode has its OWN dashboard (Prince's approved mockups), not one shared list
+ * with a card swapped in the middle:
+ * - Simple: shield, speed dial, continue — nothing else.
+ * - Advance: the warm premium stack with the news feed promoted above
+ *   Continue browsing.
+ * - Power: desktop widgets — compact news, live downloads, recently closed,
+ *   speed dial.
+ * - Developer: a dark control panel — status strip, quick tools, recent
+ *   errors, shield.
  */
 internal enum class HomeContentSection {
+    DEVELOPER_STATUS,
     PRIVACY_STATUS,
     QUICK_SITES,
+    NEWS_WIDGET,
+    DOWNLOADS,
     CONTINUE_BROWSING,
     MODE_FOCUS,
     TODAY_UPDATE,
     QUICK_ACTIONS,
+    DEVELOPER_TOOLS,
+    RECENT_ERRORS,
     OPTIONAL_NEWS_FEED
 }
 
 /**
- * Returns the post-search sections rendered for [activeMode] in display order.
- * Simple omits mode focus; Developer, Power, and Advance insert it after the
- * primary browsing sections. The optional feed or opt-in is always last.
+ * Returns the dashboard sections rendered for [activeMode] in display order —
+ * the exact composition of that mode's approved dashboard mockup.
  */
-internal fun homeContentSections(activeMode: BrowserMode): List<HomeContentSection> = buildList {
-    add(HomeContentSection.PRIVACY_STATUS)
-    add(HomeContentSection.QUICK_SITES)
-    add(HomeContentSection.CONTINUE_BROWSING)
-    if (activeMode != BrowserMode.SIMPLE) add(HomeContentSection.MODE_FOCUS)
-    add(HomeContentSection.TODAY_UPDATE)
-    add(HomeContentSection.QUICK_ACTIONS)
-    add(HomeContentSection.OPTIONAL_NEWS_FEED)
-}
+internal fun homeContentSections(activeMode: BrowserMode): List<HomeContentSection> =
+    when (activeMode) {
+        BrowserMode.SIMPLE -> listOf(
+            HomeContentSection.PRIVACY_STATUS,
+            HomeContentSection.QUICK_SITES,
+            HomeContentSection.CONTINUE_BROWSING
+        )
+        BrowserMode.ADVANCED -> listOf(
+            HomeContentSection.PRIVACY_STATUS,
+            HomeContentSection.QUICK_SITES,
+            HomeContentSection.OPTIONAL_NEWS_FEED,
+            HomeContentSection.CONTINUE_BROWSING,
+            HomeContentSection.MODE_FOCUS,
+            HomeContentSection.QUICK_ACTIONS,
+            HomeContentSection.TODAY_UPDATE
+        )
+        BrowserMode.HACK -> listOf(
+            HomeContentSection.NEWS_WIDGET,
+            HomeContentSection.DOWNLOADS,
+            HomeContentSection.CONTINUE_BROWSING,
+            HomeContentSection.QUICK_SITES
+        )
+        BrowserMode.DEVELOPER -> listOf(
+            HomeContentSection.DEVELOPER_STATUS,
+            HomeContentSection.DEVELOPER_TOOLS,
+            HomeContentSection.RECENT_ERRORS,
+            HomeContentSection.PRIVACY_STATUS
+        )
+    }
 
 /**
  * Premium home screen — "Click — AI Privacy Browser" identity (Phase 1).
@@ -206,6 +253,12 @@ fun ClickHomeScreen(
     onV9ShieldClick: () -> Unit = {},
     onShieldToggle: () -> Unit = {},
     onGamesClick: () -> Unit = {},
+    tabCount: Int = 0,
+    onOpenDownloads: () -> Unit = {},
+    onOpenDevToolsTab: (Int) -> Unit = {},
+    onOpenCookieManager: () -> Unit = {},
+    onOpenPrivacyGuards: () -> Unit = {},
+    onOpenDiagnostics: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val cardBg = theme.surface
@@ -215,6 +268,16 @@ fun ClickHomeScreen(
     // the theme background with a dimmed photo so content stays readable
     // in all four profiles.
     val context = LocalContext.current
+    // Live WebRTC guard state for the Developer status strip — the same
+    // DataStore key WebRtcGuard syncs from, so the strip never guesses.
+    var webrtcBlocked by remember { mutableStateOf(false) }
+    LaunchedEffect(Unit) {
+        try {
+            context.dataStore.data.collect { prefs ->
+                webrtcBlocked = prefs[AppSettings.WEBRTC_BLOCKED] ?: false
+            }
+        } catch (_: Exception) { }
+    }
     var wallpaperBitmap by remember(wallpaperUri) { mutableStateOf<Bitmap?>(null) }
     LaunchedEffect(wallpaperUri) {
         wallpaperBitmap = withContext(Dispatchers.IO) {
@@ -263,44 +326,55 @@ fun ClickHomeScreen(
     ) {
         Spacer(modifier = Modifier.height(6.dp))
 
-        // Simple mode (Prince's rule): the address/search bar sits at the very
-        // TOP of the dashboard, above the greeting row — first thing the user
-        // sees and can tap. Other modes keep the greeting-then-search order.
-        if (activeMode == BrowserMode.SIMPLE) {
-            SmartSearchBar(
-                theme = theme,
-                activeMode = activeMode,
-                searchEngine = searchEngine,
-                onNavigate = onNavigate
-            )
-            HomeTopRow(
-                theme = theme,
-                activeMode = activeMode,
-                adBlockStatusLabel = adBlockStatusLabel,
-                adBlockStatusActive = adBlockStatusActive,
-                neon = false,
-                onProfileClick = onProfileClick
-            )
-        } else {
-            HomeTopRow(
-                theme = theme,
-                activeMode = activeMode,
-                adBlockStatusLabel = adBlockStatusLabel,
-                adBlockStatusActive = adBlockStatusActive,
-                neon = false,
-                onProfileClick = onProfileClick
-            )
-
-            SmartSearchBar(
-                theme = theme,
-                activeMode = activeMode,
-                searchEngine = searchEngine,
-                onNavigate = onNavigate
-            )
+        // Per-mode dashboard headers (Prince's approved mockups, 2026-11-12):
+        // Simple and Advance lead with the search/address bar, then the
+        // greeting row. Power leads with the bar plus its desktop bookmarks
+        // bar (its tab strip is browser chrome, rendered above this screen).
+        // Developer leads with the squared bar alone — the status strip is
+        // its first dashboard section, and there is no greeting row.
+        when (activeMode) {
+            BrowserMode.SIMPLE, BrowserMode.ADVANCED -> {
+                SmartSearchBar(
+                    theme = theme,
+                    activeMode = activeMode,
+                    searchEngine = searchEngine,
+                    onNavigate = onNavigate
+                )
+                HomeTopRow(
+                    theme = theme,
+                    activeMode = activeMode,
+                    adBlockStatusLabel = adBlockStatusLabel,
+                    adBlockStatusActive = adBlockStatusActive,
+                    neon = false,
+                    onProfileClick = onProfileClick
+                )
+            }
+            BrowserMode.HACK -> {
+                SmartSearchBar(
+                    theme = theme,
+                    activeMode = activeMode,
+                    searchEngine = searchEngine,
+                    onNavigate = onNavigate
+                )
+                BookmarksBar(theme = theme, onNavigate = onNavigate)
+            }
+            BrowserMode.DEVELOPER -> {
+                SmartSearchBar(
+                    theme = theme,
+                    activeMode = activeMode,
+                    searchEngine = searchEngine,
+                    onNavigate = onNavigate
+                )
+            }
         }
 
         for (section in homeContentSections(activeMode)) {
             when (section) {
+                HomeContentSection.DEVELOPER_STATUS -> DeveloperStatusStrip(
+                    theme = theme,
+                    tabCount = tabCount,
+                    webrtcBlocked = webrtcBlocked
+                )
                 HomeContentSection.PRIVACY_STATUS -> V9ShieldCard(
                     theme = theme,
                     active = shieldActive,
@@ -317,6 +391,19 @@ fun ClickHomeScreen(
                     onSurface = theme.onSurface,
                     onNavigate = onNavigate
                 )
+                HomeContentSection.NEWS_WIDGET -> PowerNewsWidget(
+                    theme = theme,
+                    cardBg = cardBg,
+                    cardBorder = cardBorder,
+                    onNavigate = onNavigate
+                )
+                HomeContentSection.DOWNLOADS -> PowerDownloadsWidget(
+                    theme = theme,
+                    activeMode = activeMode,
+                    cardBg = cardBg,
+                    cardBorder = cardBorder,
+                    onOpenDownloads = onOpenDownloads
+                )
                 HomeContentSection.CONTINUE_BROWSING -> ContinueBrowsingSection(
                     theme = theme,
                     cardBg = cardBg,
@@ -324,19 +411,8 @@ fun ClickHomeScreen(
                     recentlyClosedTabs = recentlyClosedTabs.take(3),
                     onReopen = onReopenRecentTab
                 )
-                HomeContentSection.MODE_FOCUS -> when (activeMode) {
-                    BrowserMode.SIMPLE -> Unit
-                    BrowserMode.DEVELOPER -> ModeFocusCard(
-                        theme = theme,
-                        marker = "</>",
-                        eyebrow = "DEVELOPER WORKSPACE",
-                        headline = "Build, debug, and learn",
-                        detail = "Shortcuts for GitHub, MDN, and Stack Overflow.",
-                        actionLabel = "Open MDN",
-                        onClick = { onNavigate("https://developer.mozilla.org/") }
-                    )
-                    BrowserMode.HACK -> PowerModeHomeHeader(theme)
-                    BrowserMode.ADVANCED -> ModeFocusCard(
+                HomeContentSection.MODE_FOCUS -> if (activeMode == BrowserMode.ADVANCED) {
+                    ModeFocusCard(
                         theme = theme,
                         marker = "R",
                         eyebrow = "RESEARCH DESK",
@@ -345,6 +421,8 @@ fun ClickHomeScreen(
                         actionLabel = "Browse recent papers",
                         onClick = { onNavigate("https://arxiv.org/list/cs.AI/recent") }
                     )
+                } else {
+                    Unit
                 }
                 HomeContentSection.TODAY_UPDATE -> TodayUpdateCard(
                     theme = theme,
@@ -359,6 +437,20 @@ fun ClickHomeScreen(
                     onOpenAiChat = onOpenAiChat,
                     onTranslate = onTranslate,
                     onReaderMode = onReaderMode
+                )
+                HomeContentSection.DEVELOPER_TOOLS -> QuickToolsGrid(
+                    theme = theme,
+                    cardBg = cardBg,
+                    cardBorder = cardBorder,
+                    onOpenDevToolsTab = onOpenDevToolsTab,
+                    onOpenCookieManager = onOpenCookieManager,
+                    onOpenPrivacyGuards = onOpenPrivacyGuards,
+                    onOpenDiagnostics = onOpenDiagnostics
+                )
+                HomeContentSection.RECENT_ERRORS -> RecentErrorsCard(
+                    theme = theme,
+                    cardBg = cardBg,
+                    cardBorder = cardBorder
                 )
                 HomeContentSection.OPTIONAL_NEWS_FEED -> if (homeNewsFeedEnabled) {
                     NewsSection(
@@ -496,7 +588,7 @@ private fun HomeTopRow(
                     BrowserMode.SIMPLE -> "Everyday browsing, kept straightforward."
                     BrowserMode.DEVELOPER -> "Inspect pages and build with developer tools."
                     BrowserMode.HACK -> "Wide pages and focused workflows."
-                    BrowserMode.ADVANCED -> "An isolated workspace for research and exploration."
+                    BrowserMode.ADVANCED -> "Everyday browsing, kept premium."
                 },
                 color = theme.onSurface.copy(alpha = 0.72f),
                 fontSize = 13.sp
@@ -533,67 +625,6 @@ private fun HomeTopRow(
             contentAlignment = Alignment.Center
         ) {
             Icon(Icons.Default.Person, contentDescription = "Profile", tint = Color.White, modifier = Modifier.size(20.dp))
-        }
-    }
-}
-
-@Composable
-private fun PowerModeHomeHeader(theme: ModeTheme) {
-    Surface(
-        shape = RoundedCornerShape(16.dp),
-        color = theme.surface,
-        border = androidx.compose.foundation.BorderStroke(
-            1.dp,
-            theme.modeAccent.copy(alpha = 0.28f)
-        ),
-        modifier = Modifier.fillMaxWidth()
-    ) {
-        Row(
-            modifier = Modifier.padding(horizontal = 14.dp, vertical = 11.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Box(
-                modifier = Modifier
-                    .size(40.dp)
-                    .clip(RoundedCornerShape(12.dp))
-                    .background(
-                        Brush.linearGradient(
-                            listOf(Color(0xFF92400E), theme.modeAccent)
-                        )
-                    ),
-                contentAlignment = Alignment.Center
-            ) {
-                Text(
-                    "P",
-                    color = Color.White,
-                    fontWeight = FontWeight.Black,
-                    fontSize = 19.sp
-                )
-            }
-            Spacer(Modifier.width(12.dp))
-            Column(
-                modifier = Modifier.weight(1f),
-                verticalArrangement = Arrangement.spacedBy(2.dp)
-            ) {
-                Text(
-                    "POWER MODE",
-                    color = theme.modeAccent,
-                    fontWeight = FontWeight.Bold,
-                    fontSize = 10.sp,
-                    letterSpacing = 1.sp
-                )
-                Text(
-                    "Desktop-style page layout",
-                    color = theme.onSurface,
-                    fontWeight = FontWeight.SemiBold,
-                    fontSize = 13.sp
-                )
-                Text(
-                    "Wider viewport for web pages",
-                    color = theme.onSurface.copy(alpha = 0.62f),
-                    fontSize = 11.sp
-                )
-            }
         }
     }
 }
@@ -664,8 +695,18 @@ private fun SmartSearchBar(
             onNavigate(submittedQuery)
         }
     }
+    // The bar's silhouette follows the mode (ModeTheme.addressBarStyle):
+    // Simple gets an extra-tall pill (large touch target), Power a desktop
+    // rectangle, Developer a squared technical bar, Advance the premium pill.
+    val barShape = when (theme.addressBarStyle) {
+        ModeAddressBarStyle.PILL_LARGE -> RoundedCornerShape(32.dp)
+        ModeAddressBarStyle.DESKTOP -> RoundedCornerShape(12.dp)
+        ModeAddressBarStyle.TECHNICAL -> RoundedCornerShape(10.dp)
+        ModeAddressBarStyle.STANDARD -> RoundedCornerShape(28.dp)
+    }
+    val barVerticalPadding = if (theme.addressBarStyle == ModeAddressBarStyle.PILL_LARGE) 10.dp else 4.dp
     Surface(
-        shape = RoundedCornerShape(28.dp),
+        shape = barShape,
         color = theme.surface,
         border = androidx.compose.foundation.BorderStroke(
             1.5.dp, theme.onSurface.copy(alpha = 0.12f)
@@ -673,7 +714,7 @@ private fun SmartSearchBar(
         modifier = Modifier.fillMaxWidth()
     ) {
         Row(
-            modifier = Modifier.padding(start = 6.dp, end = 4.dp, top = 4.dp, bottom = 4.dp),
+            modifier = Modifier.padding(start = 6.dp, end = 4.dp, top = barVerticalPadding, bottom = barVerticalPadding),
             verticalAlignment = Alignment.CenterVertically
         ) {
             SearchEngineBadge(engine = searchEngine, theme = theme, compact = false)
@@ -1580,6 +1621,467 @@ private fun QuickActionsGrid(
                     }
                 }
             }
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Per-mode dashboard pieces (2026-11-12 redesign) and their pure helpers.
+// ---------------------------------------------------------------------------
+
+/** GeckoView major version for the Developer status strip ("153" from "153.0…"). */
+internal fun geckoMajorVersion(fullVersion: String): String =
+    fullVersion.trim().substringBefore('.').ifBlank { fullVersion.trim() }
+
+/** The Developer status strip line, built only from real runtime values. */
+internal fun developerStatusLine(
+    geckoViewVersion: String,
+    tabCount: Int,
+    usedMemoryMb: Long,
+    webrtcBlocked: Boolean
+): String = "GeckoView ${geckoMajorVersion(geckoViewVersion)}" +
+    "  ·  Tabs: $tabCount" +
+    "  ·  RAM $usedMemoryMb MB" +
+    "  ·  WebRTC Guard: ${if (webrtcBlocked) "ON" else "OFF"}"
+
+/** Downloads shown on the Power dashboard widget: transfers still in flight. */
+internal fun activeDownloadRecords(records: List<ClickDownloadRecord>): List<ClickDownloadRecord> =
+    records.filter {
+        it.state == ClickDownloadState.RUNNING || it.state == ClickDownloadState.QUEUED
+    }
+
+/** 0f..1f progress for a download record, or null when the size is unknown. */
+internal fun downloadProgressFraction(record: ClickDownloadRecord): Float? =
+    if (record.totalBytes > 0L) {
+        (record.bytesDownloaded.toFloat() / record.totalBytes.toFloat()).coerceIn(0f, 1f)
+    } else {
+        null
+    }
+
+/** "68%" for a record with a known size; "…" while the size is unknown. */
+internal fun downloadPercentLabel(record: ClickDownloadRecord): String =
+    downloadProgressFraction(record)?.let { "${(it * 100).roundToInt()}%" } ?: "…"
+
+internal data class BookmarksBarItem(val label: String, val url: String)
+
+/**
+ * Power's bookmarks bar: the user's own bookmarks first; before they have
+ * saved any, the mode's default quick sites stand in so the bar is never a
+ * dead strip. Capped so the bar stays a single scrollable row.
+ */
+internal fun bookmarksBarItems(
+    bookmarks: List<Bookmark>,
+    fallbackSites: List<QuickSiteDef>,
+    limit: Int = 5
+): List<BookmarksBarItem> =
+    if (bookmarks.isNotEmpty()) {
+        bookmarks.take(limit).map { BookmarksBarItem(it.title.ifBlank { it.url }, it.url) }
+    } else {
+        fallbackSites.take(limit).map { BookmarksBarItem(it.label, it.url) }
+    }
+
+/** Current app heap usage in MB (total − free), for the Developer status strip. */
+private fun sampleUsedMemoryMb(): Long {
+    val runtime = Runtime.getRuntime()
+    return (runtime.totalMemory() - runtime.freeMemory()) / (1024L * 1024L)
+}
+
+/** Developer status strip: GeckoView · open tabs · app heap · WebRTC guard. */
+@Composable
+private fun DeveloperStatusStrip(
+    theme: ModeTheme,
+    tabCount: Int,
+    webrtcBlocked: Boolean
+) {
+    // Re-sampled every few seconds while the strip is on screen — a single
+    // remembered sample would go stale within moments.
+    var usedMemoryMb by remember { mutableStateOf(sampleUsedMemoryMb()) }
+    LaunchedEffect(Unit) {
+        while (true) {
+            delay(5_000)
+            usedMemoryMb = sampleUsedMemoryMb()
+        }
+    }
+    Surface(
+        shape = RoundedCornerShape(10.dp),
+        color = theme.surface,
+        border = androidx.compose.foundation.BorderStroke(1.dp, theme.modeAccent.copy(alpha = 0.35f)),
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Text(
+            developerStatusLine(
+                geckoViewVersion = BuildConfig.GECKOVIEW_VERSION,
+                tabCount = tabCount,
+                usedMemoryMb = usedMemoryMb,
+                webrtcBlocked = webrtcBlocked
+            ),
+            color = theme.secondary,
+            fontFamily = FontFamily.Monospace,
+            fontSize = 11.5.sp,
+            modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp)
+        )
+    }
+}
+
+/**
+ * Developer quick tools — every tile opens a REAL screen: DevTools tabs
+ * (Console/Network/Sources), the cookie manager, Privacy Guards (the WebRTC
+ * toggle lives there) and the diagnostics log. The approved mockup's
+ * "View Source" and "User Agent" tiles were dropped: the app has no
+ * view-source feature and no user-agent settings screen, so honest tiles
+ * replace them.
+ */
+@Composable
+private fun QuickToolsGrid(
+    theme: ModeTheme,
+    cardBg: Color,
+    cardBorder: Color,
+    onOpenDevToolsTab: (Int) -> Unit,
+    onOpenCookieManager: () -> Unit,
+    onOpenPrivacyGuards: () -> Unit,
+    onOpenDiagnostics: () -> Unit
+) {
+    data class Tool(val label: String, val icon: androidx.compose.ui.graphics.vector.ImageVector, val onClick: () -> Unit)
+    val tools = listOf(
+        Tool("Console", Icons.Default.Terminal) { onOpenDevToolsTab(1) },
+        Tool("Network", Icons.Default.NetworkCheck) { onOpenDevToolsTab(2) },
+        Tool("Sources", Icons.Default.Description) { onOpenDevToolsTab(3) },
+        Tool("Cookies", Icons.Default.Cookie) { onOpenCookieManager() },
+        Tool("WebRTC", Icons.Default.Shield) { onOpenPrivacyGuards() },
+        Tool("Logs", Icons.Default.List) { onOpenDiagnostics() }
+    )
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Text(
+            "Quick tools",
+            color = theme.onBackground,
+            fontWeight = FontWeight.ExtraBold,
+            fontSize = 17.sp
+        )
+        tools.chunked(3).forEach { rowTools ->
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                rowTools.forEach { tool ->
+                    Card(
+                        modifier = Modifier.weight(1f).clickable(onClick = tool.onClick),
+                        shape = RoundedCornerShape(12.dp),
+                        colors = CardDefaults.cardColors(containerColor = cardBg),
+                        border = androidx.compose.foundation.BorderStroke(1.dp, cardBorder)
+                    ) {
+                        Column(
+                            modifier = Modifier.fillMaxWidth().padding(vertical = 14.dp),
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                            verticalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
+                            Icon(
+                                tool.icon,
+                                contentDescription = tool.label,
+                                tint = theme.secondary,
+                                modifier = Modifier.size(22.dp)
+                            )
+                            Text(
+                                tool.label,
+                                color = theme.onSurface,
+                                fontSize = 12.sp,
+                                fontWeight = FontWeight.SemiBold
+                            )
+                        }
+                    }
+                }
+                repeat(3 - rowTools.size) { Spacer(Modifier.weight(1f)) }
+            }
+        }
+    }
+}
+
+/**
+ * Developer Recent Errors: the newest renderer-crash / recovery-failure /
+ * popup failure events from the local diagnostics log (which those paths
+ * already record into). Empty state is honest — nothing is invented for the
+ * card.
+ */
+@Composable
+private fun RecentErrorsCard(
+    theme: ModeTheme,
+    cardBg: Color,
+    cardBorder: Color
+) {
+    val context = LocalContext.current
+    // Read off the composition path, and re-read every time this card
+    // (re)enters composition: leaving for a page and coming back to the
+    // Developer dashboard is exactly when new errors may have been recorded,
+    // so a one-shot remembered read would silently go stale.
+    var summaries by remember {
+        mutableStateOf<List<com.click.browser.engine.RecentErrorSummary>>(emptyList())
+    }
+    LaunchedEffect(Unit) {
+        summaries = withContext(Dispatchers.IO) {
+            com.click.browser.engine.recentErrorSummaries(ClickDiagnosticsLog.read(context))
+        }
+    }
+    Card(
+        shape = RoundedCornerShape(14.dp),
+        colors = CardDefaults.cardColors(containerColor = cardBg),
+        border = androidx.compose.foundation.BorderStroke(1.dp, cardBorder),
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Column(
+            modifier = Modifier.padding(14.dp),
+            verticalArrangement = Arrangement.spacedBy(6.dp)
+        ) {
+            Text(
+                "RECENT ERRORS",
+                color = Color(0xFFF2B04A),
+                fontWeight = FontWeight.Bold,
+                fontSize = 11.sp,
+                letterSpacing = 1.sp
+            )
+            if (summaries.isEmpty()) {
+                Text(
+                    "No errors recorded yet. Renderer crashes, failed recoveries and add-on popup failures will appear here.",
+                    color = theme.onSurface.copy(alpha = 0.65f),
+                    fontSize = 12.sp
+                )
+            } else {
+                val timeFormat = remember {
+                    java.text.SimpleDateFormat("HH:mm:ss", java.util.Locale.US)
+                }
+                summaries.forEach { summary ->
+                    Text(
+                        "${timeFormat.format(java.util.Date(summary.timestampMillis))}  ${summary.headline}",
+                        color = Color(0xFFE88A75),
+                        fontFamily = FontFamily.Monospace,
+                        fontSize = 12.sp
+                    )
+                    summary.detail?.let { detail ->
+                        Text(
+                            detail,
+                            color = theme.onSurface.copy(alpha = 0.65f),
+                            fontFamily = FontFamily.Monospace,
+                            fontSize = 11.sp
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+/** Power dashboard NEWS widget: the top two interest-filtered headlines. */
+@Composable
+private fun PowerNewsWidget(
+    theme: ModeTheme,
+    cardBg: Color,
+    cardBorder: Color,
+    onNavigate: (String) -> Unit
+) {
+    val context = LocalContext.current
+    var articles by remember { mutableStateOf<List<NewsArticle>>(emptyList()) }
+    var loaded by remember { mutableStateOf(false) }
+    LaunchedEffect(Unit) {
+        val interests = try {
+            context.dataStore.data.first()[AppSettings.HOME_NEWS_INTERESTS].orEmpty()
+        } catch (_: Exception) {
+            emptySet()
+        }
+        val result = NewsFeed.getArticles(context, NewsCategory.ALL)
+        val interestCategories =
+            com.click.browser.engine.NewsNotifications.categoriesForTopics(interests)
+        articles = result.articles.let { all ->
+            if (interestCategories.isNotEmpty()) {
+                all.filter { it.category in interestCategories }
+            } else {
+                all
+            }
+        }.take(2)
+        loaded = true
+    }
+    Card(
+        shape = RoundedCornerShape(16.dp),
+        colors = CardDefaults.cardColors(containerColor = cardBg),
+        border = androidx.compose.foundation.BorderStroke(1.dp, cardBorder),
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Column(
+            modifier = Modifier.padding(14.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    "NEWS",
+                    color = theme.modeAccent,
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 11.sp,
+                    letterSpacing = 1.sp,
+                    modifier = Modifier.weight(1f)
+                )
+                Text(
+                    "Your interests",
+                    color = theme.onSurface.copy(alpha = 0.55f),
+                    fontSize = 11.sp
+                )
+            }
+            when {
+                !loaded -> Text(
+                    "Loading headlines…",
+                    color = theme.onSurface.copy(alpha = 0.65f),
+                    fontSize = 12.5.sp
+                )
+                articles.isEmpty() -> Text(
+                    "No headlines right now — check your connection and try again shortly.",
+                    color = theme.onSurface.copy(alpha = 0.65f),
+                    fontSize = 12.5.sp
+                )
+                else -> articles.forEach { article ->
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable { onNavigate(article.link) },
+                        verticalArrangement = Arrangement.spacedBy(2.dp)
+                    ) {
+                        Text(
+                            article.title,
+                            color = theme.onSurface,
+                            fontWeight = FontWeight.SemiBold,
+                            fontSize = 14.sp,
+                            maxLines = 2,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                        Text(
+                            "${article.source} · ${NewsFeed.timeAgo(article.publishedAt)}",
+                            color = theme.onSurface.copy(alpha = 0.55f),
+                            fontSize = 11.sp
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+/** Power dashboard DOWNLOADS widget: live progress from the download store. */
+@Composable
+private fun PowerDownloadsWidget(
+    theme: ModeTheme,
+    activeMode: BrowserMode,
+    cardBg: Color,
+    cardBorder: Color,
+    onOpenDownloads: () -> Unit
+) {
+    val context = LocalContext.current
+    val store = remember { ClickDownloadStore(context) }
+    val records by store.flowFor(activeMode).collectAsState(initial = emptyList())
+    val active = activeDownloadRecords(records)
+    Card(
+        shape = RoundedCornerShape(16.dp),
+        colors = CardDefaults.cardColors(containerColor = cardBg),
+        border = androidx.compose.foundation.BorderStroke(1.dp, cardBorder),
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onOpenDownloads)
+    ) {
+        Column(
+            modifier = Modifier.padding(14.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    "DOWNLOADS",
+                    color = theme.modeAccent,
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 11.sp,
+                    letterSpacing = 1.sp,
+                    modifier = Modifier.weight(1f)
+                )
+                Text(
+                    if (active.isEmpty()) "Idle" else "${active.size} active",
+                    color = theme.onSurface.copy(alpha = 0.55f),
+                    fontSize = 11.sp
+                )
+            }
+            if (active.isEmpty()) {
+                Text(
+                    "No active downloads",
+                    color = theme.onSurface.copy(alpha = 0.65f),
+                    fontSize = 12.5.sp
+                )
+            } else {
+                active.take(2).forEach { record ->
+                    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                record.fileName,
+                                color = theme.onSurface,
+                                fontWeight = FontWeight.SemiBold,
+                                fontSize = 13.sp,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                                modifier = Modifier.weight(1f)
+                            )
+                            Text(
+                                downloadPercentLabel(record),
+                                color = theme.onSurface.copy(alpha = 0.7f),
+                                fontSize = 12.sp
+                            )
+                        }
+                        val fraction = downloadProgressFraction(record)
+                        if (fraction != null) {
+                            LinearProgressIndicator(
+                                progress = { fraction },
+                                modifier = Modifier.fillMaxWidth(),
+                                color = theme.primary,
+                                trackColor = theme.surfaceVariant
+                            )
+                        } else {
+                            LinearProgressIndicator(
+                                modifier = Modifier.fillMaxWidth(),
+                                color = theme.primary,
+                                trackColor = theme.surfaceVariant
+                            )
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/** Power's desktop bookmarks bar, under the dashboard address bar. */
+@Composable
+private fun BookmarksBar(
+    theme: ModeTheme,
+    onNavigate: (String) -> Unit
+) {
+    val context = LocalContext.current
+    val repository = remember { BrowserRepository(context) }
+    val bookmarks by repository.bookmarksFlow.collectAsState(initial = emptyList())
+    val barItems = bookmarksBarItems(
+        bookmarks,
+        ModePersonalization.defaultQuickSites(BrowserMode.HACK)
+    )
+    LazyRow(
+        horizontalArrangement = Arrangement.spacedBy(18.dp),
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        items(barItems) { item ->
+            Text(
+                item.label,
+                color = theme.onSurface.copy(alpha = 0.8f),
+                fontSize = 13.sp,
+                fontWeight = FontWeight.SemiBold,
+                maxLines = 1,
+                modifier = Modifier.clickable { onNavigate(item.url) }
+            )
         }
     }
 }

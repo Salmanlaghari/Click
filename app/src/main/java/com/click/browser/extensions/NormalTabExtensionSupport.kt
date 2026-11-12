@@ -128,7 +128,10 @@ internal fun popupSessionMustClose(state: NormalTabExtensionPopupRenderState): B
 internal class NormalTabExtensionRouter(
     private val runtime: GeckoRuntime,
     private val onActionsChanged: (String, List<NormalTabExtensionAction>) -> Unit,
-    private val onPopupChanged: (NormalTabExtensionPopup?) -> Unit
+    private val onPopupChanged: (NormalTabExtensionPopup?) -> Unit,
+    /** Called once when a popup's render state transitions into FAILED, so the
+     *  host can record the failure (Developer dashboard Recent Errors card). */
+    private val onPopupFailed: (NormalTabExtensionPopup) -> Unit = {}
 ) : WebExtension.ActionDelegate {
     private val mainHandler = Handler(Looper.getMainLooper())
     private val sessions = linkedMapOf<String, GeckoSession>()
@@ -312,6 +315,12 @@ internal class NormalTabExtensionRouter(
         if (next == current.renderState) return
         popup = current.copy(renderState = next)
         onPopupChanged(popup)
+        if (next == NormalTabExtensionPopupRenderState.FAILED) {
+            // FAILED is terminal and reachable only from a non-FAILED state
+            // (the guard above already returned for a no-change event), so
+            // this fires exactly once per failed popup.
+            runCatching { onPopupFailed(popup!!) }
+        }
         if (next != NormalTabExtensionPopupRenderState.LOADING) {
             popupTimeout?.let(mainHandler::removeCallbacks)
             popupTimeout = null
