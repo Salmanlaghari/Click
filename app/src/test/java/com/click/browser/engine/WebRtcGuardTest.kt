@@ -50,9 +50,14 @@ class WebRtcGuardTest {
     @Test
     fun schemePatternMatchesRealPageProtocolsOnly() {
         // The guard scripts test window.location.protocol, which includes
-        // the trailing colon. The fixed pattern /^https?:/ (no end anchor)
-        // must match real pages and reject everything else; the previous
-        // /^https?:$/ matched nothing at all.
+        // the trailing colon. Kilo's review of PR #211 flagged the
+        // end-anchored pattern as never matching; that premise did not
+        // survive verification — the colon sits INSIDE the pattern
+        // ("https?:" = http + optional s + ':'), so the anchored form
+        // matched real protocols too (asserted below for the record).
+        // The prefix form the scripts use now is equivalent for every
+        // real protocol value; the contract locked in here is the
+        // behavior: match http:/https:, reject everything else.
         val pattern = Regex("^https?:")
         assertTrue(pattern.containsMatchIn("http:"))
         assertTrue(pattern.containsMatchIn("https:"))
@@ -60,10 +65,9 @@ class WebRtcGuardTest {
         assertFalse(pattern.containsMatchIn("file:"))
         assertFalse(pattern.containsMatchIn("chrome:"))
         assertFalse(pattern.containsMatchIn("data:"))
-        assertFalse(Regex("^https?:$").containsMatchIn("https:"))
+        assertTrue(Regex("^https?:$").containsMatchIn("https:"))
         for (script in bothBlockScripts()) {
             assertTrue(script.contains("/^https?:/"))
-            assertFalse(script.contains("/^https?:$/"))
         }
     }
 

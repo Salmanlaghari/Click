@@ -50,10 +50,10 @@ object PrivacyGuards {
      * WebRTC block script for WebView tabs (private tabs use WebView by
      * default, and any tab switched to the WebView engine gets it too),
      * injected at onPageStarted while the user has "Block WebRTC" on. The
-     * scheme pattern must not anchor past the colon in
-     * `window.location.protocol` ("https:"), and the stub is installed
-     * with a locked (non-writable, non-configurable) descriptor so page
-     * scripts cannot undo the block. It replaces
+     * scheme check matches the protocol prefix of
+     * `window.location.protocol` ("https:", colon included), and the stub
+     * is installed with a locked (non-writable, non-configurable)
+     * descriptor so page scripts cannot undo the block. It replaces
      * RTCPeerConnection with a stub whose constructor throws, so page
      * scripts cannot create peer connections or start STUN/ICE gathering.
      * Best-effort by construction: WebView offers no document-start hook,

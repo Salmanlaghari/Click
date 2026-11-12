@@ -11,9 +11,8 @@
 // which applies the same block in WebView (private) tabs.
 (function () {
   try {
-    // location.protocol includes the trailing colon ("https:"), so the
-    // pattern must not end-anchor past it — the old anchored version
-    // never matched any real page.
+    // location.protocol includes the trailing colon ("https:"); match
+    // the scheme prefix directly.
     if (!/^https?:/.test(window.location.protocol)) return;
     function BlockedRTCPeerConnection() {
       throw new DOMException(
