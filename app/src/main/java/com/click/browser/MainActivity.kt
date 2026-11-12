@@ -5518,11 +5518,19 @@ class MainActivity : FragmentActivity() {
 
                                                                     override fun onPageStarted(view: WebView?, url: String?, favicon: Bitmap?) {
                                                                 super.onPageStarted(view, url, favicon)
-                                                                // Block WebRTC in WebView (private) tabs:
-                                                                // earliest hook WebView offers. GeckoView
-                                                                // tabs are covered by the built-in guard
-                                                                // extension instead (see WebRtcGuard).
-                                                                if (liveWebRtcBlocked) {
+                                                                // Block WebRTC in WebView tabs (private
+                                                                // tabs use WebView by default; any tab
+                                                                // switched to the WebView engine lands
+                                                                // here too): earliest hook WebView
+                                                                // offers. GeckoView tabs are covered by
+                                                                // the built-in guard extension instead
+                                                                // (see WebRtcGuard). The script itself
+                                                                // bails on non-http(s) schemes, so skip
+                                                                // evaluating it there entirely.
+                                                                if (liveWebRtcBlocked &&
+                                                                    (url?.startsWith("http://") == true ||
+                                                                        url?.startsWith("https://") == true)
+                                                                ) {
                                                                     view?.evaluateJavascript(
                                                                         com.click.browser.engine.PrivacyGuards.WEBRTC_BLOCK_JS, null
                                                                     )
