@@ -699,6 +699,9 @@ object DownloadHelper {
             runCatching { destination?.delete() }
             throw canceledByUser
         } catch (_: Exception) {
+            // Same for ordinary failures (disk full, I/O error): no partial
+            // file is left behind in Downloads/ClickBrowser.
+            runCatching { destination?.delete() }
             null
         }
     }
