@@ -10197,9 +10197,11 @@ fun DownloadActivityIndicator(
         ),
         label = "download-strip-pulse-alpha"
     )
+    val activeResponse = responses.firstOrNull { !it.paused }
     val label = when {
         runningRecords.isNotEmpty() -> "Downloading ${runningRecords.first().fileName}"
-        responses.isNotEmpty() -> "Downloading ${responses.first().fileName}"
+        activeResponse != null -> "Downloading ${activeResponse.fileName}"
+        responses.isNotEmpty() -> "Download paused — ${responses.first().fileName}"
         else -> "Downloads paused or waiting"
     }
     androidx.compose.animation.AnimatedVisibility(

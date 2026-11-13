@@ -40,6 +40,8 @@ private data class SavedLocationWrite(
 )
 
 object DownloadHelper {
+    /** Minimum gap between progress-notification refreshes for streamed downloads. */
+    private const val NOTIFICATION_UPDATE_INTERVAL_MS = 1_000L
     private const val MIN_FREE_SPACE_AFTER_STAGING_BYTES = 64L * 1024L * 1024L
     private const val SPACE_CHECK_INTERVAL_BYTES = 1024L * 1024L
     private val responseCallbackScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
@@ -71,6 +73,14 @@ object DownloadHelper {
             )
         } catch (cancelled: CancellationException) {
             throw cancelled
+        } catch (_: ResponseDownloadCanceledException) {
+            // The user canceled from the Downloads screen or the progress
+            // notification — that is not a failure and must not be reported
+            // as one.
+            withContext(Dispatchers.Main.immediate) {
+                Toast.makeText(appContext, "Download canceled.", Toast.LENGTH_SHORT).show()
+            }
+            null
         } catch (_: Exception) {
             withContext(Dispatchers.Main.immediate) {
                 Toast.makeText(appContext, "Download failed.", Toast.LENGTH_LONG).show()
@@ -301,10 +311,42 @@ object DownloadHelper {
             else -> "Downloads/ClickBrowser"
         }
         val registryId = ActiveResponseDownloads.begin(safeName, destinationLabel, totalBytes)
+        val control = ActiveResponseDownloads.control(registryId)
+        // Cancel closes the one-shot body, so a read blocked on the network
+        // unblocks at once instead of hanging until the read timeout.
+        control?.onCancel = { runCatching { responseBody.close() } }
+        val appContext = context.applicationContext
+        // Prince (13 Nov): a streamed download must announce itself in the
+        // status bar the moment it starts, exactly like an engine download.
+        // Until now this path posted nothing while copying — only the
+        // completion alert below — so APKPure-style downloads ran invisibly
+        // outside the in-app strip.
+        responseCallbackScope.launch {
+            ActiveResponseDownloads.active.value.firstOrNull { it.id == registryId }?.let { item ->
+                ClickDownloadNotifications.showResponseProgress(appContext, item)
+            }
+        }
+        // Progress callbacks fire every ~256 KB; the notification is
+        // refreshed at most once per interval (the copy runs on one thread,
+        // so a plain captured timestamp is safe here).
+        var lastNotificationAt = 0L
         return try {
             val saved = enqueueResponseInternal(
-                context, responseBody, url, safeName, actualMimeType, location, mode
-            ) { bytes -> ActiveResponseDownloads.updateProgress(registryId, bytes) }
+                context, responseBody, url, safeName, actualMimeType, location, mode, control
+            ) { bytes ->
+                ActiveResponseDownloads.updateProgress(registryId, bytes)
+                val now = System.currentTimeMillis()
+                if (now - lastNotificationAt >= NOTIFICATION_UPDATE_INTERVAL_MS) {
+                    lastNotificationAt = now
+                    val item = ActiveResponseDownloads.active.value
+                        .firstOrNull { it.id == registryId }
+                    if (item != null) {
+                        responseCallbackScope.launch {
+                            ClickDownloadNotifications.showResponseProgress(appContext, item)
+                        }
+                    }
+                }
+            }
             if (saved != null) {
                 // Response downloads stream outside the engine; still give the
                 // user the completion alert in the notification bar.
@@ -312,6 +354,7 @@ object DownloadHelper {
             }
             saved
         } finally {
+            ClickDownloadNotifications.cancelResponseProgress(appContext, registryId)
             ActiveResponseDownloads.end(registryId)
         }
     }
@@ -324,14 +367,15 @@ object DownloadHelper {
         mimeType: String?,
         location: String,
         mode: BrowserMode,
+        control: ResponseDownloadControl?,
         onProgress: (Long) -> Unit
     ): SavedDownload? {
         if (location != DownloadSettings.LOCATION_CUSTOM) {
             val savedWrite = withContext(Dispatchers.IO) {
                 when (location) {
-                    DownloadSettings.LOCATION_APP -> copyResponseBodyToAppStorage(context, responseBody, safeName, onProgress)
+                    DownloadSettings.LOCATION_APP -> copyResponseBodyToAppStorage(context, responseBody, safeName, control, onProgress)
                         ?.let { SavedLocationWrite(it) }
-                    else -> copyResponseBodyToPublicDownloads(context, responseBody, safeName, mimeType, onProgress)
+                    else -> copyResponseBodyToPublicDownloads(context, responseBody, safeName, mimeType, control, onProgress)
                         ?.let { SavedLocationWrite(it) }
                 }
             }
@@ -344,7 +388,11 @@ object DownloadHelper {
         }
 
         val staged = try {
-            stageResponseBody(context, responseBody, onProgress)
+            stageResponseBody(context, responseBody, control, onProgress)
+        } catch (canceledByUser: ResponseDownloadCanceledException) {
+            // User cancel: staged temp files are already cleaned up by
+            // stageResponseBody; propagate so no failure toast is shown.
+            throw canceledByUser
         } catch (_: Exception) {
             withContext(Dispatchers.Main) {
                 Toast.makeText(context, "The custom-folder response could not be staged safely.", Toast.LENGTH_LONG).show()
@@ -387,8 +435,10 @@ object DownloadHelper {
 
         val savedWrite = withContext(Dispatchers.IO) {
             try {
-                copyToPublicDownloads(context, staged, safeName, mimeType, onProgress)
+                copyToPublicDownloads(context, staged, safeName, mimeType, control, onProgress)
                     ?.let { SavedLocationWrite(it, usedPublicFallback = true) }
+            } catch (canceledByUser: ResponseDownloadCanceledException) {
+                throw canceledByUser
             } catch (_: Exception) {
                 null
             } finally {
@@ -413,6 +463,7 @@ object DownloadHelper {
     private suspend fun stageResponseBody(
         context: Context,
         responseBody: InputStream,
+        control: ResponseDownloadControl? = null,
         onProgress: ((Long) -> Unit)? = null
     ): File =
         withContext(Dispatchers.IO) {
@@ -433,6 +484,7 @@ object DownloadHelper {
                         var availableBudget = (android.os.StatFs(directory.absolutePath).availableBytes -
                             MIN_FREE_SPACE_AFTER_STAGING_BYTES).coerceAtLeast(0L)
                         while (true) {
+                            control?.checkpoint()
                             val count = input.read(buffer)
                             if (count < 0) break
                             if (stagedBytes > Long.MAX_VALUE - count) {
@@ -469,6 +521,7 @@ object DownloadHelper {
         context: Context,
         responseBody: InputStream,
         fileName: String,
+        control: ResponseDownloadControl? = null,
         onProgress: ((Long) -> Unit)? = null
     ): String? {
         var destination: File? = null
@@ -479,9 +532,12 @@ object DownloadHelper {
             val outputFile = File(directory, fileName)
             destination = outputFile
             outputFile.outputStream().use { output ->
-                responseBody.use { copyWithProgress(it, output, onProgress) }
+                responseBody.use { copyWithProgress(it, output, onProgress, control) }
             }
             outputFile.absolutePath
+        } catch (canceledByUser: ResponseDownloadCanceledException) {
+            runCatching { destination?.delete() }
+            throw canceledByUser
         } catch (_: Exception) {
             runCatching { destination?.delete() }
             null
@@ -495,6 +551,7 @@ object DownloadHelper {
         responseBody: InputStream,
         fileName: String,
         mimeType: String?,
+        control: ResponseDownloadControl? = null,
         onProgress: ((Long) -> Unit)? = null
     ): String? {
         val type = normalizeMimeType(mimeType, fileName)
@@ -514,7 +571,7 @@ object DownloadHelper {
                 val output = context.contentResolver.openOutputStream(uri)
                     ?: throw IllegalStateException("Download output stream unavailable")
                 output.use { destination ->
-                    responseBody.use { copyWithProgress(it, destination, onProgress) }
+                    responseBody.use { copyWithProgress(it, destination, onProgress, control) }
                 }
                 val ready = ContentValues().apply { put(MediaStore.MediaColumns.IS_PENDING, 0) }
                 if (context.contentResolver.update(uri, ready, null, null) <= 0) {
@@ -534,11 +591,17 @@ object DownloadHelper {
                 val outputFile = File(directory, fileName)
                 pendingUri = Uri.fromFile(outputFile)
                 outputFile.outputStream().use { output ->
-                    responseBody.use { copyWithProgress(it, output, onProgress) }
+                    responseBody.use { copyWithProgress(it, output, onProgress, control) }
                 }
                 pendingUri = null
                 outputFile.absolutePath
             }
+        } catch (canceledByUser: ResponseDownloadCanceledException) {
+            pendingUri?.let { uri ->
+                if (uri.scheme == "file") runCatching { File(uri.path.orEmpty()).delete() }
+                else runCatching { context.contentResolver.delete(uri, null, null) }
+            }
+            throw canceledByUser
         } catch (_: Exception) {
             pendingUri?.let { uri ->
                 if (uri.scheme == "file") runCatching { File(uri.path.orEmpty()).delete() }
@@ -550,16 +613,23 @@ object DownloadHelper {
         }
     }
 
-    /** Streams [input] to [output], reporting cumulative bytes at most every ~256 KB. */
+    /**
+     * Streams [input] to [output], reporting cumulative bytes at most every
+     * ~256 KB. When [control] is present it is consulted once per buffer:
+     * the copy blocks while the user has paused the download and aborts
+     * with [ResponseDownloadCanceledException] on cancel.
+     */
     private fun copyWithProgress(
         input: InputStream,
         output: java.io.OutputStream,
-        onProgress: ((Long) -> Unit)?
+        onProgress: ((Long) -> Unit)?,
+        control: ResponseDownloadControl? = null
     ) {
         val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
         var total = 0L
         var lastReported = 0L
         while (true) {
+            control?.checkpoint()
             val count = input.read(buffer)
             if (count < 0) break
             output.write(buffer, 0, count)
@@ -577,6 +647,7 @@ object DownloadHelper {
         source: File,
         fileName: String,
         mimeType: String?,
+        control: ResponseDownloadControl? = null,
         onProgress: ((Long) -> Unit)? = null
     ): String? {
         val type = normalizeMimeType(mimeType, fileName)
@@ -592,11 +663,14 @@ object DownloadHelper {
                 ?: return null
             return try {
                 context.contentResolver.openOutputStream(uri)?.use { output ->
-                    source.inputStream().use { copyWithProgress(it, output, onProgress) }
+                    source.inputStream().use { copyWithProgress(it, output, onProgress, control) }
                 } ?: throw IllegalStateException("Download output stream unavailable")
                 val ready = ContentValues().apply { put(MediaStore.MediaColumns.IS_PENDING, 0) }
                 context.contentResolver.update(uri, ready, null, null)
                 uri.toString()
+            } catch (canceledByUser: ResponseDownloadCanceledException) {
+                runCatching { context.contentResolver.delete(uri, null, null) }
+                throw canceledByUser
             } catch (_: Exception) {
                 runCatching { context.contentResolver.delete(uri, null, null) }
                 null
@@ -614,9 +688,11 @@ object DownloadHelper {
             if (!directory.exists() && !directory.mkdirs()) return null
             val destination = File(directory, fileName)
             destination.outputStream().use { output ->
-                source.inputStream().use { copyWithProgress(it, output, onProgress) }
+                source.inputStream().use { copyWithProgress(it, output, onProgress, control) }
             }
             destination.absolutePath
+        } catch (canceledByUser: ResponseDownloadCanceledException) {
+            throw canceledByUser
         } catch (_: Exception) {
             null
         }
