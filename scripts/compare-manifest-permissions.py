@@ -12,6 +12,11 @@ PermissionDeclaration = tuple[str, tuple[tuple[str, str], ...]]
 APPROVED_ADDITIONS = {
     ("uses-permission", ((ANDROID + "name", "android.permission.FOREGROUND_SERVICE_DATA_SYNC"),)),
     ("uses-permission", ((ANDROID + "name", "android.permission.RUN_USER_INITIATED_JOBS"),)),
+    # Prince-approved 2026-11-13 (PR #215): lets Click hand an APK the user
+    # downloaded with Click itself to the system installer. NOTE: this is a
+    # Google Play restricted permission — a Play Console declaration is
+    # still owed before any release containing it is submitted.
+    ("uses-permission", ((ANDROID + "name", "android.permission.REQUEST_INSTALL_PACKAGES"),)),
 }
 
 
