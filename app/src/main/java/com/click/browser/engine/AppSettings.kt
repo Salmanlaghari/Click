@@ -158,6 +158,11 @@ object AppSettings {
     val DEFAULT_BROWSER_PROMPT_SHOWN = booleanPreferencesKey("default_browser_prompt_shown")
     /** True after the first-run feature tour is completed or skipped. */
     val ONBOARDING_COMPLETED = booleanPreferencesKey("onboarding_completed")
+    /** Wall-clock ms when the user last dismissed the "enable notifications"
+     *  prompt shown on open (0 / absent = never dismissed). The prompt only
+     *  re-appears after a week, and only while notifications are still off,
+     *  so it never nags on every launch. */
+    val NOTIFICATION_PROMPT_DISMISSED_MS = longPreferencesKey("notification_prompt_dismissed_ms")
 
     // In-app Home feed is separate from background alerts and stays off until enabled.
     val HOME_NEWS_FEED_ENABLED = booleanPreferencesKey("home_news_feed_enabled")

@@ -259,6 +259,7 @@ fun ClickHomeScreen(
     onOpenCookieManager: () -> Unit = {},
     onOpenPrivacyGuards: () -> Unit = {},
     onOpenDiagnostics: () -> Unit = {},
+    onSearchEngineClick: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val cardBg = theme.surface
@@ -328,8 +329,9 @@ fun ClickHomeScreen(
 
         // Per-mode dashboard headers (Prince's approved mockups, 2026-11-12):
         // Simple and Advance lead with the search/address bar, then the
-        // greeting row. Power leads with the bar plus its desktop bookmarks
-        // bar (its tab strip is browser chrome, rendered above this screen).
+        // greeting row. Power leads with the bar plus its bookmarks bar
+        // (dashboard body content — the top of the screen itself carries
+        // only the thin address-bar strip, per Prince's top-bar rule).
         // Developer leads with the squared bar alone — the status strip is
         // its first dashboard section, and there is no greeting row.
         when (activeMode) {
@@ -338,7 +340,8 @@ fun ClickHomeScreen(
                     theme = theme,
                     activeMode = activeMode,
                     searchEngine = searchEngine,
-                    onNavigate = onNavigate
+                    onNavigate = onNavigate,
+                    onSearchEngineClick = onSearchEngineClick
                 )
                 HomeTopRow(
                     theme = theme,
@@ -354,7 +357,8 @@ fun ClickHomeScreen(
                     theme = theme,
                     activeMode = activeMode,
                     searchEngine = searchEngine,
-                    onNavigate = onNavigate
+                    onNavigate = onNavigate,
+                    onSearchEngineClick = onSearchEngineClick
                 )
                 BookmarksBar(theme = theme, onNavigate = onNavigate)
             }
@@ -363,7 +367,8 @@ fun ClickHomeScreen(
                     theme = theme,
                     activeMode = activeMode,
                     searchEngine = searchEngine,
-                    onNavigate = onNavigate
+                    onNavigate = onNavigate,
+                    onSearchEngineClick = onSearchEngineClick
                 )
             }
         }
@@ -681,7 +686,8 @@ private fun SmartSearchBar(
     theme: ModeTheme,
     activeMode: BrowserMode,
     searchEngine: String,
-    onNavigate: (String) -> Unit
+    onNavigate: (String) -> Unit,
+    onSearchEngineClick: () -> Unit = {}
 ) {
     var query by remember { mutableStateOf("") }
     val keyboardController = LocalSoftwareKeyboardController.current
@@ -717,7 +723,12 @@ private fun SmartSearchBar(
             modifier = Modifier.padding(start = 6.dp, end = 4.dp, top = barVerticalPadding, bottom = barVerticalPadding),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            SearchEngineBadge(engine = searchEngine, theme = theme, compact = false)
+            SearchEngineBadge(
+                engine = searchEngine,
+                theme = theme,
+                compact = false,
+                onClick = onSearchEngineClick
+            )
             OutlinedTextField(
                 value = query,
                 onValueChange = { query = it },
@@ -745,12 +756,24 @@ private fun SmartSearchBar(
 }
 
 @Composable
-private fun SearchEngineBadge(engine: String, theme: ModeTheme, compact: Boolean) {
+private fun SearchEngineBadge(
+    engine: String,
+    theme: ModeTheme,
+    compact: Boolean,
+    onClick: (() -> Unit)? = null
+) {
     val brand = SearchEngineBrands.forEngine(engine)
     Row(
         modifier = Modifier
             .padding(horizontal = if (compact) 2.dp else 4.dp)
-            .widthIn(max = if (compact) 82.dp else 124.dp),
+            .widthIn(max = if (compact) 82.dp else 124.dp)
+            .then(
+                if (onClick != null) {
+                    Modifier.clickable { onClick() }
+                } else {
+                    Modifier
+                }
+            ),
         verticalAlignment = Alignment.CenterVertically
     ) {
         Box(
@@ -2356,7 +2379,8 @@ fun CompactBrowseBar(
     showDeveloperTools: Boolean = false,
     onDeveloperToolsClick: () -> Unit = {},
     showExtensionButton: Boolean = false,
-    onAddonsClick: () -> Unit = {}
+    onAddonsClick: () -> Unit = {},
+    onSearchEngineClick: () -> Unit = {}
 ) {
     var textInput by remember(currentUrl) { mutableStateOf(currentUrl) }
     val keyboardController = LocalSoftwareKeyboardController.current
@@ -2693,7 +2717,12 @@ fun CompactBrowseBar(
                             tint = theme.onSurface.copy(alpha = 0.58f),
                             modifier = Modifier.padding(start = 8.dp).size(18.dp)
                         )
-                        SearchEngineBadge(engine = searchEngine, theme = theme, compact = true)
+                        SearchEngineBadge(
+                            engine = searchEngine,
+                            theme = theme,
+                            compact = true,
+                            onClick = onSearchEngineClick
+                        )
                         androidx.compose.foundation.text.BasicTextField(
                             value = textInput,
                             onValueChange = { textInput = it },

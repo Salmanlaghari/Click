@@ -95,6 +95,26 @@ fun DownloadsScreen(
     val activeResponseDownloads by ActiveResponseDownloads.active.collectAsState()
     // Premium open-with sheet target (engine record or saved file).
     var openWithTarget by remember { mutableStateOf<OpenWithTarget?>(null) }
+    // APK whose install is waiting on the "install unknown apps" allowance.
+    var apkPermissionTarget by remember { mutableStateOf<OpenWithTarget?>(null) }
+    /**
+     * Opens a finished file. APKs get Click's own install flow instead of
+     * the generic Open-With sheet: straight to the system installer when
+     * installs from Click are allowed, otherwise a dialog that sends the
+     * user to the exact system setting (see ApkInstaller).
+     */
+    fun handleOpenTarget(target: OpenWithTarget?) {
+        if (target == null) return
+        if (com.click.browser.engine.ApkInstaller.isApk(target.mimeType, target.fileName)) {
+            if (com.click.browser.engine.ApkInstaller.canInstall(context)) {
+                com.click.browser.engine.ApkInstaller.launchInstaller(context, target.uri)
+            } else {
+                apkPermissionTarget = target
+            }
+        } else {
+            openWithTarget = target
+        }
+    }
     LaunchedEffect(mode) {
         CustomDownloadScheduler.reconcile(context, mode)
         com.click.browser.engine.ClickDownloadEngine.reconcile(context, mode)
@@ -103,13 +123,18 @@ fun DownloadsScreen(
         val recordId = openWithRecordId ?: return@LaunchedEffect
         val record = clickDownloads.firstOrNull { it.id == recordId } ?: return@LaunchedEffect
         if (record.state == com.click.browser.engine.ClickDownloadState.COMPLETED) {
-            openWithTarget = openWithTargetForRecord(context, record)
+            handleOpenTarget(openWithTargetForRecord(context, record))
             onOpenWithConsumed()
         }
     }
     var notificationsEnabled by remember {
         mutableStateOf(CustomDownloadNotifications.canPostNotifications(context))
     }
+    // Same check for Click's own download engine — previously the warning
+    // below only looked at the custom-folder checker, so a user whose
+    // downloads all ran through the Click engine (the default path) never
+    // saw the "notifications are off" warning at all.
+    var clickNotificationsEnabled by remember { mutableStateOf(true) }
     val notificationPermissionLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestPermission()
     ) {
@@ -117,6 +142,8 @@ fun DownloadsScreen(
     }
     LaunchedEffect(resumeSignal) {
         notificationsEnabled = CustomDownloadNotifications.canPostNotifications(context)
+        clickNotificationsEnabled =
+            com.click.browser.engine.ClickDownloadNotifications.canPost(context)
     }
     var queryState by remember {
         mutableStateOf<DownloadCenterQueryState>(DownloadCenterQueryState.Loading)
@@ -186,7 +213,9 @@ fun DownloadsScreen(
                 .fillMaxSize()
                 .padding(padding)
         ) {
-            if (!notificationsEnabled && customDownloads.isNotEmpty()) {
+            if ((!notificationsEnabled || !clickNotificationsEnabled) &&
+                (customDownloads.isNotEmpty() || clickDownloads.isNotEmpty() || downloads.isNotEmpty())
+            ) {
                 item(key = "custom-download-notification-permission") {
                     Card(
                         modifier = Modifier
@@ -342,7 +371,7 @@ fun DownloadsScreen(
                 items(completedClick, key = { "click-done-${it.id}" }) { record ->
                     ClickDownloadRow(
                         record = record,
-                        onOpen = { openWithTarget = openWithTargetForRecord(context, record) },
+                        onOpen = { handleOpenTarget(openWithTargetForRecord(context, record)) },
                         onDismiss = {
                             scope.launch {
                                 com.click.browser.engine.ClickDownloadEngine.dismiss(context, mode, record.id)
@@ -438,7 +467,7 @@ fun DownloadsScreen(
                     SavedDownloadRow(
                         context = context,
                         item = item,
-                        onOpen = { openWithTarget = openWithTargetForSaved(context, item) }
+                        onOpen = { handleOpenTarget(openWithTargetForSaved(context, item)) }
                     )
                 }
             }
@@ -460,6 +489,33 @@ fun DownloadsScreen(
                 }
             }
         }
+    }
+
+    apkPermissionTarget?.let { target ->
+        AlertDialog(
+            onDismissRequest = { apkPermissionTarget = null },
+            title = { Text("Allow installs from Click") },
+            text = {
+                Text(
+                    "To install ${target.fileName}, Android needs you to allow Click to " +
+                        "install apps. Open Settings, turn on \"Allow from this source\", " +
+                        "then come back and tap the file again."
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    com.click.browser.engine.ApkInstaller.openUnknownAppSourcesSettings(context)
+                    apkPermissionTarget = null
+                }) {
+                    Text("Open settings")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { apkPermissionTarget = null }) {
+                    Text("Not now")
+                }
+            }
+        )
     }
 
     openWithTarget?.let { target ->
