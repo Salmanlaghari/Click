@@ -105,6 +105,36 @@ fun DownloadsScreen(
      * installs from Click are allowed, otherwise a dialog that sends the
      * user to the exact system setting (see ApkInstaller).
      */
+    /**
+     * Per-site "Automatic downloads" gate, shared by every restart path on
+     * this screen (retry, resume, custom-folder retry) so none of them can
+     * bypass a site the user blocked in Site settings (Kilo, PR #215).
+     * Returns the blocked host, or null when the download may proceed.
+     * Fails open on any read error, matching the browser funnel.
+     */
+    suspend fun blockedDownloadHost(url: String): String? {
+        val host = try {
+            android.net.Uri.parse(url).host?.lowercase().orEmpty()
+        } catch (_: Exception) {
+            ""
+        }
+        if (host.isEmpty()) return null
+        val blocked = try {
+            repository.siteSettingsFlow.first().forHost(host)?.autoDownloads == false
+        } catch (_: Exception) {
+            false
+        }
+        return if (blocked) host else null
+    }
+
+    fun toastDownloadBlocked(host: String) {
+        Toast.makeText(
+            context,
+            "Downloads are blocked for $host in Site settings",
+            Toast.LENGTH_SHORT
+        ).show()
+    }
+
     fun handleOpenTarget(target: OpenWithTarget?) {
         if (target == null) return
         if (com.click.browser.engine.ApkInstaller.isApk(target.mimeType, target.fileName)) {
@@ -331,7 +361,12 @@ fun DownloadsScreen(
                         },
                         onResume = {
                             scope.launch {
-                                com.click.browser.engine.ClickDownloadEngine.resume(context, mode, record.id)
+                                val blockedHost = blockedDownloadHost(record.url)
+                                if (blockedHost != null) {
+                                    toastDownloadBlocked(blockedHost)
+                                } else {
+                                    com.click.browser.engine.ClickDownloadEngine.resume(context, mode, record.id)
+                                }
                             }
                         },
                         onCancel = {
@@ -423,7 +458,12 @@ fun DownloadsScreen(
                         record = record,
                         onResume = {
                             scope.launch {
-                                com.click.browser.engine.ClickDownloadEngine.resume(context, mode, record.id)
+                                val blockedHost = blockedDownloadHost(record.url)
+                                if (blockedHost != null) {
+                                    toastDownloadBlocked(blockedHost)
+                                } else {
+                                    com.click.browser.engine.ClickDownloadEngine.resume(context, mode, record.id)
+                                }
                             }
                         },
                         onDismiss = {
@@ -438,28 +478,11 @@ fun DownloadsScreen(
                         item = item,
                         onRetry = {
                             scope.launch {
-                                // Per-site "Automatic downloads" gate: the
-                                // same check the browser download funnel
-                                // applies, so a retry cannot bypass a site
-                                // the user blocked in Site settings
-                                // (Kilo, PR #215).
-                                val retryHost = try {
-                                    android.net.Uri.parse(item.sourceUrl).host?.lowercase().orEmpty()
-                                } catch (_: Exception) {
-                                    ""
-                                }
-                                val retryBlocked = retryHost.isNotEmpty() && try {
-                                    repository.siteSettingsFlow.first()
-                                        .forHost(retryHost)?.autoDownloads == false
-                                } catch (_: Exception) {
-                                    false
-                                }
-                                if (retryBlocked) {
-                                    Toast.makeText(
-                                        context,
-                                        "Downloads are blocked for $retryHost in Site settings",
-                                        Toast.LENGTH_SHORT
-                                    ).show()
+                                // Per-site gate (shared helper): a retry
+                                // cannot bypass a blocked site.
+                                val blockedHost = blockedDownloadHost(item.sourceUrl)
+                                if (blockedHost != null) {
+                                    toastDownloadBlocked(blockedHost)
                                     return@launch
                                 }
                                 val saved = DownloadHelper.enqueue(
@@ -492,7 +515,10 @@ fun DownloadsScreen(
                         onCancel = {},
                         onRetry = {
                             scope.launch {
-                                if (!DownloadHelper.retryCustomFolder(context, item)) {
+                                val blockedHost = blockedDownloadHost(item.url)
+                                if (blockedHost != null) {
+                                    toastDownloadBlocked(blockedHost)
+                                } else if (!DownloadHelper.retryCustomFolder(context, item)) {
                                     Toast.makeText(context, "Could not restart this download.", Toast.LENGTH_SHORT).show()
                                 }
                             }

@@ -1743,6 +1743,9 @@ class MainActivity : FragmentActivity() {
                                 initialGeckoSessionState = it.geckoSessionState
                             )
                         })
+                        // Default landing is the previously active restored
+                        // tab; the two explicit cases below override it.
+                        activeTabIndex = savedActive.coerceIn(0, (tabs.size - 1).coerceAtLeast(0))
                         if (shouldLandOnHomeDashboard(startViewUrl)) {
                             // Land on this mode's home dashboard, with the
                             // restored tabs kept behind it. Before this fix
@@ -1761,16 +1764,14 @@ class MainActivity : FragmentActivity() {
                             tabs.add(0, TabItem(url = "about:blank", title = "Home"))
                             activeTabIndex = 0
                         } else {
-                            // External VIEW link: it lands in front, with the
-                            // restored tabs behind it.
-                            val linkUrl = startViewUrl
-                            if (linkUrl != null) {
-                                val startTitle = hostOfUrl(linkUrl).ifBlank { "Opening link" }
-                                tabs.add(TabItem(url = linkUrl, title = startTitle))
-                                activeTabIndex = tabs.lastIndex
-                            } else {
-                                activeTabIndex = savedActive.coerceIn(0, (tabs.size - 1).coerceAtLeast(0))
-                            }
+                            // The policy returns false only for an explicit
+                            // external VIEW link, so startViewUrl is
+                            // non-null here: the link lands in front, with
+                            // the restored tabs behind it.
+                            val linkUrl = requireNotNull(startViewUrl)
+                            val startTitle = hostOfUrl(linkUrl).ifBlank { "Opening link" }
+                            tabs.add(TabItem(url = linkUrl, title = startTitle))
+                            activeTabIndex = tabs.lastIndex
                         }
                         sessionStartupReady = true
                     }
