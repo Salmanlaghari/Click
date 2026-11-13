@@ -51,7 +51,11 @@ android {
         applicationId = "com.teampkai.clickbrowser"
         minSdk = 26
         targetSdk = 36
-        versionCode = 19
+        // Code 20 with the name still 1.8.0: Play rejected re-uploading
+        // code 19 ("Version code 19 has already been used") when the
+        // PR #216 download-fix rebuild tried to replace the unsubmitted
+        // 1.8.0 draft, so only the code moves — users see one "1.8.0".
+        versionCode = 20
         versionName = "1.8.0"
 
         // Built-in Groq key for AI chat, injected at build time from the
