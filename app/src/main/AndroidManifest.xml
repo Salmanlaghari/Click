@@ -66,6 +66,11 @@
         <receiver
             android:name=".engine.ClickDownloadActionReceiver"
             android:exported="false" />
+        <!-- Pause / Resume / Cancel actions from response-body download
+             progress notifications. Only reachable via our own PendingIntents. -->
+        <receiver
+            android:name=".engine.ResponseDownloadActionReceiver"
+            android:exported="false" />
         <service
             android:name="androidx.work.impl.foreground.SystemForegroundService"
             android:foregroundServiceType="dataSync"

@@ -187,6 +187,79 @@ object ClickDownloadNotifications {
         runCatching { manager.notify(alertNotificationId(fileName), responseSavedNotification(context, fileName)) }
     }
 
+    /** Progress-notification id for a response-body download (registry id). */
+    fun responseNotificationId(registryId: Long): Int =
+        (0x20000000 or (("respdl:$registryId").hashCode() and 0x3fffffff)).coerceAtLeast(1)
+
+    /**
+     * Ongoing progress notification for a response-body download. Until
+     * 2026-11-13 these streamed downloads posted NO progress notification
+     * at all — only the completion alert above — so a user whose download
+     * arrived as a GeckoView external response (e.g. APKPure) saw nothing
+     * in the status bar, just the in-app strip. Same channel, same tap
+     * target (Click's Downloads page) and the same Pause/Resume/Cancel
+     * actions as the engine's progress notification; the actions reach the
+     * live stream's gate through [ResponseDownloadActionReceiver].
+     */
+    fun responseProgressNotification(context: Context, item: ActiveResponseDownload): Notification {
+        ensureChannels(context)
+        val percent = customDownloadProgress(item.downloadedBytes, item.totalBytes)
+        val percentText = percent?.let { "${(it * 100).toInt()}% · " }.orEmpty()
+        val sizeText = if (item.totalBytes > 0L) {
+            "${formatBytes(item.downloadedBytes)} of ${formatBytes(item.totalBytes)}"
+        } else {
+            "${formatBytes(item.downloadedBytes)} downloaded"
+        }
+        val builder = NotificationCompat.Builder(context, PROGRESS_CHANNEL_ID)
+            .setSmallIcon(android.R.drawable.stat_sys_download)
+            .setContentTitle(item.fileName)
+            .setContentText(
+                if (item.paused) "Paused · $sizeText" else "$percentText$sizeText"
+            )
+            .setContentIntent(openDownloadsIntent(context, "response:${item.id}", openWithRecord = false))
+            .setOnlyAlertOnce(true)
+            .setOngoing(true)
+            .setCategory(NotificationCompat.CATEGORY_PROGRESS)
+            .setPriority(NotificationCompat.PRIORITY_LOW)
+        if (percent != null) {
+            builder.setProgress(100, (percent * 100).toInt(), false)
+        } else {
+            builder.setProgress(0, 0, !item.paused)
+        }
+        if (item.paused) {
+            builder.addAction(0, "Resume", responseActionIntent(context, item.id, ACTION_RESUME))
+        } else {
+            builder.addAction(0, "Pause", responseActionIntent(context, item.id, ACTION_PAUSE))
+        }
+        builder.addAction(0, "Cancel", responseActionIntent(context, item.id, ACTION_CANCEL))
+        return builder.build()
+    }
+
+    suspend fun showResponseProgress(context: Context, item: ActiveResponseDownload) {
+        if (!canPost(context)) return
+        val manager = context.getSystemService(Context.NOTIFICATION_SERVICE) as? NotificationManager ?: return
+        runCatching { manager.notify(responseNotificationId(item.id), responseProgressNotification(context, item)) }
+    }
+
+    fun cancelResponseProgress(context: Context, registryId: Long) {
+        val manager = context.getSystemService(Context.NOTIFICATION_SERVICE) as? NotificationManager ?: return
+        runCatching { manager.cancel(responseNotificationId(registryId)) }
+    }
+
+    private fun responseActionIntent(context: Context, registryId: Long, action: String): PendingIntent {
+        val intent = Intent(context, ResponseDownloadActionReceiver::class.java).apply {
+            this.action = action
+            data = android.net.Uri.parse("click://response-download-action/$registryId")
+            putExtra(ResponseDownloadActionReceiver.EXTRA_RESPONSE_ID, registryId)
+        }
+        return PendingIntent.getBroadcast(
+            context,
+            ("resp:$registryId:$action").hashCode(),
+            intent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+    }
+
     fun cancelProgress(context: Context, recordId: String) {
         val manager = context.getSystemService(Context.NOTIFICATION_SERVICE) as? NotificationManager ?: return
         runCatching { manager.cancel(notificationId(recordId)) }

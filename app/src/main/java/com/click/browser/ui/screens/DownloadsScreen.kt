@@ -17,15 +17,10 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
-import androidx.compose.animation.core.RepeatMode
-import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.animateFloatAsState
-import androidx.compose.animation.core.infiniteRepeatable
-import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Close
-import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.ErrorOutline
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
@@ -39,7 +34,6 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.asImageBitmap
-import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -188,6 +182,16 @@ fun DownloadsScreen(
     var retryToken by remember { mutableStateOf(0) }
     var isRetrying by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
+
+    /** Re-posts a response download's progress notification after a
+     *  Pause/Resume tap here, so the status bar reflects the new state
+     *  immediately instead of waiting for the next progress tick. */
+    fun refreshResponseNotification(id: Long) {
+        val item = ActiveResponseDownloads.active.value.firstOrNull { it.id == id } ?: return
+        scope.launch {
+            com.click.browser.engine.ClickDownloadNotifications.showResponseProgress(context, item)
+        }
+    }
 
     LaunchedEffect(retryToken) {
         while (isActive) {
@@ -397,7 +401,22 @@ fun DownloadsScreen(
                     )
                 }
                 items(activeResponseDownloads, key = { "response-${it.id}" }) { item ->
-                    ActiveResponseDownloadRow(item = item)
+                    ActiveResponseDownloadRow(
+                        item = item,
+                        onPause = {
+                            ActiveResponseDownloads.pause(item.id)
+                            refreshResponseNotification(item.id)
+                        },
+                        onResume = {
+                            ActiveResponseDownloads.resume(item.id)
+                            refreshResponseNotification(item.id)
+                        },
+                        onCancel = {
+                            ActiveResponseDownloads.cancel(item.id)
+                            com.click.browser.engine.ClickDownloadNotifications
+                                .cancelResponseProgress(context, item.id)
+                        }
+                    )
                 }
                 item { HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp)) }
             }
@@ -595,46 +614,98 @@ fun DownloadsScreen(
     }
 }
 
-/** Live row for a response-body download Click is streaming to storage itself. */
+/**
+ * Circular, animated progress ring for an in-progress download, with the
+ * percentage in the middle (Prince, 13 Nov: a thin line alone did not read
+ * as progress — he asked for a circle with animation and a visible %).
+ * Continuously spinning (indeterminate) when the total size is unknown.
+ */
 @Composable
-private fun ActiveResponseDownloadRow(item: ActiveResponseDownload) {
+private fun CircularDownloadProgress(progress: Float?) {
+    val animatedProgress by animateFloatAsState(
+        targetValue = progress ?: 0f,
+        animationSpec = tween(400),
+        label = "circular-download-progress"
+    )
+    Box(
+        modifier = Modifier.size(44.dp),
+        contentAlignment = Alignment.Center
+    ) {
+        if (progress != null) {
+            CircularProgressIndicator(
+                progress = { animatedProgress },
+                modifier = Modifier.fillMaxSize(),
+                strokeWidth = 3.5.dp
+            )
+            Text(
+                "${(progress * 100).toInt()}%",
+                style = MaterialTheme.typography.labelSmall
+            )
+        } else {
+            CircularProgressIndicator(
+                modifier = Modifier.fillMaxSize(),
+                strokeWidth = 3.5.dp
+            )
+        }
+    }
+}
+
+/**
+ * Live row for a response-body download Click is streaming to storage
+ * itself. Pause/Resume/Cancel drive the stream's real gate in
+ * [ActiveResponseDownloads]: pause stops the copy loop reading (no more
+ * bytes are written), resume lets it continue, cancel aborts the copy and
+ * deletes the partial output.
+ */
+@Composable
+private fun ActiveResponseDownloadRow(
+    item: ActiveResponseDownload,
+    onPause: () -> Unit,
+    onResume: () -> Unit,
+    onCancel: () -> Unit
+) {
     val progress = if (item.totalBytes > 0) {
         (item.downloadedBytes.toFloat() / item.totalBytes.toFloat()).coerceIn(0f, 1f)
     } else null
-    val animatedProgress by androidx.compose.animation.core.animateFloatAsState(
-        targetValue = progress ?: 0f,
-        animationSpec = androidx.compose.animation.core.tween(400),
-        label = "response-download-progress"
-    )
+    val percentText = progress?.let { "${(it * 100).toInt()}%" }
     val sizeText = if (item.totalBytes > 0) {
         "${formatBytes(item.downloadedBytes)} of ${formatBytes(item.totalBytes)}"
     } else {
         formatBytes(item.downloadedBytes)
     }
+    val statusText = if (item.paused) "Paused" else "Downloading…"
     Column(
         modifier = Modifier
             .fillMaxWidth()
             .padding(horizontal = 16.dp, vertical = 8.dp)
     ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
-            PulsingDownloadIcon(running = true)
-            Spacer(Modifier.width(8.dp))
-            Text(item.fileName, style = MaterialTheme.typography.bodyMedium)
+            CircularDownloadProgress(progress = progress)
+            Spacer(Modifier.width(12.dp))
+            Column(Modifier.weight(1f)) {
+                Text(
+                    item.fileName,
+                    style = MaterialTheme.typography.bodyMedium,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+                Text(
+                    listOf(statusText, percentText, sizeText, "Saving to ${item.destinationLabel}")
+                        .filterNotNull()
+                        .joinToString(" · "),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
         }
-        if (progress != null) {
-            LinearProgressIndicator(
-                progress = { animatedProgress },
-                modifier = Modifier.fillMaxWidth()
-            )
-        } else {
-            LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+        Row {
+            if (item.paused) {
+                TextButton(onClick = onResume) { Text("Resume") }
+            } else {
+                TextButton(onClick = onPause) { Text("Pause") }
+            }
+            TextButton(onClick = onCancel) { Text("Cancel") }
         }
-        Spacer(Modifier.height(4.dp))
-        Text(
-            "Downloading… · $sizeText · Saving to ${item.destinationLabel}",
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant
-        )
     }
 }
 
@@ -648,42 +719,39 @@ private fun ActiveDownloadRow(item: ManagedDownload, onCancel: () -> Unit) {
         ManagedDownloadState.PENDING -> "Waiting…"
         else -> "Downloading…"
     }
+    val percentText = progress?.let { "${(it * 100).toInt()}%" }
     val sizeText = if (item.totalBytes > 0) {
         "${formatBytes(item.downloadedBytes)} of ${formatBytes(item.totalBytes)}"
     } else {
         formatBytes(item.downloadedBytes)
     }
-    Column(
+    // These rows belong to Android's DownloadManager, which exposes no
+    // pause/resume API — Cancel is the only honest control here (Click's
+    // own engine rows above carry the real Pause/Resume).
+    Row(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(horizontal = 16.dp, vertical = 8.dp)
+            .padding(horizontal = 16.dp, vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically
     ) {
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically
-        ) {
+        CircularDownloadProgress(progress = progress)
+        Spacer(Modifier.width(12.dp))
+        Column(Modifier.weight(1f)) {
             Text(
                 item.label,
                 style = MaterialTheme.typography.bodyMedium,
-                modifier = Modifier.weight(1f)
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
             )
-            TextButton(onClick = onCancel) { Text("Cancel") }
-        }
-        if (progress != null) {
-            LinearProgressIndicator(
-                progress = { progress },
-                modifier = Modifier.fillMaxWidth()
+            Text(
+                listOf(statusText, percentText, sizeText)
+                    .filterNotNull()
+                    .joinToString(" · "),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
             )
-        } else {
-            LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
         }
-        Spacer(Modifier.height(4.dp))
-        Text(
-            "$statusText · $sizeText",
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant
-        )
+        TextButton(onClick = onCancel) { Text("Cancel") }
     }
 }
 
@@ -718,16 +786,18 @@ private fun CustomTransferRow(
             overflow = TextOverflow.Ellipsis
         )
         if (item.canCancel) {
-            if (progress != null) {
-                LinearProgressIndicator(progress = { progress }, modifier = Modifier.fillMaxWidth())
-            } else {
-                LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+            val percentText = progress?.let { "${(it * 100).toInt()}%" }
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                CircularDownloadProgress(progress = progress)
+                Spacer(Modifier.width(12.dp))
+                Text(
+                    listOf(status, percentText, sizeText)
+                        .filterNotNull()
+                        .joinToString(" · "),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
             }
-            Text(
-                "$status · $sizeText",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
         } else {
             Text(
                 status,
@@ -996,29 +1066,6 @@ private fun formatBytes(bytes: Long): String {
     return if (unit == 0) "${bytes} B" else "%.1f %s".format(value, units[unit])
 }
 
-/** Animated download glyph: pulses while a transfer is actually running. */
-@Composable
-private fun PulsingDownloadIcon(running: Boolean) {
-    val transition = androidx.compose.animation.core.rememberInfiniteTransition(label = "download-pulse")
-    val alpha by transition.animateFloat(
-        initialValue = 0.35f,
-        targetValue = 1f,
-        animationSpec = androidx.compose.animation.core.infiniteRepeatable(
-            animation = androidx.compose.animation.core.tween(650),
-            repeatMode = androidx.compose.animation.core.RepeatMode.Reverse
-        ),
-        label = "download-pulse-alpha"
-    )
-    Icon(
-        Icons.Default.Download,
-        contentDescription = null,
-        modifier = Modifier
-            .size(18.dp)
-            .then(if (running) Modifier.graphicsLayer { this.alpha = alpha } else Modifier),
-        tint = MaterialTheme.colorScheme.primary
-    )
-}
-
 /** Row for one of Click's own engine downloads, in any lifecycle state. */
 @Composable
 private fun ClickDownloadRow(
@@ -1031,11 +1078,7 @@ private fun ClickDownloadRow(
 ) {
     val state = record.state
     val progress = com.click.browser.data.customDownloadProgress(record.bytesDownloaded, record.totalBytes)
-    val animatedProgress by androidx.compose.animation.core.animateFloatAsState(
-        targetValue = progress ?: 0f,
-        animationSpec = androidx.compose.animation.core.tween(400),
-        label = "click-download-progress"
-    )
+    val percentText = progress?.let { "${(it * 100).toInt()}%" }
     val sizeText = if (record.totalBytes > 0L) {
         "${formatBytes(record.bytesDownloaded)} of ${formatBytes(record.totalBytes)}"
     } else if (record.bytesDownloaded > 0L) {
@@ -1059,38 +1102,30 @@ private fun ClickDownloadRow(
             .padding(horizontal = 16.dp, vertical = 8.dp)
     ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
-            if (state == com.click.browser.engine.ClickDownloadState.RUNNING ||
-                state == com.click.browser.engine.ClickDownloadState.QUEUED
-            ) {
-                PulsingDownloadIcon(running = state == com.click.browser.engine.ClickDownloadState.RUNNING)
-                Spacer(Modifier.width(8.dp))
+            if (record.isActive || state == com.click.browser.engine.ClickDownloadState.PAUSED) {
+                CircularDownloadProgress(progress = progress)
+                Spacer(Modifier.width(12.dp))
             }
-            Text(
-                record.fileName,
-                style = MaterialTheme.typography.bodyMedium,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis
-            )
-        }
-        if (record.isActive || state == com.click.browser.engine.ClickDownloadState.PAUSED) {
-            if (progress != null) {
-                LinearProgressIndicator(
-                    progress = { animatedProgress },
-                    modifier = Modifier.fillMaxWidth()
+            Column(Modifier.weight(1f)) {
+                Text(
+                    record.fileName,
+                    style = MaterialTheme.typography.bodyMedium,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
                 )
-            } else {
-                LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+                Text(
+                    listOfNotNull(statusText, percentText, sizeText)
+                        .filter { it.isNotBlank() }
+                        .joinToString(" · "),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = if (state == com.click.browser.engine.ClickDownloadState.FAILED) {
+                        MaterialTheme.colorScheme.error
+                    } else {
+                        MaterialTheme.colorScheme.onSurfaceVariant
+                    }
+                )
             }
         }
-        Text(
-            listOf(statusText, sizeText).filter { it.isNotBlank() }.joinToString(" · "),
-            style = MaterialTheme.typography.bodySmall,
-            color = if (state == com.click.browser.engine.ClickDownloadState.FAILED) {
-                MaterialTheme.colorScheme.error
-            } else {
-                MaterialTheme.colorScheme.onSurfaceVariant
-            }
-        )
         Row {
             if (state == com.click.browser.engine.ClickDownloadState.RUNNING ||
                 state == com.click.browser.engine.ClickDownloadState.QUEUED
