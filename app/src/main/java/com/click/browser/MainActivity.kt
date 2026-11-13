@@ -1009,6 +1009,16 @@ class MainActivity : FragmentActivity() {
             WebSettingsCompat.setSafeBrowsingEnabled(s, f.safeBrowsing)
         }
         AdBlocker.aggressive = f.aggressiveAdblock
+        // Per-site overrides win over the global values set above. This
+        // pass runs on every recomposition (AndroidView update block), so
+        // without this re-apply it would silently undo the current site's
+        // own cookie / sound / pop-up / third-party-cookie choices moments
+        // after they were applied (Kilo CRITICAL/WARNING, PR #215).
+        // applyPerSiteSettings no-ops when the current host has no
+        // overrides, and it never calls back into this function.
+        try {
+            applyPerSiteSettings(webView, webView.url)
+        } catch (_: Exception) { }
     }
 
     /** Applies FLAG_SECURE from the block-screenshots flag. */
@@ -1733,11 +1743,7 @@ class MainActivity : FragmentActivity() {
                                 initialGeckoSessionState = it.geckoSessionState
                             )
                         })
-                        if (startViewUrl != null) {
-                            val startTitle = hostOfUrl(startViewUrl).ifBlank { "Opening link" }
-                            tabs.add(TabItem(url = startViewUrl, title = startTitle))
-                            activeTabIndex = tabs.lastIndex
-                        } else if (shouldLandOnHomeDashboard(startViewUrl)) {
+                        if (shouldLandOnHomeDashboard(startViewUrl)) {
                             // Land on this mode's home dashboard, with the
                             // restored tabs kept behind it. Before this fix
                             // the restore replaced the initial home tab, and
@@ -1746,11 +1752,25 @@ class MainActivity : FragmentActivity() {
                             // composed only while the home tab is active —
                             // were never shown to a returning user (the
                             // 1.7.0 device report). See
-                            // SessionRestoreStartupPolicy.
+                            // SessionRestoreStartupPolicy. The home tab is
+                            // "about:blank" on purpose (the same target the
+                            // bottom-nav Home button uses): homeUrl() can be
+                            // a custom http(s) page, which would render as a
+                            // web page instead of the dashboard and would be
+                            // persisted into the next session snapshot.
                             tabs.add(0, TabItem(url = "about:blank", title = "Home"))
                             activeTabIndex = 0
                         } else {
-                            activeTabIndex = savedActive.coerceIn(0, (tabs.size - 1).coerceAtLeast(0))
+                            // External VIEW link: it lands in front, with the
+                            // restored tabs behind it.
+                            val linkUrl = startViewUrl
+                            if (linkUrl != null) {
+                                val startTitle = hostOfUrl(linkUrl).ifBlank { "Opening link" }
+                                tabs.add(TabItem(url = linkUrl, title = startTitle))
+                                activeTabIndex = tabs.lastIndex
+                            } else {
+                                activeTabIndex = savedActive.coerceIn(0, (tabs.size - 1).coerceAtLeast(0))
+                            }
                         }
                         sessionStartupReady = true
                     }
@@ -7561,12 +7581,18 @@ class MainActivity : FragmentActivity() {
                             }
                             LaunchedEffect(onboardingReady, showOnboarding, showDefaultBrowserPrompt) {
                                 if (onboardingReady && !showOnboarding && !showDefaultBrowserPrompt) {
+                                    // Respect the in-app master toggle: a user
+                                    // who turned download notifications OFF in
+                                    // Settings is never prompted (Kilo, PR #215).
+                                    val userOptedIn =
+                                        com.click.browser.engine.ClickDownloadNotifications
+                                            .userEnabled(this@MainActivity)
                                     val notificationsReady =
                                         com.click.browser.engine.ClickDownloadNotifications
                                             .hasRuntimePermission(this@MainActivity) &&
                                             androidx.core.app.NotificationManagerCompat
                                                 .from(this@MainActivity).areNotificationsEnabled()
-                                    if (!notificationsReady) {
+                                    if (userOptedIn && !notificationsReady) {
                                         val dismissedMs = try {
                                             dataStore.data.first()[AppSettings.NOTIFICATION_PROMPT_DISMISSED_MS] ?: 0L
                                         } catch (_: Exception) {
@@ -7581,7 +7607,13 @@ class MainActivity : FragmentActivity() {
                                     }
                                 }
                             }
-                            if (showNotificationPrompt) {
+                            // Composition is gated on the other prompts too:
+                            // the effect above only *sets* the flag while they
+                            // are hidden, but the default-browser prompt can
+                            // appear afterwards — never stack two dialogs
+                            // (Kilo, PR #215). The flag survives, so this
+                            // prompt shows once the other one is gone.
+                            if (showNotificationPrompt && !showDefaultBrowserPrompt && !showOnboarding) {
                                 androidx.compose.material3.AlertDialog(
                                     onDismissRequest = { dismissNotificationPrompt() },
                                     title = {
@@ -7647,7 +7679,9 @@ class MainActivity : FragmentActivity() {
                                         androidx.compose.material3.Text("Search engine")
                                     },
                                     text = {
-                                        androidx.compose.foundation.layout.Column {
+                                        androidx.compose.foundation.layout.Column(
+                                            modifier = Modifier.verticalScroll(rememberScrollState())
+                                        ) {
                                             ModePersonalization.allSearchEngines.forEach { engine ->
                                                 androidx.compose.foundation.layout.Row(
                                                     verticalAlignment = androidx.compose.ui.Alignment.CenterVertically,
@@ -10429,125 +10463,6 @@ fun BrowserTopBar(
                     )
                 }
             }
-        }
-    }
-}
-
-/**
- * Desktop-style top tab strip: a horizontal row of chips for every open tab.
- * Tap a chip to switch (no data loss), X closes that tab, + opens a new
- * blank tab and switches to it. Scrolls horizontally when many tabs are
- * open. Follows the per-mode theme. The full Tabs Manager screen stays
- * available too — this strip is the quick switcher.
- */
-@Composable
-fun TabStrip(
-    tabs: List<TabItem>,
-    activeTabIndex: Int,
-    theme: ModeTheme,
-    onSelectTab: (Int) -> Unit,
-    onCloseTab: (Int) -> Unit,
-    onNewTab: () -> Unit,
-    onOpenTabSwitcher: () -> Unit
-) {
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .background(theme.topBarBg)
-            .padding(horizontal = 8.dp, vertical = 4.dp),
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        // Tab count badge (Mises-style) — tap opens the visual tab switcher.
-        Surface(
-            modifier = Modifier
-                .clickable(
-                    role = Role.Button,
-                    onClickLabel = "Open tab switcher",
-                    onClick = onOpenTabSwitcher
-                )
-                .semantics { contentDescription = "${tabs.size} open tabs. Open tab switcher" },
-            shape = RoundedCornerShape(7.dp),
-            color = theme.primary.copy(alpha = 0.15f),
-            border = BorderStroke(1.dp, theme.primary.copy(alpha = 0.4f))
-        ) {
-            Text(
-                text = tabs.size.toString(),
-                fontSize = 12.sp,
-                fontWeight = FontWeight.ExtraBold,
-                color = theme.primary,
-                modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
-            )
-        }
-        Spacer(modifier = Modifier.width(6.dp))
-        LazyRow(
-            modifier = Modifier.weight(1f),
-            horizontalArrangement = Arrangement.spacedBy(6.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            itemsIndexed(tabs, key = { _, tab -> tab.id }) { idx, tab ->
-                val selected = idx == activeTabIndex
-                val tabTitle = tab.title.ifBlank { "New Tab" }
-                Surface(
-                    modifier = Modifier
-                        .selectable(
-                            selected = selected,
-                            role = Role.Tab,
-                            onClick = { onSelectTab(idx) }
-                        )
-                        .semantics {
-                            contentDescription = "Tab ${idx + 1} of ${tabs.size}: $tabTitle"
-                        },
-                    shape = RoundedCornerShape(16.dp),
-                    color = if (selected) theme.primary.copy(alpha = 0.18f)
-                    else theme.surfaceVariant.copy(alpha = 0.5f),
-                    border = BorderStroke(
-                        1.dp,
-                        if (selected) theme.primary.copy(alpha = 0.6f)
-                        else theme.onSurface.copy(alpha = 0.12f)
-                    )
-                ) {
-                    Row(
-                        modifier = Modifier.padding(start = 10.dp, end = 4.dp, top = 5.dp, bottom = 5.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Text(
-                            text = tabTitle.take(18),
-                            fontSize = 11.sp,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                            color = if (selected) theme.primary
-                            else theme.onSurface.copy(alpha = 0.75f),
-                            fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal,
-                            modifier = Modifier.widthIn(max = 110.dp)
-                        )
-                        IconButton(
-                            onClick = { onCloseTab(idx) },
-                            modifier = Modifier.size(48.dp)
-                        ) {
-                            Icon(
-                                Icons.Default.Close,
-                                contentDescription = "Close $tabTitle tab",
-                                tint = theme.onSurface.copy(alpha = 0.5f),
-                                modifier = Modifier.size(13.dp)
-                            )
-                        }
-                    }
-                }
-            }
-        }
-        Spacer(modifier = Modifier.width(6.dp))
-        IconButton(
-            onClick = onNewTab,
-            modifier = Modifier
-                .size(30.dp)
-                .background(theme.primary.copy(alpha = 0.15f), CircleShape)
-        ) {
-            Icon(
-                Icons.Default.Add,
-                contentDescription = "New tab",
-                tint = theme.primary,
-                modifier = Modifier.size(16.dp)
-            )
         }
     }
 }

@@ -55,8 +55,10 @@ import com.click.browser.engine.DownloadHelper
 import com.click.browser.engine.BrowserMode
 import com.click.browser.engine.CustomDownloadNotifications
 import com.click.browser.engine.CustomDownloadScheduler
+import com.click.browser.engine.forHost
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
@@ -107,7 +109,12 @@ fun DownloadsScreen(
         if (target == null) return
         if (com.click.browser.engine.ApkInstaller.isApk(target.mimeType, target.fileName)) {
             if (com.click.browser.engine.ApkInstaller.canInstall(context)) {
-                com.click.browser.engine.ApkInstaller.launchInstaller(context, target.uri)
+                // If the installer intent itself fails (no handler, stale
+                // URI), fall back to the Open-With sheet instead of failing
+                // silently (Kilo, PR #215).
+                if (!com.click.browser.engine.ApkInstaller.launchInstaller(context, target.uri)) {
+                    openWithTarget = target
+                }
             } else {
                 apkPermissionTarget = target
             }
@@ -382,7 +389,22 @@ fun DownloadsScreen(
                 items(completed, key = { it.id }) { item ->
                     ManagedDownloadRow(
                         item = item,
-                        onOpen = { openManagedDownload(context, item.id) },
+                        onOpen = {
+                            // Route through the same handler as every other
+                            // row, so a managed APK also gets the
+                            // install-permission flow instead of a bare
+                            // ACTION_VIEW (Kilo, PR #215).
+                            val target = managedOpenTarget(context, item.id, item.label)
+                            if (target == null) {
+                                Toast.makeText(
+                                    context,
+                                    "This downloaded file is no longer available.",
+                                    Toast.LENGTH_SHORT
+                                ).show()
+                            } else {
+                                handleOpenTarget(target)
+                            }
+                        },
                         onShare = { shareManagedDownload(context, item.id, item.label) }
                     )
                 }
@@ -416,6 +438,30 @@ fun DownloadsScreen(
                         item = item,
                         onRetry = {
                             scope.launch {
+                                // Per-site "Automatic downloads" gate: the
+                                // same check the browser download funnel
+                                // applies, so a retry cannot bypass a site
+                                // the user blocked in Site settings
+                                // (Kilo, PR #215).
+                                val retryHost = try {
+                                    android.net.Uri.parse(item.sourceUrl).host?.lowercase().orEmpty()
+                                } catch (_: Exception) {
+                                    ""
+                                }
+                                val retryBlocked = retryHost.isNotEmpty() && try {
+                                    repository.siteSettingsFlow.first()
+                                        .forHost(retryHost)?.autoDownloads == false
+                                } catch (_: Exception) {
+                                    false
+                                }
+                                if (retryBlocked) {
+                                    Toast.makeText(
+                                        context,
+                                        "Downloads are blocked for $retryHost in Site settings",
+                                        Toast.LENGTH_SHORT
+                                    ).show()
+                                    return@launch
+                                }
                                 val saved = DownloadHelper.enqueue(
                                     context,
                                     item.sourceUrl,
@@ -826,23 +872,15 @@ private fun shareSavedDownload(context: Context, item: DownloadItem) {
     }
 }
 
-private fun openManagedDownload(context: Context, id: Long) {
-    val dm = context.getSystemService(Context.DOWNLOAD_SERVICE) as? DownloadManager
-    val uri = try { dm?.getUriForDownloadedFile(id) } catch (_: Exception) { null }
-    if (uri == null) {
-        Toast.makeText(context, "This downloaded file is no longer available.", Toast.LENGTH_SHORT).show()
-        return
-    }
-    val mimeType = try { dm?.getMimeTypeForDownloadedFile(id) } catch (_: Exception) { null }
-    val intent = Intent(Intent.ACTION_VIEW).apply {
-        setDataAndType(uri, mimeType?.takeIf { it.isNotBlank() } ?: "*/*")
-        addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-    }
-    try {
-        context.startActivity(intent)
-    } catch (_: Exception) {
-        Toast.makeText(context, "No app can open this file.", Toast.LENGTH_SHORT).show()
-    }
+/** Builds an open target for a system DownloadManager row, or null when
+ *  the file is gone. The caller routes it through the shared open handler
+ *  (APK install flow included) and toasts on null. */
+private fun managedOpenTarget(context: Context, id: Long, label: String): OpenWithTarget? {
+    val dm = context.getSystemService(Context.DOWNLOAD_SERVICE) as? DownloadManager ?: return null
+    val uri = try { dm.getUriForDownloadedFile(id) } catch (_: Exception) { null } ?: return null
+    val mimeType = try { dm.getMimeTypeForDownloadedFile(id) } catch (_: Exception) { null }
+        ?.takeIf { it.isNotBlank() } ?: "*/*"
+    return OpenWithTarget(uri, mimeType, label)
 }
 
 private fun shareManagedDownload(context: Context, id: Long, label: String) {
