@@ -840,6 +840,24 @@ class MainActivity : FragmentActivity() {
         mode: BrowserMode = liveMode,
         mimeType: String? = null
     ) {
+        // Per-site "Automatic downloads" gate (Site settings): when the
+        // user blocked downloads for this host, refuse here — this funnel
+        // covers the WebView download listener and in-app download actions.
+        val downloadHost = try {
+            android.net.Uri.parse(url).host?.lowercase().orEmpty()
+        } catch (_: Exception) {
+            ""
+        }
+        if (downloadHost.isNotEmpty() &&
+            liveSiteSettings.forHost(downloadHost)?.autoDownloads == false
+        ) {
+            Toast.makeText(
+                this,
+                "Downloads are blocked for $downloadHost in Site settings",
+                Toast.LENGTH_SHORT
+            ).show()
+            return
+        }
         // Download notifications are ON by default in Click; Android 13+
         // still requires the runtime grant. Ask once per session, in the
         // context of the user's first download — downloads proceed either way.
@@ -991,6 +1009,16 @@ class MainActivity : FragmentActivity() {
             WebSettingsCompat.setSafeBrowsingEnabled(s, f.safeBrowsing)
         }
         AdBlocker.aggressive = f.aggressiveAdblock
+        // Per-site overrides win over the global values set above. This
+        // pass runs on every recomposition (AndroidView update block), so
+        // without this re-apply it would silently undo the current site's
+        // own cookie / sound / pop-up / third-party-cookie choices moments
+        // after they were applied (Kilo CRITICAL/WARNING, PR #215).
+        // applyPerSiteSettings no-ops when the current host has no
+        // overrides, and it never calls back into this function.
+        try {
+            applyPerSiteSettings(webView, webView.url)
+        } catch (_: Exception) { }
     }
 
     /** Applies FLAG_SECURE from the block-screenshots flag. */
@@ -1096,6 +1124,21 @@ class MainActivity : FragmentActivity() {
                 s.setSupportMultipleWindows(allowPopups)
             } catch (_: Exception) {
             }
+        }
+        // First-party cookies. NOTE: CookieManager is a process-global
+        // singleton on Android — setAcceptCookie is not per-WebView, so the
+        // value follows the most recently applied site (the same limitation
+        // as Click's global cookie flag in applyExperimentalFlags).
+        site.cookies?.let { allow ->
+            try {
+                android.webkit.CookieManager.getInstance().setAcceptCookie(allow)
+            } catch (_: Exception) {
+            }
+        }
+        // Sound / autoplay: allowing sound means media may play without a
+        // user gesture on this site; blocking it requires a gesture first.
+        site.sound?.let { allowSound ->
+            s.mediaPlaybackRequiresUserGesture = !allowSound
         }
     }
 
@@ -1700,12 +1743,35 @@ class MainActivity : FragmentActivity() {
                                 initialGeckoSessionState = it.geckoSessionState
                             )
                         })
-                        if (startViewUrl != null) {
-                            val startTitle = hostOfUrl(startViewUrl).ifBlank { "Opening link" }
-                            tabs.add(TabItem(url = startViewUrl, title = startTitle))
-                            activeTabIndex = tabs.lastIndex
+                        // Default landing is the previously active restored
+                        // tab; the two explicit cases below override it.
+                        activeTabIndex = savedActive.coerceIn(0, (tabs.size - 1).coerceAtLeast(0))
+                        if (shouldLandOnHomeDashboard(startViewUrl)) {
+                            // Land on this mode's home dashboard, with the
+                            // restored tabs kept behind it. Before this fix
+                            // the restore replaced the initial home tab, and
+                            // because a home tab ("about:blank") is never
+                            // part of a saved snapshot, the dashboards —
+                            // composed only while the home tab is active —
+                            // were never shown to a returning user (the
+                            // 1.7.0 device report). See
+                            // SessionRestoreStartupPolicy. The home tab is
+                            // "about:blank" on purpose (the same target the
+                            // bottom-nav Home button uses): homeUrl() can be
+                            // a custom http(s) page, which would render as a
+                            // web page instead of the dashboard and would be
+                            // persisted into the next session snapshot.
+                            tabs.add(0, TabItem(url = "about:blank", title = "Home"))
+                            activeTabIndex = 0
                         } else {
-                            activeTabIndex = savedActive.coerceIn(0, (tabs.size - 1).coerceAtLeast(0))
+                            // The policy returns false only for an explicit
+                            // external VIEW link, so startViewUrl is
+                            // non-null here: the link lands in front, with
+                            // the restored tabs behind it.
+                            val linkUrl = requireNotNull(startViewUrl)
+                            val startTitle = hostOfUrl(linkUrl).ifBlank { "Opening link" }
+                            tabs.add(TabItem(url = linkUrl, title = startTitle))
+                            activeTabIndex = tabs.lastIndex
                         }
                         sessionStartupReady = true
                     }
@@ -1782,6 +1848,9 @@ class MainActivity : FragmentActivity() {
             var showBookmarks by remember { mutableStateOf(false) }
             var showHistory by remember { mutableStateOf(false) }
             var showDownloads by remember { mutableStateOf(false) }
+            // Address-bar search-engine picker (Prince, 13 Nov): tapping
+            // the current engine's badge opens the full engine list.
+            var showSearchEnginePicker by remember { mutableStateOf(false) }
             val openDownloadsRequested by pendingOpenDownloads.collectAsState()
             LaunchedEffect(openDownloadsRequested) {
                 if (openDownloadsRequested) {
@@ -4646,26 +4715,14 @@ class MainActivity : FragmentActivity() {
                                 val showExtensionButton = currentTab.engine == BrowserTabEngine.GECKOVIEW &&
                                     !currentTab.isIncognito && !showOverlays
                                 Column {
-                                    // The tab strip is Power's desktop chrome ONLY —
-                                    // on its dashboard and while browsing. Every other
-                                    // mode starts with the address bar alone (Prince's
-                                    // rule for Simple, and the approved per-mode
-                                    // dashboards for Advance/Developer show no strip);
-                                    // their tabs live behind the bottom Tabs button.
-                                    if (!immersiveMode && activeMode == BrowserMode.HACK) {
-                                        TabStrip(
-                                            tabs = tabs,
-                                            activeTabIndex = activeTabIndex,
-                                            theme = theme,
-                                            onSelectTab = { idx -> activeTabIndex = idx },
-                                            onCloseTab = { idx -> closeTabAt(idx) },
-                                            onNewTab = {
-                                                tabs.add(TabItem(url = homeUrl(), title = "New Tab"))
-                                                activeTabIndex = tabs.lastIndex
-                                            },
-                                            onOpenTabSwitcher = { showTabsManager = true }
-                                        )
-                                    }
+                                    // Prince's top-bar rule (restated 13 Nov,
+                                    // applies to ALL four modes): the top shows
+                                    // ONLY the thin address-bar strip — no tab
+                                    // strip, no bookmarks bar, no extra header.
+                                    // Tabs live behind the Tabs button / tab
+                                    // switcher in every mode, Power included
+                                    // (this removes the Power tab strip that
+                                    // PR #214 kept at the top).
                                     AnimatedVisibility(
                                         visible = showAddressBar && !immersiveMode && toolbarVisible,
                                         enter = expandVertically() + fadeIn(),
@@ -4724,7 +4781,8 @@ class MainActivity : FragmentActivity() {
                                                     showDeveloperTools = activeMode == BrowserMode.DEVELOPER,
                                                     onDeveloperToolsClick = { openDevToolsTab(1) },
                                                     showExtensionButton = showExtensionButton,
-                                                    onAddonsClick = { requestExtensionsForTab(currentTab) }
+                                                    onAddonsClick = { requestExtensionsForTab(currentTab) },
+                                                    onSearchEngineClick = { showSearchEnginePicker = true }
                                                 )
                                                 // Thin page-load progress indicator — visible for the
                                                 // entire load like Chrome's bar: a determinate fill once
@@ -4808,7 +4866,8 @@ class MainActivity : FragmentActivity() {
                                     onOpenDevToolsTab = { tab -> openDevToolsTab(tab) },
                                     onOpenCookieManager = { showCookieManager = true },
                                     onOpenPrivacyGuards = { showPrivacyGuards = true },
-                                    onOpenDiagnostics = { showClickDiagnostics = true }
+                                    onOpenDiagnostics = { showClickDiagnostics = true },
+                                    onSearchEngineClick = { showSearchEnginePicker = true }
                                 )
                             }
 
@@ -6145,6 +6204,27 @@ class MainActivity : FragmentActivity() {
                                                                 it.webView === devToolsOwnerWebView
                                                             }
                                                             val resources = permissionRequest.resources?.toSet().orEmpty()
+                                                            // Protected content (DRM): granted only
+                                                            // when the user explicitly allowed it for
+                                                            // this site in Site settings; denied
+                                                            // otherwise (the historic behaviour).
+                                                            if (resources == setOf(android.webkit.PermissionRequest.RESOURCE_PROTECTED_MEDIA_ID)) {
+                                                                val drmHost = try {
+                                                                    permissionRequest.origin?.host?.lowercase().orEmpty()
+                                                                } catch (_: Exception) {
+                                                                    ""
+                                                                }
+                                                                val drmAllowed = drmHost.isNotEmpty() &&
+                                                                    liveSiteSettings.forHost(drmHost)?.protectedContent == true
+                                                                if (drmAllowed) {
+                                                                    permissionRequest.grant(
+                                                                        arrayOf(android.webkit.PermissionRequest.RESOURCE_PROTECTED_MEDIA_ID)
+                                                                    )
+                                                                } else {
+                                                                    permissionRequest.deny()
+                                                                }
+                                                                return
+                                                            }
                                                             if (ownerTab == null ||
                                                                 resources != setOf(android.webkit.PermissionRequest.RESOURCE_AUDIO_CAPTURE)
                                                             ) {
@@ -6684,11 +6764,19 @@ class MainActivity : FragmentActivity() {
                                     .padding(bottom = browseBottomNavInset)
                             ) {
 
-                                // The home screen owns its primary search field. Keep the tab
-                                // strip there, but show the browser omnibox only on open pages
-                                // (or at the bottom when that setting is selected).
-                                // Simple mode ALWAYS keeps the bar at the top (Prince's
-                                // rule) — the bottom-bar preference is ignored there.
+                                // Prince's top-bar rule (13 Nov): in ALL four
+                                // modes the top carries ONLY the thin
+                                // address-bar strip — no tab strip, no
+                                // bookmarks bar, no extra header (see
+                                // BrowseTopBarBlock). On the home dashboard
+                                // the strip is the dashboard's own leading
+                                // search bar, so the browse omnibox stays
+                                // hidden there (showOverlays) instead of
+                                // stacking a second bar above it; while
+                                // browsing, only the omnibox strip shows.
+                                // Simple mode ALWAYS keeps the bar at the top
+                                // (Prince's rule) — the bottom-bar preference
+                                // is ignored there.
                                 if (!videoFullscreenActive &&
                                     (!(flagsUi.bottomAddressBar && activeMode != BrowserMode.SIMPLE) || showOverlays)
                                 ) {
@@ -7466,6 +7554,170 @@ class MainActivity : FragmentActivity() {
                                             dismissDefaultBrowserPrompt()
                                         }) {
                                             androidx.compose.material3.Text("Not now")
+                                        }
+                                    }
+                                )
+                            }
+
+                            // ---- Notifications: ask on open when still off ----
+                            // Prince (13 Nov): "Notifications Click khulte
+                            // user se karwao, taa ke user yes kare aur
+                            // notifications milein." Shown after the
+                            // default-browser prompt so the two never stack.
+                            // "Not now" is remembered for a week; the prompt
+                            // only returns while notifications are still off.
+                            var showNotificationPrompt by remember { mutableStateOf(false) }
+                            val notificationPromptLauncher =
+                                androidx.activity.compose.rememberLauncherForActivityResult(
+                                    androidx.activity.result.contract.ActivityResultContracts.RequestPermission()
+                                ) { showNotificationPrompt = false }
+                            fun dismissNotificationPrompt() {
+                                showNotificationPrompt = false
+                                scope.launch {
+                                    dataStore.edit { prefs ->
+                                        prefs[AppSettings.NOTIFICATION_PROMPT_DISMISSED_MS] =
+                                            System.currentTimeMillis()
+                                    }
+                                }
+                            }
+                            LaunchedEffect(onboardingReady, showOnboarding, showDefaultBrowserPrompt) {
+                                if (onboardingReady && !showOnboarding && !showDefaultBrowserPrompt) {
+                                    // Respect the in-app master toggle: a user
+                                    // who turned download notifications OFF in
+                                    // Settings is never prompted (Kilo, PR #215).
+                                    val userOptedIn =
+                                        com.click.browser.engine.ClickDownloadNotifications
+                                            .userEnabled(this@MainActivity)
+                                    val notificationsReady =
+                                        com.click.browser.engine.ClickDownloadNotifications
+                                            .hasRuntimePermission(this@MainActivity) &&
+                                            androidx.core.app.NotificationManagerCompat
+                                                .from(this@MainActivity).areNotificationsEnabled()
+                                    if (userOptedIn && !notificationsReady) {
+                                        val dismissedMs = try {
+                                            dataStore.data.first()[AppSettings.NOTIFICATION_PROMPT_DISMISSED_MS] ?: 0L
+                                        } catch (_: Exception) {
+                                            0L
+                                        }
+                                        val weekMs = 7L * 24 * 60 * 60 * 1000
+                                        if (dismissedMs == 0L ||
+                                            System.currentTimeMillis() - dismissedMs > weekMs
+                                        ) {
+                                            showNotificationPrompt = true
+                                        }
+                                    }
+                                }
+                            }
+                            // Composition is gated on the other prompts too:
+                            // the effect above only *sets* the flag while they
+                            // are hidden, but the default-browser prompt can
+                            // appear afterwards — never stack two dialogs
+                            // (Kilo, PR #215). The flag survives, so this
+                            // prompt shows once the other one is gone.
+                            if (showNotificationPrompt && !showDefaultBrowserPrompt && !showOnboarding) {
+                                androidx.compose.material3.AlertDialog(
+                                    onDismissRequest = { dismissNotificationPrompt() },
+                                    title = {
+                                        androidx.compose.material3.Text("Turn on notifications?")
+                                    },
+                                    text = {
+                                        androidx.compose.material3.Text(
+                                            "Click uses notifications to show download progress, " +
+                                                "finished downloads and app updates. Without them, " +
+                                                "downloads finish silently and you cannot see their status."
+                                        )
+                                    },
+                                    confirmButton = {
+                                        androidx.compose.material3.TextButton(onClick = {
+                                            showNotificationPrompt = false
+                                            if (android.os.Build.VERSION.SDK_INT >=
+                                                android.os.Build.VERSION_CODES.TIRAMISU &&
+                                                !com.click.browser.engine.ClickDownloadNotifications
+                                                    .hasRuntimePermission(this@MainActivity)
+                                            ) {
+                                                notificationPromptLauncher.launch(
+                                                    android.Manifest.permission.POST_NOTIFICATIONS
+                                                )
+                                            } else {
+                                                // Runtime permission is not the
+                                                // blocker (older Android, or the
+                                                // app switch is off): deep-link
+                                                // to Click's notification settings.
+                                                val settingsIntent = android.content.Intent(
+                                                    android.provider.Settings
+                                                        .ACTION_APP_NOTIFICATION_SETTINGS
+                                                ).apply {
+                                                    putExtra(
+                                                        android.provider.Settings.EXTRA_APP_PACKAGE,
+                                                        packageName
+                                                    )
+                                                }
+                                                runCatching { startActivity(settingsIntent) }
+                                            }
+                                        }) {
+                                            androidx.compose.material3.Text("Allow notifications")
+                                        }
+                                    },
+                                    dismissButton = {
+                                        androidx.compose.material3.TextButton(
+                                            onClick = { dismissNotificationPrompt() }
+                                        ) {
+                                            androidx.compose.material3.Text("Not now")
+                                        }
+                                    }
+                                )
+                            }
+
+                            // ---- Search-engine picker (address-bar badge) ----
+                            // Prince (13 Nov): tapping the search-engine icon
+                            // in the address bar must show ALL engines; the
+                            // pick switches this mode's default engine and
+                            // the badge updates with it.
+                            if (showSearchEnginePicker) {
+                                androidx.compose.material3.AlertDialog(
+                                    onDismissRequest = { showSearchEnginePicker = false },
+                                    title = {
+                                        androidx.compose.material3.Text("Search engine")
+                                    },
+                                    text = {
+                                        androidx.compose.foundation.layout.Column(
+                                            modifier = Modifier.verticalScroll(rememberScrollState())
+                                        ) {
+                                            ModePersonalization.allSearchEngines.forEach { engine ->
+                                                androidx.compose.foundation.layout.Row(
+                                                    verticalAlignment = androidx.compose.ui.Alignment.CenterVertically,
+                                                    modifier = Modifier
+                                                        .fillMaxWidth()
+                                                        .clickable {
+                                                            showSearchEnginePicker = false
+                                                            currentSearchEngineSetting = engine
+                                                            scope.launch {
+                                                                ModePersonalization.setSearchEngine(
+                                                                    this@MainActivity,
+                                                                    activeMode,
+                                                                    engine
+                                                                )
+                                                            }
+                                                        }
+                                                        .padding(vertical = 4.dp)
+                                                ) {
+                                                    androidx.compose.material3.RadioButton(
+                                                        selected = engine == currentSearchEngineSetting,
+                                                        onClick = null
+                                                    )
+                                                    androidx.compose.material3.Text(
+                                                        engine,
+                                                        modifier = Modifier.padding(start = 8.dp)
+                                                    )
+                                                }
+                                            }
+                                        }
+                                    },
+                                    confirmButton = {
+                                        androidx.compose.material3.TextButton(
+                                            onClick = { showSearchEnginePicker = false }
+                                        ) {
+                                            androidx.compose.material3.Text("Close")
                                         }
                                     }
                                 )
@@ -9917,7 +10169,10 @@ fun DownloadActivityIndicator(
         it.state == com.click.browser.engine.ClickDownloadState.QUEUED ||
             it.state == com.click.browser.engine.ClickDownloadState.PAUSED
     }
-    if (runningRecords.isEmpty() && waitingRecords.isEmpty() && responses.isEmpty()) return
+    // Prince (13 Nov): the strip must ease in/out smoothly instead of
+    // popping — visibility now drives an AnimatedVisibility below instead
+    // of an abrupt early return.
+    val stripVisible = runningRecords.isNotEmpty() || waitingRecords.isNotEmpty() || responses.isNotEmpty()
 
     val activeCount = runningRecords.size + waitingRecords.size + responses.size
     val knownTotals = (runningRecords.map { it.bytesDownloaded to it.totalBytes } +
@@ -9947,6 +10202,25 @@ fun DownloadActivityIndicator(
         responses.isNotEmpty() -> "Downloading ${responses.first().fileName}"
         else -> "Downloads paused or waiting"
     }
+    androidx.compose.animation.AnimatedVisibility(
+        visible = stripVisible,
+        enter = androidx.compose.animation.slideInVertically(
+            animationSpec = androidx.compose.animation.core.tween(
+                durationMillis = 320,
+                easing = androidx.compose.animation.core.EaseOutCubic
+            )
+        ) { -it } + androidx.compose.animation.fadeIn(
+            animationSpec = androidx.compose.animation.core.tween(320)
+        ),
+        exit = androidx.compose.animation.slideOutVertically(
+            animationSpec = androidx.compose.animation.core.tween(
+                durationMillis = 240,
+                easing = androidx.compose.animation.core.EaseInCubic
+            )
+        ) { -it } + androidx.compose.animation.fadeOut(
+            animationSpec = androidx.compose.animation.core.tween(240)
+        )
+    ) {
     Column(
         modifier = Modifier
             .fillMaxWidth()
@@ -10005,6 +10279,7 @@ fun DownloadActivityIndicator(
                 trackColor = theme.surfaceVariant
             )
         }
+    }
     }
 }
 
@@ -10189,125 +10464,6 @@ fun BrowserTopBar(
                     )
                 }
             }
-        }
-    }
-}
-
-/**
- * Desktop-style top tab strip: a horizontal row of chips for every open tab.
- * Tap a chip to switch (no data loss), X closes that tab, + opens a new
- * blank tab and switches to it. Scrolls horizontally when many tabs are
- * open. Follows the per-mode theme. The full Tabs Manager screen stays
- * available too — this strip is the quick switcher.
- */
-@Composable
-fun TabStrip(
-    tabs: List<TabItem>,
-    activeTabIndex: Int,
-    theme: ModeTheme,
-    onSelectTab: (Int) -> Unit,
-    onCloseTab: (Int) -> Unit,
-    onNewTab: () -> Unit,
-    onOpenTabSwitcher: () -> Unit
-) {
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .background(theme.topBarBg)
-            .padding(horizontal = 8.dp, vertical = 4.dp),
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        // Tab count badge (Mises-style) — tap opens the visual tab switcher.
-        Surface(
-            modifier = Modifier
-                .clickable(
-                    role = Role.Button,
-                    onClickLabel = "Open tab switcher",
-                    onClick = onOpenTabSwitcher
-                )
-                .semantics { contentDescription = "${tabs.size} open tabs. Open tab switcher" },
-            shape = RoundedCornerShape(7.dp),
-            color = theme.primary.copy(alpha = 0.15f),
-            border = BorderStroke(1.dp, theme.primary.copy(alpha = 0.4f))
-        ) {
-            Text(
-                text = tabs.size.toString(),
-                fontSize = 12.sp,
-                fontWeight = FontWeight.ExtraBold,
-                color = theme.primary,
-                modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
-            )
-        }
-        Spacer(modifier = Modifier.width(6.dp))
-        LazyRow(
-            modifier = Modifier.weight(1f),
-            horizontalArrangement = Arrangement.spacedBy(6.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            itemsIndexed(tabs, key = { _, tab -> tab.id }) { idx, tab ->
-                val selected = idx == activeTabIndex
-                val tabTitle = tab.title.ifBlank { "New Tab" }
-                Surface(
-                    modifier = Modifier
-                        .selectable(
-                            selected = selected,
-                            role = Role.Tab,
-                            onClick = { onSelectTab(idx) }
-                        )
-                        .semantics {
-                            contentDescription = "Tab ${idx + 1} of ${tabs.size}: $tabTitle"
-                        },
-                    shape = RoundedCornerShape(16.dp),
-                    color = if (selected) theme.primary.copy(alpha = 0.18f)
-                    else theme.surfaceVariant.copy(alpha = 0.5f),
-                    border = BorderStroke(
-                        1.dp,
-                        if (selected) theme.primary.copy(alpha = 0.6f)
-                        else theme.onSurface.copy(alpha = 0.12f)
-                    )
-                ) {
-                    Row(
-                        modifier = Modifier.padding(start = 10.dp, end = 4.dp, top = 5.dp, bottom = 5.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Text(
-                            text = tabTitle.take(18),
-                            fontSize = 11.sp,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                            color = if (selected) theme.primary
-                            else theme.onSurface.copy(alpha = 0.75f),
-                            fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal,
-                            modifier = Modifier.widthIn(max = 110.dp)
-                        )
-                        IconButton(
-                            onClick = { onCloseTab(idx) },
-                            modifier = Modifier.size(48.dp)
-                        ) {
-                            Icon(
-                                Icons.Default.Close,
-                                contentDescription = "Close $tabTitle tab",
-                                tint = theme.onSurface.copy(alpha = 0.5f),
-                                modifier = Modifier.size(13.dp)
-                            )
-                        }
-                    }
-                }
-            }
-        }
-        Spacer(modifier = Modifier.width(6.dp))
-        IconButton(
-            onClick = onNewTab,
-            modifier = Modifier
-                .size(30.dp)
-                .background(theme.primary.copy(alpha = 0.15f), CircleShape)
-        ) {
-            Icon(
-                Icons.Default.Add,
-                contentDescription = "New tab",
-                tint = theme.primary,
-                modifier = Modifier.size(16.dp)
-            )
         }
     }
 }

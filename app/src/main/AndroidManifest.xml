@@ -18,6 +18,16 @@
          in to news alerts or chooses to enable download notifications. -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
+    <!-- Lets Click offer to install an APK the user downloaded with Click
+         itself (Downloads screen / completion notification). The system
+         installer still shows its own confirmation, and the user must also
+         allow "install unknown apps" for Click in system settings — Click
+         sends them there when it is not yet allowed. NOTE (Play policy):
+         REQUEST_INSTALL_PACKAGES is a restricted permission; keep the Play
+         Console declaration in step before submitting a release that
+         contains it. -->
+    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
+
     <!-- V9 Shield (built-in VPN): packet tunnel + foreground service. -->
     <uses-permission android:name="android.permission.BIND_VPN_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />

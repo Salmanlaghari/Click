@@ -47,6 +47,17 @@ object ModePersonalization {
         BrowserMode.ADVANCED -> "Perplexity"
     }
 
+    /**
+     * Every search engine Click knows how to query, across all modes.
+     * The address-bar engine picker offers this full list (Prince, 13 Nov:
+     * tapping the engine icon must show ALL engines); Settings keeps the
+     * shorter per-mode shortlist below.
+     */
+    val allSearchEngines: List<String> = listOf(
+        "Google", "Bing", "Yahoo", "DuckDuckGo", "Yandex",
+        "Baidu", "Brave Search", "Startpage", "Perplexity"
+    )
+
     /** Engines offered per mode in Settings (default first). */
     fun searchEngines(mode: BrowserMode): List<String> = when (mode) {
         BrowserMode.SIMPLE -> listOf("Google", "Bing", "Yahoo", "DuckDuckGo")
@@ -193,8 +204,10 @@ object ModePersonalization {
     fun searchEngineFlow(context: Context, mode: BrowserMode): Flow<String> =
         context.profileDataStoreFor(mode).data.map { prefs ->
             val saved = prefs[engineKey(mode)]
-            val offered = searchEngines(mode)
-            if (saved != null && offered.contains(saved)) saved else defaultSearchEngine(mode)
+            // Any known engine is honoured (the address-bar picker offers
+            // the full list, not just this mode's Settings shortlist).
+            if (saved != null && allSearchEngines.contains(saved)) saved
+            else defaultSearchEngine(mode)
         }
 
     suspend fun getSearchEngine(context: Context, mode: BrowserMode): String =

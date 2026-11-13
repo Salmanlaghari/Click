@@ -260,6 +260,18 @@ private fun siteSettingsSummary(
         s.thirdPartyCookies?.let {
             parts += if (it) "Third-party cookies allowed" else "Third-party cookies blocked"
         }
+        s.cookies?.let {
+            parts += if (it) "Cookies allowed" else "Cookies blocked"
+        }
+        s.sound?.let {
+            parts += if (it) "Sound allowed" else "Sound blocked"
+        }
+        s.autoDownloads?.let {
+            parts += if (it) "Downloads allowed" else "Downloads blocked"
+        }
+        s.protectedContent?.let {
+            parts += if (it) "Protected content allowed" else "Protected content blocked"
+        }
         s.textZoom?.let { parts += "Text zoom $it%" }
     }
     when (desktopLayout) {

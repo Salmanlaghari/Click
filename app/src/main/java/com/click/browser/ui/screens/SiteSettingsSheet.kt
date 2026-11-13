@@ -31,6 +31,8 @@ import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Shield
 import androidx.compose.material.icons.filled.Speed
 import androidx.compose.material.icons.filled.Code
+import androidx.compose.material.icons.filled.Download
+import androidx.compose.material.icons.filled.VolumeUp
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
@@ -306,6 +308,67 @@ fun SiteSettingsSheet(
                     val next = current.copy(thirdPartyCookies = v)
                     onSettingsChange(next)
                     onApplyToWebView(next)
+                }
+            )
+            // First-party cookies — tri-state.
+            TriStateRow(
+                theme = theme,
+                icon = Icons.Default.Cookie,
+                title = "Cookies",
+                subtitle = "Allow this site to save its own cookies",
+                value = current.cookies,
+                globalLabel = "Allowed",
+                onChange = { v ->
+                    val next = current.copy(cookies = v)
+                    onSettingsChange(next)
+                    onApplyToWebView(next)
+                }
+            )
+            // Sound / autoplay — tri-state. Stored as "allow sound":
+            // allowed = media may autoplay with sound; blocked = a user
+            // gesture is required before media plays.
+            TriStateRow(
+                theme = theme,
+                icon = Icons.Default.VolumeUp,
+                title = "Sound",
+                subtitle = "Allow this site to play sound and autoplay media",
+                value = current.sound,
+                globalLabel = "Allowed",
+                onChange = { v ->
+                    val next = current.copy(sound = v)
+                    onSettingsChange(next)
+                    onApplyToWebView(next)
+                    onReload()
+                }
+            )
+            // Automatic downloads — tri-state. Blocked = the download
+            // funnel refuses downloads that start from this site.
+            TriStateRow(
+                theme = theme,
+                icon = Icons.Default.Download,
+                title = "Automatic downloads",
+                subtitle = "Allow this site to download files",
+                value = current.autoDownloads,
+                globalLabel = "Allowed",
+                onChange = { v ->
+                    val next = current.copy(autoDownloads = v)
+                    onSettingsChange(next)
+                }
+            )
+            // Protected content (DRM) — tri-state. Allowed = the WebView
+            // permission request for protected media is granted for this
+            // site; blocked/default = denied.
+            TriStateRow(
+                theme = theme,
+                icon = Icons.Default.Shield,
+                title = "Protected content",
+                subtitle = "Allow this site to play DRM-protected media",
+                value = current.protectedContent,
+                globalLabel = "Blocked",
+                onChange = { v ->
+                    val next = current.copy(protectedContent = v)
+                    onSettingsChange(next)
+                    onReload()
                 }
             )
             // Per-site wide-layout override; the WebView identity is unchanged.
