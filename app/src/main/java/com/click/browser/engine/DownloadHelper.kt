@@ -680,18 +680,23 @@ object DownloadHelper {
         if (context.checkSelfPermission(android.Manifest.permission.WRITE_EXTERNAL_STORAGE) !=
             android.content.pm.PackageManager.PERMISSION_GRANTED
         ) return null
+        var destination: File? = null
         return try {
             val directory = File(
                 Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS),
                 "ClickBrowser"
             )
             if (!directory.exists() && !directory.mkdirs()) return null
-            val destination = File(directory, fileName)
-            destination.outputStream().use { output ->
+            val outputFile = File(directory, fileName)
+            destination = outputFile
+            outputFile.outputStream().use { output ->
                 source.inputStream().use { copyWithProgress(it, output, onProgress, control) }
             }
-            destination.absolutePath
+            outputFile.absolutePath
         } catch (canceledByUser: ResponseDownloadCanceledException) {
+            // Match the MediaStore branch above: a canceled copy must not
+            // leave a partial file behind in Downloads/ClickBrowser.
+            runCatching { destination?.delete() }
             throw canceledByUser
         } catch (_: Exception) {
             null
