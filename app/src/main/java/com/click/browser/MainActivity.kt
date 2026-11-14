@@ -4567,7 +4567,15 @@ class MainActivity : FragmentActivity() {
 
                             // Immersive Fullscreen WebView setup: if loaded, hide overlays for full screen coverage!
                             val showOverlays = currentTab.url == "about:blank"
-                            val showBrowseBottomNav = !showOverlays && !immersiveMode && !videoFullscreenActive
+                            // Prince's full-screen web rule (14 Nov 2026): while a
+                            // real web page is showing there is NO bottom bar over
+                            // or under it — the website gets the full screen. The
+                            // old Menu - Home - Tabs - More browse bar is removed
+                            // from web pages for good; the home dashboard keeps
+                            // its own ClickBottomNav. This flag now only tracks
+                            // the browsing surface for the optional bottom
+                            // address bar (an opt-in experimental flag).
+                            val showBrowseBottomChrome = !showOverlays && !immersiveMode && !videoFullscreenActive
 
                             // Manual immersive mode and site video fullscreen both hide system bars.
                             LaunchedEffect(immersiveMode, videoFullscreenActive) {
@@ -4589,11 +4597,17 @@ class MainActivity : FragmentActivity() {
                             // reveals on scroll-up (event-driven, battery-safe), thin
                             // page-load progress bar, one-shot theme crossfade.
                             var toolbarVisible by remember { mutableStateOf(true) }
-                            // Keep page content clear of the bottom navigation; reserve extra
-                            // room for the address bar only while its auto-hidden toolbar is shown.
+                            // Keep page content clear of any bottom chrome; reserve
+                            // room for the bottom address bar only while it is shown.
+                            // With the browse bottom bar gone, the only bottom
+                            // chrome that can still sit over a web page is the
+                            // opt-in bottom address bar — reserve exactly its
+                            // height while visible, nothing otherwise, so the
+                            // WebView truly fills the screen.
                             val browseBottomNavInset = browseBottomChromeInsetDp(
-                                showBrowseBottomNav = showBrowseBottomNav,
-                                bottomAddressBarEnabled = flagsUi.bottomAddressBar,
+                                bottomAddressBarEnabled = flagsUi.bottomAddressBar &&
+                                    activeMode != BrowserMode.SIMPLE &&
+                                    showBrowseBottomChrome,
                                 toolbarVisible = toolbarVisible
                             ).dp
                             val toolbarScrollConnection = remember {
@@ -6474,15 +6488,13 @@ class MainActivity : FragmentActivity() {
                                                     }
                                                 }
                                             )
-                                            if (currentTab.url != "about:blank" && currentTab.isPageLoading && !currentTab.hasCommittedContent) {
-                                                WebsiteProcessingOverlay(
-                                                    theme = theme,
-                                                    site = hostOfUrl(currentTab.url),
-                                                    progress = currentTab.loadProgress,
-                                                    animationsEnabled = flagsUi.tabAnimations && !liveReducedMotion,
-                                                    onCancel = { stopCurrentTabLoading() }
-                                                )
-                                            }
+                                            // Prince's rule (14 Nov 2026): NO centre
+                                            // "Loading page..." dialog over a web page,
+                                            // in any mode — it is removed for good.
+                                            // Load state still shows in the thin
+                                            // address-bar progress line, and stopping a
+                                            // load stays on the address bar's stop
+                                            // control (onStopLoading).
                                             if (
                                                 currentTab.engine == BrowserTabEngine.WEBVIEW &&
                                                 currentTab.webViewNavigationStopRecovery &&
@@ -6835,38 +6847,24 @@ class MainActivity : FragmentActivity() {
                             // Back/forward stay in the address bar to avoid duplicate controls.
                             // (No center AI tab here — AI lives in the floating pill.)
                             // Polish: one-shot theme crossfade (battery-safe).
-                            // Bottom-address-bar option: bar renders below the page,
-                            // padded above the overlaid bottom nav so they never overlap.
-                            // (Never in Simple mode — its bar stays at the top.)
-                            if (flagsUi.bottomAddressBar && activeMode != BrowserMode.SIMPLE && showBrowseBottomNav) {
+                            // Bottom-address-bar option: the address bar renders
+                            // below the page instead of at the top. (Never in
+                            // Simple mode — its bar stays at the top.)
+                            if (flagsUi.bottomAddressBar && activeMode != BrowserMode.SIMPLE && showBrowseBottomChrome) {
+                                // No bottom nav row to clear any more (14 Nov
+                                // full-screen web rule), so the optional bottom
+                                // address bar sits directly at the bottom edge.
                                 Box(
-                                    modifier = Modifier
-                                        .align(Alignment.BottomCenter)
-                                        .padding(bottom = BROWSE_BOTTOM_ADDRESS_BAR_OFFSET_DP.dp)
+                                    modifier = Modifier.align(Alignment.BottomCenter)
                                 ) {
                                     BrowseTopBarBlock()
                                 }
                             }
-                            if (showBrowseBottomNav) {
-                                Crossfade(
-                                    targetState = theme,
-                                    label = "browseNavTheme",
-                                    modifier = Modifier.align(Alignment.BottomCenter)
-                                ) { themed ->
-                                    BrowseBottomNav(
-                                        theme = themed,
-                                        activeMode = activeMode,
-                                        tabCount = tabs.size,
-                                        onDrawerClick = { scope.launch { drawerState.open() } },
-                                        onHome = {
-                                            currentTab.url = "about:blank"
-                                            currentTab.browserSession?.loadUrl("about:blank")
-                                        },
-                                        onTabs = { showTabsManager = true },
-                                        onMenu = { showBrowserMenu = true }
-                                    )
-                                }
-                            }
+                            // (No browsing bottom bar any more — see
+                            // Prince's full-screen web rule above. While
+                            // browsing, Menu/Tabs/Home live in the thin top
+                            // address bar and its menu, exactly as the
+                            // 13 Nov top-bar rule set up.)
 
                             val featureMenuPageHost = try {
                                 android.net.Uri.parse(currentTab.url).host?.lowercase().orEmpty()
@@ -6877,9 +6875,11 @@ class MainActivity : FragmentActivity() {
                             )
                             // Keep the feature FAB on the home surface; hide it on loaded sites
                             // so it does not cover page content. Home remains in the 3-dot menu.
-                            if (!immersiveMode && !videoFullscreenActive &&
-                                (showOverlays || currentTab.url == "about:blank" || currentTab.isPageLoading)
-                            ) {
+                            // Full-screen web rule (14 Nov 2026): the floating
+                            // feature-menu button is a home-surface control; on
+                            // web pages nothing floats over the page any more
+                            // (it used to appear there while a page loaded).
+                            if (!immersiveMode && !videoFullscreenActive && showOverlays) {
                                 FeatureMenuFabOverlay(
                                     theme = theme,
                                     expanded = showFeatureMenu,

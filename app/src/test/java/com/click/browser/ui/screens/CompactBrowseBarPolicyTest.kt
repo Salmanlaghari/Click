@@ -65,41 +65,40 @@ class CompactBrowseBarPolicyTest {
     }
 
     @Test
-    fun bottomAddressBarInsetShrinksWhenToolbarAutoHides() {
+    fun visibleBottomAddressBarReservesExactlyItsOwnHeight() {
+        // Full-screen web rule (14 Nov 2026): the browse bottom navigation
+        // is gone, so a visible bottom address bar reserves only its own
+        // 54dp row plus the 2dp load-progress line — no nav offset.
         assertEquals(
-            132,
+            56,
             browseBottomChromeInsetDp(
-                showBrowseBottomNav = true,
                 bottomAddressBarEnabled = true,
                 toolbarVisible = true
-            )
-        )
-        assertEquals(
-            64,
-            browseBottomChromeInsetDp(
-                showBrowseBottomNav = true,
-                bottomAddressBarEnabled = true,
-                toolbarVisible = false
             )
         )
     }
 
     @Test
-    fun bottomChromeInsetIsZeroWithoutBrowseNavigationAndNavOnlyOtherwise() {
+    fun noVisibleBottomChromeReservesNoSpaceSoTheWebPageFillsTheScreen() {
         assertEquals(
             0,
             browseBottomChromeInsetDp(
-                showBrowseBottomNav = false,
                 bottomAddressBarEnabled = true,
+                toolbarVisible = false
+            )
+        )
+        assertEquals(
+            0,
+            browseBottomChromeInsetDp(
+                bottomAddressBarEnabled = false,
                 toolbarVisible = true
             )
         )
         assertEquals(
-            64,
+            0,
             browseBottomChromeInsetDp(
-                showBrowseBottomNav = true,
                 bottomAddressBarEnabled = false,
-                toolbarVisible = true
+                toolbarVisible = false
             )
         )
     }
