@@ -143,6 +143,10 @@ class TabItem(
      * A popup tab's own history holds only the popup page, so Back uses
      * this to return to the opener's page instead of falling through to
      * Home (Prince's stuck-junk-page report, 14 Nov 2026).
+     *
+     * Only GeckoView popup tabs record an opener: window.open is a
+     * Gecko-only path here, and WebView (private) tabs never set this —
+     * their Back fallback stays the plain go-Home behaviour.
      */
     val openerTabId: String? = initialOpenerTabId
     /** Regular tabs default to GeckoView; private tabs stay on WebView. */
@@ -10203,6 +10207,10 @@ fun DownloadActivityIndicator(
     // download continues in the background behind its notification. A later
     // new (or resumed) transfer re-shows the box for another 10 seconds.
     // (The 13 Nov ease in/out animation below is unchanged.)
+    // Measured speed state lives above the transfer-set effect so that
+    // effect can reset it (see below).
+    var speedSample by remember { mutableStateOf<Pair<Long, Long>?>(null) }
+    var measuredSpeedBps by remember { mutableStateOf<Double?>(null) }
     var seenTransferIds by remember { mutableStateOf<Set<String>>(emptySet()) }
     var showToken by remember { mutableStateOf(0) }
     var boxTimedVisible by remember { mutableStateOf(false) }
@@ -10210,6 +10218,13 @@ fun DownloadActivityIndicator(
         val fresh = transferIds - seenTransferIds
         seenTransferIds = transferIds
         if (fresh.isNotEmpty()) showToken++
+        if (fresh.isNotEmpty() || transferIds.isEmpty()) {
+            // Never carry a speed sample across downloads: a stale sample
+            // would hand the NEXT download the previous one's speed and
+            // produce a wildly wrong first ETA (Kilo review, PR #218).
+            speedSample = null
+            measuredSpeedBps = null
+        }
     }
     // Keyed ONLY on the show token, so a transfer finishing mid-window can
     // never cancel the pending hide: each fresh start re-arms a full 10s.
@@ -10256,10 +10271,6 @@ fun DownloadActivityIndicator(
         label = "download-box-pulse-alpha"
     )
 
-    // Measured speed: byte movement of the known-size transfers between
-    // samples ~2s apart. No sample yet (or nothing measurable) -> no ETA.
-    var speedSample by remember { mutableStateOf<Pair<Long, Long>?>(null) }
-    var measuredSpeedBps by remember { mutableStateOf<Double?>(null) }
     LaunchedEffect(nowMillis) {
         val sample = speedSample
         if (sample == null) {
@@ -10276,10 +10287,17 @@ fun DownloadActivityIndicator(
     val primaryRecord = runningRecords.firstOrNull()
     val primaryResponse = activeResponses.firstOrNull()
     val primaryName = primaryRecord?.fileName ?: primaryResponse?.fileName ?: "Download"
-    val primaryStartedAt = primaryRecord?.createdAt ?: primaryResponse?.startedAtMillis
+    // Legacy engine records can carry createdAt = 0 (the store's optLong
+    // default); a zero start would render an absurd elapsed, so drop it.
+    val primaryStartedAt = (primaryRecord?.createdAt ?: primaryResponse?.startedAtMillis)
+        ?.takeIf { it > 0L }
+    // ETA covers the known-size transfers only, so it is shown only when
+    // EVERY active transfer has a known total — with a streamed
+    // (unknown-size) download in flight, "~N left" would silently ignore
+    // it; the card then falls back to elapsed time (Kilo review, PR #218).
     val etaSeconds = com.click.browser.engine.downloadEtaSeconds(
         downloadedBytes = aggregateDownloaded,
-        totalBytes = aggregateTotal,
+        totalBytes = if (activeCount > 0 && knownTotals.size == activeCount) aggregateTotal else -1L,
         speedBps = measuredSpeedBps
     )
     val detailsLine = buildList {

@@ -57,5 +57,7 @@ internal fun formatDownloadBytes(bytes: Long): String {
         value /= 1024
         unit++
     }
-    return if (unit == 0) "$bytes B" else "%.1f %s".format(value, units[unit])
+    // Locale.US pinned: the default locale can render "1,5 KB" or
+    // non-ASCII digits on some devices (Kilo review, PR #218).
+    return if (unit == 0) "$bytes B" else "%.1f %s".format(java.util.Locale.US, value, units[unit])
 }
