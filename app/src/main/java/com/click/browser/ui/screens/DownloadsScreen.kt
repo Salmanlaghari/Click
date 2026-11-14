@@ -669,9 +669,9 @@ private fun ActiveResponseDownloadRow(
     } else null
     val percentText = progress?.let { "${(it * 100).toInt()}%" }
     val sizeText = if (item.totalBytes > 0) {
-        "${formatBytes(item.downloadedBytes)} of ${formatBytes(item.totalBytes)}"
+        "${com.click.browser.engine.formatDownloadBytes(item.downloadedBytes)} of ${com.click.browser.engine.formatDownloadBytes(item.totalBytes)}"
     } else {
-        formatBytes(item.downloadedBytes)
+        com.click.browser.engine.formatDownloadBytes(item.downloadedBytes)
     }
     val statusText = if (item.paused) "Paused" else "Downloading…"
     // Honest timing from this stream's own start (Prince, 14 Nov 2026):
@@ -743,9 +743,9 @@ private fun ActiveDownloadRow(item: ManagedDownload, onCancel: () -> Unit) {
     }
     val percentText = progress?.let { "${(it * 100).toInt()}%" }
     val sizeText = if (item.totalBytes > 0) {
-        "${formatBytes(item.downloadedBytes)} of ${formatBytes(item.totalBytes)}"
+        "${com.click.browser.engine.formatDownloadBytes(item.downloadedBytes)} of ${com.click.browser.engine.formatDownloadBytes(item.totalBytes)}"
     } else {
-        formatBytes(item.downloadedBytes)
+        com.click.browser.engine.formatDownloadBytes(item.downloadedBytes)
     }
     // These rows belong to Android's DownloadManager, which exposes no
     // pause/resume API — Cancel is the only honest control here (Click's
@@ -792,9 +792,9 @@ private fun CustomTransferRow(
         CustomDownloadState.COMPLETED -> "Saved."
     }
     val sizeText = if (item.totalBytes > 0L) {
-        "${formatBytes(item.bytesDownloaded)} of ${formatBytes(item.totalBytes)}"
+        "${com.click.browser.engine.formatDownloadBytes(item.bytesDownloaded)} of ${com.click.browser.engine.formatDownloadBytes(item.totalBytes)}"
     } else {
-        "${formatBytes(item.bytesDownloaded)} downloaded"
+        "${com.click.browser.engine.formatDownloadBytes(item.bytesDownloaded)} downloaded"
     }
     Column(
         modifier = Modifier
@@ -852,7 +852,7 @@ private fun ManagedDownloadRow(
         Text(item.label, style = MaterialTheme.typography.bodyMedium)
         if (item.totalBytes > 0) {
             Text(
-                formatBytes(item.totalBytes),
+                com.click.browser.engine.formatDownloadBytes(item.totalBytes),
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
@@ -1076,18 +1076,6 @@ private suspend fun queryManagedDownloads(context: Context): Result<List<Managed
         }
     }
 
-private fun formatBytes(bytes: Long): String {
-    if (bytes <= 0) return "0 B"
-    val units = arrayOf("B", "KB", "MB", "GB")
-    var value = bytes.toDouble()
-    var unit = 0
-    while (value >= 1024 && unit < units.lastIndex) {
-        value /= 1024
-        unit++
-    }
-    return if (unit == 0) "${bytes} B" else "%.1f %s".format(value, units[unit])
-}
-
 /** Row for one of Click's own engine downloads, in any lifecycle state. */
 @Composable
 private fun ClickDownloadRow(
@@ -1102,9 +1090,9 @@ private fun ClickDownloadRow(
     val progress = com.click.browser.data.customDownloadProgress(record.bytesDownloaded, record.totalBytes)
     val percentText = progress?.let { "${(it * 100).toInt()}%" }
     val sizeText = if (record.totalBytes > 0L) {
-        "${formatBytes(record.bytesDownloaded)} of ${formatBytes(record.totalBytes)}"
+        "${com.click.browser.engine.formatDownloadBytes(record.bytesDownloaded)} of ${com.click.browser.engine.formatDownloadBytes(record.totalBytes)}"
     } else if (record.bytesDownloaded > 0L) {
-        formatBytes(record.bytesDownloaded)
+        com.click.browser.engine.formatDownloadBytes(record.bytesDownloaded)
     } else {
         ""
     }

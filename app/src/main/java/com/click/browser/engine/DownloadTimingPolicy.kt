@@ -47,10 +47,11 @@ internal fun formatDownloadDuration(totalSeconds: Long): String {
     }
 }
 
-/** 1024-based byte formatting, matching the Downloads screen's style. */
+/** Shared 1024-based byte formatting for all download surfaces (PR #218
+ *  consolidated the previously drifted private copies into this one). */
 internal fun formatDownloadBytes(bytes: Long): String {
     if (bytes <= 0) return "0 B"
-    val units = arrayOf("B", "KB", "MB", "GB")
+    val units = arrayOf("B", "KB", "MB", "GB", "TB")
     var value = bytes.toDouble()
     var unit = 0
     while (value >= 1024 && unit < units.lastIndex) {

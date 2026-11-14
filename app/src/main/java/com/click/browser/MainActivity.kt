@@ -10218,13 +10218,12 @@ fun DownloadActivityIndicator(
         val fresh = transferIds - seenTransferIds
         seenTransferIds = transferIds
         if (fresh.isNotEmpty()) showToken++
-        if (fresh.isNotEmpty() || transferIds.isEmpty()) {
-            // Never carry a speed sample across downloads: a stale sample
-            // would hand the NEXT download the previous one's speed and
-            // produce a wildly wrong first ETA (Kilo review, PR #218).
-            speedSample = null
-            measuredSpeedBps = null
-        }
+        // Never carry a speed sample across a change in the transfer set:
+        // a stale sample would hand the remaining/next download another
+        // transfer's rate and produce a wildly wrong ETA until the next
+        // sampling window healed it (Kilo review, PR #218).
+        speedSample = null
+        measuredSpeedBps = null
     }
     // Keyed ONLY on the show token, so a transfer finishing mid-window can
     // never cancel the pending hide: each fresh start re-arms a full 10s.
