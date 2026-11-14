@@ -234,6 +234,40 @@ internal fun BrowserTabNavigation?.handleBrowserBackPress(): BrowserBackResult {
     return BrowserBackResult.NAVIGATED_BACK
 }
 
+internal enum class WebPageBackAction {
+    /** The tab has its own history: go back inside the tab. */
+    IN_TAB,
+
+    /**
+     * Popup/child tab with no history of its own: close it and return to
+     * the tab that opened it — that tab holds the page the user was reading.
+     */
+    RETURN_TO_OPENER,
+
+    /** No in-tab history and no opener: nowhere to go back to. */
+    GO_HOME
+}
+
+/**
+ * Back on a web page (Prince's report, 14 Nov 2026): pressing Back on a
+ * stuck junk/redirect page landed on Home instead of the previous page.
+ * Root cause: such pages usually open via window.open into a NEW tab whose
+ * own history holds only that one (never-committed) entry, so the engine
+ * reports canGoBack=false and the chrome fell through to loading Home —
+ * even though the user's actual previous page sits in the opener tab
+ * right behind it. Rule: in-tab history wins; otherwise a still-open
+ * opener tab is the previous page; only a genuinely history-less,
+ * opener-less tab falls back to Home.
+ */
+internal fun webPageBackAction(
+    canGoBackInTab: Boolean,
+    openerTabStillOpen: Boolean
+): WebPageBackAction = when {
+    canGoBackInTab -> WebPageBackAction.IN_TAB
+    openerTabStillOpen -> WebPageBackAction.RETURN_TO_OPENER
+    else -> WebPageBackAction.GO_HOME
+}
+
 internal fun BrowserTabNavigation?.goForwardIfPossible(): Boolean {
     if (this?.canGoForward() != true) return false
     goForward()

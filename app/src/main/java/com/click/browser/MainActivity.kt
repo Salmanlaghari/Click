@@ -135,8 +135,20 @@ class TabItem(
     initialWebView: WebView? = null,
     initialEngine: BrowserTabEngine = defaultBrowserTabEngine(isIncognito),
     initialGeckoSessionState: String? = null,
-    initialGeckoSession: org.mozilla.geckoview.GeckoSession? = null
+    initialGeckoSession: org.mozilla.geckoview.GeckoSession? = null,
+    initialOpenerTabId: String? = null
 ) {
+    /**
+     * The tab that opened this one via window.open / target=_blank, if any.
+     * A popup tab's own history holds only the popup page, so Back uses
+     * this to return to the opener's page instead of falling through to
+     * Home (Prince's stuck-junk-page report, 14 Nov 2026).
+     *
+     * Only GeckoView popup tabs record an opener: window.open is a
+     * Gecko-only path here, and WebView (private) tabs never set this —
+     * their Back fallback stays the plain go-Home behaviour.
+     */
+    val openerTabId: String? = initialOpenerTabId
     /** Regular tabs default to GeckoView; private tabs stay on WebView. */
     var engine by mutableStateOf(initialEngine)
 
@@ -3252,12 +3264,28 @@ class MainActivity : FragmentActivity() {
             val isWebPageActive = currentTab.url.isNotBlank() && currentTab.url != "about:blank" && currentTab.url != homeUrl()
 
             BackHandler(enabled = isWebPageActive && !immersiveMode && !isAnyOverlayOpen && showClickPage == null && showGamePlayer == null && exitFullscreenVideo == null) {
-                if (canCurrentTabGoBack) {
-                    currentTab.browserSession.goBackIfPossible()
-                } else {
-                    val home = homeUrl()
-                    currentTab.url = home
-                    currentTab.browserSession?.loadUrl(home)
+                // Back must reach the PREVIOUS PAGE (Prince, 14 Nov 2026):
+                // a stuck junk/redirect page usually sits in a popup tab
+                // whose own history has no previous entry, so falling
+                // through to Home was wrong — close the popup and return
+                // to the opener tab's page. Home is only for a tab that
+                // genuinely has no previous page anywhere.
+                val openerTabId = currentTab.openerTabId
+                val openerStillOpen = openerTabId != null &&
+                    tabs.any { it.id == openerTabId }
+                when (webPageBackAction(canCurrentTabGoBack, openerStillOpen)) {
+                    WebPageBackAction.IN_TAB ->
+                        currentTab.browserSession.goBackIfPossible()
+                    WebPageBackAction.RETURN_TO_OPENER -> {
+                        closeTabAt(activeTabIndex)
+                        val openerIndex = tabs.indexOfFirst { it.id == openerTabId }
+                        if (openerIndex >= 0) activeTabIndex = openerIndex
+                    }
+                    WebPageBackAction.GO_HOME -> {
+                        val home = homeUrl()
+                        currentTab.url = home
+                        currentTab.browserSession?.loadUrl(home)
+                    }
                 }
             }
 
@@ -4567,7 +4595,15 @@ class MainActivity : FragmentActivity() {
 
                             // Immersive Fullscreen WebView setup: if loaded, hide overlays for full screen coverage!
                             val showOverlays = currentTab.url == "about:blank"
-                            val showBrowseBottomNav = !showOverlays && !immersiveMode && !videoFullscreenActive
+                            // Prince's full-screen web rule (14 Nov 2026): while a
+                            // real web page is showing there is NO bottom bar over
+                            // or under it — the website gets the full screen. The
+                            // old Menu - Home - Tabs - More browse bar is removed
+                            // from web pages for good; the home dashboard keeps
+                            // its own ClickBottomNav. This flag now only tracks
+                            // the browsing surface for the optional bottom
+                            // address bar (an opt-in experimental flag).
+                            val showBrowseBottomChrome = !showOverlays && !immersiveMode && !videoFullscreenActive
 
                             // Manual immersive mode and site video fullscreen both hide system bars.
                             LaunchedEffect(immersiveMode, videoFullscreenActive) {
@@ -4589,11 +4625,17 @@ class MainActivity : FragmentActivity() {
                             // reveals on scroll-up (event-driven, battery-safe), thin
                             // page-load progress bar, one-shot theme crossfade.
                             var toolbarVisible by remember { mutableStateOf(true) }
-                            // Keep page content clear of the bottom navigation; reserve extra
-                            // room for the address bar only while its auto-hidden toolbar is shown.
+                            // Keep page content clear of any bottom chrome; reserve
+                            // room for the bottom address bar only while it is shown.
+                            // With the browse bottom bar gone, the only bottom
+                            // chrome that can still sit over a web page is the
+                            // opt-in bottom address bar — reserve exactly its
+                            // height while visible, nothing otherwise, so the
+                            // WebView truly fills the screen.
                             val browseBottomNavInset = browseBottomChromeInsetDp(
-                                showBrowseBottomNav = showBrowseBottomNav,
-                                bottomAddressBarEnabled = flagsUi.bottomAddressBar,
+                                bottomAddressBarEnabled = flagsUi.bottomAddressBar &&
+                                    activeMode != BrowserMode.SIMPLE &&
+                                    showBrowseBottomChrome,
                                 toolbarVisible = toolbarVisible
                             ).dp
                             val toolbarScrollConnection = remember {
@@ -5034,7 +5076,8 @@ class MainActivity : FragmentActivity() {
                                                                         title = "New Tab",
                                                                         isIncognito = currentTab.isIncognito,
                                                                         initialEngine = BrowserTabEngine.GECKOVIEW,
-                                                                        initialGeckoSession = childSession
+                                                                        initialGeckoSession = childSession,
+                                                                        initialOpenerTabId = tabId
                                                                     )
                                                                     tabs.add(childTab)
                                                                     activeTabIndex = tabs.lastIndex
@@ -6474,15 +6517,13 @@ class MainActivity : FragmentActivity() {
                                                     }
                                                 }
                                             )
-                                            if (currentTab.url != "about:blank" && currentTab.isPageLoading && !currentTab.hasCommittedContent) {
-                                                WebsiteProcessingOverlay(
-                                                    theme = theme,
-                                                    site = hostOfUrl(currentTab.url),
-                                                    progress = currentTab.loadProgress,
-                                                    animationsEnabled = flagsUi.tabAnimations && !liveReducedMotion,
-                                                    onCancel = { stopCurrentTabLoading() }
-                                                )
-                                            }
+                                            // Prince's rule (14 Nov 2026): NO centre
+                                            // "Loading page..." dialog over a web page,
+                                            // in any mode — it is removed for good.
+                                            // Load state still shows in the thin
+                                            // address-bar progress line, and stopping a
+                                            // load stays on the address bar's stop
+                                            // control (onStopLoading).
                                             if (
                                                 currentTab.engine == BrowserTabEngine.WEBVIEW &&
                                                 currentTab.webViewNavigationStopRecovery &&
@@ -6783,8 +6824,9 @@ class MainActivity : FragmentActivity() {
                                     BrowseTopBarBlock(showAddressBar = !showOverlays)
                                 }
 
-                                // Slim animated download strip under the toolbar while
-                                // any Click-engine or response download is active.
+                                // Download box under the toolbar while any
+                                // Click-engine or response download is active
+                                // (larger card, timing, auto-hides after ~10s).
                                 if (!immersiveMode) {
                                     DownloadActivityIndicator(
                                         mode = activeMode,
@@ -6835,38 +6877,24 @@ class MainActivity : FragmentActivity() {
                             // Back/forward stay in the address bar to avoid duplicate controls.
                             // (No center AI tab here — AI lives in the floating pill.)
                             // Polish: one-shot theme crossfade (battery-safe).
-                            // Bottom-address-bar option: bar renders below the page,
-                            // padded above the overlaid bottom nav so they never overlap.
-                            // (Never in Simple mode — its bar stays at the top.)
-                            if (flagsUi.bottomAddressBar && activeMode != BrowserMode.SIMPLE && showBrowseBottomNav) {
+                            // Bottom-address-bar option: the address bar renders
+                            // below the page instead of at the top. (Never in
+                            // Simple mode — its bar stays at the top.)
+                            if (flagsUi.bottomAddressBar && activeMode != BrowserMode.SIMPLE && showBrowseBottomChrome) {
+                                // No bottom nav row to clear any more (14 Nov
+                                // full-screen web rule), so the optional bottom
+                                // address bar sits directly at the bottom edge.
                                 Box(
-                                    modifier = Modifier
-                                        .align(Alignment.BottomCenter)
-                                        .padding(bottom = BROWSE_BOTTOM_ADDRESS_BAR_OFFSET_DP.dp)
+                                    modifier = Modifier.align(Alignment.BottomCenter)
                                 ) {
                                     BrowseTopBarBlock()
                                 }
                             }
-                            if (showBrowseBottomNav) {
-                                Crossfade(
-                                    targetState = theme,
-                                    label = "browseNavTheme",
-                                    modifier = Modifier.align(Alignment.BottomCenter)
-                                ) { themed ->
-                                    BrowseBottomNav(
-                                        theme = themed,
-                                        activeMode = activeMode,
-                                        tabCount = tabs.size,
-                                        onDrawerClick = { scope.launch { drawerState.open() } },
-                                        onHome = {
-                                            currentTab.url = "about:blank"
-                                            currentTab.browserSession?.loadUrl("about:blank")
-                                        },
-                                        onTabs = { showTabsManager = true },
-                                        onMenu = { showBrowserMenu = true }
-                                    )
-                                }
-                            }
+                            // (No browsing bottom bar any more — see
+                            // Prince's full-screen web rule above. While
+                            // browsing, Menu/Tabs/Home live in the thin top
+                            // address bar and its menu, exactly as the
+                            // 13 Nov top-bar rule set up.)
 
                             val featureMenuPageHost = try {
                                 android.net.Uri.parse(currentTab.url).host?.lowercase().orEmpty()
@@ -6877,9 +6905,11 @@ class MainActivity : FragmentActivity() {
                             )
                             // Keep the feature FAB on the home surface; hide it on loaded sites
                             // so it does not cover page content. Home remains in the 3-dot menu.
-                            if (!immersiveMode && !videoFullscreenActive &&
-                                (showOverlays || currentTab.url == "about:blank" || currentTab.isPageLoading)
-                            ) {
+                            // Full-screen web rule (14 Nov 2026): the floating
+                            // feature-menu button is a home-surface control; on
+                            // web pages nothing floats over the page any more
+                            // (it used to appear there while a page loaded).
+                            if (!immersiveMode && !videoFullscreenActive && showOverlays) {
                                 FeatureMenuFabOverlay(
                                     theme = theme,
                                     expanded = showFeatureMenu,
@@ -10162,32 +10192,74 @@ fun DownloadActivityIndicator(
     val store = remember { com.click.browser.data.ClickDownloadStore(context) }
     val records by remember(mode) { store.flowFor(mode) }.collectAsState(initial = emptyList())
     val responses by com.click.browser.engine.ActiveResponseDownloads.active.collectAsState()
+    // The box reports ACTIVE transfers only (Prince, 14 Nov 2026): a queued
+    // or paused download is not "downloading" — its notification and the
+    // Downloads screen still carry it.
     val runningRecords = records.filter {
         it.state == com.click.browser.engine.ClickDownloadState.RUNNING
     }
-    val waitingRecords = records.filter {
-        it.state == com.click.browser.engine.ClickDownloadState.QUEUED ||
-            it.state == com.click.browser.engine.ClickDownloadState.PAUSED
-    }
-    // Prince (13 Nov): the strip must ease in/out smoothly instead of
-    // popping — visibility now drives an AnimatedVisibility below instead
-    // of an abrupt early return.
-    val stripVisible = runningRecords.isNotEmpty() || waitingRecords.isNotEmpty() || responses.isNotEmpty()
+    val activeResponses = responses.filter { !it.paused }
+    val transferIds = (runningRecords.map { "engine:${it.id}" } +
+        activeResponses.map { "response:${it.id}" }).toSet()
 
-    val activeCount = runningRecords.size + waitingRecords.size + responses.size
+    // Show-for-10-seconds rule (Prince, 14 Nov 2026): the box appears when a
+    // new transfer starts, stays for ~10 seconds, then hides itself; the
+    // download continues in the background behind its notification. A later
+    // new (or resumed) transfer re-shows the box for another 10 seconds.
+    // (The 13 Nov ease in/out animation below is unchanged.)
+    // Measured speed state lives above the transfer-set effect so that
+    // effect can reset it (see below).
+    var speedSample by remember { mutableStateOf<Pair<Long, Long>?>(null) }
+    var measuredSpeedBps by remember { mutableStateOf<Double?>(null) }
+    var seenTransferIds by remember { mutableStateOf<Set<String>>(emptySet()) }
+    var showToken by remember { mutableStateOf(0) }
+    var boxTimedVisible by remember { mutableStateOf(false) }
+    LaunchedEffect(transferIds) {
+        val fresh = transferIds - seenTransferIds
+        seenTransferIds = transferIds
+        if (fresh.isNotEmpty()) showToken++
+        // Never carry a speed sample across a change in the transfer set:
+        // a stale sample would hand the remaining/next download another
+        // transfer's rate and produce a wildly wrong ETA until the next
+        // sampling window healed it (Kilo review, PR #218).
+        speedSample = null
+        measuredSpeedBps = null
+    }
+    // Keyed ONLY on the show token, so a transfer finishing mid-window can
+    // never cancel the pending hide: each fresh start re-arms a full 10s.
+    LaunchedEffect(showToken) {
+        if (showToken > 0) {
+            boxTimedVisible = true
+            kotlinx.coroutines.delay(10_000)
+            boxTimedVisible = false
+        }
+    }
+    val boxVisible = boxTimedVisible && transferIds.isNotEmpty()
+
+    // One-second ticker while the box is up: drives the elapsed clock and
+    // the speed sampling below. Timing is computed from real bytes only.
+    var nowMillis by remember { mutableStateOf(System.currentTimeMillis()) }
+    LaunchedEffect(boxVisible) {
+        while (boxVisible) {
+            nowMillis = System.currentTimeMillis()
+            kotlinx.coroutines.delay(1_000)
+        }
+    }
+
+    val activeCount = runningRecords.size + activeResponses.size
     val knownTotals = (runningRecords.map { it.bytesDownloaded to it.totalBytes } +
-        responses.map { it.downloadedBytes to it.totalBytes }).filter { it.second > 0L }
-    val aggregate = if (knownTotals.isNotEmpty()) {
-        val downloaded = knownTotals.sumOf { it.first }
-        val total = knownTotals.sumOf { it.second }
-        if (total > 0L) (downloaded.toFloat() / total.toFloat()).coerceIn(0f, 1f) else null
+        activeResponses.map { it.downloadedBytes to it.totalBytes }).filter { it.second > 0L }
+    val aggregateDownloaded = knownTotals.sumOf { it.first }
+    val aggregateTotal = knownTotals.sumOf { it.second }
+    val aggregate = if (knownTotals.isNotEmpty() && aggregateTotal > 0L) {
+        (aggregateDownloaded.toFloat() / aggregateTotal.toFloat()).coerceIn(0f, 1f)
     } else null
     val animatedAggregate by androidx.compose.animation.core.animateFloatAsState(
         targetValue = aggregate ?: 0f,
         animationSpec = androidx.compose.animation.core.tween(400),
-        label = "download-strip-progress"
+        label = "download-box-progress"
     )
-    val pulse = androidx.compose.animation.core.rememberInfiniteTransition(label = "download-strip-pulse")
+    val pulse = androidx.compose.animation.core.rememberInfiniteTransition(label = "download-box-pulse")
     val pulseAlpha by pulse.animateFloat(
         initialValue = 0.35f,
         targetValue = 1f,
@@ -10195,17 +10267,62 @@ fun DownloadActivityIndicator(
             animation = androidx.compose.animation.core.tween(650),
             repeatMode = androidx.compose.animation.core.RepeatMode.Reverse
         ),
-        label = "download-strip-pulse-alpha"
+        label = "download-box-pulse-alpha"
     )
-    val activeResponse = responses.firstOrNull { !it.paused }
-    val label = when {
-        runningRecords.isNotEmpty() -> "Downloading ${runningRecords.first().fileName}"
-        activeResponse != null -> "Downloading ${activeResponse.fileName}"
-        responses.isNotEmpty() -> "Download paused — ${responses.first().fileName}"
-        else -> "Downloads paused or waiting"
+
+    LaunchedEffect(nowMillis) {
+        val sample = speedSample
+        if (sample == null) {
+            speedSample = aggregateDownloaded to nowMillis
+        } else if (nowMillis - sample.second >= 2_000L) {
+            com.click.browser.engine.downloadSpeedBps(
+                bytesMoved = aggregateDownloaded - sample.first,
+                elapsedMillis = nowMillis - sample.second
+            )?.let { measuredSpeedBps = it }
+            speedSample = aggregateDownloaded to nowMillis
+        }
     }
+
+    val primaryRecord = runningRecords.firstOrNull()
+    val primaryResponse = activeResponses.firstOrNull()
+    val primaryName = primaryRecord?.fileName ?: primaryResponse?.fileName ?: "Download"
+    // Legacy engine records can carry createdAt = 0 (the store's optLong
+    // default); a zero start would render an absurd elapsed, so drop it.
+    val primaryStartedAt = (primaryRecord?.createdAt ?: primaryResponse?.startedAtMillis)
+        ?.takeIf { it > 0L }
+    // ETA covers the known-size transfers only, so it is shown only when
+    // EVERY active transfer has a known total — with a streamed
+    // (unknown-size) download in flight, "~N left" would silently ignore
+    // it; the card then falls back to elapsed time (Kilo review, PR #218).
+    val etaSeconds = com.click.browser.engine.downloadEtaSeconds(
+        downloadedBytes = aggregateDownloaded,
+        totalBytes = if (activeCount > 0 && knownTotals.size == activeCount) aggregateTotal else -1L,
+        speedBps = measuredSpeedBps
+    )
+    val detailsLine = buildList {
+        if (knownTotals.isNotEmpty()) {
+            add(
+                "${com.click.browser.engine.formatDownloadBytes(aggregateDownloaded)} of " +
+                    com.click.browser.engine.formatDownloadBytes(aggregateTotal)
+            )
+        } else {
+            val downloaded = primaryRecord?.bytesDownloaded ?: primaryResponse?.downloadedBytes
+            if (downloaded != null) {
+                add("${com.click.browser.engine.formatDownloadBytes(downloaded)} downloaded")
+            }
+        }
+        if (etaSeconds != null) {
+            add("~${com.click.browser.engine.formatDownloadDuration(etaSeconds)} left")
+        } else if (primaryStartedAt != null) {
+            // Total size unknown (or speed not measured yet): elapsed only,
+            // never an invented ETA.
+            val elapsed = com.click.browser.engine.downloadElapsedSeconds(primaryStartedAt, nowMillis)
+            add("${com.click.browser.engine.formatDownloadDuration(elapsed)} elapsed")
+        }
+    }.joinToString(" · ")
+
     androidx.compose.animation.AnimatedVisibility(
-        visible = stripVisible,
+        visible = boxVisible,
         enter = androidx.compose.animation.slideInVertically(
             animationSpec = androidx.compose.animation.core.tween(
                 durationMillis = 320,
@@ -10223,65 +10340,93 @@ fun DownloadActivityIndicator(
             animationSpec = androidx.compose.animation.core.tween(240)
         )
     ) {
-    Column(
-        modifier = Modifier
-            .fillMaxWidth()
-            .background(theme.surfaceVariant)
-            .clickable { onOpenDownloads() }
-    ) {
-        Row(
+        // Prince (14 Nov 2026): the old strip was "bohat patla" — this is a
+        // real card now: file name, thick progress bar, percent, and honest
+        // timing. Tap still opens the Downloads page (unchanged behaviour).
+        Surface(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 12.dp, vertical = 5.dp),
-            verticalAlignment = Alignment.CenterVertically
+                .padding(horizontal = 10.dp, vertical = 6.dp)
+                .clickable { onOpenDownloads() },
+            shape = RoundedCornerShape(16.dp),
+            color = theme.surface,
+            border = androidx.compose.foundation.BorderStroke(
+                1.dp, theme.primary.copy(alpha = 0.20f)
+            ),
+            shadowElevation = 6.dp
         ) {
-            Icon(
-                Icons.Default.Download,
-                contentDescription = null,
-                modifier = Modifier
-                    .size(15.dp)
-                    .then(
-                        if (runningRecords.isNotEmpty() || responses.isNotEmpty()) {
-                            Modifier.graphicsLayer { alpha = pulseAlpha }
-                        } else Modifier
-                    ),
-                tint = theme.primary
-            )
-            Spacer(modifier = Modifier.width(8.dp))
-            Text(
-                label,
-                color = theme.onSurface,
-                fontSize = 11.5.sp,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-                modifier = Modifier.weight(1f)
-            )
-            if (activeCount > 1) {
-                Text(
-                    "$activeCount active",
-                    color = theme.onSurface.copy(alpha = 0.65f),
-                    fontSize = 11.sp
-                )
-                Spacer(modifier = Modifier.width(8.dp))
-            }
-            if (aggregate != null) {
-                Text(
-                    "${(aggregate * 100).toInt()}%",
-                    color = theme.primary,
-                    fontSize = 11.5.sp,
-                    fontWeight = FontWeight.Bold
-                )
+            Column(
+                modifier = Modifier.padding(horizontal = 14.dp, vertical = 12.dp)
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(
+                        Icons.Default.Download,
+                        contentDescription = null,
+                        modifier = Modifier
+                            .size(20.dp)
+                            .graphicsLayer { alpha = pulseAlpha },
+                        tint = theme.primary
+                    )
+                    Spacer(modifier = Modifier.width(10.dp))
+                    Text(
+                        primaryName,
+                        color = theme.onSurface,
+                        fontSize = 13.5.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f)
+                    )
+                    if (activeCount > 1) {
+                        Text(
+                            "$activeCount active",
+                            color = theme.onSurface.copy(alpha = 0.65f),
+                            fontSize = 11.sp
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                    }
+                    if (aggregate != null) {
+                        Text(
+                            "${(aggregate * 100).toInt()}%",
+                            color = theme.primary,
+                            fontSize = 13.sp,
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
+                }
+                Spacer(modifier = Modifier.height(8.dp))
+                if (aggregate != null) {
+                    LinearProgressIndicator(
+                        progress = { animatedAggregate },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(6.dp)
+                            .clip(RoundedCornerShape(3.dp)),
+                        color = theme.primary,
+                        trackColor = theme.surfaceVariant
+                    )
+                } else {
+                    LinearProgressIndicator(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(6.dp)
+                            .clip(RoundedCornerShape(3.dp)),
+                        color = theme.primary,
+                        trackColor = theme.surfaceVariant
+                    )
+                }
+                if (detailsLine.isNotBlank()) {
+                    Spacer(modifier = Modifier.height(6.dp))
+                    Text(
+                        detailsLine,
+                        color = theme.onSurface.copy(alpha = 0.72f),
+                        fontSize = 11.5.sp,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
             }
         }
-        if (aggregate != null) {
-            LinearProgressIndicator(
-                progress = { animatedAggregate },
-                modifier = Modifier.fillMaxWidth().height(2.dp),
-                color = theme.primary,
-                trackColor = theme.surfaceVariant
-            )
-        }
-    }
     }
 }
 

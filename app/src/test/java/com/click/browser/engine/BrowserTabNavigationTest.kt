@@ -44,6 +44,37 @@ class BrowserTabNavigationTest {
     }
 
     @Test
+    fun backPrefersInTabHistoryOverEverythingElse() {
+        assertEquals(
+            WebPageBackAction.IN_TAB,
+            webPageBackAction(canGoBackInTab = true, openerTabStillOpen = true)
+        )
+        assertEquals(
+            WebPageBackAction.IN_TAB,
+            webPageBackAction(canGoBackInTab = true, openerTabStillOpen = false)
+        )
+    }
+
+    @Test
+    fun backOnHistoryLessPopupTabReturnsToTheOpenerPage() {
+        // Prince's stuck junk-page case (14 Nov 2026): the popup tab's own
+        // history holds only the never-committed junk entry, so Back must
+        // close it and return to the opener tab — NOT load Home.
+        assertEquals(
+            WebPageBackAction.RETURN_TO_OPENER,
+            webPageBackAction(canGoBackInTab = false, openerTabStillOpen = true)
+        )
+    }
+
+    @Test
+    fun backGoesHomeOnlyWhenNoPreviousPageExistsAnywhere() {
+        assertEquals(
+            WebPageBackAction.GO_HOME,
+            webPageBackAction(canGoBackInTab = false, openerTabStillOpen = false)
+        )
+    }
+
+    @Test
     fun forwardIsNoOpWhenHistoryIsUnavailable() {
         val session = FakeNavigation(canForward = false)
 
