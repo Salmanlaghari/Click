@@ -135,8 +135,16 @@ class TabItem(
     initialWebView: WebView? = null,
     initialEngine: BrowserTabEngine = defaultBrowserTabEngine(isIncognito),
     initialGeckoSessionState: String? = null,
-    initialGeckoSession: org.mozilla.geckoview.GeckoSession? = null
+    initialGeckoSession: org.mozilla.geckoview.GeckoSession? = null,
+    initialOpenerTabId: String? = null
 ) {
+    /**
+     * The tab that opened this one via window.open / target=_blank, if any.
+     * A popup tab's own history holds only the popup page, so Back uses
+     * this to return to the opener's page instead of falling through to
+     * Home (Prince's stuck-junk-page report, 14 Nov 2026).
+     */
+    val openerTabId: String? = initialOpenerTabId
     /** Regular tabs default to GeckoView; private tabs stay on WebView. */
     var engine by mutableStateOf(initialEngine)
 
@@ -3252,12 +3260,28 @@ class MainActivity : FragmentActivity() {
             val isWebPageActive = currentTab.url.isNotBlank() && currentTab.url != "about:blank" && currentTab.url != homeUrl()
 
             BackHandler(enabled = isWebPageActive && !immersiveMode && !isAnyOverlayOpen && showClickPage == null && showGamePlayer == null && exitFullscreenVideo == null) {
-                if (canCurrentTabGoBack) {
-                    currentTab.browserSession.goBackIfPossible()
-                } else {
-                    val home = homeUrl()
-                    currentTab.url = home
-                    currentTab.browserSession?.loadUrl(home)
+                // Back must reach the PREVIOUS PAGE (Prince, 14 Nov 2026):
+                // a stuck junk/redirect page usually sits in a popup tab
+                // whose own history has no previous entry, so falling
+                // through to Home was wrong — close the popup and return
+                // to the opener tab's page. Home is only for a tab that
+                // genuinely has no previous page anywhere.
+                val openerTabId = currentTab.openerTabId
+                val openerStillOpen = openerTabId != null &&
+                    tabs.any { it.id == openerTabId }
+                when (webPageBackAction(canCurrentTabGoBack, openerStillOpen)) {
+                    WebPageBackAction.IN_TAB ->
+                        currentTab.browserSession.goBackIfPossible()
+                    WebPageBackAction.RETURN_TO_OPENER -> {
+                        closeTabAt(activeTabIndex)
+                        val openerIndex = tabs.indexOfFirst { it.id == openerTabId }
+                        if (openerIndex >= 0) activeTabIndex = openerIndex
+                    }
+                    WebPageBackAction.GO_HOME -> {
+                        val home = homeUrl()
+                        currentTab.url = home
+                        currentTab.browserSession?.loadUrl(home)
+                    }
                 }
             }
 
@@ -5048,7 +5072,8 @@ class MainActivity : FragmentActivity() {
                                                                         title = "New Tab",
                                                                         isIncognito = currentTab.isIncognito,
                                                                         initialEngine = BrowserTabEngine.GECKOVIEW,
-                                                                        initialGeckoSession = childSession
+                                                                        initialGeckoSession = childSession,
+                                                                        initialOpenerTabId = tabId
                                                                     )
                                                                     tabs.add(childTab)
                                                                     activeTabIndex = tabs.lastIndex
