@@ -210,11 +210,33 @@ object ClickDownloadNotifications {
         } else {
             "${formatBytes(item.downloadedBytes)} downloaded"
         }
+        // Honest timing from this stream's own start (Prince, 14 Nov 2026):
+        // ETA from the measured average speed when the total is known,
+        // otherwise elapsed time only — never an invented estimate.
+        val timingText = if (item.paused) {
+            null
+        } else {
+            val now = System.currentTimeMillis()
+            val averageSpeed = downloadSpeedBps(
+                bytesMoved = item.downloadedBytes,
+                elapsedMillis = now - item.startedAtMillis
+            )
+            val eta = downloadEtaSeconds(item.downloadedBytes, item.totalBytes, averageSpeed)
+            if (eta != null) {
+                "~${formatDownloadDuration(eta)} left"
+            } else {
+                "${formatDownloadDuration(downloadElapsedSeconds(item.startedAtMillis, now))} elapsed"
+            }
+        }
         val builder = NotificationCompat.Builder(context, PROGRESS_CHANNEL_ID)
             .setSmallIcon(android.R.drawable.stat_sys_download)
             .setContentTitle(item.fileName)
             .setContentText(
-                if (item.paused) "Paused · $sizeText" else "$percentText$sizeText"
+                if (item.paused) {
+                    "Paused · $sizeText"
+                } else {
+                    listOf("$percentText$sizeText", timingText).filterNotNull().joinToString(" · ")
+                }
             )
             .setContentIntent(openDownloadsIntent(context, "response:${item.id}", openWithRecord = false))
             .setOnlyAlertOnce(true)

@@ -674,6 +674,28 @@ private fun ActiveResponseDownloadRow(
         formatBytes(item.downloadedBytes)
     }
     val statusText = if (item.paused) "Paused" else "Downloading…"
+    // Honest timing from this stream's own start (Prince, 14 Nov 2026):
+    // ETA from the measured average speed when the total is known,
+    // otherwise elapsed time only — never an invented estimate.
+    val timingText = if (item.paused) {
+        null
+    } else {
+        val now = System.currentTimeMillis()
+        val averageSpeed = com.click.browser.engine.downloadSpeedBps(
+            bytesMoved = item.downloadedBytes,
+            elapsedMillis = now - item.startedAtMillis
+        )
+        val eta = com.click.browser.engine.downloadEtaSeconds(
+            item.downloadedBytes, item.totalBytes, averageSpeed
+        )
+        if (eta != null) {
+            "~${com.click.browser.engine.formatDownloadDuration(eta)} left"
+        } else {
+            "${com.click.browser.engine.formatDownloadDuration(
+                com.click.browser.engine.downloadElapsedSeconds(item.startedAtMillis, now)
+            )} elapsed"
+        }
+    }
     Column(
         modifier = Modifier
             .fillMaxWidth()
@@ -690,7 +712,7 @@ private fun ActiveResponseDownloadRow(
                     overflow = TextOverflow.Ellipsis
                 )
                 Text(
-                    listOf(statusText, percentText, sizeText, "Saving to ${item.destinationLabel}")
+                    listOf(statusText, percentText, sizeText, timingText, "Saving to ${item.destinationLabel}")
                         .filterNotNull()
                         .joinToString(" · "),
                     style = MaterialTheme.typography.bodySmall,

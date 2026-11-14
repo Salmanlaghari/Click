@@ -6820,8 +6820,9 @@ class MainActivity : FragmentActivity() {
                                     BrowseTopBarBlock(showAddressBar = !showOverlays)
                                 }
 
-                                // Slim animated download strip under the toolbar while
-                                // any Click-engine or response download is active.
+                                // Download box under the toolbar while any
+                                // Click-engine or response download is active
+                                // (larger card, timing, auto-hides after ~10s).
                                 if (!immersiveMode) {
                                     DownloadActivityIndicator(
                                         mode = activeMode,
@@ -10187,32 +10188,64 @@ fun DownloadActivityIndicator(
     val store = remember { com.click.browser.data.ClickDownloadStore(context) }
     val records by remember(mode) { store.flowFor(mode) }.collectAsState(initial = emptyList())
     val responses by com.click.browser.engine.ActiveResponseDownloads.active.collectAsState()
+    // The box reports ACTIVE transfers only (Prince, 14 Nov 2026): a queued
+    // or paused download is not "downloading" — its notification and the
+    // Downloads screen still carry it.
     val runningRecords = records.filter {
         it.state == com.click.browser.engine.ClickDownloadState.RUNNING
     }
-    val waitingRecords = records.filter {
-        it.state == com.click.browser.engine.ClickDownloadState.QUEUED ||
-            it.state == com.click.browser.engine.ClickDownloadState.PAUSED
-    }
-    // Prince (13 Nov): the strip must ease in/out smoothly instead of
-    // popping — visibility now drives an AnimatedVisibility below instead
-    // of an abrupt early return.
-    val stripVisible = runningRecords.isNotEmpty() || waitingRecords.isNotEmpty() || responses.isNotEmpty()
+    val activeResponses = responses.filter { !it.paused }
+    val transferIds = (runningRecords.map { "engine:${it.id}" } +
+        activeResponses.map { "response:${it.id}" }).toSet()
 
-    val activeCount = runningRecords.size + waitingRecords.size + responses.size
+    // Show-for-10-seconds rule (Prince, 14 Nov 2026): the box appears when a
+    // new transfer starts, stays for ~10 seconds, then hides itself; the
+    // download continues in the background behind its notification. A later
+    // new (or resumed) transfer re-shows the box for another 10 seconds.
+    // (The 13 Nov ease in/out animation below is unchanged.)
+    var seenTransferIds by remember { mutableStateOf<Set<String>>(emptySet()) }
+    var showToken by remember { mutableStateOf(0) }
+    var boxTimedVisible by remember { mutableStateOf(false) }
+    LaunchedEffect(transferIds) {
+        val fresh = transferIds - seenTransferIds
+        seenTransferIds = transferIds
+        if (fresh.isNotEmpty()) showToken++
+    }
+    // Keyed ONLY on the show token, so a transfer finishing mid-window can
+    // never cancel the pending hide: each fresh start re-arms a full 10s.
+    LaunchedEffect(showToken) {
+        if (showToken > 0) {
+            boxTimedVisible = true
+            kotlinx.coroutines.delay(10_000)
+            boxTimedVisible = false
+        }
+    }
+    val boxVisible = boxTimedVisible && transferIds.isNotEmpty()
+
+    // One-second ticker while the box is up: drives the elapsed clock and
+    // the speed sampling below. Timing is computed from real bytes only.
+    var nowMillis by remember { mutableStateOf(System.currentTimeMillis()) }
+    LaunchedEffect(boxVisible) {
+        while (boxVisible) {
+            nowMillis = System.currentTimeMillis()
+            kotlinx.coroutines.delay(1_000)
+        }
+    }
+
+    val activeCount = runningRecords.size + activeResponses.size
     val knownTotals = (runningRecords.map { it.bytesDownloaded to it.totalBytes } +
-        responses.map { it.downloadedBytes to it.totalBytes }).filter { it.second > 0L }
-    val aggregate = if (knownTotals.isNotEmpty()) {
-        val downloaded = knownTotals.sumOf { it.first }
-        val total = knownTotals.sumOf { it.second }
-        if (total > 0L) (downloaded.toFloat() / total.toFloat()).coerceIn(0f, 1f) else null
+        activeResponses.map { it.downloadedBytes to it.totalBytes }).filter { it.second > 0L }
+    val aggregateDownloaded = knownTotals.sumOf { it.first }
+    val aggregateTotal = knownTotals.sumOf { it.second }
+    val aggregate = if (knownTotals.isNotEmpty() && aggregateTotal > 0L) {
+        (aggregateDownloaded.toFloat() / aggregateTotal.toFloat()).coerceIn(0f, 1f)
     } else null
     val animatedAggregate by androidx.compose.animation.core.animateFloatAsState(
         targetValue = aggregate ?: 0f,
         animationSpec = androidx.compose.animation.core.tween(400),
-        label = "download-strip-progress"
+        label = "download-box-progress"
     )
-    val pulse = androidx.compose.animation.core.rememberInfiniteTransition(label = "download-strip-pulse")
+    val pulse = androidx.compose.animation.core.rememberInfiniteTransition(label = "download-box-pulse")
     val pulseAlpha by pulse.animateFloat(
         initialValue = 0.35f,
         targetValue = 1f,
@@ -10220,17 +10253,59 @@ fun DownloadActivityIndicator(
             animation = androidx.compose.animation.core.tween(650),
             repeatMode = androidx.compose.animation.core.RepeatMode.Reverse
         ),
-        label = "download-strip-pulse-alpha"
+        label = "download-box-pulse-alpha"
     )
-    val activeResponse = responses.firstOrNull { !it.paused }
-    val label = when {
-        runningRecords.isNotEmpty() -> "Downloading ${runningRecords.first().fileName}"
-        activeResponse != null -> "Downloading ${activeResponse.fileName}"
-        responses.isNotEmpty() -> "Download paused — ${responses.first().fileName}"
-        else -> "Downloads paused or waiting"
+
+    // Measured speed: byte movement of the known-size transfers between
+    // samples ~2s apart. No sample yet (or nothing measurable) -> no ETA.
+    var speedSample by remember { mutableStateOf<Pair<Long, Long>?>(null) }
+    var measuredSpeedBps by remember { mutableStateOf<Double?>(null) }
+    LaunchedEffect(nowMillis) {
+        val sample = speedSample
+        if (sample == null) {
+            speedSample = aggregateDownloaded to nowMillis
+        } else if (nowMillis - sample.second >= 2_000L) {
+            com.click.browser.engine.downloadSpeedBps(
+                bytesMoved = aggregateDownloaded - sample.first,
+                elapsedMillis = nowMillis - sample.second
+            )?.let { measuredSpeedBps = it }
+            speedSample = aggregateDownloaded to nowMillis
+        }
     }
+
+    val primaryRecord = runningRecords.firstOrNull()
+    val primaryResponse = activeResponses.firstOrNull()
+    val primaryName = primaryRecord?.fileName ?: primaryResponse?.fileName ?: "Download"
+    val primaryStartedAt = primaryRecord?.createdAt ?: primaryResponse?.startedAtMillis
+    val etaSeconds = com.click.browser.engine.downloadEtaSeconds(
+        downloadedBytes = aggregateDownloaded,
+        totalBytes = aggregateTotal,
+        speedBps = measuredSpeedBps
+    )
+    val detailsLine = buildList {
+        if (knownTotals.isNotEmpty()) {
+            add(
+                "${com.click.browser.engine.formatDownloadBytes(aggregateDownloaded)} of " +
+                    com.click.browser.engine.formatDownloadBytes(aggregateTotal)
+            )
+        } else {
+            val downloaded = primaryRecord?.bytesDownloaded ?: primaryResponse?.downloadedBytes
+            if (downloaded != null) {
+                add("${com.click.browser.engine.formatDownloadBytes(downloaded)} downloaded")
+            }
+        }
+        if (etaSeconds != null) {
+            add("~${com.click.browser.engine.formatDownloadDuration(etaSeconds)} left")
+        } else if (primaryStartedAt != null) {
+            // Total size unknown (or speed not measured yet): elapsed only,
+            // never an invented ETA.
+            val elapsed = com.click.browser.engine.downloadElapsedSeconds(primaryStartedAt, nowMillis)
+            add("${com.click.browser.engine.formatDownloadDuration(elapsed)} elapsed")
+        }
+    }.joinToString(" · ")
+
     androidx.compose.animation.AnimatedVisibility(
-        visible = stripVisible,
+        visible = boxVisible,
         enter = androidx.compose.animation.slideInVertically(
             animationSpec = androidx.compose.animation.core.tween(
                 durationMillis = 320,
@@ -10248,65 +10323,93 @@ fun DownloadActivityIndicator(
             animationSpec = androidx.compose.animation.core.tween(240)
         )
     ) {
-    Column(
-        modifier = Modifier
-            .fillMaxWidth()
-            .background(theme.surfaceVariant)
-            .clickable { onOpenDownloads() }
-    ) {
-        Row(
+        // Prince (14 Nov 2026): the old strip was "bohat patla" — this is a
+        // real card now: file name, thick progress bar, percent, and honest
+        // timing. Tap still opens the Downloads page (unchanged behaviour).
+        Surface(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 12.dp, vertical = 5.dp),
-            verticalAlignment = Alignment.CenterVertically
+                .padding(horizontal = 10.dp, vertical = 6.dp)
+                .clickable { onOpenDownloads() },
+            shape = RoundedCornerShape(16.dp),
+            color = theme.surface,
+            border = androidx.compose.foundation.BorderStroke(
+                1.dp, theme.primary.copy(alpha = 0.20f)
+            ),
+            shadowElevation = 6.dp
         ) {
-            Icon(
-                Icons.Default.Download,
-                contentDescription = null,
-                modifier = Modifier
-                    .size(15.dp)
-                    .then(
-                        if (runningRecords.isNotEmpty() || responses.isNotEmpty()) {
-                            Modifier.graphicsLayer { alpha = pulseAlpha }
-                        } else Modifier
-                    ),
-                tint = theme.primary
-            )
-            Spacer(modifier = Modifier.width(8.dp))
-            Text(
-                label,
-                color = theme.onSurface,
-                fontSize = 11.5.sp,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-                modifier = Modifier.weight(1f)
-            )
-            if (activeCount > 1) {
-                Text(
-                    "$activeCount active",
-                    color = theme.onSurface.copy(alpha = 0.65f),
-                    fontSize = 11.sp
-                )
-                Spacer(modifier = Modifier.width(8.dp))
-            }
-            if (aggregate != null) {
-                Text(
-                    "${(aggregate * 100).toInt()}%",
-                    color = theme.primary,
-                    fontSize = 11.5.sp,
-                    fontWeight = FontWeight.Bold
-                )
+            Column(
+                modifier = Modifier.padding(horizontal = 14.dp, vertical = 12.dp)
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(
+                        Icons.Default.Download,
+                        contentDescription = null,
+                        modifier = Modifier
+                            .size(20.dp)
+                            .graphicsLayer { alpha = pulseAlpha },
+                        tint = theme.primary
+                    )
+                    Spacer(modifier = Modifier.width(10.dp))
+                    Text(
+                        primaryName,
+                        color = theme.onSurface,
+                        fontSize = 13.5.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f)
+                    )
+                    if (activeCount > 1) {
+                        Text(
+                            "$activeCount active",
+                            color = theme.onSurface.copy(alpha = 0.65f),
+                            fontSize = 11.sp
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                    }
+                    if (aggregate != null) {
+                        Text(
+                            "${(aggregate * 100).toInt()}%",
+                            color = theme.primary,
+                            fontSize = 13.sp,
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
+                }
+                Spacer(modifier = Modifier.height(8.dp))
+                if (aggregate != null) {
+                    LinearProgressIndicator(
+                        progress = { animatedAggregate },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(6.dp)
+                            .clip(RoundedCornerShape(3.dp)),
+                        color = theme.primary,
+                        trackColor = theme.surfaceVariant
+                    )
+                } else {
+                    LinearProgressIndicator(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(6.dp)
+                            .clip(RoundedCornerShape(3.dp)),
+                        color = theme.primary,
+                        trackColor = theme.surfaceVariant
+                    )
+                }
+                if (detailsLine.isNotBlank()) {
+                    Spacer(modifier = Modifier.height(6.dp))
+                    Text(
+                        detailsLine,
+                        color = theme.onSurface.copy(alpha = 0.72f),
+                        fontSize = 11.5.sp,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
             }
         }
-        if (aggregate != null) {
-            LinearProgressIndicator(
-                progress = { animatedAggregate },
-                modifier = Modifier.fillMaxWidth().height(2.dp),
-                color = theme.primary,
-                trackColor = theme.surfaceVariant
-            )
-        }
-    }
     }
 }
 
