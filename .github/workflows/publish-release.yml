@@ -83,6 +83,9 @@ jobs:
       - name: Create the GitHub release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # No checkout in this workflow, so gh cannot infer the repo from a
+          # local .git — name it explicitly (first dispatch failed on this).
+          GH_REPO: ${{ github.repository }}
           TAG: ${{ inputs.tag }}
         run: |
           # Deliberately NOT idempotent: re-publishing over an existing
