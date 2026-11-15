@@ -86,7 +86,13 @@ internal class GeckoNavigationTracker {
         val attempt = if (uri == null) {
             active?.takeIf { pending.size == 1 }
         } else {
-            pending.toList().lastOrNull { it.url == uri } ?: active?.takeIf { it.url == uri }
+            // Exact URL match wins. Otherwise, when exactly one load is in
+            // flight the error can only belong to it — its recorded URL may
+            // legitimately differ from the error URI after a redirect rewrite
+            // (updateCurrentUrl follows the target, Gecko may still report
+            // the failing hop's URI).
+            pending.toList().lastOrNull { it.url == uri }
+                ?: active?.takeIf { pending.size == 1 }
         } ?: return@synchronized false
         if (uri != null) attempt.url = uri
         attempt.loadErrorObserved = true
@@ -119,12 +125,24 @@ internal class GeckoNavigationTracker {
         val wasCancelled = !commitsContent && cancelledGeneration == attempt.generation
         if (cancelledGeneration == attempt.generation) cancelledGeneration = null
         val retryUrl = if (commitsContent) null else attempt.retryUrl?.takeIf { it == attempt.url }
-        val outcome = geckoNavigationStopOutcome(
-            success = commitsContent,
-            failedUrl = attempt.url,
-            safeRetryUrl = retryUrl,
-            wasCancelled = wasCancelled
-        )
+        // Gecko reports success=false for EVERY stopped load, not just failed
+        // ones: a load superseded by a newer navigation (link tapped mid-load,
+        // a redirect hop rewritten or denied in onLoadRequest, a popup
+        // hand-off) stops with success=false and NO load error. Only a load
+        // Gecko actually errored (onLoadError) — or one the user deliberately
+        // stopped — is a page failure worth the recovery card. An interrupted
+        // stop commits nothing and surfaces nothing; the newer navigation (or
+        // the still-displayed page) owns the UI from here.
+        val outcome = if (!commitsContent && !attempt.loadErrorObserved && !wasCancelled) {
+            GeckoNavigationStopOutcome(commitsContent = false, failure = null)
+        } else {
+            geckoNavigationStopOutcome(
+                success = commitsContent,
+                failedUrl = attempt.url,
+                safeRetryUrl = retryUrl,
+                wasCancelled = wasCancelled
+            )
+        }
         GeckoNavigationCompletion(
             generation = attempt.generation,
             url = attempt.url,
