@@ -13,6 +13,8 @@ class GeckoNavigationErrorPolicyTest {
         val tracker = GeckoNavigationTracker()
         tracker.begin(url, geckoSafeRetryUrl("GET", url))
 
+        // A genuine failure is Gecko's onLoadError followed by the failed stop.
+        assertTrue(tracker.markLoadError(url))
         val completion = tracker.complete(success = false)!!
 
         assertFalse(completion.outcome.commitsContent)
@@ -20,6 +22,71 @@ class GeckoNavigationErrorPolicyTest {
         assertEquals(url, completion.outcome.failure?.retryUrl)
         assertFalse(completion.wasCancelled)
         assertTrue(completion.isCurrent)
+    }
+
+    @Test
+    fun supersededLoadStopWithoutLoadErrorShowsNoFailure() {
+        val tracker = GeckoNavigationTracker()
+        val older = tracker.begin("https://example.test/older", null)
+        val newer = tracker.begin("https://example.test/newer", null)
+
+        // The older load was replaced by the newer one: Gecko stops it with
+        // success=false but never reported a load error for it.
+        val olderCompletion = tracker.complete(success = false)!!
+        assertEquals(older.generation, olderCompletion.generation)
+        assertFalse(olderCompletion.outcome.commitsContent)
+        assertNull(olderCompletion.outcome.failure)
+        assertFalse(olderCompletion.isCurrent)
+
+        val newerCompletion = tracker.complete(success = true)!!
+        assertEquals(newer.generation, newerCompletion.generation)
+        assertTrue(newerCompletion.outcome.commitsContent)
+        assertNull(newerCompletion.outcome.failure)
+    }
+
+    @Test
+    fun interruptedCurrentLoadStopWithoutLoadErrorShowsNoFailure() {
+        // The only in-flight load is interrupted (e.g. its next hop was a
+        // denied/replaced navigation, so no newer start follows): still not
+        // a page failure, and nothing is marked committed.
+        val tracker = GeckoNavigationTracker()
+        tracker.begin("https://example.test/interrupted", null)
+
+        val completion = tracker.complete(success = false)!!
+
+        assertTrue(completion.isCurrent)
+        assertFalse(completion.outcome.commitsContent)
+        assertNull(completion.outcome.failure)
+    }
+
+    @Test
+    fun successfulStopAfterEarlierInterruptedStopLeavesNoStaleFailure() {
+        val tracker = GeckoNavigationTracker()
+        tracker.begin("https://example.test/first", null)
+        tracker.begin("https://example.test/second", null)
+
+        val interrupted = tracker.complete(success = false)!!
+        assertNull(interrupted.outcome.failure)
+
+        val successful = tracker.complete(success = true)!!
+        assertTrue(successful.isCurrent)
+        assertTrue(successful.outcome.commitsContent)
+        assertNull(successful.outcome.failure)
+    }
+
+    @Test
+    fun loadErrorWithRewrittenUrlStillAttributesToTheSingleInFlightLoad() {
+        val tracker = GeckoNavigationTracker()
+        tracker.begin("https://example.test/start", null)
+        tracker.updateCurrentUrl("https://example.test/redirected")
+
+        // Gecko reports the error against the original hop's URI, which no
+        // longer matches the attempt's rewritten URL.
+        assertTrue(tracker.markLoadError("https://example.test/start"))
+        val completion = tracker.complete(success = false)!!
+
+        assertFalse(completion.outcome.commitsContent)
+        assertEquals("https://example.test/start", completion.outcome.failure?.failedUrl)
     }
 
     @Test
@@ -83,6 +150,7 @@ class GeckoNavigationErrorPolicyTest {
         val newer = tracker.begin(newerUrl, geckoSafeRetryUrl("GET", newerUrl))
 
         assertNull(tracker.progressGeneration())
+        assertTrue(tracker.markLoadError(olderUrl))
         val olderCompletion = tracker.complete(success = false)!!
         assertEquals(older.generation, olderCompletion.generation)
         assertEquals(olderUrl, olderCompletion.url)
@@ -147,6 +215,7 @@ class GeckoNavigationErrorPolicyTest {
 
         tracker.updateCurrentUrl(redirectedUrl)
         tracker.updateCurrentRetryUrl(redirectedUrl)
+        assertTrue(tracker.markLoadError(redirectedUrl))
         val completion = tracker.complete(success = false)!!
 
         assertEquals(redirectedUrl, completion.url)
@@ -164,6 +233,7 @@ class GeckoNavigationErrorPolicyTest {
             url = "https://example.test/submit",
             retryUrl = geckoSafeRetryUrl("POST", "https://example.test/submit")
         )
+        assertTrue(tracker.markLoadError("https://example.test/submit"))
         val failedPost = tracker.complete(success = false)!!
         assertFalse(failedPost.outcome.commitsContent)
         assertTrue(failedPost.outcome.failure != null)

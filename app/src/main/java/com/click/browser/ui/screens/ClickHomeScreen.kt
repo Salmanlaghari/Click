@@ -308,10 +308,13 @@ fun ClickHomeScreen(
                     .background(theme.background.copy(alpha = 0.84f))
             )
         } else {
+            // No custom wallpaper: Click's own ambient gradient (Prince,
+            // 15 Nov 2026 — full-page, very light, slowly drifting like
+            // Gemini's). A user wallpaper above still wins untouched.
             Box(
                 modifier = Modifier
                     .fillMaxSize()
-                    .background(theme.background)
+                    .ambientGradientBackground(theme)
             )
         }
 
@@ -2373,6 +2376,10 @@ fun CompactBrowseBar(
     onBack: () -> Unit,
     canGoForward: Boolean,
     onForward: () -> Unit,
+    // Required like onDrawerClick/onModeChange: a missing Home wiring must
+    // fail at compile time, not silently do nothing (Prince, 15 Nov 2026:
+    // the address bar must carry a Home button in every mode).
+    onHomeClick: () -> Unit,
     tabCount: Int,
     onTabsClick: () -> Unit,
     modifier: Modifier = Modifier,
@@ -2575,6 +2582,17 @@ fun CompactBrowseBar(
                                 Icons.AutoMirrored.Filled.ArrowForward,
                                 contentDescription = "Forward",
                                 tint = if (canGoForward) theme.onSurface else theme.onSurface.copy(alpha = 0.34f),
+                                modifier = Modifier.size(19.dp)
+                            )
+                        }
+                        // Home sits in the left cluster with Back/Forward
+                        // (Prince, 15 Nov 2026) — the pill's text field flexes
+                        // to make room, so compact widths keep every control.
+                        IconButton(onClick = onHomeClick, modifier = Modifier.size(36.dp)) {
+                            Icon(
+                                Icons.Default.Home,
+                                contentDescription = "Home",
+                                tint = theme.onSurface,
                                 modifier = Modifier.size(19.dp)
                             )
                         }

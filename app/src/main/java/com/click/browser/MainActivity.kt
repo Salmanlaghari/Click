@@ -4785,6 +4785,16 @@ class MainActivity : FragmentActivity() {
                                                     onBack = { currentTab.browserSession.goBackIfPossible() },
                                                     canGoForward = !showOverlays && currentTab.canGoForward,
                                                     onForward = { currentTab.browserSession.goForwardIfPossible() },
+                                                    // Same go-home behaviour as the Back
+                                                    // policy's GO_HOME and the error card's
+                                                    // Home action (Prince, 15 Nov 2026:
+                                                    // Home button in the address bar).
+                                                    onHomeClick = {
+                                                        val home = homeUrl()
+                                                        currentTab.geckoNavigationFailure = null
+                                                        currentTab.url = home
+                                                        currentTab.browserSession?.loadUrl(home)
+                                                    },
                                                     onNavigate = { input ->
                                                         pendingKeyboardDismissTabId = currentTab.id.takeIf {
                                                             currentTab.engine == BrowserTabEngine.WEBVIEW
@@ -6837,10 +6847,23 @@ class MainActivity : FragmentActivity() {
 
                                 // 4. MAIN CONTENT CONTAINER (WIDGET-STYLE DASHBOARD OR WEBVIEW)
                                 // Nested-scroll: drives the toolbar auto-hide on page scroll.
+                                // Ambient gradient backdrop (Prince, 15 Nov 2026):
+                                // Click's own full-page wash behind the content —
+                                // visible on the dashboard and behind the loading /
+                                // error states of a web page. Gated on no committed
+                                // content so no animation loop runs invisibly under
+                                // a fully painted site (the site keeps its own design).
                                 Box(
                                     modifier = Modifier
                                         .weight(1f)
                                         .nestedScroll(toolbarScrollConnection)
+                                        .then(
+                                            if (!currentTab.hasCommittedContent) {
+                                                Modifier.ambientGradientBackground(theme)
+                                            } else {
+                                                Modifier
+                                            }
+                                        )
                                 ) {
                                     if (currentTab.url == "about:blank") {
                                         HomeDashboardContent()
