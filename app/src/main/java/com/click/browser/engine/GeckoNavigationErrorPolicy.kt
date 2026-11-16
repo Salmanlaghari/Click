@@ -1,10 +1,13 @@
 package com.click.browser.engine
 
+import org.mozilla.geckoview.WebRequestError
+
 /** A recoverable main-frame navigation failure shown above GeckoView content. */
 internal data class GeckoNavigationFailure(
     val failedUrl: String,
     val retryUrl: String?,
-    val wasCancelled: Boolean = false
+    val wasCancelled: Boolean = false,
+    val errorLabel: String? = null
 )
 
 /** Result of stopping a Gecko navigation; only a successful page stop commits content. */
@@ -31,7 +34,8 @@ private data class PendingGeckoNavigation(
     val generation: Long,
     var url: String,
     var retryUrl: String?,
-    var loadErrorObserved: Boolean = false
+    var loadErrorObserved: Boolean = false,
+    var loadErrorLabel: String? = null
 )
 
 private object GeckoNavigationGenerationIds {
@@ -81,21 +85,21 @@ internal class GeckoNavigationTracker {
 
     fun currentRetryUrl(): String? = synchronized(lock) { active?.retryUrl }
 
-    /** Gecko may report a null URI; attribute it only when one pending attempt is unambiguous. */
-    fun markLoadError(uri: String?): Boolean = synchronized(lock) {
-        val attempt = if (uri == null) {
-            active?.takeIf { pending.size == 1 }
-        } else {
-            // Exact URL match wins. Otherwise, when exactly one load is in
-            // flight the error can only belong to it — its recorded URL may
-            // legitimately differ from the error URI after a redirect rewrite
-            // (updateCurrentUrl follows the target, Gecko may still report
-            // the failing hop's URI).
-            pending.toList().lastOrNull { it.url == uri }
-                ?: active?.takeIf { pending.size == 1 }
-        } ?: return@synchronized false
-        if (uri != null) attempt.url = uri
+    /**
+     * Attribute a Gecko load error to a pending attempt ONLY on an exact URL
+     * match. Gecko's error callback also fires for subresources, subframes,
+     * and previous navigations that are already dying; guessing "the single
+     * in-flight load" in those cases poisons a healthy navigation — its later
+     * page-stop was then misreported as a failure. The tracker follows
+     * redirects via [updateCurrentUrl], so a genuine main-frame error still
+     * matches its attempt's current URL exactly.
+     */
+    fun markLoadError(uri: String?, errorLabel: String? = null): Boolean = synchronized(lock) {
+        if (uri == null) return@synchronized false
+        val attempt = pending.toList().lastOrNull { it.url == uri }
+            ?: return@synchronized false
         attempt.loadErrorObserved = true
+        attempt.loadErrorLabel = errorLabel
         true
     }
 
@@ -121,26 +125,44 @@ internal class GeckoNavigationTracker {
         val attempt = pending.pollFirst() ?: return@synchronized null
         if (active?.generation == attempt.generation) active = pending.peekLast()
 
-        val commitsContent = success && !attempt.loadErrorObserved
-        val wasCancelled = !commitsContent && cancelledGeneration == attempt.generation
+        val wasCancelled = !success && cancelledGeneration == attempt.generation
         if (cancelledGeneration == attempt.generation) cancelledGeneration = null
-        val retryUrl = if (commitsContent) null else attempt.retryUrl?.takeIf { it == attempt.url }
+
+        // A page-stop with success=true means Gecko actually delivered the
+        // page: it ALWAYS commits content and NEVER produces a failure, even
+        // when an error was attributed to this attempt earlier. Error events
+        // can be stray or late (a previous page's dying subresource, a
+        // subframe failure), and letting one veto a successful stop turned
+        // loaded pages into the "Page couldn't load" card over blank content.
+        if (success) {
+            return@synchronized GeckoNavigationCompletion(
+                generation = attempt.generation,
+                url = attempt.url,
+                outcome = GeckoNavigationStopOutcome(commitsContent = true, failure = null),
+                wasCancelled = false,
+                isCurrent = attempt.generation == latestGeneration
+            )
+        }
+
+        val retryUrl = attempt.retryUrl?.takeIf { it == attempt.url }
         // Gecko reports success=false for EVERY stopped load, not just failed
         // ones: a load superseded by a newer navigation (link tapped mid-load,
         // a redirect hop rewritten or denied in onLoadRequest, a popup
         // hand-off) stops with success=false and NO load error. Only a load
-        // Gecko actually errored (onLoadError) — or one the user deliberately
-        // stopped — is a page failure worth the recovery card. An interrupted
-        // stop commits nothing and surfaces nothing; the newer navigation (or
-        // the still-displayed page) owns the UI from here.
-        val outcome = if (!commitsContent && !attempt.loadErrorObserved && !wasCancelled) {
+        // Gecko actually errored (onLoadError, exactly attributed) — or one
+        // the user deliberately stopped — is a page failure worth the
+        // recovery card. An interrupted stop commits nothing and surfaces
+        // nothing; the newer navigation (or the still-displayed page) owns
+        // the UI from here.
+        val outcome = if (!attempt.loadErrorObserved && !wasCancelled) {
             GeckoNavigationStopOutcome(commitsContent = false, failure = null)
         } else {
             geckoNavigationStopOutcome(
-                success = commitsContent,
+                success = false,
                 failedUrl = attempt.url,
                 safeRetryUrl = retryUrl,
-                wasCancelled = wasCancelled
+                wasCancelled = wasCancelled,
+                errorLabel = attempt.loadErrorLabel
             )
         }
         GeckoNavigationCompletion(
@@ -167,7 +189,8 @@ internal fun geckoNavigationStopOutcome(
     success: Boolean,
     failedUrl: String?,
     safeRetryUrl: String?,
-    wasCancelled: Boolean = false
+    wasCancelled: Boolean = false,
+    errorLabel: String? = null
 ): GeckoNavigationStopOutcome {
     if (success) return GeckoNavigationStopOutcome(commitsContent = true, failure = null)
 
@@ -179,9 +202,54 @@ internal fun geckoNavigationStopOutcome(
         failure = GeckoNavigationFailure(
             failedUrl = validFailureUrl,
             retryUrl = retryUrl,
-            wasCancelled = wasCancelled
+            wasCancelled = wasCancelled,
+            errorLabel = errorLabel
         )
     )
+}
+
+/**
+ * Short human-readable reason for a Gecko load error, shown on the recovery
+ * card so a failure stays diagnosable instead of collapsing into a generic
+ * message. Matches [WebRequestError]'s code against its named constants
+ * (verified against the GeckoView build this app ships); anything unmapped
+ * keeps the raw category/code numbers.
+ */
+internal fun geckoLoadErrorLabel(category: Int, error: Int): String {
+    val known = when (error) {
+        WebRequestError.ERROR_UNKNOWN_HOST -> "Server address could not be found (DNS)"
+        WebRequestError.ERROR_NET_TIMEOUT -> "The connection timed out"
+        WebRequestError.ERROR_NET_INTERRUPT -> "The connection was interrupted"
+        WebRequestError.ERROR_NET_RESET -> "The connection was reset"
+        WebRequestError.ERROR_CONNECTION_REFUSED -> "The server refused the connection"
+        WebRequestError.ERROR_OFFLINE -> "The device is offline"
+        WebRequestError.ERROR_REDIRECT_LOOP -> "Too many redirects"
+        WebRequestError.ERROR_PORT_BLOCKED -> "The port is blocked"
+        WebRequestError.ERROR_UNKNOWN_SOCKET_TYPE -> "Unknown connection type"
+        WebRequestError.ERROR_SECURITY_SSL -> "Secure connection failed (SSL)"
+        WebRequestError.ERROR_SECURITY_BAD_CERT -> "Secure connection failed (bad certificate)"
+        WebRequestError.ERROR_BAD_HSTS_CERT -> "Secure connection failed (HSTS certificate)"
+        WebRequestError.ERROR_HTTPS_ONLY -> "The site only allows secure connections"
+        WebRequestError.ERROR_MALFORMED_URI -> "The address is not valid"
+        WebRequestError.ERROR_UNKNOWN_PROTOCOL -> "Unsupported protocol"
+        WebRequestError.ERROR_FILE_NOT_FOUND -> "File not found"
+        WebRequestError.ERROR_FILE_ACCESS_DENIED -> "File access denied"
+        WebRequestError.ERROR_DATA_URI_TOO_LONG -> "The data address is too long"
+        WebRequestError.ERROR_PROXY_CONNECTION_REFUSED -> "The proxy refused the connection"
+        WebRequestError.ERROR_UNKNOWN_PROXY_HOST -> "The proxy address could not be found"
+        WebRequestError.ERROR_UNSAFE_CONTENT_TYPE -> "Unsafe content type"
+        WebRequestError.ERROR_CORRUPTED_CONTENT -> "The page content was corrupted"
+        WebRequestError.ERROR_CONTENT_CRASHED -> "The page crashed while loading"
+        WebRequestError.ERROR_INVALID_CONTENT_ENCODING -> "Invalid content encoding"
+        WebRequestError.ERROR_SAFEBROWSING_MALWARE_URI -> "Blocked: reported malware site"
+        WebRequestError.ERROR_SAFEBROWSING_UNWANTED_URI -> "Blocked: reported unwanted-software site"
+        WebRequestError.ERROR_SAFEBROWSING_HARMFUL_URI -> "Blocked: reported harmful site"
+        WebRequestError.ERROR_SAFEBROWSING_PHISHING_URI -> "Blocked: reported phishing site"
+        WebRequestError.ERROR_HARMFULADDON_URI -> "Blocked: harmful add-on site"
+        WebRequestError.ERROR_UNKNOWN -> "Unknown error"
+        else -> null
+    }
+    return known ?: "Load error (category $category, code $error)"
 }
 
 private fun isSafeGeckoRetryUrl(url: String): Boolean {
