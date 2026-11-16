@@ -6664,6 +6664,12 @@ class MainActivity : FragmentActivity() {
                                                             },
                                                             color = theme.onSurface.copy(alpha = 0.8f)
                                                         )
+                                                        navigationFailure.errorLabel?.let { errorLabel ->
+                                                            Text(
+                                                                text = "Reason: $errorLabel",
+                                                                color = theme.onSurface.copy(alpha = 0.65f)
+                                                            )
+                                                        }
                                                         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                                                             if (currentTab.canGoBack) {
                                                                 TextButton(onClick = {

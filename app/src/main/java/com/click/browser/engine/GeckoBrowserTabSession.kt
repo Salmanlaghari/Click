@@ -310,7 +310,10 @@ internal class GeckoBrowserTabSession(
                 uri: String?,
                 error: org.mozilla.geckoview.WebRequestError
             ): GeckoResult<String>? {
-                navigationTracker.markLoadError(uri)
+                navigationTracker.markLoadError(
+                    uri,
+                    geckoLoadErrorLabel(error.category, error.code)
+                )
                 // Keep Gecko's default error handling; Click presents its own
                 // safe, accessible recovery actions above the browser surface.
                 return null
