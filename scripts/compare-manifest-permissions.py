@@ -17,6 +17,14 @@ APPROVED_ADDITIONS = {
     # Google Play restricted permission — a Play Console declaration is
     # still owed before any release containing it is submitted.
     ("uses-permission", ((ANDROID + "name", "android.permission.REQUEST_INSTALL_PACKAGES"),)),
+    # Prince-approved 2026-11-18 (PR #224): real per-site Camera and
+    # Location permissions in Site settings (Allow / Ask / Block), same
+    # consent flow as the existing microphone permission. NOTE:
+    # ACCESS_FINE_LOCATION is a Google Play sensitive permission — a Play
+    # Console location declaration / prominent disclosure is still owed
+    # before any release containing it is submitted.
+    ("uses-permission", ((ANDROID + "name", "android.permission.CAMERA"),)),
+    ("uses-permission", ((ANDROID + "name", "android.permission.ACCESS_FINE_LOCATION"),)),
 }
 
 
