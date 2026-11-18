@@ -16,7 +16,7 @@ import androidx.compose.runtime.Composable
  * callbacks; only the receiver moved.
  */
 @Composable
-fun WebsitePermissionDialogs(handler: WebsiteDevicePermissionHandler) {
+internal fun WebsitePermissionDialogs(handler: WebsiteDevicePermissionHandler) {
     handler.microphoneConsent?.let { consent ->
         AlertDialog(
             onDismissRequest = consent.onDismiss,
