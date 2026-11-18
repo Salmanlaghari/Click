@@ -59,6 +59,8 @@ import com.click.browser.engine.SiteSettingsRowKind
 import com.click.browser.engine.TextScaleStore
 import com.click.browser.engine.WebsitePermissionGlobalDefault
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.suspendCancellableCoroutine
+import kotlin.coroutines.resume
 
 /** Navigation destinations inside the Site settings hub. */
 private sealed interface SiteSettingsDestination {
@@ -195,9 +197,15 @@ private fun SiteSettingsHubList(
         } catch (_: Exception) {
             null
         }
-        WebStorage.getInstance().getOrigins { map ->
-            storedTotalBytes = map?.values.orEmpty()
-                .sumOf { (it as? WebStorage.Origin)?.usage ?: 0L }
+        // WebStorage answers on a background thread; bridge it through a
+        // cancellable continuation so snapshot state is only ever written
+        // from this (main) coroutine, never from the callback thread.
+        storedTotalBytes = suspendCancellableCoroutine { continuation ->
+            WebStorage.getInstance().getOrigins { map ->
+                val total = map?.values.orEmpty()
+                    .sumOf { (it as? WebStorage.Origin)?.usage ?: 0L }
+                if (continuation.isActive) continuation.resume(total)
+            }
         }
     }
 

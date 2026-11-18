@@ -2788,36 +2788,41 @@ class MainActivity : FragmentActivity() {
             }
 
             // "Automatically remove permissions" sweep: once per app launch,
-            // drop saved camera / microphone / location choices for sites with
-            // no visit in the last 30 days. Fail-safe: the toggle defaults off,
-            // and empty or unreadable history revokes nothing (the pure policy
-            // also refuses an empty visit list).
+            // drop saved camera / microphone / location choices whose origin
+            // has a last-visit stamp older than 30 days. The stamp store is
+            // the revoke trigger — stamped when a choice is saved, refreshed
+            // on page loads — NOT browsing history, which is capped at 100
+            // entries and can silently lose a recent visit. Recent history
+            // only acts as a secondary keep-signal. Fail-safe: the toggle
+            // defaults off, a missing stamp never revokes, and any failure
+            // revokes nothing.
             LaunchedEffect(Unit) {
                 try {
                     val enabled = dataStore.data.first()[AppSettings.AUTO_REMOVE_PERMISSIONS] == true
                     if (enabled) {
-                        val history = repository.historyFlow.first()
-                        if (history.isNotEmpty()) {
-                            val visits = history.mapNotNull { item ->
-                                val origin = canonicalWebsiteMicrophoneOrigin(item.url)
-                                    ?: return@mapNotNull null
-                                val host = websiteMicrophoneOriginHost(origin)
-                                    ?: return@mapNotNull null
-                                host to item.timestamp
+                        val now = System.currentTimeMillis()
+                        val stamps = repository.websitePermissionLastVisitFlow.first()
+                        val cutoff = now - PERMISSION_AUTO_REMOVE_WINDOW_MS
+                        val recentHistoryHosts = repository.historyFlow.first()
+                            .filter { item -> item.timestamp >= cutoff }
+                            .mapNotNull { item ->
+                                canonicalWebsiteMicrophoneOrigin(item.url)?.let { origin ->
+                                    websiteMicrophoneOriginHost(origin)
+                                }
                             }
-                            if (visits.isNotEmpty()) {
-                                val now = System.currentTimeMillis()
-                                permissionOriginsToRevoke(
-                                    repository.websiteCameraPermissionsFlow.first(), visits, now
-                                ).forEach { repository.clearWebsiteCameraPermission(it) }
-                                permissionOriginsToRevoke(
-                                    repository.websiteMicrophonePermissionsFlow.first(), visits, now
-                                ).forEach { repository.clearWebsiteMicrophonePermission(it) }
-                                permissionOriginsToRevoke(
-                                    repository.websiteLocationPermissionsFlow.first(), visits, now
-                                ).forEach { repository.clearWebsiteLocationPermission(it) }
-                            }
-                        }
+                            .toSet()
+                        permissionOriginsToRevoke(
+                            repository.websiteCameraPermissionsFlow.first(),
+                            stamps, recentHistoryHosts, now
+                        ).forEach { repository.clearWebsiteCameraPermission(it) }
+                        permissionOriginsToRevoke(
+                            repository.websiteMicrophonePermissionsFlow.first(),
+                            stamps, recentHistoryHosts, now
+                        ).forEach { repository.clearWebsiteMicrophonePermission(it) }
+                        permissionOriginsToRevoke(
+                            repository.websiteLocationPermissionsFlow.first(),
+                            stamps, recentHistoryHosts, now
+                        ).forEach { repository.clearWebsiteLocationPermission(it) }
                     }
                 } catch (_: Exception) {
                     // A failed sweep must never break browsing or revoke blindly.
@@ -5850,6 +5855,12 @@ class MainActivity : FragmentActivity() {
                                                                             HistoryItem(title, url, System.currentTimeMillis()),
                                                                             isIncognitoTab = isIncognitoTab
                                                                         )
+                                                                        // Keep the auto-remove sweep's
+                                                                        // last-visit stamps fresh for any
+                                                                        // saved permission choice on this host.
+                                                                        if (!isIncognitoTab) {
+                                                                            repository.refreshWebsitePermissionVisit(url)
+                                                                        }
                                                                     }
                                                                 }
                                                             },
@@ -6720,6 +6731,12 @@ class MainActivity : FragmentActivity() {
                                                                         HistoryItem(finishedTab.title, url, System.currentTimeMillis()),
                                                                         isIncognitoTab = isIncognitoTab
                                                                     )
+                                                                    // Keep the auto-remove sweep's
+                                                                    // last-visit stamps fresh for any
+                                                                    // saved permission choice on this host.
+                                                                    if (!isIncognitoTab) {
+                                                                        repository.refreshWebsitePermissionVisit(url)
+                                                                    }
                                                                 }
                                                             }
 
@@ -7183,7 +7200,9 @@ class MainActivity : FragmentActivity() {
                                                     settings.domStorageEnabled = liveOnDeviceSiteDataEnabled
                                                     // The geolocation prompt callback above is
                                                     // the gate; the engine feature itself stays on.
-                                                    settings.geolocationEnabled = true
+                                                    // WebSettings exposes a setter only (no
+                                                    // getter), so property syntax cannot resolve.
+                                                    settings.setGeolocationEnabled(true)
                                                     // Privacy toggles (HTTPS-Only / night mode / data saver);
                                                     // MIXED_CONTENT_ALWAYS_ALLOW was removed — it contradicted HTTPS-Only.
                                                     this@MainActivity.applyPrivacyToggles(this)

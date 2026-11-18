@@ -3,6 +3,7 @@ package com.click.browser.data
 import android.content.Context
 import android.util.Log
 import androidx.datastore.core.DataStore
+import androidx.datastore.preferences.core.MutablePreferences
 import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.stringPreferencesKey
@@ -10,6 +11,7 @@ import com.click.browser.engine.BrowserMode
 import com.click.browser.engine.SiteSettings
 import com.click.browser.engine.WebsitePermissionGlobalDefault
 import com.click.browser.engine.canonicalWebsiteMicrophoneOrigin
+import com.click.browser.engine.shouldRefreshPermissionVisitStamp
 import com.click.browser.engine.profileDataStore
 import com.click.browser.engine.profileDataStoreFor
 import com.click.browser.engine.websiteMicrophoneHostKey
@@ -47,6 +49,11 @@ class BrowserRepository(private val context: Context) {
             stringPreferencesKey("website_camera_permissions")
         private val WEBSITE_LOCATION_PERMISSIONS_KEY =
             stringPreferencesKey("website_location_permissions")
+        // Last-visit stamps (canonical origin -> epoch ms) for origins with a
+        // saved camera / microphone / location choice. Drives the
+        // "Automatically remove permissions" sweep; see PermissionAutoRemovePolicy.
+        private val WEBSITE_PERMISSION_LAST_VISIT_KEY =
+            stringPreferencesKey("website_permission_last_visit")
         // Profile-wide defaults ("allow" | "ask" | "block") applied when a
         // site has no saved choice; see WebsitePermissionGlobalDefault.
         private val WEBSITE_CAMERA_DEFAULT_KEY =
@@ -674,6 +681,7 @@ class BrowserRepository(private val context: Context) {
             permissions[canonicalOrigin] = allowed
             preferences[WEBSITE_MICROPHONE_PERMISSIONS_KEY] =
                 websiteMicrophonePermissionsToJson(permissions)
+            stampWebsitePermissionVisit(preferences, canonicalOrigin)
         }
     }
 
@@ -759,6 +767,7 @@ class BrowserRepository(private val context: Context) {
             permissions[canonicalOrigin] = allowed
             preferences[WEBSITE_CAMERA_PERMISSIONS_KEY] =
                 websiteMicrophonePermissionsToJson(permissions)
+            stampWebsitePermissionVisit(preferences, canonicalOrigin)
         }
     }
 
@@ -811,6 +820,7 @@ class BrowserRepository(private val context: Context) {
             permissions[canonicalOrigin] = allowed
             preferences[WEBSITE_LOCATION_PERMISSIONS_KEY] =
                 websiteMicrophonePermissionsToJson(permissions)
+            stampWebsitePermissionVisit(preferences, canonicalOrigin)
         }
     }
 
@@ -859,6 +869,74 @@ class BrowserRepository(private val context: Context) {
                 .filter { websiteMicrophoneOriginHost(it) == normalizedHost }
                 .forEach(permissions::remove)
             preferences[key] = websiteMicrophonePermissionsToJson(permissions)
+        }
+    }
+
+    // --- Last-visit stamps for saved device-permission choices ---
+    //
+    // The "Automatically remove permissions" sweep must not trust browsing
+    // history as its "visited recently" signal: history is capped at 100
+    // entries (see addHistoryItem), so a recent visit can silently fall out
+    // and a still-used site's choice would be revoked. Instead, every origin
+    // with a saved camera / microphone / location choice carries its own
+    // last-visit stamp here. Stamps are written when a choice is saved (the
+    // three set*Permission functions above, via [stampWebsitePermissionVisit])
+    // and refreshed by [refreshWebsitePermissionVisit] when a page from the
+    // same host finishes loading.
+
+    /** Canonical origin -> last-visit epoch ms, for origins with a saved device-permission choice. */
+    val websitePermissionLastVisitFlow: Flow<Map<String, Long>> =
+        context.profileDataStore.data.map { preferences ->
+            websitePermissionLastVisitFromJson(preferences[WEBSITE_PERMISSION_LAST_VISIT_KEY])
+        }
+
+    /** Records [canonicalOrigin] as visited "now" in the stamp store, inside the caller's edit. */
+    private fun stampWebsitePermissionVisit(
+        preferences: MutablePreferences,
+        canonicalOrigin: String
+    ) {
+        val stamps = websitePermissionLastVisitFromJson(
+            preferences[WEBSITE_PERMISSION_LAST_VISIT_KEY]
+        ).toMutableMap()
+        stamps[canonicalOrigin] = System.currentTimeMillis()
+        preferences[WEBSITE_PERMISSION_LAST_VISIT_KEY] =
+            websitePermissionLastVisitToJson(stamps)
+    }
+
+    /**
+     * Refresh last-visit stamps after a page load: every saved choice whose
+     * origin shares [url]'s host counts as visited. Writes are throttled per
+     * origin (see [shouldRefreshPermissionVisitStamp]) so ordinary browsing
+     * does not rewrite the store on every navigation. Origins without a
+     * saved choice are never stamped.
+     */
+    suspend fun refreshWebsitePermissionVisit(url: String) {
+        val pageOrigin = canonicalWebsiteMicrophoneOrigin(url) ?: return
+        val pageHost = websiteMicrophoneOriginHost(pageOrigin) ?: return
+        val nowMs = System.currentTimeMillis()
+        context.profileDataStore.edit { preferences ->
+            val decisionOrigins = listOf(
+                WEBSITE_CAMERA_PERMISSIONS_KEY,
+                WEBSITE_MICROPHONE_PERMISSIONS_KEY,
+                WEBSITE_LOCATION_PERMISSIONS_KEY
+            ).flatMap { key ->
+                websiteMicrophonePermissionsFromJson(preferences[key]).keys
+            }.filter { origin -> websiteMicrophoneOriginHost(origin) == pageHost }
+            if (decisionOrigins.isEmpty()) return@edit
+            val stamps = websitePermissionLastVisitFromJson(
+                preferences[WEBSITE_PERMISSION_LAST_VISIT_KEY]
+            ).toMutableMap()
+            var changed = false
+            decisionOrigins.forEach { origin ->
+                if (shouldRefreshPermissionVisitStamp(stamps[origin], nowMs)) {
+                    stamps[origin] = nowMs
+                    changed = true
+                }
+            }
+            if (changed) {
+                preferences[WEBSITE_PERMISSION_LAST_VISIT_KEY] =
+                    websitePermissionLastVisitToJson(stamps)
+            }
         }
     }
 
@@ -973,6 +1051,25 @@ private fun websiteMicrophonePermissionsFromJson(json: String?): Map<String, Boo
 private fun websiteMicrophonePermissionsToJson(permissions: Map<String, Boolean>): String =
     JSONObject().apply {
         permissions.toSortedMap().forEach { (origin, allowed) -> put(origin, allowed) }
+    }.toString()
+
+private fun websitePermissionLastVisitFromJson(json: String?): Map<String, Long> {
+    val root = runCatching { JSONObject(json ?: "{}") }.getOrElse { JSONObject() }
+    val stamps = linkedMapOf<String, Long>()
+    val keys = root.keys()
+    while (keys.hasNext()) {
+        val origin = keys.next()
+        val stampMs = (root.opt(origin) as? Number)?.toLong() ?: continue
+        if (stampMs > 0 && canonicalWebsiteMicrophoneOrigin(origin) == origin) {
+            stamps[origin] = stampMs
+        }
+    }
+    return stamps
+}
+
+private fun websitePermissionLastVisitToJson(stamps: Map<String, Long>): String =
+    JSONObject().apply {
+        stamps.toSortedMap().forEach { (origin, stampMs) -> put(origin, stampMs) }
     }.toString()
 
 private fun parseDownloadItems(json: String?): List<DownloadItem> = try {

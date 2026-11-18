@@ -16,6 +16,8 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.click.browser.engine.ModeTheme
+import kotlinx.coroutines.suspendCancellableCoroutine
+import kotlin.coroutines.resume
 
 /** One WebStorage origin row: the origin string plus its stored usage in bytes. */
 private data class StoredOrigin(val origin: String, val usageBytes: Long)
@@ -52,14 +54,20 @@ fun DataStoredScreen(
     var showDeleteAll by remember { mutableStateOf(false) }
 
     LaunchedEffect(refreshKey) {
-        WebStorage.getInstance().getOrigins { map ->
-            val list = map?.values.orEmpty().mapNotNull { value ->
-                val origin = value as? WebStorage.Origin ?: return@mapNotNull null
-                StoredOrigin(origin.origin, origin.usage)
-            }.sortedByDescending { it.usageBytes }
-            origins = list
-            loaded = true
+        // WebStorage delivers its result on a background thread; bridge it
+        // through a cancellable continuation so snapshot state is only ever
+        // written from this (main) coroutine, never from the callback thread.
+        val list = suspendCancellableCoroutine { continuation ->
+            WebStorage.getInstance().getOrigins { map ->
+                val result = map?.values.orEmpty().mapNotNull { value ->
+                    val origin = value as? WebStorage.Origin ?: return@mapNotNull null
+                    StoredOrigin(origin.origin, origin.usage)
+                }.sortedByDescending { it.usageBytes }
+                if (continuation.isActive) continuation.resume(result)
+            }
         }
+        origins = list
+        loaded = true
     }
 
     val totalBytes = remember(origins) { origins.sumOf { it.usageBytes } }

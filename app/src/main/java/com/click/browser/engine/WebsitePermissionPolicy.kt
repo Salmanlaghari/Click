@@ -23,7 +23,7 @@ internal enum class WebsitePermissionStatus {
  * values "allow" | "ask" | "block"; anything unrecognized falls back to ASK,
  * which preserves Click's historic ask-first behaviour.
  */
-internal enum class WebsitePermissionGlobalDefault {
+enum class WebsitePermissionGlobalDefault {
     ALLOW,
     ASK,
     BLOCK;
