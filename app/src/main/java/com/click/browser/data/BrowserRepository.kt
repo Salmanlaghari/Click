@@ -25,6 +25,15 @@ import java.util.UUID
 
 data class Bookmark(val title: String, val url: String, val folder: String? = null)
 data class HistoryItem(val title: String, val url: String, val timestamp: Long)
+
+/** One consistent snapshot for the "Automatically remove permissions" sweep. */
+data class WebsitePermissionAutoRemoveSnapshot(
+    val cameraDecisions: Map<String, Boolean>,
+    val microphoneDecisions: Map<String, Boolean>,
+    val locationDecisions: Map<String, Boolean>,
+    val lastVisitByOriginMs: Map<String, Long>,
+    val recentHistoryHosts: Set<String>
+)
 data class DownloadItem(
     val fileName: String,
     val url: String,
@@ -220,14 +229,8 @@ class BrowserRepository(private val context: Context) {
 
     // --- History ---
     val historyFlow: Flow<List<HistoryItem>> = context.profileDataStore.data.map { preferences ->
-        val jsonStr = preferences[HISTORY_KEY] ?: "[]"
-        val list = mutableListOf<HistoryItem>()
-        val array = JSONArray(jsonStr)
-        for (i in 0 until array.length()) {
-            val obj = array.getJSONObject(i)
-            list.add(HistoryItem(obj.getString("title"), obj.getString("url"), obj.getLong("timestamp")))
-        }
-        list.sortedByDescending { it.timestamp }
+        historyItemsFromJson(preferences[HISTORY_KEY] ?: "[]")
+            .sortedByDescending { it.timestamp }
     }
 
     suspend fun addHistoryItem(item: HistoryItem, isIncognitoTab: Boolean) {
@@ -921,7 +924,8 @@ class BrowserRepository(private val context: Context) {
                 WEBSITE_LOCATION_PERMISSIONS_KEY
             ).flatMap { key ->
                 websiteMicrophonePermissionsFromJson(preferences[key]).keys
-            }.filter { origin -> websiteMicrophoneOriginHost(origin) == pageHost }
+            }.distinct()
+                .filter { origin -> websiteMicrophoneOriginHost(origin) == pageHost }
             if (decisionOrigins.isEmpty()) return@edit
             val stamps = websitePermissionLastVisitFromJson(
                 preferences[WEBSITE_PERMISSION_LAST_VISIT_KEY]
@@ -938,6 +942,43 @@ class BrowserRepository(private val context: Context) {
                     websitePermissionLastVisitToJson(stamps)
             }
         }
+    }
+
+    /**
+     * One consistent snapshot for the "Automatically remove permissions"
+     * sweep: the camera / microphone / location decisions, the last-visit
+     * stamps, and the hosts seen in recent history — all read from a SINGLE
+     * profile DataStore snapshot, so the sweep can never mix decisions from
+     * one moment with stamps from another (the old sweep read six separate
+     * cold flows with `.first()`).
+     */
+    suspend fun websitePermissionAutoRemoveSnapshot(
+        cutoffMs: Long
+    ): WebsitePermissionAutoRemoveSnapshot {
+        val preferences = context.profileDataStore.data.first()
+        val recentHistoryHosts = historyItemsFromJson(preferences[HISTORY_KEY] ?: "[]")
+            .filter { item -> item.timestamp >= cutoffMs }
+            .mapNotNull { item ->
+                canonicalWebsiteMicrophoneOrigin(item.url)?.let { origin ->
+                    websiteMicrophoneOriginHost(origin)
+                }
+            }
+            .toSet()
+        return WebsitePermissionAutoRemoveSnapshot(
+            cameraDecisions = websiteMicrophonePermissionsFromJson(
+                preferences[WEBSITE_CAMERA_PERMISSIONS_KEY]
+            ),
+            microphoneDecisions = websiteMicrophonePermissionsFromJson(
+                preferences[WEBSITE_MICROPHONE_PERMISSIONS_KEY]
+            ),
+            locationDecisions = websiteMicrophonePermissionsFromJson(
+                preferences[WEBSITE_LOCATION_PERMISSIONS_KEY]
+            ),
+            lastVisitByOriginMs = websitePermissionLastVisitFromJson(
+                preferences[WEBSITE_PERMISSION_LAST_VISIT_KEY]
+            ),
+            recentHistoryHosts = recentHistoryHosts
+        )
     }
 
     // --- Permission defaults (per profile): used when a site has no saved choice ---
@@ -1029,6 +1070,20 @@ class BrowserRepository(private val context: Context) {
             }
             preferences[WEBSITE_LOCATION_PERMISSIONS_KEY] =
                 websiteMicrophonePermissionsToJson(locationPermissions)
+
+            // A full site reset also drops the site's last-visit stamps, so
+            // a reset site cannot be treated as "visited" by the auto-remove
+            // sweep on the strength of a stale stamp.
+            val lastVisitStamps = websitePermissionLastVisitFromJson(
+                preferences[WEBSITE_PERMISSION_LAST_VISIT_KEY]
+            ).toMutableMap()
+            if (normalizedHost != null) {
+                lastVisitStamps.keys
+                    .filter { websiteMicrophoneOriginHost(it) == normalizedHost }
+                    .forEach(lastVisitStamps::remove)
+            }
+            preferences[WEBSITE_PERMISSION_LAST_VISIT_KEY] =
+                websitePermissionLastVisitToJson(lastVisitStamps)
         }
     }
 
@@ -1052,6 +1107,24 @@ private fun websiteMicrophonePermissionsToJson(permissions: Map<String, Boolean>
     JSONObject().apply {
         permissions.toSortedMap().forEach { (origin, allowed) -> put(origin, allowed) }
     }.toString()
+
+/** Parses the stored history JSON array (same shape historyFlow reads). */
+private fun historyItemsFromJson(jsonStr: String): List<HistoryItem> {
+    val list = mutableListOf<HistoryItem>()
+    val array = runCatching { JSONArray(jsonStr) }.getOrElse { JSONArray() }
+    for (i in 0 until array.length()) {
+        val obj = array.optJSONObject(i) ?: continue
+        val url = obj.optString("url").takeIf { it.isNotBlank() } ?: continue
+        list.add(
+            HistoryItem(
+                obj.optString("title"),
+                url,
+                obj.optLong("timestamp")
+            )
+        )
+    }
+    return list
+}
 
 private fun websitePermissionLastVisitFromJson(json: String?): Map<String, Long> {
     val root = runCatching { JSONObject(json ?: "{}") }.getOrElse { JSONObject() }

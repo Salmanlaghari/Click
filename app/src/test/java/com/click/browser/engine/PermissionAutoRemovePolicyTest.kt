@@ -93,6 +93,18 @@ class PermissionAutoRemovePolicyTest {
     }
 
     @Test
+    fun malformedOriginIsNeverRevoked() {
+        // A decision whose origin has no derivable host cannot be checked
+        // against recent history — the fail-safe sweep keeps it, however
+        // old its stamp is.
+        val decisions = mapOf("not-a-valid-origin" to true)
+        val stamps = mapOf("not-a-valid-origin" to (now - 90 * dayMs))
+        assertTrue(
+            permissionOriginsToRevoke(decisions, stamps, nowMs = now).isEmpty()
+        )
+    }
+
+    @Test
     fun emptyDecisionsRevokeNothing() {
         val stamps = mapOf("https://example.com" to (now - 90 * dayMs))
         assertTrue(permissionOriginsToRevoke(emptyMap(), stamps, nowMs = now).isEmpty())

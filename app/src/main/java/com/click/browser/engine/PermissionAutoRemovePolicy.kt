@@ -37,8 +37,11 @@ internal fun permissionOriginsToRevoke(
         .filter { origin ->
             val stampMs = lastVisitByOriginMs[origin] ?: return@filter false
             if (stampMs >= cutoff) return@filter false
+            // A malformed origin (no host can be derived) is never revoked:
+            // without a host its recency cannot be verified, and the sweep
+            // is fail-safe — uncertainty keeps the choice.
             val host = websiteMicrophoneOriginHost(origin)
-            host == null || host !in recentHistoryHosts
+            host != null && host !in recentHistoryHosts
         }
         .toSet()
 }
