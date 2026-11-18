@@ -6823,191 +6823,81 @@ class MainActivity : FragmentActivity() {
 
                             }
 
-                            Column(
-                                modifier = Modifier
-                                    .fillMaxSize()
-                                    .padding(bottom = browseBottomNavInset)
-                            ) {
+                            // ---- Hoisted out of the overlay sections below ----
+                            // These helpers are used by more than one overlay section
+                            // (Settings reads the default-browser state/actions, and
+                            // several screens clear the current mode’s data), so they
+                            // live here in the main content scope instead of inside
+                            // any single section.
+                            // ---- Default browser: one-time first-launch prompt ----
+                            // State + actions live here (after the restore dialog)
+                            // so both this dialog and Settings can use them.
+                            val isDefaultBrowser by isDefaultBrowserState.collectAsState()
+                            var showDefaultBrowserPrompt by remember { mutableStateOf(false) }
 
-                                // Prince's top-bar rule (13 Nov): in ALL four
-                                // modes the top carries ONLY the thin
-                                // address-bar strip — no tab strip, no
-                                // bookmarks bar, no extra header (see
-                                // BrowseTopBarBlock). On the home dashboard
-                                // the strip is the dashboard's own leading
-                                // search bar, so the browse omnibox stays
-                                // hidden there (showOverlays) instead of
-                                // stacking a second bar above it; while
-                                // browsing, only the omnibox strip shows.
-                                // Simple mode ALWAYS keeps the bar at the top
-                                // (Prince's rule) — the bottom-bar preference
-                                // is ignored there.
-                                if (!videoFullscreenActive &&
-                                    (!(flagsUi.bottomAddressBar && activeMode != BrowserMode.SIMPLE) || showOverlays)
-                                ) {
-                                    BrowseTopBarBlock(showAddressBar = !showOverlays)
-                                }
-
-                                // Download box under the toolbar while any
-                                // Click-engine or response download is active
-                                // (larger card, timing, auto-hides after ~10s).
-                                if (!immersiveMode) {
-                                    DownloadActivityIndicator(
-                                        mode = activeMode,
-                                        theme = theme,
-                                        onOpenDownloads = { showDownloads = true }
-                                    )
-                                }
-
-                                // 4. MAIN CONTENT CONTAINER (WIDGET-STYLE DASHBOARD OR WEBVIEW)
-                                // Nested-scroll: drives the toolbar auto-hide on page scroll.
-                                // Ambient gradient backdrop (Prince, 15 Nov 2026):
-                                // Click's own full-page wash behind the content —
-                                // visible on the dashboard and behind the loading /
-                                // error states of a web page. Gated on no committed
-                                // content so no animation loop runs invisibly under
-                                // a fully painted site (the site keeps its own design).
-                                Box(
-                                    modifier = Modifier
-                                        .weight(1f)
-                                        .nestedScroll(toolbarScrollConnection)
-                                        .then(
-                                            if (!currentTab.hasCommittedContent) {
-                                                Modifier.ambientGradientBackground(theme)
-                                            } else {
-                                                Modifier
-                                            }
-                                        )
-                                ) {
-                                    if (currentTab.url == "about:blank") {
-                                        HomeDashboardContent()
-                                    } else {
-                                        WebPageContent()
-                                    }
-
-                                // 7. DevTools lives in a dismissible bottom sheet now
-                                // (see overlay screens below) — the website is never
-                                // covered by a fixed panel.
-                            }
-                            }
-
-                            // Premium bottom nav (Phase 1): Home · Tabs (count badge) · big glowing
-                            // AI center · Bookmarks · Menu. Theme follows the selected palette
-                            // and per-mode light/dark choice.
-                            if (showOverlays && !immersiveMode && !videoFullscreenActive) {
-                                ClickBottomNav(
-                                    theme = theme,
-                                    tabCount = tabs.size,
-                                    onHome = {
-                                        currentTab.url = "about:blank"
-                                        currentTab.browserSession?.loadUrl("about:blank")
-                                    },
-                                    onTabs = { showTabsManager = true },
-                                    onAi = { if (tamperBlocked) showTamperDialog = true else showAiChat = true },
-                                    onBookmarks = { showBookmarks = true },
-                                    onMenu = { showBrowserMenu = true },
-                                    modifier = Modifier.align(Alignment.BottomCenter)
-                                )
-                            }
-
-                            // SURFACE 2 — Browsing bottom nav: Menu · Home · Tabs · More.
-                            // Back/forward stay in the address bar to avoid duplicate controls.
-                            // (No center AI tab here — AI lives in the floating pill.)
-                            // Polish: one-shot theme crossfade (battery-safe).
-                            // Bottom-address-bar option: the address bar renders
-                            // below the page instead of at the top. (Never in
-                            // Simple mode — its bar stays at the top.)
-                            if (flagsUi.bottomAddressBar && activeMode != BrowserMode.SIMPLE && showBrowseBottomChrome) {
-                                // No bottom nav row to clear any more (14 Nov
-                                // full-screen web rule), so the optional bottom
-                                // address bar sits directly at the bottom edge.
-                                Box(
-                                    modifier = Modifier.align(Alignment.BottomCenter)
-                                ) {
-                                    BrowseTopBarBlock()
-                                }
-                            }
-                            // (No browsing bottom bar any more — see
-                            // Prince's full-screen web rule above. While
-                            // browsing, Menu/Tabs/Home live in the thin top
-                            // address bar and its menu, exactly as the
-                            // 13 Nov top-bar rule set up.)
-
-                            val featureMenuPageHost = try {
-                                android.net.Uri.parse(currentTab.url).host?.lowercase().orEmpty()
-                            } catch (_: Exception) { "" }
-                            val featureMenuWideLayout = DesktopLayoutPolicy.enabledForHost(
-                                featureMenuPageHost, desktopOverrides, activeMode,
-                                forceDesktopMode, effectiveDesktopDefault
-                            )
-                            // Keep the feature FAB on the home surface; hide it on loaded sites
-                            // so it does not cover page content. Home remains in the 3-dot menu.
-                            // Full-screen web rule (14 Nov 2026): the floating
-                            // feature-menu button is a home-surface control; on
-                            // web pages nothing floats over the page any more
-                            // (it used to appear there while a page loaded).
-                            if (!immersiveMode && !videoFullscreenActive && showOverlays) {
-                                FeatureMenuFabOverlay(
-                                    theme = theme,
-                                    expanded = showFeatureMenu,
-                                    activeMode = activeMode,
-                                    activeEngine = currentTab.engine,
-                                    hasLoadedPage = currentTabHasLoadedWebPage(),
-                                    desktopLayoutEnabled = featureMenuWideLayout,
-                                    onToggle = { showFeatureMenu = !showFeatureMenu },
-                                    onDismiss = { showFeatureMenu = false },
-                                    onModeChange = { mode ->
-                                        showFeatureMenu = false
-                                        // Mode switch needs restart — ask first via dialog.
-                                        if (activeMode != mode) {
-                                            pendingModeSwitch = mode
-                                        } else {
-                                            Toast.makeText(this@MainActivity, "Already in ${mode.display().title}", Toast.LENGTH_SHORT).show()
-                                        }
-                                    },
-                                    onFeature = { id -> handleFeature(id) },
-                                )
-                            }
-
-                            // The "Normal view" exit must stay reachable for the
-                            // whole time immersive mode is on: the drawer cannot be
-                            // gesture-opened and the bars are hidden, so this chip
-                            // (and Back) are the only exits. It is intentionally
-                            // NOT hidden while a video is fullscreen — the bars
-                            // stay hidden until the video exits, but the user is
-                            // never left without a visible way back to normal.
-                            if (immersiveMode) {
-                                Surface(
-                                    modifier = Modifier
-                                        .align(Alignment.TopEnd)
-                                        .padding(12.dp),
-                                    shape = RoundedCornerShape(24.dp),
-                                    color = theme.surface.copy(alpha = 0.94f),
-                                    border = BorderStroke(1.dp, theme.primary.copy(alpha = 0.45f)),
-                                    shadowElevation = 6.dp
-                                ) {
-                                    TextButton(
-                                        onClick = { immersiveMode = false },
-                                        colors = ButtonDefaults.textButtonColors(contentColor = theme.primary)
-                                    ) {
-                                        Text("Normal view")
+                            /**
+                             * Marks the first-launch prompt as shown so it
+                             * never nags again (every exit path does this).
+                             */
+                            fun dismissDefaultBrowserPrompt() {
+                                showDefaultBrowserPrompt = false
+                                scope.launch {
+                                    dataStore.edit { prefs ->
+                                        prefs[AppSettings.DEFAULT_BROWSER_PROMPT_SHOWN] = true
                                     }
                                 }
                             }
 
-                            // Tab-close UNDO snackbar (Premium UI v2) — sits above
-                            // the bottom nav / FAB so it never overlaps them.
-                            SnackbarHost(
-                                hostState = snackbarHostState,
-                                modifier = Modifier
-                                    .align(Alignment.BottomCenter)
-                                    .padding(start = 16.dp, end = 16.dp, bottom = 96.dp)
-                            )
+                            /**
+                             * Launches the system "set Click as default
+                             * browser" flow: the RoleManager role request on
+                             * API 29+, else the system's Default-Apps page.
+                             * Both paths are real — no dead button.
+                             */
+                            fun requestDefaultBrowser() {
+                                if (DefaultBrowserHelper.canRequestRole(this@MainActivity)) {
+                                    val roleIntent =
+                                        DefaultBrowserHelper.requestRoleIntent(this@MainActivity)
+                                    if (roleIntent != null) {
+                                        defaultBrowserLauncher.launch(roleIntent)
+                                        return
+                                    }
+                                }
+                                DefaultBrowserHelper.openDefaultAppsSettings(this@MainActivity)
+                            }
 
-                            // --- Visual tab switcher (Mises/Chrome-style card grid) ---
-                            // Replaces the old PremiumTabsManager: thumbnails,
-                            // search, per-card close, + button. The top TabStrip
-                            // stays as the quick switcher.
+                            fun performCurrentModeDataClear() {
+                                val modeToClear = activeMode
+                                discardPendingTabUndoForMode(modeToClear)
+                                CookieStore.clearAll()
+                                currentTab.webView?.clearCache(true)
+                                requestGeckoModeDataClear(modeToClear)
+                                val historyScope = if (modeToClear == BrowserMode.ADVANCED) {
+                                    "Advance"
+                                } else {
+                                    "Simple/Developer/Power shared"
+                                }
+                                scope.launch {
+                                    RecentlyClosedTabs.clearHistoryAndRecentlyClosedForMode(modeToClear) { historyMode ->
+                                        repository.clearHistoryFor(historyMode)
+                                    }
+                                    Toast.makeText(
+                                        this@MainActivity,
+                                        "WebView cookies/cache and Gecko profile data clear requested for ${modeToClear.display().title}; $historyScope history and recently closed tabs cleared",
+                                        Toast.LENGTH_SHORT
+                                    ).show()
+                                }
+                            }
+
+                            // ---- Browser overlay sections ----
+                            // The sheets/dialogs below used to sit inline in this Box
+                            // and pushed one onCreate lambda past the JVM 64 KB method
+                            // limit (MethodTooLargeException). Each section is now a
+                            // separate local composable; bodies moved verbatim, no
+                            // behaviour change.
+
+                            @Composable
+                            fun BrowserSheetsLibrary() {
                             if (showTabsManager) {
                                 key(thumbnailVersion) {
                                     TabSwitcherScreen(
@@ -7427,6 +7317,10 @@ class MainActivity : FragmentActivity() {
                                 }
                             }
 
+                            }
+
+                            @Composable
+                            fun BrowserSheetsPrompts() {
                             // click:// internal pages (chrome://-style) full-screen overlay.
                             if (showClickPage != null) {
                                 ClickPageHost(
@@ -7534,42 +7428,6 @@ class MainActivity : FragmentActivity() {
                                 )
                             }
 
-                            // ---- Default browser: one-time first-launch prompt ----
-                            // State + actions live here (after the restore dialog)
-                            // so both this dialog and Settings can use them.
-                            val isDefaultBrowser by isDefaultBrowserState.collectAsState()
-                            var showDefaultBrowserPrompt by remember { mutableStateOf(false) }
-
-                            /**
-                             * Marks the first-launch prompt as shown so it
-                             * never nags again (every exit path does this).
-                             */
-                            fun dismissDefaultBrowserPrompt() {
-                                showDefaultBrowserPrompt = false
-                                scope.launch {
-                                    dataStore.edit { prefs ->
-                                        prefs[AppSettings.DEFAULT_BROWSER_PROMPT_SHOWN] = true
-                                    }
-                                }
-                            }
-
-                            /**
-                             * Launches the system "set Click as default
-                             * browser" flow: the RoleManager role request on
-                             * API 29+, else the system's Default-Apps page.
-                             * Both paths are real — no dead button.
-                             */
-                            fun requestDefaultBrowser() {
-                                if (DefaultBrowserHelper.canRequestRole(this@MainActivity)) {
-                                    val roleIntent =
-                                        DefaultBrowserHelper.requestRoleIntent(this@MainActivity)
-                                    if (roleIntent != null) {
-                                        defaultBrowserLauncher.launch(roleIntent)
-                                        return
-                                    }
-                                }
-                                DefaultBrowserHelper.openDefaultAppsSettings(this@MainActivity)
-                            }
 
                             // External links arriving while the app is already
                             // running (onNewIntent): open each in a new
@@ -7790,29 +7648,10 @@ class MainActivity : FragmentActivity() {
                                 )
                             }
 
-                            fun performCurrentModeDataClear() {
-                                val modeToClear = activeMode
-                                discardPendingTabUndoForMode(modeToClear)
-                                CookieStore.clearAll()
-                                currentTab.webView?.clearCache(true)
-                                requestGeckoModeDataClear(modeToClear)
-                                val historyScope = if (modeToClear == BrowserMode.ADVANCED) {
-                                    "Advance"
-                                } else {
-                                    "Simple/Developer/Power shared"
-                                }
-                                scope.launch {
-                                    RecentlyClosedTabs.clearHistoryAndRecentlyClosedForMode(modeToClear) { historyMode ->
-                                        repository.clearHistoryFor(historyMode)
-                                    }
-                                    Toast.makeText(
-                                        this@MainActivity,
-                                        "WebView cookies/cache and Gecko profile data clear requested for ${modeToClear.display().title}; $historyScope history and recently closed tabs cleared",
-                                        Toast.LENGTH_SHORT
-                                    ).show()
-                                }
                             }
 
+                            @Composable
+                            fun BrowserSheetsSettings() {
                             if (showSettings) {
                                 SettingsScreen(
                                     theme = theme,
@@ -8105,6 +7944,10 @@ class MainActivity : FragmentActivity() {
                                 )
                             }
 
+                            }
+
+                            @Composable
+                            fun BrowserSheetsSettingsScreens() {
                             // Tool details overlays for Premium modules
                             if (showMusicDetails) {
                                 InteractiveMusicPlayerDialog(onClose = { showMusicDetails = false })
@@ -8534,6 +8377,10 @@ class MainActivity : FragmentActivity() {
                                     }
                                 )
                             }
+                            }
+
+                            @Composable
+                            fun BrowserSheetsSiteSettings() {
                             if (showSiteSettings) {
                                 val siteHost = try {
                                     android.net.Uri.parse(currentTab.url).host?.lowercase().orEmpty()
@@ -8881,6 +8728,10 @@ class MainActivity : FragmentActivity() {
                                     showSiteSettings = false
                                 }
                             }
+                            }
+
+                            @Composable
+                            fun BoxScope.BrowserSheetsDialogs() {
                             WebsitePermissionDialogs(permissionHandler)
                             if (showClearSiteDataConfirm) {
                                 AlertDialog(
@@ -9548,6 +9399,10 @@ class MainActivity : FragmentActivity() {
                                 )
                             }
                             } // AnimatedVisibility (AI chat slide/spring)
+                            }
+
+                            @Composable
+                            fun BrowserSheetsMenus() {
                             if (showPrivacyGuards) {
                                 PrivacyGuardsScreen(
                                     dntEnabled = dntEnabled,
@@ -9908,6 +9763,10 @@ class MainActivity : FragmentActivity() {
                             }
 
                             // Text scaling (accessibility): live slider + optional
+                            }
+
+                            @Composable
+                            fun BrowserSheetsOverlays() {
                             // per-site persistence. Applies instantly to the
                             // current tab via WebView textZoom.
                             if (showTextScaleSheet) {
@@ -9977,6 +9836,201 @@ class MainActivity : FragmentActivity() {
                             if (onboardingReady && showOnboarding && !privateLocked) {
                                 FirstRunOnboarding(onFinished = { finishFirstRunOnboarding() })
                             }
+                            }
+
+                            Column(
+                                modifier = Modifier
+                                    .fillMaxSize()
+                                    .padding(bottom = browseBottomNavInset)
+                            ) {
+
+                                // Prince's top-bar rule (13 Nov): in ALL four
+                                // modes the top carries ONLY the thin
+                                // address-bar strip — no tab strip, no
+                                // bookmarks bar, no extra header (see
+                                // BrowseTopBarBlock). On the home dashboard
+                                // the strip is the dashboard's own leading
+                                // search bar, so the browse omnibox stays
+                                // hidden there (showOverlays) instead of
+                                // stacking a second bar above it; while
+                                // browsing, only the omnibox strip shows.
+                                // Simple mode ALWAYS keeps the bar at the top
+                                // (Prince's rule) — the bottom-bar preference
+                                // is ignored there.
+                                if (!videoFullscreenActive &&
+                                    (!(flagsUi.bottomAddressBar && activeMode != BrowserMode.SIMPLE) || showOverlays)
+                                ) {
+                                    BrowseTopBarBlock(showAddressBar = !showOverlays)
+                                }
+
+                                // Download box under the toolbar while any
+                                // Click-engine or response download is active
+                                // (larger card, timing, auto-hides after ~10s).
+                                if (!immersiveMode) {
+                                    DownloadActivityIndicator(
+                                        mode = activeMode,
+                                        theme = theme,
+                                        onOpenDownloads = { showDownloads = true }
+                                    )
+                                }
+
+                                // 4. MAIN CONTENT CONTAINER (WIDGET-STYLE DASHBOARD OR WEBVIEW)
+                                // Nested-scroll: drives the toolbar auto-hide on page scroll.
+                                // Ambient gradient backdrop (Prince, 15 Nov 2026):
+                                // Click's own full-page wash behind the content —
+                                // visible on the dashboard and behind the loading /
+                                // error states of a web page. Gated on no committed
+                                // content so no animation loop runs invisibly under
+                                // a fully painted site (the site keeps its own design).
+                                Box(
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .nestedScroll(toolbarScrollConnection)
+                                        .then(
+                                            if (!currentTab.hasCommittedContent) {
+                                                Modifier.ambientGradientBackground(theme)
+                                            } else {
+                                                Modifier
+                                            }
+                                        )
+                                ) {
+                                    if (currentTab.url == "about:blank") {
+                                        HomeDashboardContent()
+                                    } else {
+                                        WebPageContent()
+                                    }
+
+                                // 7. DevTools lives in a dismissible bottom sheet now
+                                // (see overlay screens below) — the website is never
+                                // covered by a fixed panel.
+                            }
+                            }
+
+                            // Premium bottom nav (Phase 1): Home · Tabs (count badge) · big glowing
+                            // AI center · Bookmarks · Menu. Theme follows the selected palette
+                            // and per-mode light/dark choice.
+                            if (showOverlays && !immersiveMode && !videoFullscreenActive) {
+                                ClickBottomNav(
+                                    theme = theme,
+                                    tabCount = tabs.size,
+                                    onHome = {
+                                        currentTab.url = "about:blank"
+                                        currentTab.browserSession?.loadUrl("about:blank")
+                                    },
+                                    onTabs = { showTabsManager = true },
+                                    onAi = { if (tamperBlocked) showTamperDialog = true else showAiChat = true },
+                                    onBookmarks = { showBookmarks = true },
+                                    onMenu = { showBrowserMenu = true },
+                                    modifier = Modifier.align(Alignment.BottomCenter)
+                                )
+                            }
+
+                            // SURFACE 2 — Browsing bottom nav: Menu · Home · Tabs · More.
+                            // Back/forward stay in the address bar to avoid duplicate controls.
+                            // (No center AI tab here — AI lives in the floating pill.)
+                            // Polish: one-shot theme crossfade (battery-safe).
+                            // Bottom-address-bar option: the address bar renders
+                            // below the page instead of at the top. (Never in
+                            // Simple mode — its bar stays at the top.)
+                            if (flagsUi.bottomAddressBar && activeMode != BrowserMode.SIMPLE && showBrowseBottomChrome) {
+                                // No bottom nav row to clear any more (14 Nov
+                                // full-screen web rule), so the optional bottom
+                                // address bar sits directly at the bottom edge.
+                                Box(
+                                    modifier = Modifier.align(Alignment.BottomCenter)
+                                ) {
+                                    BrowseTopBarBlock()
+                                }
+                            }
+                            // (No browsing bottom bar any more — see
+                            // Prince's full-screen web rule above. While
+                            // browsing, Menu/Tabs/Home live in the thin top
+                            // address bar and its menu, exactly as the
+                            // 13 Nov top-bar rule set up.)
+
+                            val featureMenuPageHost = try {
+                                android.net.Uri.parse(currentTab.url).host?.lowercase().orEmpty()
+                            } catch (_: Exception) { "" }
+                            val featureMenuWideLayout = DesktopLayoutPolicy.enabledForHost(
+                                featureMenuPageHost, desktopOverrides, activeMode,
+                                forceDesktopMode, effectiveDesktopDefault
+                            )
+                            // Keep the feature FAB on the home surface; hide it on loaded sites
+                            // so it does not cover page content. Home remains in the 3-dot menu.
+                            // Full-screen web rule (14 Nov 2026): the floating
+                            // feature-menu button is a home-surface control; on
+                            // web pages nothing floats over the page any more
+                            // (it used to appear there while a page loaded).
+                            if (!immersiveMode && !videoFullscreenActive && showOverlays) {
+                                FeatureMenuFabOverlay(
+                                    theme = theme,
+                                    expanded = showFeatureMenu,
+                                    activeMode = activeMode,
+                                    activeEngine = currentTab.engine,
+                                    hasLoadedPage = currentTabHasLoadedWebPage(),
+                                    desktopLayoutEnabled = featureMenuWideLayout,
+                                    onToggle = { showFeatureMenu = !showFeatureMenu },
+                                    onDismiss = { showFeatureMenu = false },
+                                    onModeChange = { mode ->
+                                        showFeatureMenu = false
+                                        // Mode switch needs restart — ask first via dialog.
+                                        if (activeMode != mode) {
+                                            pendingModeSwitch = mode
+                                        } else {
+                                            Toast.makeText(this@MainActivity, "Already in ${mode.display().title}", Toast.LENGTH_SHORT).show()
+                                        }
+                                    },
+                                    onFeature = { id -> handleFeature(id) },
+                                )
+                            }
+
+                            // The "Normal view" exit must stay reachable for the
+                            // whole time immersive mode is on: the drawer cannot be
+                            // gesture-opened and the bars are hidden, so this chip
+                            // (and Back) are the only exits. It is intentionally
+                            // NOT hidden while a video is fullscreen — the bars
+                            // stay hidden until the video exits, but the user is
+                            // never left without a visible way back to normal.
+                            if (immersiveMode) {
+                                Surface(
+                                    modifier = Modifier
+                                        .align(Alignment.TopEnd)
+                                        .padding(12.dp),
+                                    shape = RoundedCornerShape(24.dp),
+                                    color = theme.surface.copy(alpha = 0.94f),
+                                    border = BorderStroke(1.dp, theme.primary.copy(alpha = 0.45f)),
+                                    shadowElevation = 6.dp
+                                ) {
+                                    TextButton(
+                                        onClick = { immersiveMode = false },
+                                        colors = ButtonDefaults.textButtonColors(contentColor = theme.primary)
+                                    ) {
+                                        Text("Normal view")
+                                    }
+                                }
+                            }
+
+                            // Tab-close UNDO snackbar (Premium UI v2) — sits above
+                            // the bottom nav / FAB so it never overlaps them.
+                            SnackbarHost(
+                                hostState = snackbarHostState,
+                                modifier = Modifier
+                                    .align(Alignment.BottomCenter)
+                                    .padding(start = 16.dp, end = 16.dp, bottom = 96.dp)
+                            )
+
+                            // --- Visual tab switcher (Mises/Chrome-style card grid) ---
+                            // Replaces the old PremiumTabsManager: thumbnails,
+                            // search, per-card close, + button. The top TabStrip
+                            // stays as the quick switcher.
+                            BrowserSheetsLibrary()
+                            BrowserSheetsPrompts()
+                            BrowserSheetsSettings()
+                            BrowserSheetsSettingsScreens()
+                            BrowserSheetsSiteSettings()
+                            BrowserSheetsDialogs()
+                            BrowserSheetsMenus()
+                            BrowserSheetsOverlays()
                         }
                     }
                 }
