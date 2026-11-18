@@ -24,7 +24,8 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.click.browser.engine.ModeTheme
 
-/** Explains Click's deny-only geolocation behavior without offering a false Allow action. */
+/** Explains Click's per-site geolocation permission: sites ask first, and
+ *  only sites the user allows ever receive the device location. */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun LocationSettingsSheet(
@@ -54,7 +55,7 @@ fun LocationSettingsSheet(
             }
             Icon(Icons.Default.LocationOff, contentDescription = null, tint = theme.primary)
             Text(
-                "Click does not request Android device-location permission. Website geolocation requests are blocked, and Click never sends substitute coordinates.",
+                "Websites must ask before they can see your location. Click shares your device location only with sites you allow — manage choices in Settings → Site settings → Location. Click never sends substitute coordinates.",
                 fontSize = 13.sp,
                 color = theme.onSurface.copy(alpha = 0.75f)
             )

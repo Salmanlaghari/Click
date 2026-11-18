@@ -14,6 +14,17 @@
     <!-- AI chat voice input: requested at runtime with a rationale dialog. -->
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
 
+    <!-- Website camera: requested at runtime only after the site's per-origin
+         consent flow allows it (Site settings → Camera). -->
+    <uses-permission android:name="android.permission.CAMERA" />
+    <uses-feature android:name="android.hardware.camera" android:required="false" />
+
+    <!-- Website location: requested at runtime only after the site's
+         per-origin consent flow allows it (Site settings → Location). -->
+    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
+    <uses-feature android:name="android.hardware.location" android:required="false" />
+    <uses-feature android:name="android.hardware.location.gps" android:required="false" />
+
     <!-- Runtime notification permission is requested only when the user opts
          in to news alerts or chooses to enable download notifications. -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
