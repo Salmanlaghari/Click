@@ -23,7 +23,6 @@ import androidx.compose.material.icons.filled.Cookie
 import androidx.compose.material.icons.filled.DeleteSweep
 import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.Image
-import androidx.compose.material.icons.filled.LocationOn
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.LockOpen
 import androidx.compose.material.icons.filled.OpenInNew
@@ -77,8 +76,8 @@ import kotlinx.coroutines.launch
  *
  * Sections (mirroring Chrome's site-details page):
  * - Site header: host + the browser's observed connection-security state.
- * - Permissions: per-site microphone state plus the capabilities that remain
- *   blocked (camera and location) or unsupported (website notifications).
+ * - Permissions: real per-site camera / microphone / location choices plus
+ *   website notifications, which remain unsupported.
  * - Content: JavaScript / Images / Pop-ups / Ads / Third-party cookies.
  *   Applied to the current WebView.
  * - Shields: protection status plus cookies and history information.
@@ -118,7 +117,27 @@ fun SiteSettingsSheet(
     canResetMicrophonePermission: Boolean = false,
     showMicrophoneAndroidSettings: Boolean = false,
     onResetMicrophonePermission: () -> Unit = {},
-    onOpenMicrophoneAndroidSettings: () -> Unit = {}
+    onOpenMicrophoneAndroidSettings: () -> Unit = {},
+    // Camera: real per-site control (Allow / Block / reset to Ask).
+    cameraPermissionStatusLabel: String = "Ask on request",
+    cameraPermissionExplanation: String = "Click asks before allowing this exact site to use the camera.",
+    cameraDecision: Boolean? = null,
+    cameraControlsEnabled: Boolean = false,
+    showCameraAndroidSettings: Boolean = false,
+    onAllowCameraPermission: () -> Unit = {},
+    onBlockCameraPermission: () -> Unit = {},
+    onResetCameraPermission: () -> Unit = {},
+    onOpenCameraAndroidSettings: () -> Unit = {},
+    // Location: real per-site control (Allow / Block / reset to Ask).
+    locationPermissionStatusLabel: String = "Ask on request",
+    locationPermissionExplanation: String = "Click asks before allowing this exact site to see your location.",
+    locationDecision: Boolean? = null,
+    locationControlsEnabled: Boolean = false,
+    showLocationAndroidSettings: Boolean = false,
+    onAllowLocationPermission: () -> Unit = {},
+    onBlockLocationPermission: () -> Unit = {},
+    onResetLocationPermission: () -> Unit = {},
+    onOpenLocationAndroidSettings: () -> Unit = {}
 ) {
     val scope = rememberCoroutineScope()
     val context = LocalContext.current
@@ -202,16 +221,23 @@ fun SiteSettingsSheet(
             // ================= WEBSITE PERMISSIONS =================
             SectionTitle(theme, "Website permissions")
             Text(
-                "Microphone consent is limited to this site. Camera, location, and website notifications remain blocked.",
+                "Camera, microphone, and location choices apply to this exact site only. Website notifications remain blocked.",
                 fontSize = 12.sp,
                 color = theme.onSurface.copy(alpha = 0.68f),
                 lineHeight = 18.sp
             )
-            WebsitePermissionStatusRow(
+            WebsiteDevicePermissionControlRow(
                 theme = theme,
-                capability = WebsitePermissionCapability.CAMERA,
                 title = "Camera",
-                explanation = "Click denies website camera requests."
+                statusLabel = cameraPermissionStatusLabel,
+                explanation = cameraPermissionExplanation,
+                decision = cameraDecision,
+                controlsEnabled = cameraControlsEnabled,
+                showAndroidSettings = showCameraAndroidSettings,
+                onAllow = onAllowCameraPermission,
+                onBlock = onBlockCameraPermission,
+                onReset = onResetCameraPermission,
+                onOpenAndroidSettings = onOpenCameraAndroidSettings
             )
             WebsiteMicrophonePermissionStatusRow(
                 theme = theme,
@@ -222,11 +248,18 @@ fun SiteSettingsSheet(
                 onReset = onResetMicrophonePermission,
                 onOpenAndroidSettings = onOpenMicrophoneAndroidSettings
             )
-            WebsitePermissionStatusRow(
+            WebsiteDevicePermissionControlRow(
                 theme = theme,
-                capability = WebsitePermissionCapability.LOCATION,
                 title = "Location",
-                explanation = "Click denies website location requests and does not request Android location access."
+                statusLabel = locationPermissionStatusLabel,
+                explanation = locationPermissionExplanation,
+                decision = locationDecision,
+                controlsEnabled = locationControlsEnabled,
+                showAndroidSettings = showLocationAndroidSettings,
+                onAllow = onAllowLocationPermission,
+                onBlock = onBlockLocationPermission,
+                onReset = onResetLocationPermission,
+                onOpenAndroidSettings = onOpenLocationAndroidSettings
             )
             WebsitePermissionStatusRow(
                 theme = theme,
@@ -679,6 +712,55 @@ private fun WebsiteMicrophonePermissionStatusRow(
             }
             if (showAndroidSettings) {
                 TextButton(onClick = onOpenAndroidSettings) { Text("Android settings") }
+            }
+        }
+    }
+}
+
+/**
+ * Real per-site device-permission control (camera / location): shows the
+ * current status and lets the user Allow, Block, or reset the site back to
+ * "Ask". Every button writes the matching exact-origin decision store via
+ * the callbacks — there is no display-only state here.
+ */
+@Composable
+private fun WebsiteDevicePermissionControlRow(
+    theme: ModeTheme,
+    title: String,
+    statusLabel: String,
+    explanation: String,
+    decision: Boolean?,
+    controlsEnabled: Boolean,
+    showAndroidSettings: Boolean,
+    onAllow: () -> Unit,
+    onBlock: () -> Unit,
+    onReset: () -> Unit,
+    onOpenAndroidSettings: () -> Unit
+) {
+    Column(modifier = Modifier.fillMaxWidth().padding(vertical = 6.dp)) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(title, fontWeight = FontWeight.SemiBold, fontSize = 13.sp, color = theme.onSurface)
+            Text(statusLabel, fontSize = 12.sp, color = theme.onSurface.copy(alpha = 0.7f))
+        }
+        Text(explanation, fontSize = 11.sp, color = theme.onSurface.copy(alpha = 0.62f))
+        if (controlsEnabled) {
+            Row {
+                if (decision != true) {
+                    TextButton(onClick = onAllow) { Text("Allow") }
+                }
+                if (decision != false) {
+                    TextButton(onClick = onBlock) { Text("Block") }
+                }
+                if (decision != null) {
+                    TextButton(onClick = onReset) { Text("Reset site choice") }
+                }
+                if (showAndroidSettings) {
+                    TextButton(onClick = onOpenAndroidSettings) { Text("Android settings") }
+                }
             }
         }
     }

@@ -92,10 +92,12 @@ class WebsiteMicrophonePermissionPolicyTest {
     }
 
     @Test
-    fun cameraAndLocationRemainBlockedAndWebsiteNotificationsUnsupported() {
-        assertEquals(WebsitePermissionStatus.BLOCKED_IN_CLICK,
+    fun cameraAndLocationAskWithoutSavedChoiceAndWebsiteNotificationsUnsupported() {
+        // Camera and location are real per-site permissions now: with no
+        // saved choice they ask, exactly like the microphone.
+        assertEquals(WebsitePermissionStatus.ASK,
             websitePermissionStatus(WebsitePermissionCapability.CAMERA))
-        assertEquals(WebsitePermissionStatus.BLOCKED_IN_CLICK,
+        assertEquals(WebsitePermissionStatus.ASK,
             websitePermissionStatus(WebsitePermissionCapability.LOCATION))
         assertEquals(WebsitePermissionStatus.UNSUPPORTED,
             websitePermissionStatus(WebsitePermissionCapability.NOTIFICATIONS))

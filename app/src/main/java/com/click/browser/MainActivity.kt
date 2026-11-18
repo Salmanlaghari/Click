@@ -180,6 +180,10 @@ class TabItem(
     var isIncognito by mutableStateOf(isIncognito)
     /** Private-tab website microphone choices are memory-only and disappear with this tab. */
     internal val privateWebsiteMicrophonePermissions = mutableStateMapOf<String, Boolean>()
+    /** Private-tab website camera choices are memory-only and disappear with this tab. */
+    internal val privateWebsiteCameraPermissions = mutableStateMapOf<String, Boolean>()
+    /** Private-tab website location choices are memory-only and disappear with this tab. */
+    internal val privateWebsiteLocationPermissions = mutableStateMapOf<String, Boolean>()
     /** Gecko's serialized history/scroll/form snapshot; never written for private tabs. */
     var geckoSessionState by mutableStateOf(initialGeckoSessionState)
     var canGoBack by mutableStateOf(false)
@@ -231,6 +235,70 @@ private data class WebsiteMicrophoneRecoveryUiState(
 )
 
 private data class PendingWebsiteMicrophoneAndroidResult(
+    val requestId: String,
+    val tabId: String,
+    val onResult: (Boolean) -> Unit,
+    val onCancel: () -> Unit
+)
+
+private data class WebsiteCameraConsentUiState(
+    val requestId: String,
+    val tabId: String,
+    val host: String,
+    val privateTab: Boolean,
+    val onAllow: () -> Unit,
+    val onBlock: () -> Unit,
+    val onDismiss: () -> Unit
+)
+
+private data class WebsiteCameraRecoveryUiState(
+    val origin: String,
+    val tabId: String,
+    val privateTab: Boolean
+)
+
+private data class PendingWebsiteCameraAndroidResult(
+    val requestId: String,
+    val tabId: String,
+    val onResult: (Boolean) -> Unit,
+    val onCancel: () -> Unit
+)
+
+/** Combined camera + microphone request: one dialog decides both. */
+private data class WebsiteMediaConsentUiState(
+    val requestId: String,
+    val tabId: String,
+    val host: String,
+    val privateTab: Boolean,
+    val onAllow: () -> Unit,
+    val onBlock: () -> Unit,
+    val onDismiss: () -> Unit
+)
+
+private data class PendingWebsiteMediaAndroidResult(
+    val requestId: String,
+    val tabId: String,
+    val onResult: (Map<String, Boolean>) -> Unit,
+    val onCancel: () -> Unit
+)
+
+private data class WebsiteLocationConsentUiState(
+    val requestId: String,
+    val tabId: String,
+    val host: String,
+    val privateTab: Boolean,
+    val onAllow: () -> Unit,
+    val onBlock: () -> Unit,
+    val onDismiss: () -> Unit
+)
+
+private data class WebsiteLocationRecoveryUiState(
+    val origin: String,
+    val tabId: String,
+    val privateTab: Boolean
+)
+
+private data class PendingWebsiteLocationAndroidResult(
     val requestId: String,
     val tabId: String,
     val onResult: (Boolean) -> Unit,
@@ -334,6 +402,13 @@ class MainActivity : FragmentActivity() {
     private var liveReducedMotion = false
     // Sharp View: full-density WebView rendering. Default ON.
     private var liveSharpViewEnabled = true
+    // On-device site data (DOM storage) master switch. Default ON.
+    private var liveOnDeviceSiteDataEnabled = true
+    // Global "Desktop site" default from Site settings (AppSettings). The
+    // click://flags desktopDefault keeps working; either source enables it.
+    private var liveDesktopSiteDefault = false
+    private val effectiveDesktopDefault: Boolean
+        get() = liveFlags.desktopDefault || liveDesktopSiteDefault
     // HTTPS mode: "off" | "standard" | "strict" + per-site Strict exceptions.
     private var liveHttpsMode = "standard"
     private var liveHttpsStrictExceptions: Set<String> = emptySet()
@@ -1053,7 +1128,7 @@ class MainActivity : FragmentActivity() {
             overrides = liveDesktopOverrides,
             mode = liveMode,
             forceDesktopMode = liveForceDesktopMode,
-            desktopDefault = liveFlags.desktopDefault
+            desktopDefault = effectiveDesktopDefault
         )
         modeManager.applyDesktopOverride(webView, liveMode, desktop)
     }
@@ -1070,7 +1145,7 @@ class MainActivity : FragmentActivity() {
             overrides = liveDesktopOverrides,
             mode = liveMode,
             forceDesktopMode = liveForceDesktopMode,
-            desktopDefault = liveFlags.desktopDefault
+            desktopDefault = effectiveDesktopDefault
         )
     }
 
@@ -1098,7 +1173,9 @@ class MainActivity : FragmentActivity() {
      * - Images: loadsImagesAutomatically per WebView.
      * - Pop-ups: javaScriptCanOpenWindowsAutomatically per WebView.
      * - Ad-block is stored here for shouldInterceptRequest. Website camera,
-     *   microphone and notification permissions are not granted by this build.
+     *   microphone, and location permissions are granted through the
+     *   WebChromeClient consent flows, not here; website notifications are
+     *   never granted by this build.
      * Wide layout stays in the existing per-site preference path.
      */
     private fun applyPerSiteSettings(
@@ -1844,6 +1921,13 @@ class MainActivity : FragmentActivity() {
             var advanceIntroEnabled by remember { mutableStateOf(true) }
             // Sharp View: full-density WebView rendering (default ON).
             var sharpViewEnabled by remember { mutableStateOf(true) }
+            // Chrome-parity Site settings globals (AppSettings-persisted below).
+            // Global "Desktop site" default (Site settings → Desktop site).
+            var desktopSiteDefaultEnabled by remember { mutableStateOf(false) }
+            // On-device site data (DOM storage) master switch; default ON.
+            var onDeviceSiteDataEnabled by remember { mutableStateOf(true) }
+            // Automatically remove saved site permissions (30 days); default OFF.
+            var autoRemovePermissionsEnabled by remember { mutableStateOf(false) }
             // Brave-inspired privacy quick wins (DataStore-persisted below).
             var stripTrackingParams by remember { mutableStateOf(true) }
             var forgetfulBrowsing by remember { mutableStateOf(false) }
@@ -1853,7 +1937,7 @@ class MainActivity : FragmentActivity() {
             var readerModeEnabled by remember { mutableStateOf(false) }
             var reducedMotionEnabled by remember { mutableStateOf(false) }
 
-            // Click does not request device location; the sheet explains that all site requests are blocked.
+            // Website location explainer sheet (per-site permission; see Site settings → Location).
             var showLocationSettings by remember { mutableStateOf(false) }
 
             // Common overlays
@@ -2308,6 +2392,60 @@ class MainActivity : FragmentActivity() {
                 pendingWebsiteMicrophoneAndroidResult = null
                 pendingResult?.onResult?.invoke(granted)
             }
+            // Website camera consent (mirrors the microphone flow).
+            var websiteCameraConsent by remember {
+                mutableStateOf<WebsiteCameraConsentUiState?>(null)
+            }
+            var websiteCameraRecovery by remember {
+                mutableStateOf<WebsiteCameraRecoveryUiState?>(null)
+            }
+            var pendingWebsiteCameraAndroidResult by remember {
+                mutableStateOf<PendingWebsiteCameraAndroidResult?>(null)
+            }
+            val pendingWebViewCameraRequestIds = remember {
+                java.util.WeakHashMap<android.webkit.PermissionRequest, String>()
+            }
+            val websiteCameraAndroidPermissionLauncher = rememberLauncherForActivityResult(
+                ActivityResultContracts.RequestPermission()
+            ) { granted ->
+                val pendingResult = pendingWebsiteCameraAndroidResult
+                pendingWebsiteCameraAndroidResult = null
+                pendingResult?.onResult?.invoke(granted)
+            }
+            // Combined camera + microphone consent (one dialog, both decisions).
+            var websiteMediaConsent by remember {
+                mutableStateOf<WebsiteMediaConsentUiState?>(null)
+            }
+            var pendingWebsiteMediaAndroidResult by remember {
+                mutableStateOf<PendingWebsiteMediaAndroidResult?>(null)
+            }
+            val pendingWebViewMediaRequestIds = remember {
+                java.util.WeakHashMap<android.webkit.PermissionRequest, String>()
+            }
+            val websiteMediaAndroidPermissionLauncher = rememberLauncherForActivityResult(
+                ActivityResultContracts.RequestMultiplePermissions()
+            ) { results ->
+                val pendingResult = pendingWebsiteMediaAndroidResult
+                pendingWebsiteMediaAndroidResult = null
+                pendingResult?.onResult?.invoke(results)
+            }
+            // Website location consent (holds the GeolocationPermissions callback).
+            var websiteLocationConsent by remember {
+                mutableStateOf<WebsiteLocationConsentUiState?>(null)
+            }
+            var websiteLocationRecovery by remember {
+                mutableStateOf<WebsiteLocationRecoveryUiState?>(null)
+            }
+            var pendingWebsiteLocationAndroidResult by remember {
+                mutableStateOf<PendingWebsiteLocationAndroidResult?>(null)
+            }
+            val websiteLocationAndroidPermissionLauncher = rememberLauncherForActivityResult(
+                ActivityResultContracts.RequestPermission()
+            ) { granted ->
+                val pendingResult = pendingWebsiteLocationAndroidResult
+                pendingWebsiteLocationAndroidResult = null
+                pendingResult?.onResult?.invoke(granted)
+            }
             var showClearSiteDataConfirm by remember { mutableStateOf(false) }
             var clearSiteDataInProgress by remember { mutableStateOf(false) }
             var browserSessionGeneration by remember { mutableStateOf(0) }
@@ -2565,12 +2703,35 @@ class MainActivity : FragmentActivity() {
             val websiteMicrophonePermissions by repository.websiteMicrophonePermissionsFlow
                 .collectAsState(initial = emptyMap())
             val latestWebsiteMicrophonePermissions = rememberUpdatedState(websiteMicrophonePermissions)
+            val websiteCameraPermissions by repository.websiteCameraPermissionsFlow
+                .collectAsState(initial = emptyMap())
+            val latestWebsiteCameraPermissions = rememberUpdatedState(websiteCameraPermissions)
+            val websiteLocationPermissions by repository.websiteLocationPermissionsFlow
+                .collectAsState(initial = emptyMap())
+            val latestWebsiteLocationPermissions = rememberUpdatedState(websiteLocationPermissions)
+            val websiteCameraDefault by repository.websiteCameraDefaultFlow
+                .collectAsState(initial = WebsitePermissionGlobalDefault.ASK)
+            val latestWebsiteCameraDefault = rememberUpdatedState(websiteCameraDefault)
+            val websiteMicrophoneDefault by repository.websiteMicrophoneDefaultFlow
+                .collectAsState(initial = WebsitePermissionGlobalDefault.ASK)
+            val latestWebsiteMicrophoneDefault = rememberUpdatedState(websiteMicrophoneDefault)
+            val websiteLocationDefault by repository.websiteLocationDefaultFlow
+                .collectAsState(initial = WebsitePermissionGlobalDefault.ASK)
+            val latestWebsiteLocationDefault = rememberUpdatedState(websiteLocationDefault)
 
             LaunchedEffect(
                 tabs.map { it.id },
                 websiteMicrophoneConsent?.requestId,
                 pendingWebsiteMicrophoneAndroidResult?.requestId,
-                websiteMicrophoneRecovery?.tabId
+                websiteMicrophoneRecovery?.tabId,
+                websiteCameraConsent?.requestId,
+                pendingWebsiteCameraAndroidResult?.requestId,
+                websiteCameraRecovery?.tabId,
+                websiteMediaConsent?.requestId,
+                pendingWebsiteMediaAndroidResult?.requestId,
+                websiteLocationConsent?.requestId,
+                pendingWebsiteLocationAndroidResult?.requestId,
+                websiteLocationRecovery?.tabId
             ) {
                 val consent = websiteMicrophoneConsent
                 if (consent != null && tabs.none { it.id == consent.tabId }) {
@@ -2585,6 +2746,81 @@ class MainActivity : FragmentActivity() {
                 val recovery = websiteMicrophoneRecovery
                 if (recovery != null && tabs.none { it.id == recovery.tabId }) {
                     websiteMicrophoneRecovery = null
+                }
+                val cameraConsent = websiteCameraConsent
+                if (cameraConsent != null && tabs.none { it.id == cameraConsent.tabId }) {
+                    websiteCameraConsent = null
+                    runCatching { cameraConsent.onDismiss() }
+                }
+                val cameraPending = pendingWebsiteCameraAndroidResult
+                if (cameraPending != null && tabs.none { it.id == cameraPending.tabId }) {
+                    pendingWebsiteCameraAndroidResult = null
+                    runCatching { cameraPending.onCancel() }
+                }
+                val cameraRecovery = websiteCameraRecovery
+                if (cameraRecovery != null && tabs.none { it.id == cameraRecovery.tabId }) {
+                    websiteCameraRecovery = null
+                }
+                val mediaConsent = websiteMediaConsent
+                if (mediaConsent != null && tabs.none { it.id == mediaConsent.tabId }) {
+                    websiteMediaConsent = null
+                    runCatching { mediaConsent.onDismiss() }
+                }
+                val mediaPending = pendingWebsiteMediaAndroidResult
+                if (mediaPending != null && tabs.none { it.id == mediaPending.tabId }) {
+                    pendingWebsiteMediaAndroidResult = null
+                    runCatching { mediaPending.onCancel() }
+                }
+                val locationConsent = websiteLocationConsent
+                if (locationConsent != null && tabs.none { it.id == locationConsent.tabId }) {
+                    websiteLocationConsent = null
+                    runCatching { locationConsent.onDismiss() }
+                }
+                val locationPending = pendingWebsiteLocationAndroidResult
+                if (locationPending != null && tabs.none { it.id == locationPending.tabId }) {
+                    pendingWebsiteLocationAndroidResult = null
+                    runCatching { locationPending.onCancel() }
+                }
+                val locationRecovery = websiteLocationRecovery
+                if (locationRecovery != null && tabs.none { it.id == locationRecovery.tabId }) {
+                    websiteLocationRecovery = null
+                }
+            }
+
+            // "Automatically remove permissions" sweep: once per app launch,
+            // drop saved camera / microphone / location choices for sites with
+            // no visit in the last 30 days. Fail-safe: the toggle defaults off,
+            // and empty or unreadable history revokes nothing (the pure policy
+            // also refuses an empty visit list).
+            LaunchedEffect(Unit) {
+                try {
+                    val enabled = dataStore.data.first()[AppSettings.AUTO_REMOVE_PERMISSIONS] == true
+                    if (enabled) {
+                        val history = repository.historyFlow.first()
+                        if (history.isNotEmpty()) {
+                            val visits = history.mapNotNull { item ->
+                                val origin = canonicalWebsiteMicrophoneOrigin(item.url)
+                                    ?: return@mapNotNull null
+                                val host = websiteMicrophoneOriginHost(origin)
+                                    ?: return@mapNotNull null
+                                host to item.timestamp
+                            }
+                            if (visits.isNotEmpty()) {
+                                val now = System.currentTimeMillis()
+                                permissionOriginsToRevoke(
+                                    repository.websiteCameraPermissionsFlow.first(), visits, now
+                                ).forEach { repository.clearWebsiteCameraPermission(it) }
+                                permissionOriginsToRevoke(
+                                    repository.websiteMicrophonePermissionsFlow.first(), visits, now
+                                ).forEach { repository.clearWebsiteMicrophonePermission(it) }
+                                permissionOriginsToRevoke(
+                                    repository.websiteLocationPermissionsFlow.first(), visits, now
+                                ).forEach { repository.clearWebsiteLocationPermission(it) }
+                            }
+                        }
+                    }
+                } catch (_: Exception) {
+                    // A failed sweep must never break browsing or revoke blindly.
                 }
             }
 
@@ -2670,7 +2906,17 @@ class MainActivity : FragmentActivity() {
                     }
                 }
 
-                when (decision) {
+                // No saved choice: the profile default decides — "allow" skips
+                // the dialog (Android permission still applies), "block" denies
+                // silently, "ask" shows the consent dialog. The default itself
+                // is never saved as a per-site choice.
+                val effectiveDecision = decision ?: when (latestWebsiteMicrophoneDefault.value) {
+                    WebsitePermissionGlobalDefault.ALLOW -> true
+                    WebsitePermissionGlobalDefault.BLOCK -> false
+                    WebsitePermissionGlobalDefault.ASK -> null
+                }
+
+                when (effectiveDecision) {
                     false -> reject()
                     true -> requestAndroidPermissionAfterConsent()
                     null -> {
@@ -2736,6 +2982,481 @@ class MainActivity : FragmentActivity() {
                         "Open Click's app settings in Android to enable microphone access.",
                         Toast.LENGTH_LONG
                     ).show()
+                }
+            }
+
+            // Website camera consent flow: a direct mirror of the microphone
+            // flow above, backed by the camera decision store and the Android
+            // CAMERA permission.
+            fun handleWebsiteCameraRequest(
+                tab: TabItem?,
+                requestedOrigin: String,
+                grant: () -> Unit,
+                reject: () -> Unit,
+                requestId: String = java.util.UUID.randomUUID().toString()
+            ) {
+                val origin = canonicalWebsiteMicrophoneOrigin(requestedOrigin)
+                if (origin == null || tab == null || !tabs.contains(tab)) {
+                    reject()
+                    return
+                }
+                val privateTab = tab.isIncognito
+                val decision = if (privateTab) {
+                    tab.privateWebsiteCameraPermissions[origin]
+                } else {
+                    latestWebsiteCameraPermissions.value[origin]
+                }
+
+                fun requestAndroidPermissionAfterConsent() {
+                    if (!tabs.contains(tab)) {
+                        reject()
+                        return
+                    }
+                    val alreadyGranted = ContextCompat.checkSelfPermission(
+                        this@MainActivity,
+                        android.Manifest.permission.CAMERA
+                    ) == PackageManager.PERMISSION_GRANTED
+                    if (alreadyGranted) {
+                        runCatching { grant() }.onFailure { runCatching { reject() } }
+                        return
+                    }
+                    if (pendingWebsiteCameraAndroidResult != null) {
+                        reject()
+                        return
+                    }
+                    pendingWebsiteCameraAndroidResult = PendingWebsiteCameraAndroidResult(
+                        requestId = requestId,
+                        tabId = tab.id,
+                        onResult = { granted ->
+                            if (!tabs.contains(tab)) {
+                                runCatching { reject() }
+                            } else if (granted) {
+                                runCatching { grant() }.onFailure { runCatching { reject() } }
+                            } else {
+                                runCatching { reject() }
+                                websiteCameraRecovery = WebsiteCameraRecoveryUiState(
+                                    origin = origin,
+                                    tabId = tab.id,
+                                    privateTab = privateTab
+                                )
+                            }
+                        },
+                        onCancel = { runCatching { reject() } }
+                    )
+                    try {
+                        websiteCameraAndroidPermissionLauncher.launch(
+                            android.Manifest.permission.CAMERA
+                        )
+                    } catch (_: Exception) {
+                        if (pendingWebsiteCameraAndroidResult?.requestId == requestId) {
+                            pendingWebsiteCameraAndroidResult = null
+                        }
+                        runCatching { reject() }
+                        websiteCameraRecovery = WebsiteCameraRecoveryUiState(
+                            origin = origin,
+                            tabId = tab.id,
+                            privateTab = privateTab
+                        )
+                    }
+                }
+
+                fun saveDecision(allowed: Boolean) {
+                    if (privateTab) {
+                        tab.privateWebsiteCameraPermissions[origin] = allowed
+                    } else {
+                        scope.launch {
+                            repository.setWebsiteCameraPermission(origin, allowed)
+                        }
+                    }
+                }
+
+                // Same default handling as the microphone flow: the profile
+                // default applies without being saved as a per-site choice.
+                val effectiveDecision = decision ?: when (latestWebsiteCameraDefault.value) {
+                    WebsitePermissionGlobalDefault.ALLOW -> true
+                    WebsitePermissionGlobalDefault.BLOCK -> false
+                    WebsitePermissionGlobalDefault.ASK -> null
+                }
+
+                when (effectiveDecision) {
+                    false -> reject()
+                    true -> requestAndroidPermissionAfterConsent()
+                    null -> {
+                        if (websiteCameraConsent != null) {
+                            reject()
+                            return
+                        }
+                        val host = android.net.Uri.parse(origin).host ?: origin
+                        websiteCameraConsent = WebsiteCameraConsentUiState(
+                            requestId = requestId,
+                            tabId = tab.id,
+                            host = host,
+                            privateTab = privateTab,
+                            onAllow = {
+                                if (websiteCameraConsent?.requestId == requestId) {
+                                    websiteCameraConsent = null
+                                    if (tabs.contains(tab)) {
+                                        saveDecision(true)
+                                        requestAndroidPermissionAfterConsent()
+                                    } else {
+                                        runCatching { reject() }
+                                    }
+                                }
+                            },
+                            onBlock = {
+                                if (websiteCameraConsent?.requestId == requestId) {
+                                    websiteCameraConsent = null
+                                    saveDecision(false)
+                                }
+                                runCatching { reject() }
+                            },
+                            onDismiss = {
+                                if (websiteCameraConsent?.requestId == requestId) {
+                                    websiteCameraConsent = null
+                                }
+                                runCatching { reject() }
+                            }
+                        )
+                    }
+                }
+            }
+
+            fun cancelWebsiteCameraRequest(requestId: String) {
+                if (websiteCameraConsent?.requestId == requestId) {
+                    websiteCameraConsent = null
+                }
+                val pending = pendingWebsiteCameraAndroidResult
+                if (pending?.requestId == requestId) {
+                    pendingWebsiteCameraAndroidResult = null
+                }
+            }
+
+            // Combined camera + microphone request (getUserMedia with both):
+            // a saved/defaulted block on either capability denies the whole
+            // request; both allowed goes straight to the Android permissions;
+            // anything undecided gets ONE combined consent dialog that saves
+            // both decisions, after which only the Android-granted subset is
+            // granted to the site.
+            fun handleWebsiteMediaRequest(
+                tab: TabItem?,
+                requestedOrigin: String,
+                grant: (Array<String>) -> Unit,
+                reject: () -> Unit,
+                requestId: String = java.util.UUID.randomUUID().toString()
+            ) {
+                val origin = canonicalWebsiteMicrophoneOrigin(requestedOrigin)
+                if (origin == null || tab == null || !tabs.contains(tab)) {
+                    reject()
+                    return
+                }
+                val privateTab = tab.isIncognito
+
+                fun savedDecision(camera: Boolean): Boolean? = if (privateTab) {
+                    if (camera) tab.privateWebsiteCameraPermissions[origin]
+                    else tab.privateWebsiteMicrophonePermissions[origin]
+                } else {
+                    if (camera) latestWebsiteCameraPermissions.value[origin]
+                    else latestWebsiteMicrophonePermissions.value[origin]
+                }
+
+                fun effective(
+                    decision: Boolean?,
+                    globalDefault: WebsitePermissionGlobalDefault
+                ): Boolean? = decision ?: when (globalDefault) {
+                    WebsitePermissionGlobalDefault.ALLOW -> true
+                    WebsitePermissionGlobalDefault.BLOCK -> false
+                    WebsitePermissionGlobalDefault.ASK -> null
+                }
+
+                val cameraEffective = effective(savedDecision(true), latestWebsiteCameraDefault.value)
+                val microphoneEffective =
+                    effective(savedDecision(false), latestWebsiteMicrophoneDefault.value)
+                if (cameraEffective == false || microphoneEffective == false) {
+                    reject()
+                    return
+                }
+
+                fun saveDecision(camera: Boolean, allowed: Boolean) {
+                    if (privateTab) {
+                        if (camera) tab.privateWebsiteCameraPermissions[origin] = allowed
+                        else tab.privateWebsiteMicrophonePermissions[origin] = allowed
+                    } else {
+                        scope.launch {
+                            if (camera) repository.setWebsiteCameraPermission(origin, allowed)
+                            else repository.setWebsiteMicrophonePermission(origin, allowed)
+                        }
+                    }
+                }
+
+                fun androidGranted(permission: String): Boolean =
+                    ContextCompat.checkSelfPermission(this@MainActivity, permission) ==
+                        PackageManager.PERMISSION_GRANTED
+
+                fun grantAllowedSubset(cameraGranted: Boolean, microphoneGranted: Boolean) {
+                    val grantedResources = mutableListOf<String>()
+                    if (cameraGranted) {
+                        grantedResources += android.webkit.PermissionRequest.RESOURCE_VIDEO_CAPTURE
+                    }
+                    if (microphoneGranted) {
+                        grantedResources += android.webkit.PermissionRequest.RESOURCE_AUDIO_CAPTURE
+                    }
+                    if (grantedResources.isEmpty()) {
+                        runCatching { reject() }
+                        if (!cameraGranted) {
+                            websiteCameraRecovery = WebsiteCameraRecoveryUiState(
+                                origin = origin,
+                                tabId = tab.id,
+                                privateTab = privateTab
+                            )
+                        } else {
+                            websiteMicrophoneRecovery = WebsiteMicrophoneRecoveryUiState(
+                                origin = origin,
+                                tabId = tab.id,
+                                privateTab = privateTab
+                            )
+                        }
+                    } else {
+                        runCatching { grant(grantedResources.toTypedArray()) }
+                            .onFailure { runCatching { reject() } }
+                    }
+                }
+
+                fun requestAndroidPermissionsAfterConsent() {
+                    if (!tabs.contains(tab)) {
+                        reject()
+                        return
+                    }
+                    val cameraGranted = androidGranted(android.Manifest.permission.CAMERA)
+                    val microphoneGranted = androidGranted(android.Manifest.permission.RECORD_AUDIO)
+                    if (cameraGranted && microphoneGranted) {
+                        grantAllowedSubset(cameraGranted = true, microphoneGranted = true)
+                        return
+                    }
+                    if (pendingWebsiteMediaAndroidResult != null) {
+                        reject()
+                        return
+                    }
+                    pendingWebsiteMediaAndroidResult = PendingWebsiteMediaAndroidResult(
+                        requestId = requestId,
+                        tabId = tab.id,
+                        onResult = { results ->
+                            if (!tabs.contains(tab)) {
+                                runCatching { reject() }
+                            } else {
+                                grantAllowedSubset(
+                                    cameraGranted = results[android.Manifest.permission.CAMERA]
+                                        ?: androidGranted(android.Manifest.permission.CAMERA),
+                                    microphoneGranted = results[android.Manifest.permission.RECORD_AUDIO]
+                                        ?: androidGranted(android.Manifest.permission.RECORD_AUDIO)
+                                )
+                            }
+                        },
+                        onCancel = { runCatching { reject() } }
+                    )
+                    try {
+                        websiteMediaAndroidPermissionLauncher.launch(
+                            arrayOf(
+                                android.Manifest.permission.CAMERA,
+                                android.Manifest.permission.RECORD_AUDIO
+                            )
+                        )
+                    } catch (_: Exception) {
+                        if (pendingWebsiteMediaAndroidResult?.requestId == requestId) {
+                            pendingWebsiteMediaAndroidResult = null
+                        }
+                        runCatching { reject() }
+                        websiteCameraRecovery = WebsiteCameraRecoveryUiState(
+                            origin = origin,
+                            tabId = tab.id,
+                            privateTab = privateTab
+                        )
+                    }
+                }
+
+                if (cameraEffective == true && microphoneEffective == true) {
+                    requestAndroidPermissionsAfterConsent()
+                    return
+                }
+                if (websiteMediaConsent != null) {
+                    reject()
+                    return
+                }
+                val host = android.net.Uri.parse(origin).host ?: origin
+                websiteMediaConsent = WebsiteMediaConsentUiState(
+                    requestId = requestId,
+                    tabId = tab.id,
+                    host = host,
+                    privateTab = privateTab,
+                    onAllow = {
+                        if (websiteMediaConsent?.requestId == requestId) {
+                            websiteMediaConsent = null
+                            if (tabs.contains(tab)) {
+                                if (savedDecision(true) == null) saveDecision(true, true)
+                                if (savedDecision(false) == null) saveDecision(false, true)
+                                requestAndroidPermissionsAfterConsent()
+                            } else {
+                                runCatching { reject() }
+                            }
+                        }
+                    },
+                    onBlock = {
+                        if (websiteMediaConsent?.requestId == requestId) {
+                            websiteMediaConsent = null
+                            if (savedDecision(true) == null) saveDecision(true, false)
+                            if (savedDecision(false) == null) saveDecision(false, false)
+                        }
+                        runCatching { reject() }
+                    },
+                    onDismiss = {
+                        if (websiteMediaConsent?.requestId == requestId) {
+                            websiteMediaConsent = null
+                        }
+                        runCatching { reject() }
+                    }
+                )
+            }
+
+            fun cancelWebsiteMediaRequest(requestId: String) {
+                if (websiteMediaConsent?.requestId == requestId) {
+                    websiteMediaConsent = null
+                }
+                val pending = pendingWebsiteMediaAndroidResult
+                if (pending?.requestId == requestId) {
+                    pendingWebsiteMediaAndroidResult = null
+                }
+            }
+
+            // Website location flow: the GeolocationPermissions callback is
+            // held by exactly one state holder at a time (consent dialog or
+            // pending Android result) and invoked exactly once on every path,
+            // always with retain = false.
+            fun handleWebsiteLocationRequest(
+                tab: TabItem?,
+                rawOrigin: String?,
+                callback: GeolocationPermissions.Callback?
+            ) {
+                if (callback == null) return
+                val origin = rawOrigin?.let(::canonicalWebsiteMicrophoneOrigin)
+                if (origin == null || tab == null || !tabs.contains(tab)) {
+                    callback.invoke(rawOrigin, false, false)
+                    return
+                }
+                val requestId = java.util.UUID.randomUUID().toString()
+                val privateTab = tab.isIncognito
+                val decision = if (privateTab) {
+                    tab.privateWebsiteLocationPermissions[origin]
+                } else {
+                    latestWebsiteLocationPermissions.value[origin]
+                }
+                val effectiveDecision = decision ?: when (latestWebsiteLocationDefault.value) {
+                    WebsitePermissionGlobalDefault.ALLOW -> true
+                    WebsitePermissionGlobalDefault.BLOCK -> false
+                    WebsitePermissionGlobalDefault.ASK -> null
+                }
+
+                fun saveDecision(allowed: Boolean) {
+                    if (privateTab) {
+                        tab.privateWebsiteLocationPermissions[origin] = allowed
+                    } else {
+                        scope.launch {
+                            repository.setWebsiteLocationPermission(origin, allowed)
+                        }
+                    }
+                }
+
+                fun requestAndroidPermissionAfterConsent() {
+                    if (!tabs.contains(tab)) {
+                        callback.invoke(origin, false, false)
+                        return
+                    }
+                    val alreadyGranted = ContextCompat.checkSelfPermission(
+                        this@MainActivity,
+                        android.Manifest.permission.ACCESS_FINE_LOCATION
+                    ) == PackageManager.PERMISSION_GRANTED
+                    if (alreadyGranted) {
+                        callback.invoke(origin, true, false)
+                        return
+                    }
+                    if (pendingWebsiteLocationAndroidResult != null) {
+                        callback.invoke(origin, false, false)
+                        return
+                    }
+                    pendingWebsiteLocationAndroidResult = PendingWebsiteLocationAndroidResult(
+                        requestId = requestId,
+                        tabId = tab.id,
+                        onResult = { granted ->
+                            if (!tabs.contains(tab)) {
+                                callback.invoke(origin, false, false)
+                            } else if (granted) {
+                                callback.invoke(origin, true, false)
+                            } else {
+                                callback.invoke(origin, false, false)
+                                websiteLocationRecovery = WebsiteLocationRecoveryUiState(
+                                    origin = origin,
+                                    tabId = tab.id,
+                                    privateTab = privateTab
+                                )
+                            }
+                        },
+                        onCancel = { callback.invoke(origin, false, false) }
+                    )
+                    try {
+                        websiteLocationAndroidPermissionLauncher.launch(
+                            android.Manifest.permission.ACCESS_FINE_LOCATION
+                        )
+                    } catch (_: Exception) {
+                        if (pendingWebsiteLocationAndroidResult?.requestId == requestId) {
+                            pendingWebsiteLocationAndroidResult = null
+                        }
+                        callback.invoke(origin, false, false)
+                        websiteLocationRecovery = WebsiteLocationRecoveryUiState(
+                            origin = origin,
+                            tabId = tab.id,
+                            privateTab = privateTab
+                        )
+                    }
+                }
+
+                when (effectiveDecision) {
+                    false -> callback.invoke(origin, false, false)
+                    true -> requestAndroidPermissionAfterConsent()
+                    null -> {
+                        if (websiteLocationConsent != null) {
+                            callback.invoke(origin, false, false)
+                            return
+                        }
+                        val host = android.net.Uri.parse(origin).host ?: origin
+                        websiteLocationConsent = WebsiteLocationConsentUiState(
+                            requestId = requestId,
+                            tabId = tab.id,
+                            host = host,
+                            privateTab = privateTab,
+                            onAllow = {
+                                if (websiteLocationConsent?.requestId == requestId) {
+                                    websiteLocationConsent = null
+                                    if (tabs.contains(tab)) {
+                                        saveDecision(true)
+                                        requestAndroidPermissionAfterConsent()
+                                    } else {
+                                        callback.invoke(origin, false, false)
+                                    }
+                                }
+                            },
+                            onBlock = {
+                                if (websiteLocationConsent?.requestId == requestId) {
+                                    websiteLocationConsent = null
+                                    saveDecision(false)
+                                }
+                                callback.invoke(origin, false, false)
+                            },
+                            onDismiss = {
+                                if (websiteLocationConsent?.requestId == requestId) {
+                                    websiteLocationConsent = null
+                                }
+                                callback.invoke(origin, false, false)
+                            }
+                        )
+                    }
                 }
             }
 
@@ -2839,12 +3560,12 @@ class MainActivity : FragmentActivity() {
                             } else {
                                 val isWideLayout = DesktopLayoutPolicy.enabledForHost(
                                     host, liveDesktopOverrides, activeMode,
-                                    forceDesktopMode, liveFlags.desktopDefault
+                                    forceDesktopMode, effectiveDesktopDefault
                                 )
                                 persistDesktopOverride(host, !isWideLayout)
                                 val nextWideLayout = DesktopLayoutPolicy.enabledForHost(
                                     host, liveDesktopOverrides, activeMode,
-                                    forceDesktopMode, liveFlags.desktopDefault
+                                    forceDesktopMode, effectiveDesktopDefault
                                 )
                                 applyWideLayoutToTab(currentTab, nextWideLayout)
                                 Toast.makeText(
@@ -3048,6 +3769,8 @@ class MainActivity : FragmentActivity() {
             LaunchedEffect(readerModeEnabled) { liveReaderMode = readerModeEnabled }
             LaunchedEffect(reducedMotionEnabled) { liveReducedMotion = reducedMotionEnabled }
             LaunchedEffect(sharpViewEnabled) { liveSharpViewEnabled = sharpViewEnabled }
+            LaunchedEffect(onDeviceSiteDataEnabled) { liveOnDeviceSiteDataEnabled = onDeviceSiteDataEnabled }
+            LaunchedEffect(desktopSiteDefaultEnabled) { liveDesktopSiteDefault = desktopSiteDefaultEnabled }
             LaunchedEffect(desktopOverrides) { liveDesktopOverrides = desktopOverrides }
             LaunchedEffect(forceDesktopMode) { liveForceDesktopMode = forceDesktopMode }
             LaunchedEffect(adBlockerEnabled) { liveAdBlockerEnabled = adBlockerEnabled }
@@ -3134,6 +3857,10 @@ class MainActivity : FragmentActivity() {
                         ?: NewsNotifications.DEFAULT_TOPICS
                     advanceIntroEnabled = prefs[AppSettings.ADVANCE_INTRO_ENABLED] ?: true
                     sharpViewEnabled = prefs[AppSettings.SHARP_VIEW_ENABLED] != false
+                    // Chrome-parity Site settings globals.
+                    desktopSiteDefaultEnabled = prefs[AppSettings.DESKTOP_SITE_DEFAULT] == true
+                    onDeviceSiteDataEnabled = prefs[AppSettings.ON_DEVICE_SITE_DATA] != false
+                    autoRemovePermissionsEnabled = prefs[AppSettings.AUTO_REMOVE_PERMISSIONS] == true
                     // Brave-inspired privacy quick wins.
                     stripTrackingParams = prefs[AppSettings.STRIP_TRACKING_PARAMS] ?: true
                     forgetfulBrowsing = prefs[AppSettings.FORGETFUL_BROWSING] == true
@@ -4293,7 +5020,7 @@ class MainActivity : FragmentActivity() {
                                     } catch (e: Exception) { "" }
                                     val isWideLayoutForSite = DesktopLayoutPolicy.enabledForHost(
                                         pageHost, desktopOverrides, activeMode,
-                                        forceDesktopMode, liveFlags.desktopDefault
+                                        forceDesktopMode, effectiveDesktopDefault
                                     )
                                     DrawerItem(
                                         label = if (isWideLayoutForSite) "Wide layout: ON (this site)" else "Wide layout (this site)",
@@ -4308,7 +5035,7 @@ class MainActivity : FragmentActivity() {
                                                 persistDesktopOverride(pageHost, !isWideLayoutForSite)
                                                 val nextWideLayout = DesktopLayoutPolicy.enabledForHost(
                                                     pageHost, liveDesktopOverrides, activeMode,
-                                                    forceDesktopMode, liveFlags.desktopDefault
+                                                    forceDesktopMode, effectiveDesktopDefault
                                                 )
                                                 applyWideLayoutToTab(currentTab, nextWideLayout)
                                                 Toast.makeText(
@@ -6236,21 +6963,33 @@ class MainActivity : FragmentActivity() {
                                                             tabs.firstOrNull { it.webView === view }?.loadProgress = newProgress
                                                         }
 
-                                                        // Click does not request Android location permission.
-                                                        // Fail closed for every origin; no fake coordinates or Allow UI.
+                                                        // Website location is a real per-site
+                                                        // permission: the consent flow owns the
+                                                        // callback and invokes it exactly once
+                                                        // (saved choice / profile default / dialog,
+                                                        // then the Android location grant).
                                                         override fun onGeolocationPermissionsShowPrompt(
                                                             origin: String?,
                                                             callback: GeolocationPermissions.Callback?
                                                         ) {
-                                                            callback?.invoke(origin, false, false)
+                                                            val ownerTab = tabs.firstOrNull {
+                                                                it.webView === devToolsOwnerWebView
+                                                            }
+                                                            handleWebsiteLocationRequest(
+                                                                tab = ownerTab,
+                                                                rawOrigin = origin,
+                                                                callback = callback
+                                                            )
                                                         }
 
                                                         override fun onGeolocationPermissionsHidePrompt() {
                                                             super.onGeolocationPermissionsHidePrompt()
                                                         }
 
-                                                        // Only audio capture can enter the per-site microphone
-                                                        // consent flow. Every camera or mixed request remains denied.
+                                                        // Audio capture enters the per-site microphone
+                                                        // consent flow, video capture the camera flow,
+                                                        // and a combined request the combined flow.
+                                                        // Anything else (MIDI, unknown resources) is denied.
                                                         override fun onPermissionRequest(request: android.webkit.PermissionRequest?) {
                                                             val permissionRequest = request ?: return
                                                             val ownerTab = tabs.firstOrNull {
@@ -6278,25 +7017,63 @@ class MainActivity : FragmentActivity() {
                                                                 }
                                                                 return
                                                             }
-                                                            if (ownerTab == null ||
-                                                                resources != setOf(android.webkit.PermissionRequest.RESOURCE_AUDIO_CAPTURE)
+                                                            val wantsAudio =
+                                                                android.webkit.PermissionRequest.RESOURCE_AUDIO_CAPTURE in resources
+                                                            val wantsVideo =
+                                                                android.webkit.PermissionRequest.RESOURCE_VIDEO_CAPTURE in resources
+                                                            val mediaResources = setOf(
+                                                                android.webkit.PermissionRequest.RESOURCE_AUDIO_CAPTURE,
+                                                                android.webkit.PermissionRequest.RESOURCE_VIDEO_CAPTURE
+                                                            )
+                                                            if (ownerTab == null || (!wantsAudio && !wantsVideo) ||
+                                                                !mediaResources.containsAll(resources)
                                                             ) {
                                                                 permissionRequest.deny()
                                                                 return
                                                             }
                                                             val requestId = java.util.UUID.randomUUID().toString()
-                                                            pendingWebViewMicrophoneRequestIds[permissionRequest] = requestId
-                                                            handleWebsiteMicrophoneRequest(
-                                                                tab = ownerTab,
-                                                                requestedOrigin = permissionRequest.origin.toString(),
-                                                                grant = {
-                                                                    permissionRequest.grant(
-                                                                        arrayOf(android.webkit.PermissionRequest.RESOURCE_AUDIO_CAPTURE)
+                                                            when {
+                                                                wantsAudio && wantsVideo -> {
+                                                                    pendingWebViewMediaRequestIds[permissionRequest] = requestId
+                                                                    handleWebsiteMediaRequest(
+                                                                        tab = ownerTab,
+                                                                        requestedOrigin = permissionRequest.origin.toString(),
+                                                                        grant = { grantedResources ->
+                                                                            permissionRequest.grant(grantedResources)
+                                                                        },
+                                                                        reject = { permissionRequest.deny() },
+                                                                        requestId = requestId
                                                                     )
-                                                                },
-                                                                reject = { permissionRequest.deny() },
-                                                                requestId = requestId
-                                                            )
+                                                                }
+                                                                wantsVideo -> {
+                                                                    pendingWebViewCameraRequestIds[permissionRequest] = requestId
+                                                                    handleWebsiteCameraRequest(
+                                                                        tab = ownerTab,
+                                                                        requestedOrigin = permissionRequest.origin.toString(),
+                                                                        grant = {
+                                                                            permissionRequest.grant(
+                                                                                arrayOf(android.webkit.PermissionRequest.RESOURCE_VIDEO_CAPTURE)
+                                                                            )
+                                                                        },
+                                                                        reject = { permissionRequest.deny() },
+                                                                        requestId = requestId
+                                                                    )
+                                                                }
+                                                                else -> {
+                                                                    pendingWebViewMicrophoneRequestIds[permissionRequest] = requestId
+                                                                    handleWebsiteMicrophoneRequest(
+                                                                        tab = ownerTab,
+                                                                        requestedOrigin = permissionRequest.origin.toString(),
+                                                                        grant = {
+                                                                            permissionRequest.grant(
+                                                                                arrayOf(android.webkit.PermissionRequest.RESOURCE_AUDIO_CAPTURE)
+                                                                            )
+                                                                        },
+                                                                        reject = { permissionRequest.deny() },
+                                                                        requestId = requestId
+                                                                    )
+                                                                }
+                                                            }
                                                         }
 
                                                         override fun onPermissionRequestCanceled(
@@ -6306,6 +7083,12 @@ class MainActivity : FragmentActivity() {
                                                                 pendingWebViewMicrophoneRequestIds
                                                                     .remove(request)
                                                                     ?.let(::cancelWebsiteMicrophoneRequest)
+                                                                pendingWebViewCameraRequestIds
+                                                                    .remove(request)
+                                                                    ?.let(::cancelWebsiteCameraRequest)
+                                                                pendingWebViewMediaRequestIds
+                                                                    .remove(request)
+                                                                    ?.let(::cancelWebsiteMediaRequest)
                                                             }
                                                         }
                                                     }
@@ -6395,7 +7178,12 @@ class MainActivity : FragmentActivity() {
 
                                                     // Config settings
                                                     settings.javaScriptEnabled = javaScriptEnabledGlobal
-                                                    settings.domStorageEnabled = true
+                                                    // On-device site data master switch
+                                                    // (Site settings → On-device site data).
+                                                    settings.domStorageEnabled = liveOnDeviceSiteDataEnabled
+                                                    // The geolocation prompt callback above is
+                                                    // the gate; the engine feature itself stays on.
+                                                    settings.geolocationEnabled = true
                                                     // Privacy toggles (HTTPS-Only / night mode / data saver);
                                                     // MIXED_CONTENT_ALWAYS_ALLOW was removed — it contradicted HTTPS-Only.
                                                     this@MainActivity.applyPrivacyToggles(this)
@@ -6403,7 +7191,7 @@ class MainActivity : FragmentActivity() {
                                                     settings.builtInZoomControls = true
                                                     settings.displayZoomControls = false
 
-                                                            modeManager.applySettings(this, activeMode, forceDesktopMode || liveFlags.desktopDefault)
+                                                            modeManager.applySettings(this, activeMode, forceDesktopMode || effectiveDesktopDefault, domStorageEnabled = liveOnDeviceSiteDataEnabled)
                                                             // Sharp View: full-density rendering
                                                             // (no artificial scale-down) so text
                                                             // & images stay crisp on high-DPI
@@ -6930,7 +7718,7 @@ class MainActivity : FragmentActivity() {
                             } catch (_: Exception) { "" }
                             val featureMenuWideLayout = DesktopLayoutPolicy.enabledForHost(
                                 featureMenuPageHost, desktopOverrides, activeMode,
-                                forceDesktopMode, liveFlags.desktopDefault
+                                forceDesktopMode, effectiveDesktopDefault
                             )
                             // Keep the feature FAB on the home surface; hide it on loaded sites
                             // so it does not cover page content. Home remains in the 3-dot menu.
@@ -8359,11 +9147,43 @@ class MainActivity : FragmentActivity() {
                                     onClose = { showCookieManager = false }
                                 )
                             }
-                            // All-sites settings: every saved per-site choice in one list.
+                            // Site settings hub: Chrome-style categories; its
+                            // "All sites" row opens the all-sites reset list.
                             if (showSiteSettingsList) {
-                                com.click.browser.ui.screens.AllSiteSettingsScreen(
+                                com.click.browser.ui.screens.SiteSettingsHubScreen(
                                     theme = theme,
                                     repository = repository,
+                                    javaScriptEnabled = javaScriptEnabledGlobal,
+                                    onJavaScriptChange = { enabled ->
+                                        javaScriptEnabledGlobal = enabled
+                                    },
+                                    desktopSiteDefault = desktopSiteDefaultEnabled,
+                                    onDesktopSiteDefaultChange = { enabled ->
+                                        desktopSiteDefaultEnabled = enabled
+                                        scope.launch {
+                                            dataStore.edit { prefs ->
+                                                prefs[AppSettings.DESKTOP_SITE_DEFAULT] = enabled
+                                            }
+                                        }
+                                    },
+                                    siteDataEnabled = onDeviceSiteDataEnabled,
+                                    onSiteDataEnabledChange = { enabled ->
+                                        onDeviceSiteDataEnabled = enabled
+                                        scope.launch {
+                                            dataStore.edit { prefs ->
+                                                prefs[AppSettings.ON_DEVICE_SITE_DATA] = enabled
+                                            }
+                                        }
+                                    },
+                                    autoRemovePermissions = autoRemovePermissionsEnabled,
+                                    onAutoRemovePermissionsChange = { enabled ->
+                                        autoRemovePermissionsEnabled = enabled
+                                        scope.launch {
+                                            dataStore.edit { prefs ->
+                                                prefs[AppSettings.AUTO_REMOVE_PERMISSIONS] = enabled
+                                            }
+                                        }
+                                    },
                                     onClose = {
                                         showSiteSettingsList = false
                                         if (siteSettingsReturnToAdvancedSecurity) {
@@ -8523,6 +9343,60 @@ class MainActivity : FragmentActivity() {
                                             "Android permission required"
                                     }
                                 }
+                                // Camera + location share the microphone origin key
+                                // space (canonical https origin of the current page).
+                                val siteCameraDecision = siteMicrophoneOrigin?.let { origin ->
+                                    if (currentTab.isIncognito) {
+                                        currentTab.privateWebsiteCameraPermissions[origin]
+                                    } else {
+                                        websiteCameraPermissions[origin]
+                                    }
+                                }
+                                val androidCameraGranted = ContextCompat.checkSelfPermission(
+                                    this@MainActivity,
+                                    android.Manifest.permission.CAMERA
+                                ) == PackageManager.PERMISSION_GRANTED
+                                val siteCameraStatusLabel = when {
+                                    siteMicrophoneOrigin == null -> "Blocked on insecure pages"
+                                    else -> when (websitePermissionStatus(
+                                        WebsitePermissionCapability.CAMERA,
+                                        siteCameraAllowed = siteCameraDecision,
+                                        androidPermissionGranted = androidCameraGranted
+                                    )) {
+                                        WebsitePermissionStatus.ASK -> "Ask on request"
+                                        WebsitePermissionStatus.ALLOWED -> "Allowed"
+                                        WebsitePermissionStatus.BLOCKED_FOR_SITE -> "Blocked for this site"
+                                        WebsitePermissionStatus.ANDROID_PERMISSION_REQUIRED ->
+                                            "Android permission required"
+                                        else -> "Blocked on insecure pages"
+                                    }
+                                }
+                                val siteLocationDecision = siteMicrophoneOrigin?.let { origin ->
+                                    if (currentTab.isIncognito) {
+                                        currentTab.privateWebsiteLocationPermissions[origin]
+                                    } else {
+                                        websiteLocationPermissions[origin]
+                                    }
+                                }
+                                val androidLocationGranted = ContextCompat.checkSelfPermission(
+                                    this@MainActivity,
+                                    android.Manifest.permission.ACCESS_FINE_LOCATION
+                                ) == PackageManager.PERMISSION_GRANTED
+                                val siteLocationStatusLabel = when {
+                                    siteMicrophoneOrigin == null -> "Blocked on insecure pages"
+                                    else -> when (websitePermissionStatus(
+                                        WebsitePermissionCapability.LOCATION,
+                                        siteLocationAllowed = siteLocationDecision,
+                                        androidPermissionGranted = androidLocationGranted
+                                    )) {
+                                        WebsitePermissionStatus.ASK -> "Ask on request"
+                                        WebsitePermissionStatus.ALLOWED -> "Allowed"
+                                        WebsitePermissionStatus.BLOCKED_FOR_SITE -> "Blocked for this site"
+                                        WebsitePermissionStatus.ANDROID_PERMISSION_REQUIRED ->
+                                            "Android permission required"
+                                        else -> "Blocked on insecure pages"
+                                    }
+                                }
                                 if (currentTab.engine == BrowserTabEngine.GECKOVIEW) {
                                     AlertDialog(
                                         onDismissRequest = { showSiteSettings = false },
@@ -8535,9 +9409,9 @@ class MainActivity : FragmentActivity() {
                                             ) {
                                                 Text("Website permissions")
                                                 Spacer(Modifier.height(6.dp))
-                                                Text("Camera: blocked by Click")
+                                                Text("Camera: not available in GeckoView tabs")
                                                 Text("Microphone: $siteMicrophoneStatusLabel")
-                                                Text("Location: blocked by Click")
+                                                Text("Location: not available in GeckoView tabs")
                                                 Text("Website notifications: blocked / unsupported")
                                                 Spacer(Modifier.height(8.dp))
                                                 Text(
@@ -8593,7 +9467,7 @@ class MainActivity : FragmentActivity() {
                                             ?: com.click.browser.engine.SiteSettings()
                                     val siteDesktop = DesktopLayoutPolicy.enabledForHost(
                                         siteHost, desktopOverrides, activeMode,
-                                        forceDesktopMode, liveFlags.desktopDefault
+                                        forceDesktopMode, effectiveDesktopDefault
                                     )
                                     val siteAdBlockCapability = ModeCapabilityRegistry.availability(
                                         feature = FeatureId.ADBLOCK,
@@ -8625,7 +9499,7 @@ class MainActivity : FragmentActivity() {
                                                 persistDesktopOverride(siteHost, desktop)
                                                 val nextWideLayout = DesktopLayoutPolicy.enabledForHost(
                                                     siteHost, liveDesktopOverrides, activeMode,
-                                                    forceDesktopMode, liveFlags.desktopDefault
+                                                    forceDesktopMode, effectiveDesktopDefault
                                                 )
                                                 applyWideLayoutToTab(currentTab, nextWideLayout)
                                             }
@@ -8683,6 +9557,104 @@ class MainActivity : FragmentActivity() {
                                         },
                                         onOpenMicrophoneAndroidSettings = {
                                             openWebsiteMicrophoneAndroidSettings()
+                                        },
+                                        cameraPermissionStatusLabel = siteCameraStatusLabel,
+                                        cameraPermissionExplanation = when {
+                                            siteMicrophoneOrigin == null ->
+                                                "Only secure (HTTPS) sites can request the camera."
+                                            currentTab.isIncognito ->
+                                                "This choice lasts only in this private tab. Android permission is still required after you allow the site."
+                                            else ->
+                                                "Click asks before a secure site can use the camera; Android permission is also required."
+                                        },
+                                        cameraDecision = siteCameraDecision,
+                                        cameraControlsEnabled = siteMicrophoneOrigin != null,
+                                        showCameraAndroidSettings =
+                                            siteCameraDecision == true && !androidCameraGranted,
+                                        onAllowCameraPermission = {
+                                            if (siteMicrophoneOrigin != null) {
+                                                if (currentTab.isIncognito) {
+                                                    currentTab.privateWebsiteCameraPermissions[siteMicrophoneOrigin] = true
+                                                } else {
+                                                    scope.launch {
+                                                        repository.setWebsiteCameraPermission(siteMicrophoneOrigin, true)
+                                                    }
+                                                }
+                                            }
+                                        },
+                                        onBlockCameraPermission = {
+                                            if (siteMicrophoneOrigin != null) {
+                                                if (currentTab.isIncognito) {
+                                                    currentTab.privateWebsiteCameraPermissions[siteMicrophoneOrigin] = false
+                                                } else {
+                                                    scope.launch {
+                                                        repository.setWebsiteCameraPermission(siteMicrophoneOrigin, false)
+                                                    }
+                                                }
+                                            }
+                                        },
+                                        onResetCameraPermission = {
+                                            if (siteMicrophoneOrigin != null) {
+                                                if (currentTab.isIncognito) {
+                                                    currentTab.privateWebsiteCameraPermissions.remove(siteMicrophoneOrigin)
+                                                } else {
+                                                    scope.launch {
+                                                        repository.clearWebsiteCameraPermission(siteMicrophoneOrigin)
+                                                    }
+                                                }
+                                            }
+                                        },
+                                        onOpenCameraAndroidSettings = {
+                                            openWebsiteMicrophoneAndroidSettings()
+                                        },
+                                        locationPermissionStatusLabel = siteLocationStatusLabel,
+                                        locationPermissionExplanation = when {
+                                            siteMicrophoneOrigin == null ->
+                                                "Only secure (HTTPS) sites can request your location."
+                                            currentTab.isIncognito ->
+                                                "This choice lasts only in this private tab. Android permission is still required after you allow the site."
+                                            else ->
+                                                "Click asks before a secure site can see your location; Android permission is also required."
+                                        },
+                                        locationDecision = siteLocationDecision,
+                                        locationControlsEnabled = siteMicrophoneOrigin != null,
+                                        showLocationAndroidSettings =
+                                            siteLocationDecision == true && !androidLocationGranted,
+                                        onAllowLocationPermission = {
+                                            if (siteMicrophoneOrigin != null) {
+                                                if (currentTab.isIncognito) {
+                                                    currentTab.privateWebsiteLocationPermissions[siteMicrophoneOrigin] = true
+                                                } else {
+                                                    scope.launch {
+                                                        repository.setWebsiteLocationPermission(siteMicrophoneOrigin, true)
+                                                    }
+                                                }
+                                            }
+                                        },
+                                        onBlockLocationPermission = {
+                                            if (siteMicrophoneOrigin != null) {
+                                                if (currentTab.isIncognito) {
+                                                    currentTab.privateWebsiteLocationPermissions[siteMicrophoneOrigin] = false
+                                                } else {
+                                                    scope.launch {
+                                                        repository.setWebsiteLocationPermission(siteMicrophoneOrigin, false)
+                                                    }
+                                                }
+                                            }
+                                        },
+                                        onResetLocationPermission = {
+                                            if (siteMicrophoneOrigin != null) {
+                                                if (currentTab.isIncognito) {
+                                                    currentTab.privateWebsiteLocationPermissions.remove(siteMicrophoneOrigin)
+                                                } else {
+                                                    scope.launch {
+                                                        repository.clearWebsiteLocationPermission(siteMicrophoneOrigin)
+                                                    }
+                                                }
+                                            }
+                                        },
+                                        onOpenLocationAndroidSettings = {
+                                            openWebsiteMicrophoneAndroidSettings()
                                         }
                                     )
                                 } else {
@@ -8697,9 +9669,9 @@ class MainActivity : FragmentActivity() {
                                         Text(
                                             "Only this secure site can receive microphone audio after you allow it here and Android grants Click's RECORD_AUDIO permission. " +
                                                 if (consent.privateTab) {
-                                                    "This choice lasts only in this private tab. Camera, location, and website notifications stay blocked."
+                                                    "This choice lasts only in this private tab. Website notifications stay blocked."
                                                 } else {
-                                                    "This choice is saved only in the current browser profile. Camera, location, and website notifications stay blocked."
+                                                    "This choice is saved only in the current browser profile. Website notifications stay blocked."
                                                 }
                                         )
                                     },
@@ -8720,7 +9692,7 @@ class MainActivity : FragmentActivity() {
                                     title = { Text("Android microphone permission is off") },
                                     text = {
                                         Text(
-                                            "The microphone choice for ${recovery.origin} is saved in " +
+                                            "Microphone is allowed for ${recovery.origin} in " +
                                                 if (recovery.privateTab) {
                                                     "this private tab, but Android denied Click's RECORD_AUDIO permission. Enable microphone access in Android settings, then return to the site and try again."
                                                 } else {
@@ -8736,6 +9708,135 @@ class MainActivity : FragmentActivity() {
                                     },
                                     dismissButton = {
                                         TextButton(onClick = { websiteMicrophoneRecovery = null }) {
+                                            Text("Not now")
+                                        }
+                                    }
+                                )
+                            }
+                            websiteCameraConsent?.let { consent ->
+                                AlertDialog(
+                                    onDismissRequest = consent.onDismiss,
+                                    title = { Text("Allow camera for ${consent.host}?") },
+                                    text = {
+                                        Text(
+                                            "Only this secure site can receive camera video after you allow it here and Android grants Click's CAMERA permission. " +
+                                                if (consent.privateTab) {
+                                                    "This choice lasts only in this private tab. Website notifications stay blocked."
+                                                } else {
+                                                    "This choice is saved only in the current browser profile. Website notifications stay blocked."
+                                                }
+                                        )
+                                    },
+                                    confirmButton = {
+                                        TextButton(onClick = consent.onAllow) { Text("Allow camera") }
+                                    },
+                                    dismissButton = {
+                                        Row {
+                                            TextButton(onClick = consent.onBlock) { Text("Block site") }
+                                            TextButton(onClick = consent.onDismiss) { Text("Not now") }
+                                        }
+                                    }
+                                )
+                            }
+                            websiteCameraRecovery?.let { recovery ->
+                                AlertDialog(
+                                    onDismissRequest = { websiteCameraRecovery = null },
+                                    title = { Text("Android camera permission is off") },
+                                    text = {
+                                        Text(
+                                            "Camera is allowed for ${recovery.origin} in " +
+                                                if (recovery.privateTab) {
+                                                    "this private tab, but Android denied Click's CAMERA permission. Enable camera access in Android settings, then return to the site and try again."
+                                                } else {
+                                                    "this browser profile, but Android denied Click's CAMERA permission. Enable camera access in Android settings, then return to the site and try again."
+                                                }
+                                        )
+                                    },
+                                    confirmButton = {
+                                        TextButton(onClick = {
+                                            websiteCameraRecovery = null
+                                            openWebsiteMicrophoneAndroidSettings()
+                                        }) { Text("Open Android settings") }
+                                    },
+                                    dismissButton = {
+                                        TextButton(onClick = { websiteCameraRecovery = null }) {
+                                            Text("Not now")
+                                        }
+                                    }
+                                )
+                            }
+                            websiteMediaConsent?.let { consent ->
+                                AlertDialog(
+                                    onDismissRequest = consent.onDismiss,
+                                    title = { Text("Allow camera and microphone for ${consent.host}?") },
+                                    text = {
+                                        Text(
+                                            "Only this secure site can receive camera video and microphone audio after you allow it here and Android grants Click's CAMERA and RECORD_AUDIO permissions. " +
+                                                if (consent.privateTab) {
+                                                    "This choice lasts only in this private tab. Website notifications stay blocked."
+                                                } else {
+                                                    "This choice is saved only in the current browser profile. Website notifications stay blocked."
+                                                }
+                                        )
+                                    },
+                                    confirmButton = {
+                                        TextButton(onClick = consent.onAllow) { Text("Allow both") }
+                                    },
+                                    dismissButton = {
+                                        Row {
+                                            TextButton(onClick = consent.onBlock) { Text("Block site") }
+                                            TextButton(onClick = consent.onDismiss) { Text("Not now") }
+                                        }
+                                    }
+                                )
+                            }
+                            websiteLocationConsent?.let { consent ->
+                                AlertDialog(
+                                    onDismissRequest = consent.onDismiss,
+                                    title = { Text("Allow location for ${consent.host}?") },
+                                    text = {
+                                        Text(
+                                            "Only this secure site can receive your device location after you allow it here and Android grants Click's location permission. Click never sends substitute coordinates. " +
+                                                if (consent.privateTab) {
+                                                    "This choice lasts only in this private tab."
+                                                } else {
+                                                    "This choice is saved only in the current browser profile."
+                                                }
+                                        )
+                                    },
+                                    confirmButton = {
+                                        TextButton(onClick = consent.onAllow) { Text("Allow location") }
+                                    },
+                                    dismissButton = {
+                                        Row {
+                                            TextButton(onClick = consent.onBlock) { Text("Block site") }
+                                            TextButton(onClick = consent.onDismiss) { Text("Not now") }
+                                        }
+                                    }
+                                )
+                            }
+                            websiteLocationRecovery?.let { recovery ->
+                                AlertDialog(
+                                    onDismissRequest = { websiteLocationRecovery = null },
+                                    title = { Text("Android location permission is off") },
+                                    text = {
+                                        Text(
+                                            "Location is allowed for ${recovery.origin} in " +
+                                                if (recovery.privateTab) {
+                                                    "this private tab, but Android denied Click's location permission. Enable location access in Android settings, then return to the site and try again."
+                                                } else {
+                                                    "this browser profile, but Android denied Click's location permission. Enable location access in Android settings, then return to the site and try again."
+                                                }
+                                        )
+                                    },
+                                    confirmButton = {
+                                        TextButton(onClick = {
+                                            websiteLocationRecovery = null
+                                            openWebsiteMicrophoneAndroidSettings()
+                                        }) { Text("Open Android settings") }
+                                    },
+                                    dismissButton = {
+                                        TextButton(onClick = { websiteLocationRecovery = null }) {
                                             Text("Not now")
                                         }
                                     }
@@ -9516,7 +10617,7 @@ class MainActivity : FragmentActivity() {
                                 } catch (_: Exception) { "" }
                                 val menuDesktopForSite = DesktopLayoutPolicy.enabledForHost(
                                     menuPageHost, desktopOverrides, activeMode,
-                                    forceDesktopMode, liveFlags.desktopDefault
+                                    forceDesktopMode, effectiveDesktopDefault
                                 )
                                 BrowserMenuSheet(
                                     theme = theme,
@@ -9629,7 +10730,7 @@ class MainActivity : FragmentActivity() {
                                                 persistDesktopOverride(menuPageHost, !menuDesktopForSite)
                                                 val nextWideLayout = DesktopLayoutPolicy.enabledForHost(
                                                     menuPageHost, liveDesktopOverrides, activeMode,
-                                                    forceDesktopMode, liveFlags.desktopDefault
+                                                    forceDesktopMode, effectiveDesktopDefault
                                                 )
                                                 applyWideLayoutToTab(currentTab, nextWideLayout)
                                                 Toast.makeText(
@@ -9931,7 +11032,12 @@ class MainActivity : FragmentActivity() {
                 this, com.click.browser.engine.ClickCatLogCode.MODE_CHANGED_WITHOUT_RESTART,
                 savedMode, mode
             )
-            webView?.let { modeManager.applySettings(it, mode, forceDesktop) }
+            webView?.let {
+                modeManager.applySettings(
+                    it, mode, forceDesktop,
+                    domStorageEnabled = liveOnDeviceSiteDataEnabled
+                )
+            }
             android.widget.Toast.makeText(
                 this, "${mode.display().title} activated", android.widget.Toast.LENGTH_SHORT
             ).show()

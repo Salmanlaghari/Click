@@ -8,6 +8,7 @@ import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.stringPreferencesKey
 import com.click.browser.engine.BrowserMode
 import com.click.browser.engine.SiteSettings
+import com.click.browser.engine.WebsitePermissionGlobalDefault
 import com.click.browser.engine.canonicalWebsiteMicrophoneOrigin
 import com.click.browser.engine.profileDataStore
 import com.click.browser.engine.profileDataStoreFor
@@ -42,6 +43,18 @@ class BrowserRepository(private val context: Context) {
         private val SITE_SETTINGS_KEY = stringPreferencesKey("site_settings")
         private val WEBSITE_MICROPHONE_PERMISSIONS_KEY =
             stringPreferencesKey("website_microphone_permissions")
+        private val WEBSITE_CAMERA_PERMISSIONS_KEY =
+            stringPreferencesKey("website_camera_permissions")
+        private val WEBSITE_LOCATION_PERMISSIONS_KEY =
+            stringPreferencesKey("website_location_permissions")
+        // Profile-wide defaults ("allow" | "ask" | "block") applied when a
+        // site has no saved choice; see WebsitePermissionGlobalDefault.
+        private val WEBSITE_CAMERA_DEFAULT_KEY =
+            stringPreferencesKey("website_camera_default")
+        private val WEBSITE_MICROPHONE_DEFAULT_KEY =
+            stringPreferencesKey("website_microphone_default")
+        private val WEBSITE_LOCATION_DEFAULT_KEY =
+            stringPreferencesKey("website_location_default")
         private const val MAX_CUSTOM_DOWNLOAD_RECORDS = 100
     }
 
@@ -722,6 +735,168 @@ class BrowserRepository(private val context: Context) {
         }
     }
 
+    // --- Website camera / location choices + permission defaults ---
+    //
+    // Exact-origin stores mirroring the microphone store above: same JSON
+    // shape (canonical origin -> allowed), same canonicalization helpers
+    // (they are origin-generic), same per-profile isolation.
+
+    /** Exact-origin camera choices live in this profile's DataStore, never in private tabs. */
+    val websiteCameraPermissionsFlow: Flow<Map<String, Boolean>> =
+        context.profileDataStore.data.map { preferences ->
+            websiteMicrophonePermissionsFromJson(preferences[WEBSITE_CAMERA_PERMISSIONS_KEY])
+        }
+
+    suspend fun setWebsiteCameraPermission(origin: String, allowed: Boolean) {
+        val canonicalOrigin = canonicalWebsiteMicrophoneOrigin(origin) ?: run {
+            Log.w(TAG, "Ignoring invalid website camera origin in set request")
+            return
+        }
+        context.profileDataStore.edit { preferences ->
+            val permissions = websiteMicrophonePermissionsFromJson(
+                preferences[WEBSITE_CAMERA_PERMISSIONS_KEY]
+            ).toMutableMap()
+            permissions[canonicalOrigin] = allowed
+            preferences[WEBSITE_CAMERA_PERMISSIONS_KEY] =
+                websiteMicrophonePermissionsToJson(permissions)
+        }
+    }
+
+    suspend fun clearWebsiteCameraPermission(origin: String) {
+        val canonicalOrigin = canonicalWebsiteMicrophoneOrigin(origin) ?: run {
+            Log.w(TAG, "Ignoring invalid website camera origin in clear request")
+            return
+        }
+        context.profileDataStore.edit { preferences ->
+            val permissions = websiteMicrophonePermissionsFromJson(
+                preferences[WEBSITE_CAMERA_PERMISSIONS_KEY]
+            ).toMutableMap()
+            permissions.remove(canonicalOrigin)
+            preferences[WEBSITE_CAMERA_PERMISSIONS_KEY] =
+                websiteMicrophonePermissionsToJson(permissions)
+        }
+    }
+
+    suspend fun clearWebsiteCameraPermissionsForHost(host: String) {
+        val normalizedHost = websiteMicrophoneHostKey(host) ?: run {
+            Log.w(TAG, "Ignoring invalid website camera host in clear request")
+            return
+        }
+        clearWebsitePermissionsFromStore(
+            context.profileDataStore, WEBSITE_CAMERA_PERMISSIONS_KEY, normalizedHost
+        )
+    }
+
+    suspend fun clearAllWebsiteCameraPermissions() {
+        context.profileDataStore.edit { preferences ->
+            preferences[WEBSITE_CAMERA_PERMISSIONS_KEY] = "{}"
+        }
+    }
+
+    /** Exact-origin location choices live in this profile's DataStore, never in private tabs. */
+    val websiteLocationPermissionsFlow: Flow<Map<String, Boolean>> =
+        context.profileDataStore.data.map { preferences ->
+            websiteMicrophonePermissionsFromJson(preferences[WEBSITE_LOCATION_PERMISSIONS_KEY])
+        }
+
+    suspend fun setWebsiteLocationPermission(origin: String, allowed: Boolean) {
+        val canonicalOrigin = canonicalWebsiteMicrophoneOrigin(origin) ?: run {
+            Log.w(TAG, "Ignoring invalid website location origin in set request")
+            return
+        }
+        context.profileDataStore.edit { preferences ->
+            val permissions = websiteMicrophonePermissionsFromJson(
+                preferences[WEBSITE_LOCATION_PERMISSIONS_KEY]
+            ).toMutableMap()
+            permissions[canonicalOrigin] = allowed
+            preferences[WEBSITE_LOCATION_PERMISSIONS_KEY] =
+                websiteMicrophonePermissionsToJson(permissions)
+        }
+    }
+
+    suspend fun clearWebsiteLocationPermission(origin: String) {
+        val canonicalOrigin = canonicalWebsiteMicrophoneOrigin(origin) ?: run {
+            Log.w(TAG, "Ignoring invalid website location origin in clear request")
+            return
+        }
+        context.profileDataStore.edit { preferences ->
+            val permissions = websiteMicrophonePermissionsFromJson(
+                preferences[WEBSITE_LOCATION_PERMISSIONS_KEY]
+            ).toMutableMap()
+            permissions.remove(canonicalOrigin)
+            preferences[WEBSITE_LOCATION_PERMISSIONS_KEY] =
+                websiteMicrophonePermissionsToJson(permissions)
+        }
+    }
+
+    suspend fun clearWebsiteLocationPermissionsForHost(host: String) {
+        val normalizedHost = websiteMicrophoneHostKey(host) ?: run {
+            Log.w(TAG, "Ignoring invalid website location host in clear request")
+            return
+        }
+        clearWebsitePermissionsFromStore(
+            context.profileDataStore, WEBSITE_LOCATION_PERMISSIONS_KEY, normalizedHost
+        )
+    }
+
+    suspend fun clearAllWebsiteLocationPermissions() {
+        context.profileDataStore.edit { preferences ->
+            preferences[WEBSITE_LOCATION_PERMISSIONS_KEY] = "{}"
+        }
+    }
+
+    /** Shared host cleanup for the camera / location stores (same JSON shape as microphone). */
+    private suspend fun clearWebsitePermissionsFromStore(
+        store: DataStore<Preferences>,
+        key: Preferences.Key<String>,
+        normalizedHost: String
+    ) {
+        store.edit { preferences ->
+            val permissions = websiteMicrophonePermissionsFromJson(
+                preferences[key]
+            ).toMutableMap()
+            permissions.keys
+                .filter { websiteMicrophoneOriginHost(it) == normalizedHost }
+                .forEach(permissions::remove)
+            preferences[key] = websiteMicrophonePermissionsToJson(permissions)
+        }
+    }
+
+    // --- Permission defaults (per profile): used when a site has no saved choice ---
+
+    val websiteCameraDefaultFlow: Flow<WebsitePermissionGlobalDefault> =
+        context.profileDataStore.data.map { preferences ->
+            WebsitePermissionGlobalDefault.fromStoredValue(preferences[WEBSITE_CAMERA_DEFAULT_KEY])
+        }
+
+    suspend fun setWebsiteCameraDefault(value: WebsitePermissionGlobalDefault) {
+        context.profileDataStore.edit { preferences ->
+            preferences[WEBSITE_CAMERA_DEFAULT_KEY] = value.toStoredValue()
+        }
+    }
+
+    val websiteMicrophoneDefaultFlow: Flow<WebsitePermissionGlobalDefault> =
+        context.profileDataStore.data.map { preferences ->
+            WebsitePermissionGlobalDefault.fromStoredValue(preferences[WEBSITE_MICROPHONE_DEFAULT_KEY])
+        }
+
+    suspend fun setWebsiteMicrophoneDefault(value: WebsitePermissionGlobalDefault) {
+        context.profileDataStore.edit { preferences ->
+            preferences[WEBSITE_MICROPHONE_DEFAULT_KEY] = value.toStoredValue()
+        }
+    }
+
+    val websiteLocationDefaultFlow: Flow<WebsitePermissionGlobalDefault> =
+        context.profileDataStore.data.map { preferences ->
+            WebsitePermissionGlobalDefault.fromStoredValue(preferences[WEBSITE_LOCATION_DEFAULT_KEY])
+        }
+
+    suspend fun setWebsiteLocationDefault(value: WebsitePermissionGlobalDefault) {
+        context.profileDataStore.edit { preferences ->
+            preferences[WEBSITE_LOCATION_DEFAULT_KEY] = value.toStoredValue()
+        }
+    }
+
     suspend fun setSiteSettings(host: String, settings: SiteSettings) {
         context.profileDataStore.edit { preferences ->
             val jsonStr = preferences[SITE_SETTINGS_KEY] ?: "{}"
@@ -752,6 +927,30 @@ class BrowserRepository(private val context: Context) {
             }
             preferences[WEBSITE_MICROPHONE_PERMISSIONS_KEY] =
                 websiteMicrophonePermissionsToJson(microphonePermissions)
+
+            // A full site reset also drops the site's camera and location
+            // choices, mirroring the microphone handling above.
+            val cameraPermissions = websiteMicrophonePermissionsFromJson(
+                preferences[WEBSITE_CAMERA_PERMISSIONS_KEY]
+            ).toMutableMap()
+            if (normalizedHost != null) {
+                cameraPermissions.keys
+                    .filter { websiteMicrophoneOriginHost(it) == normalizedHost }
+                    .forEach(cameraPermissions::remove)
+            }
+            preferences[WEBSITE_CAMERA_PERMISSIONS_KEY] =
+                websiteMicrophonePermissionsToJson(cameraPermissions)
+
+            val locationPermissions = websiteMicrophonePermissionsFromJson(
+                preferences[WEBSITE_LOCATION_PERMISSIONS_KEY]
+            ).toMutableMap()
+            if (normalizedHost != null) {
+                locationPermissions.keys
+                    .filter { websiteMicrophoneOriginHost(it) == normalizedHost }
+                    .forEach(locationPermissions::remove)
+            }
+            preferences[WEBSITE_LOCATION_PERMISSIONS_KEY] =
+                websiteMicrophonePermissionsToJson(locationPermissions)
         }
     }
 

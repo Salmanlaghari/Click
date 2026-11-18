@@ -167,6 +167,22 @@ object AppSettings {
     // In-app Home feed is separate from background alerts and stays off until enabled.
     val HOME_NEWS_FEED_ENABLED = booleanPreferencesKey("home_news_feed_enabled")
 
+    // ---- Chrome-parity Site settings (Nov 2026) ----
+    /** Global "Desktop site" default from Site settings → Desktop site.
+     *  Consulted by DesktopLayoutPolicy call sites only when a host has no
+     *  per-site override; the click://flags desktopDefault keeps working and
+     *  either one turning it on enables the wide layout. Default OFF. */
+    val DESKTOP_SITE_DEFAULT = booleanPreferencesKey("desktop_site_default")
+    /** On-device site data master switch (Site settings → On-device site
+     *  data): applied as WebSettings.domStorageEnabled when a WebView is
+     *  configured. Default ON — turning it off stops sites saving data
+     *  (local storage / IndexedDB) and may sign sites out. */
+    val ON_DEVICE_SITE_DATA = booleanPreferencesKey("on_device_site_data")
+    /** Automatically remove permissions (Site settings hub): when ON, saved
+     *  camera / microphone / location choices for sites with no visit in the
+     *  last 30 days are revoked once per app launch. Default OFF. */
+    val AUTO_REMOVE_PERMISSIONS = booleanPreferencesKey("auto_remove_permissions")
+
     // ---- Background news notifications (WhatsApp-style alerts) ----
     // Opt-in, default OFF (Play-policy friendly): the user enables them in
     // Settings → General → News Notifications and picks topics. A

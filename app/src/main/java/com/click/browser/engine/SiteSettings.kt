@@ -6,12 +6,11 @@ import org.json.JSONObject
  * Per-site overrides for content settings that Click currently enforces.
  * Every field is nullable — null means "use the global setting".
  *
- * Website microphone consent is stored separately as an exact-origin profile
- * permission. Camera and location preferences are intentionally not
- * represented: Click blocks those website capabilities outright (no Android
- * CAMERA / location permission is requested by the browser). Website
- * notifications and background sync have no WebView API to enforce per site,
- * and neither does the clipboard, so those are not represented either.
+ * Website microphone, camera, and location consent are stored separately as
+ * exact-origin profile permissions in BrowserRepository (mirroring the
+ * microphone store), not in this content-override map. Website notifications
+ * and background sync have no WebView API to enforce per site, and neither
+ * does the clipboard, so those are not represented either.
  * Legacy JSON keys are ignored when read.
  *
  * Nov 2026 additions, each wired to a real effect:

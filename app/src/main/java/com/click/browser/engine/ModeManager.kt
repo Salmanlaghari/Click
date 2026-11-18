@@ -41,10 +41,15 @@ class ModeManager(private val context: Context) {
      * All modes use Android System WebView's actual User-Agent. Wide layout
      * changes only standard viewport settings, not the requested site identity.
      */
-    fun applySettings(webView: WebView, mode: BrowserMode, forceDesktop: Boolean = false) {
+    fun applySettings(
+        webView: WebView,
+        mode: BrowserMode,
+        forceDesktop: Boolean = false,
+        domStorageEnabled: Boolean = true
+    ) {
         val settings = webView.settings
         settings.javaScriptEnabled = true
-        settings.domStorageEnabled = true
+        settings.domStorageEnabled = domStorageEnabled
         settings.mediaPlaybackRequiresUserGesture = false
         settings.allowFileAccess = true
         settings.allowContentAccess = true
@@ -61,7 +66,7 @@ class ModeManager(private val context: Context) {
             settings.cacheMode = WebSettings.LOAD_DEFAULT
             settings.loadsImagesAutomatically = true
             settings.blockNetworkImage = false
-            settings.domStorageEnabled = true
+            settings.domStorageEnabled = domStorageEnabled
         }
     }
 
