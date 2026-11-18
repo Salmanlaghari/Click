@@ -1050,8 +1050,7 @@ private fun UnsupportedInfoScreen(
             Spacer(Modifier.height(16.dp))
             Text(
                 "Websites can't use $phrase in Click. The browser engine doesn't provide " +
-                    "this capability, so no site can request it — there is nothing to allow. " +
-                    "This is stricter than Chrome's 'Ask first'.",
+                    "this capability, so no site can request it — there is nothing to allow.",
                 fontSize = 14.sp,
                 color = theme.onSurface.copy(alpha = 0.8f),
                 lineHeight = 20.sp
