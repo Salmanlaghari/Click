@@ -19,12 +19,14 @@ import org.junit.Test
 class HomeContentSectionOrderTest {
 
     @Test
-    fun simpleIsJustShieldSpeedDialAndContinue() {
-        // Simple mockup: address bar (header) -> shield card -> big speed
-        // dial -> Continue browsing. Nothing else on the dashboard.
+    fun simpleIsShieldWeatherSpeedDialAndContinue() {
+        // Simple mockup: address bar (header) -> shield card -> weather ->
+        // big speed dial -> Continue browsing. Nothing else on the dashboard.
+        // (Weather added 2026-11-21 — Prince: "Weather show Nahin".)
         assertEquals(
             listOf(
                 HomeContentSection.PRIVACY_STATUS,
+                HomeContentSection.WEATHER,
                 HomeContentSection.QUICK_SITES,
                 HomeContentSection.CONTINUE_BROWSING
             ),
@@ -40,6 +42,12 @@ class HomeContentSectionOrderTest {
             sections.indexOf(HomeContentSection.OPTIONAL_NEWS_FEED) <
                 sections.indexOf(HomeContentSection.CONTINUE_BROWSING)
         )
+        // Weather sits right with the news feed, above Continue browsing.
+        assertTrue(sections.contains(HomeContentSection.WEATHER))
+        assertTrue(
+            sections.indexOf(HomeContentSection.WEATHER) <
+                sections.indexOf(HomeContentSection.OPTIONAL_NEWS_FEED)
+        )
         assertFalse(sections.contains(HomeContentSection.DEVELOPER_STATUS))
         assertFalse(sections.contains(HomeContentSection.DOWNLOADS))
     }
@@ -49,6 +57,7 @@ class HomeContentSectionOrderTest {
         assertEquals(
             listOf(
                 HomeContentSection.NEWS_WIDGET,
+                HomeContentSection.WEATHER,
                 HomeContentSection.DOWNLOADS,
                 HomeContentSection.CONTINUE_BROWSING,
                 HomeContentSection.QUICK_SITES

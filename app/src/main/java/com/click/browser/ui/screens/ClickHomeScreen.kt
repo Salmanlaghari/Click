@@ -164,11 +164,11 @@ import java.util.Calendar
  * Dashboard sections, composed per mode. Since the 2026-11-12 redesign each
  * mode has its OWN dashboard (Prince's approved mockups), not one shared list
  * with a card swapped in the middle:
- * - Simple: shield, speed dial, continue — nothing else.
- * - Advance: the warm premium stack with the news feed promoted above
- *   Continue browsing.
- * - Power: desktop widgets — compact news, live downloads, recently closed,
- *   speed dial.
+ * - Simple: shield, weather, speed dial, continue — nothing else.
+ * - Advance: the warm premium stack with weather and the news feed promoted
+ *   above Continue browsing.
+ * - Power: desktop widgets — compact news, weather, live downloads, recently
+ *   closed, speed dial.
  * - Developer: a dark control panel — status strip, quick tools, recent
  *   errors, shield.
  */
@@ -177,6 +177,7 @@ internal enum class HomeContentSection {
     PRIVACY_STATUS,
     QUICK_SITES,
     NEWS_WIDGET,
+    WEATHER,
     DOWNLOADS,
     CONTINUE_BROWSING,
     MODE_FOCUS,
@@ -195,12 +196,14 @@ internal fun homeContentSections(activeMode: BrowserMode): List<HomeContentSecti
     when (activeMode) {
         BrowserMode.SIMPLE -> listOf(
             HomeContentSection.PRIVACY_STATUS,
+            HomeContentSection.WEATHER,
             HomeContentSection.QUICK_SITES,
             HomeContentSection.CONTINUE_BROWSING
         )
         BrowserMode.ADVANCED -> listOf(
             HomeContentSection.PRIVACY_STATUS,
             HomeContentSection.QUICK_SITES,
+            HomeContentSection.WEATHER,
             HomeContentSection.OPTIONAL_NEWS_FEED,
             HomeContentSection.CONTINUE_BROWSING,
             HomeContentSection.MODE_FOCUS,
@@ -209,6 +212,7 @@ internal fun homeContentSections(activeMode: BrowserMode): List<HomeContentSecti
         )
         BrowserMode.HACK -> listOf(
             HomeContentSection.NEWS_WIDGET,
+            HomeContentSection.WEATHER,
             HomeContentSection.DOWNLOADS,
             HomeContentSection.CONTINUE_BROWSING,
             HomeContentSection.QUICK_SITES
@@ -404,6 +408,11 @@ fun ClickHomeScreen(
                     cardBg = cardBg,
                     cardBorder = cardBorder,
                     onNavigate = onNavigate
+                )
+                HomeContentSection.WEATHER -> WeatherCard(
+                    theme = theme,
+                    cardBg = cardBg,
+                    cardBorder = cardBorder
                 )
                 HomeContentSection.DOWNLOADS -> PowerDownloadsWidget(
                     theme = theme,
