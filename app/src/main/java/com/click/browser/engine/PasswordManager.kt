@@ -124,12 +124,15 @@ object PasswordManager {
     /**
      * Cache-only variant of [getAllForHost] for callers that must not block
      * (the GeckoView storage delegate runs on the UI thread): null while
-     * the vault has not been loaded this process, otherwise the exact-host
-     * matches — empty when the password manager is known to be disabled.
+     * the vault has not been loaded this process OR while the enabled state
+     * is still unknown (the caller then falls back to the async path, which
+     * checks the flag on disk first). Otherwise the exact-host matches —
+     * empty when the password manager is disabled.
      */
     fun cachedLoginsForHost(host: String): List<SavedPassword>? {
         val all = cache ?: return null
-        if (cachedEnabled == false) return emptyList()
+        val enabled = cachedEnabled ?: return null
+        if (!enabled) return emptyList()
         return savedPasswordsForExactHost(all, host)
     }
 

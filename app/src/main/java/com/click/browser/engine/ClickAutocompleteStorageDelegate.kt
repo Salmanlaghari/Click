@@ -54,7 +54,9 @@ internal class ClickAutocompleteStorageDelegate(context: Context) : Autocomplete
                     emptyList()
                 }
             } catch (error: Exception) {
-                Log.w(TAG, "Login fetch failed for domain $domain", error)
+                // The requested domain is deliberately not logged: it names
+                // a site the user has a saved login for.
+                Log.w(TAG, "Login fetch failed", error)
                 emptyList()
             }
             result.complete(entries.toLoginEntries())

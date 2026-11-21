@@ -1,6 +1,7 @@
 package com.click.browser.engine
 
 import android.content.Context
+import android.util.Log
 import androidx.datastore.preferences.core.Preferences
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -36,6 +37,8 @@ data class ProtectionState(
  * 1.8.5.)
  */
 object ProtectionRuntime {
+
+    private const val TAG = "ProtectionRuntime"
 
     @Volatile
     var current: ProtectionState = ProtectionState()
@@ -108,7 +111,10 @@ object ProtectionRuntime {
             }
             val effective = current
             callbacks.forEach { callback ->
+                // One consumer's failure must not strand the others, but it
+                // is logged rather than silently swallowed.
                 runCatching { callback(effective) }
+                    .onFailure { Log.w(TAG, "Persisted-load callback failed", it) }
             }
         }
     }
