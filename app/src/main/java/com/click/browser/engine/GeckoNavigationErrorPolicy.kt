@@ -27,7 +27,14 @@ internal data class GeckoNavigationCompletion(
     val url: String,
     val outcome: GeckoNavigationStopOutcome,
     val wasCancelled: Boolean,
-    val isCurrent: Boolean
+    val isCurrent: Boolean,
+    /**
+     * Set when this completion's failure was suppressed because the load was
+     * a session restore or was interrupted by the app going to background and
+     * the error is transient: the session should silently reload [autoRetryUrl]
+     * once instead of surfacing the recovery card. Null in every other case.
+     */
+    val autoRetryUrl: String? = null
 )
 
 private data class PendingGeckoNavigation(
@@ -35,7 +42,18 @@ private data class PendingGeckoNavigation(
     var url: String,
     var retryUrl: String?,
     var loadErrorObserved: Boolean = false,
-    var loadErrorLabel: String? = null
+    var loadErrorLabel: String? = null,
+    var loadErrorCode: Int? = null,
+    /** The host app was backgrounded while this load was in flight (or it
+     *  began while backgrounded): its network stack was suspended/frozen, so
+     *  a transient failure says nothing about the site itself. */
+    var exposedToBackground: Boolean = false,
+    /** This load re-displays an already-open page from saved session state
+     *  (app-start restore or renderer-recovery restore), not a navigation
+     *  the user just asked for. */
+    var isRestoreLoad: Boolean = false,
+    /** This load is itself an automatic retry of a suppressed failure. */
+    var isAutoRetryLoad: Boolean = false
 )
 
 private object GeckoNavigationGenerationIds {
@@ -61,18 +79,57 @@ internal class GeckoNavigationTracker {
     private var latestGeneration = 0L
     private var active: PendingGeckoNavigation? = null
     private var cancelledGeneration: Long? = null
+    private var hostResumed = true
+    private var restoreNextLoad = false
+    private var autoRetryNextLoad = false
+    private var autoRetriesUsed = 0
 
     fun begin(url: String, retryUrl: String?): GeckoNavigationStart = synchronized(lock) {
         val generation = GeckoNavigationGenerationIds.next()
         latestGeneration = generation
+        val isRestore = restoreNextLoad
+        val isAutoRetry = autoRetryNextLoad
+        restoreNextLoad = false
+        autoRetryNextLoad = false
         val attempt = PendingGeckoNavigation(
             generation = generation,
             url = url,
-            retryUrl = retryUrl?.takeIf { it == url }
+            retryUrl = retryUrl?.takeIf { it == url },
+            exposedToBackground = !hostResumed,
+            isRestoreLoad = isRestore,
+            isAutoRetryLoad = isAutoRetry
         )
+        // A plain fresh navigation (user- or page-initiated, in the
+        // foreground, not a restore and not an automatic retry) starts a new
+        // failure chain: any earlier restore/resume chain is over.
+        if (!isRestore && !isAutoRetry && hostResumed) autoRetriesUsed = 0
         pending.addLast(attempt)
         active = attempt
         GeckoNavigationStart(attempt.generation, attempt.url)
+    }
+
+    /**
+     * Host lifecycle: while the app is backgrounded Android suspends/freezes
+     * the process and its network, so a load in flight across that boundary
+     * can fail transiently through no fault of the site. Loads pending at
+     * backgrounding — and any begun before the host resumes — are marked
+     * background-exposed; [complete] treats their transient failures as
+     * interruptions to retry silently, never as page failures.
+     */
+    fun setHostResumed(resumed: Boolean) = synchronized(lock) {
+        hostResumed = resumed
+        if (!resumed) pending.forEach { it.exposedToBackground = true }
+    }
+
+    /** The next begun load re-displays an already-open page from saved state. */
+    fun markNextLoadAsRestore() = synchronized(lock) {
+        restoreNextLoad = true
+    }
+
+    /** The next begun load is the session's automatic retry of a suppressed
+     *  restore/background failure; it stays eligible for one more retry. */
+    fun markNextLoadAsAutoRetry() = synchronized(lock) {
+        autoRetryNextLoad = true
     }
 
     fun updateCurrentUrl(url: String) = synchronized(lock) {
@@ -94,12 +151,17 @@ internal class GeckoNavigationTracker {
      * redirects via [updateCurrentUrl], so a genuine main-frame error still
      * matches its attempt's current URL exactly.
      */
-    fun markLoadError(uri: String?, errorLabel: String? = null): Boolean = synchronized(lock) {
+    fun markLoadError(
+        uri: String?,
+        errorLabel: String? = null,
+        errorCode: Int? = null
+    ): Boolean = synchronized(lock) {
         if (uri == null) return@synchronized false
         val attempt = pending.toList().lastOrNull { it.url == uri }
             ?: return@synchronized false
         attempt.loadErrorObserved = true
         attempt.loadErrorLabel = errorLabel
+        attempt.loadErrorCode = errorCode
         true
     }
 
@@ -135,6 +197,7 @@ internal class GeckoNavigationTracker {
         // subframe failure), and letting one veto a successful stop turned
         // loaded pages into the "Page couldn't load" card over blank content.
         if (success) {
+            autoRetriesUsed = 0
             return@synchronized GeckoNavigationCompletion(
                 generation = attempt.generation,
                 url = attempt.url,
@@ -154,7 +217,7 @@ internal class GeckoNavigationTracker {
         // recovery card. An interrupted stop commits nothing and surfaces
         // nothing; the newer navigation (or the still-displayed page) owns
         // the UI from here.
-        val outcome = if (!attempt.loadErrorObserved && !wasCancelled) {
+        val rawOutcome = if (!attempt.loadErrorObserved && !wasCancelled) {
             GeckoNavigationStopOutcome(commitsContent = false, failure = null)
         } else {
             geckoNavigationStopOutcome(
@@ -165,10 +228,41 @@ internal class GeckoNavigationTracker {
                 errorLabel = attempt.loadErrorLabel
             )
         }
+        // A restore load (app-start or renderer-recovery) or a load that was
+        // in flight while the app sat in the background is not a navigation
+        // the user just made: at the moment it runs, the network, DNS or the
+        // VPN path is often still coming back, so a transient failure (DNS,
+        // timeout, interrupt…) proves nothing about the site. Showing the
+        // sticky "Page couldn't load" card for it — and never retrying — was
+        // the resume bug: the page was fine before backgrounding, and a
+        // reload seconds later succeeds. Suppress the failure and let the
+        // session silently reload instead, a bounded number of times; only
+        // when the retries are exhausted (or the error is not transient)
+        // does the genuine failure reach the card, reason intact.
+        val failure = rawOutcome.failure
+        if (failure != null &&
+            !wasCancelled &&
+            attempt.loadErrorObserved &&
+            (attempt.exposedToBackground || attempt.isRestoreLoad || attempt.isAutoRetryLoad) &&
+            attempt.generation == latestGeneration &&
+            isTransientGeckoLoadError(attempt.loadErrorCode) &&
+            autoRetriesUsed < GECKO_RESTORE_AUTO_RETRY_MAX
+        ) {
+            autoRetriesUsed += 1
+            return@synchronized GeckoNavigationCompletion(
+                generation = attempt.generation,
+                url = attempt.url,
+                outcome = GeckoNavigationStopOutcome(commitsContent = false, failure = null),
+                wasCancelled = false,
+                isCurrent = true,
+                autoRetryUrl = attempt.url
+            )
+        }
+        if (failure != null) autoRetriesUsed = 0
         GeckoNavigationCompletion(
             generation = attempt.generation,
             url = attempt.url,
-            outcome = outcome,
+            outcome = rawOutcome,
             wasCancelled = wasCancelled,
             isCurrent = attempt.generation == latestGeneration
         )
@@ -183,6 +277,32 @@ internal class GeckoNavigationTracker {
 internal fun geckoSafeRetryUrl(method: String, url: String?): String? {
     if (!method.equals("GET", ignoreCase = true)) return null
     return url?.takeIf(::isSafeGeckoRetryUrl)
+}
+
+/** How many times one restore/background failure chain is silently reloaded
+ *  before its failure is allowed to reach the recovery card. */
+internal const val GECKO_RESTORE_AUTO_RETRY_MAX = 2
+
+/**
+ * Network errors that say "the path to the site failed", not "the site is
+ * gone": DNS that could not resolve yet, timeouts, interrupted/reset
+ * connections, offline and proxy/VPN-path failures. On a restore or
+ * background-exposed load these are the classic resume-time transients —
+ * the radio, DNS resolver or tunnel is still coming back — so the load is
+ * retried silently instead of carded. Certificate, security, malformed-URL
+ * and content errors are NOT transient: they would fail identically on a
+ * retry and must reach the card immediately with their real reason.
+ */
+internal fun isTransientGeckoLoadError(errorCode: Int?): Boolean = when (errorCode) {
+    WebRequestError.ERROR_UNKNOWN_HOST,
+    WebRequestError.ERROR_NET_TIMEOUT,
+    WebRequestError.ERROR_NET_INTERRUPT,
+    WebRequestError.ERROR_NET_RESET,
+    WebRequestError.ERROR_OFFLINE,
+    WebRequestError.ERROR_CONNECTION_REFUSED,
+    WebRequestError.ERROR_UNKNOWN_PROXY_HOST,
+    WebRequestError.ERROR_PROXY_CONNECTION_REFUSED -> true
+    else -> false
 }
 
 internal fun geckoNavigationStopOutcome(

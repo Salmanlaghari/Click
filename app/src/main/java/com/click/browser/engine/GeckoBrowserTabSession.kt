@@ -58,6 +58,11 @@ internal fun geckoSessionStartupPlan(
  *  a new crash is treated as a silent no-op and Reload is re-enabled. */
 private const val RECOVERY_WATCHDOG_MS = 12_000L
 
+/** Delay before a restore/background load that failed transiently is
+ *  silently reloaded: long enough for the radio, DNS resolver or VPN path
+ *  to finish coming back after the app returns to the foreground. */
+private const val RESTORE_AUTO_RETRY_DELAY_MS = 2_000L
+
 private const val GECKO_ACTION_EXPLAIN_SELECTED_TEXT = "com.click.browser.EXPLAIN_SELECTED_TEXT"
 private const val GECKO_ACTION_TRANSLATE_SELECTED_TEXT = "com.click.browser.TRANSLATE_SELECTED_TEXT"
 
@@ -151,6 +156,9 @@ internal class GeckoBrowserTabSession(
     @Volatile private var recoveryWatchdogToken = 0L
     @Volatile private var pendingSafeRetryUrl: String? = null
     private val navigationTracker = GeckoNavigationTracker()
+    /** Generation whose suppressed restore/background failure has a silent
+     *  reload scheduled; any newer navigation cancels it. */
+    @Volatile private var pendingAutoRetryGeneration: Long? = null
     private val recoveryFailureLock = Any()
     private var recoveryFailureTimesMillis: List<Long> = emptyList()
     private val adoptedChildSession = initialGeckoSession != null
@@ -319,7 +327,8 @@ internal class GeckoBrowserTabSession(
             ): GeckoResult<String>? {
                 navigationTracker.markLoadError(
                     uri,
-                    geckoLoadErrorLabel(error.category, error.code)
+                    geckoLoadErrorLabel(error.category, error.code),
+                    errorCode = error.code
                 )
                 // Keep Gecko's default error handling; Click presents its own
                 // safe, accessible recovery actions above the browser surface.
@@ -338,6 +347,11 @@ internal class GeckoBrowserTabSession(
             }
 
             override fun onPageStart(session: GeckoSession, url: String) {
+                // A newer navigation supersedes any scheduled silent reload
+                // of a suppressed restore/background failure. (The retry
+                // itself clears the flag before loading, so its own start
+                // never cancels it.)
+                pendingAutoRetryGeneration = null
                 previewGeneration += 1
                 pendingPreviewGeneration = null
                 completedPreviewGeneration = null
@@ -371,6 +385,13 @@ internal class GeckoBrowserTabSession(
                     (completion.url.startsWith("http://") || completion.url.startsWith("https://"))
                 ) {
                     onPageLoaded(completion.url)
+                }
+                // The tracker suppressed a transient failure of a restore or
+                // background-exposed load: no card was shown. Silently reload
+                // the page once the network path has had a moment to return.
+                val autoRetryUrl = completion.autoRetryUrl
+                if (autoRetryUrl != null && completion.isCurrent) {
+                    scheduleRestoreAutoRetry(autoRetryUrl, completion.generation)
                 }
             }
 
@@ -451,10 +472,16 @@ internal class GeckoBrowserTabSession(
             hasRestorableState = restoredState != null,
             initialUrl = initialUrl
         )
+        navigationTracker.setHostResumed(initiallyResumed)
         if (startup.openLocally) session.open(runtime)
         geckoView.setSession(session)
         attachExtensionRouterIfOpen()
         if (startup.restoreSavedState && restoredState != null) {
+            // The restored page's load is a re-display of an already-open
+            // page, not a user navigation: a transient failure at this
+            // moment (network still coming back at cold start) must not
+            // become the sticky "Page couldn't load" card.
+            navigationTracker.markNextLoadAsRestore()
             session.restoreState(restoredState)
         } else if (startup.loadInitialUrl) {
             pendingSafeRetryUrl = geckoSafeRetryUrl("GET", initialUrl)
@@ -541,6 +568,7 @@ internal class GeckoBrowserTabSession(
     }
     override fun loadUrl(url: String) {
         if (destroyed) return
+        pendingAutoRetryGeneration = null
         try {
             pendingSafeRetryUrl = geckoSafeRetryUrl("GET", url)
             setWideLayout(wideLayoutForUrl(url))
@@ -563,6 +591,7 @@ internal class GeckoBrowserTabSession(
     }
     override fun reload() {
         if (destroyed || rendererRecoveryInProgress) return
+        pendingAutoRetryGeneration = null
         if (rendererRecoveryRequired && !rendererRecoveryRetryDecision().retryAllowed) {
             onRendererRecovery(GeckoRenderEvent.RECOVERY_RETRY_THROTTLED)
             return
@@ -616,6 +645,7 @@ internal class GeckoBrowserTabSession(
                 restoreLatestStateOrLoad(lastKnownPageUrl)
             }
             GeckoRecoveryPlan.REOPEN_AND_LOAD_CURRENT_URL -> {
+                navigationTracker.markNextLoadAsRestore()
                 session.open(runtime)
                 session.loadUri(lastKnownPageUrl)
             }
@@ -690,6 +720,7 @@ internal class GeckoBrowserTabSession(
     }
     override fun stopLoading() {
         if (destroyed) return
+        pendingAutoRetryGeneration = null
         val cancelledGeneration = navigationTracker.cancelActive()
         try {
             session.stop()
@@ -701,6 +732,10 @@ internal class GeckoBrowserTabSession(
 
     override fun onPause() {
         hostResumed = false
+        // Loads in flight across this backgrounding are network-suspended by
+        // the OS; the tracker must not treat their transient failures as
+        // genuine page failures when their callbacks land around resume.
+        navigationTracker.setHostResumed(false)
         updateActiveState()
     }
 
@@ -710,6 +745,7 @@ internal class GeckoBrowserTabSession(
 
     override fun onResume() {
         hostResumed = true
+        navigationTracker.setHostResumed(true)
         updateActiveState()
     }
 
@@ -768,6 +804,11 @@ internal class GeckoBrowserTabSession(
     }
 
     private fun restoreLatestStateOrLoad(fallbackUrl: String): Boolean {
+        // Both branches re-display the tab's already-open page (saved state,
+        // or its current URL when no state survived): mark the load as a
+        // restore so a transient resume-time failure is retried silently
+        // instead of surfacing the recovery card.
+        navigationTracker.markNextLoadAsRestore()
         val restoredState = latestSessionState
             ?.takeIf { it.isNotBlank() }
             ?.let { encoded -> runCatching { GeckoSession.SessionState.fromString(encoded) }.getOrNull() }
@@ -777,6 +818,30 @@ internal class GeckoBrowserTabSession(
         }
         session.loadUri(fallbackUrl.ifBlank { "about:blank" })
         return false
+    }
+
+    /**
+     * Silently reloads a page whose restore/background load failed with a
+     * transient network error (the tracker suppressed the failure, so no
+     * card is showing). Cancelled by any newer navigation (see onPageStart),
+     * by explicit user actions, and on destroy; skipped while renderer
+     * recovery owns the page, since its own restore reloads it.
+     */
+    private fun scheduleRestoreAutoRetry(url: String, failedGeneration: Long) {
+        if (destroyed) return
+        pendingAutoRetryGeneration = failedGeneration
+        geckoView.postDelayed({
+            if (destroyed || pendingAutoRetryGeneration != failedGeneration) return@postDelayed
+            pendingAutoRetryGeneration = null
+            if (rendererRecoveryRequired || rendererRecoveryInProgress) return@postDelayed
+            navigationTracker.markNextLoadAsAutoRetry()
+            try {
+                session.loadUri(url)
+            } catch (_: Exception) {
+                // Session closed underneath us; the recovery path owns
+                // restoring this tab and will load the page itself.
+            }
+        }, RESTORE_AUTO_RETRY_DELAY_MS)
     }
 
     private fun reportRecoveryFailure(error: Exception, recordForThrottle: Boolean = true) {
@@ -806,6 +871,7 @@ internal class GeckoBrowserTabSession(
     override fun destroy() {
         if (destroyed) return
         destroyed = true
+        pendingAutoRetryGeneration = null
         previewGeneration += 1
         pendingPreviewGeneration = null
         devicePermissionDelegate.rejectPendingAndroidPermission()
