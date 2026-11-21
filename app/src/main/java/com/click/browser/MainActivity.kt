@@ -293,6 +293,10 @@ class MainActivity : FragmentActivity() {
     // which run outside composition. Synced from the composable state.
     @Volatile private var backgroundAudioEnabledCached: Boolean = false
 
+    // Cached copy of the Privacy & Safety "clear data on exit" setting for
+    // onDestroy, which runs outside composition. Synced from composable state.
+    @Volatile private var clearOnExitCached: Boolean = false
+
     // Deep-link URL from a news notification tap (NewsNotifications.EXTRA_OPEN_URL).
     // Set from onCreate (cold start) or onNewIntent (warm, singleTask); consumed
     // once by the composable, which opens it in a new tab.
@@ -338,6 +342,12 @@ class MainActivity : FragmentActivity() {
     private var liveSiteSettings: Map<String, com.click.browser.engine.SiteSettings> = emptyMap()
     // Live copy of the global ad-block toggle for WebViewClient callbacks.
     private var liveAdBlockerEnabled: Boolean = true
+    // Live copies of the Protection settings (Settings → Protection /
+    // Privacy & Safety) for WebViewClient callbacks and WebView settings
+    // application. The Gecko side is driven through ProtectionRuntime.
+    private var liveProtectionLevel: String = "standard"
+    private var liveBlockThirdPartyCookies: Boolean = false
+    private var liveSafeBrowsingEnabled: Boolean = true
     // Live copy of experimental flags (click://flags) for WebViewClient callbacks.
     private var liveFlags = ExperimentalFlags()
     // Biometric private-tab lock: live copies for onPause(), which runs
@@ -736,8 +746,11 @@ class MainActivity : FragmentActivity() {
         try { ttsEngine?.shutdown() } catch (_: Exception) { }
         normalTabExtensionRouter?.closePopup()
         destroyLiveGeckoSessions()
-        // Experimental flags: clear data / history on exit.
-        if (liveFlags.clearOnExit) {
+        // Experimental flags: clear data / history on exit. The user-facing
+        // Privacy & Safety "Clear data on exit" setting joins the same path,
+        // but only on a real finish (not a configuration teardown).
+        val userClearOnExit = clearOnExitCached && isFinishing
+        if (liveFlags.clearOnExit || userClearOnExit) {
             // GeckoView requires sessions for a context to be closed before its
             // persistent context data can be fully removed.
             geckoContextIdsToClearOnExit(V9Engine.bootMode, geckoContextIdsUsedInActivity)
@@ -748,7 +761,7 @@ class MainActivity : FragmentActivity() {
                 android.webkit.WebStorage.getInstance().deleteAllData()
             } catch (_: Exception) { }
         }
-        if (liveFlags.clearHistoryOnExit) {
+        if (liveFlags.clearHistoryOnExit || userClearOnExit) {
             val modeToClear = V9Engine.bootMode
             kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.IO).launch {
                 try {
@@ -954,10 +967,17 @@ class MainActivity : FragmentActivity() {
         if (WebViewFeature.isFeatureSupported(WebViewFeature.ALGORITHMIC_DARKENING)) {
             WebSettingsCompat.setAlgorithmicDarkeningAllowed(s, nightMode)
         }
-        // Safe Browsing: Google's harmful-site protection, enforced on every
-        // WebView. Hits surface via framework onSafeBrowsingHit (API 27+).
+        // Safe Browsing: harmful-site protection for WebView tabs, honoring
+        // the Privacy & Safety setting AND the click://flags experiment
+        // (either one can turn it off). Hits surface via the framework
+        // onSafeBrowsingHit (API 27+).
         if (WebViewFeature.isFeatureSupported(WebViewFeature.SAFE_BROWSING_ENABLE)) {
-            WebSettingsCompat.setSafeBrowsingEnabled(s, true)
+            WebSettingsCompat.setSafeBrowsingEnabled(
+                s,
+                com.click.browser.engine.ProtectionPolicy.effectiveSafeBrowsing(
+                    liveSafeBrowsingEnabled, liveFlags.safeBrowsing
+                )
+            )
         }
     }
 
@@ -998,7 +1018,14 @@ class MainActivity : FragmentActivity() {
         val cm = android.webkit.CookieManager.getInstance()
         cm.setAcceptCookie(f.cookieAccept)
         try {
-            cm.setAcceptThirdPartyCookies(webView, !f.blockThirdPartyCookies)
+            // The Protection screen's "Block third-party cookies" toggle ORs
+            // with the click://flags experiment.
+            cm.setAcceptThirdPartyCookies(
+                webView,
+                !com.click.browser.engine.ProtectionPolicy.effectiveBlockThirdPartyCookies(
+                    liveBlockThirdPartyCookies, f.blockThirdPartyCookies
+                )
+            )
         } catch (_: Exception) { }
         webView.overScrollMode = if (f.overscrollGlow) {
             android.view.View.OVER_SCROLL_ALWAYS
@@ -1006,9 +1033,18 @@ class MainActivity : FragmentActivity() {
             android.view.View.OVER_SCROLL_NEVER
         }
         if (WebViewFeature.isFeatureSupported(WebViewFeature.SAFE_BROWSING_ENABLE)) {
-            WebSettingsCompat.setSafeBrowsingEnabled(s, f.safeBrowsing)
+            WebSettingsCompat.setSafeBrowsingEnabled(
+                s,
+                com.click.browser.engine.ProtectionPolicy.effectiveSafeBrowsing(
+                    liveSafeBrowsingEnabled, f.safeBrowsing
+                )
+            )
         }
-        AdBlocker.aggressive = f.aggressiveAdblock
+        // Strong protection uses the aggressive WebView filter list even
+        // when the click://flags experiment is off.
+        AdBlocker.aggressive = com.click.browser.engine.ProtectionPolicy.effectiveAggressive(
+            liveProtectionLevel, f.aggressiveAdblock
+        )
         // Per-site overrides win over the global values set above. This
         // pass runs on every recomposition (AndroidView update block), so
         // without this re-apply it would silently undo the current site's
@@ -1154,8 +1190,15 @@ class MainActivity : FragmentActivity() {
         return site?.adBlock ?: adBlockerEnabledGlobal()
     }
 
-    /** Reads the global ad-block toggle without touching composable state. */
-    private fun adBlockerEnabledGlobal(): Boolean = liveAdBlockerEnabled
+    /**
+     * Reads the global ad-block state without touching composable state:
+     * the Settings toggle AND the Protection level (level Off disables
+     * WebView filter-list blocking globally; per-site overrides still win
+     * for their host in [isAdBlockEnabledForHost]).
+     */
+    private fun adBlockerEnabledGlobal(): Boolean =
+        liveAdBlockerEnabled &&
+            liveProtectionLevel != com.click.browser.engine.ProtectionPolicy.LEVEL_OFF
 
     /** Shared pretty error page used by both onReceivedError variants. */
     /** Extracts the lowercase host from a URL ("" on failure). */
@@ -1817,6 +1860,14 @@ class MainActivity : FragmentActivity() {
                     }
             }
             var adBlockerEnabled by remember { mutableStateOf(true) }
+            // Protection settings (Settings → Protection / Privacy & Safety).
+            // Persisted via AppSettings; applied to the Gecko runtime through
+            // ProtectionRuntime and to WebView tabs via the live mirrors.
+            var protectionLevel by remember { mutableStateOf("standard") }
+            var fingerprintingProtection by remember { mutableStateOf(true) }
+            var blockThirdPartyCookies by remember { mutableStateOf(false) }
+            var safeBrowsingEnabled by remember { mutableStateOf(true) }
+            var clearOnExitEnabled by remember { mutableStateOf(false) }
             // Page transition animation: bumped on every main-frame navigation
             // start; drives a subtle fade+slide over the WebView (never blocks
             // loading, purely visual). Disabled via the Settings toggle.
@@ -2283,6 +2334,10 @@ class MainActivity : FragmentActivity() {
             // Privacy & Security suite (Google Sign-In, passwords, Safety Check, autofill, cards).
             var showPrivacySecurity by remember { mutableStateOf(false) }
             var showAdvancedSecurity by remember { mutableStateOf(false) }
+            // Brave-style Settings sections (Nov 2026): Protection and
+            // Privacy & Safety are dedicated screens opened from Settings.
+            var showProtectionSettings by remember { mutableStateOf(false) }
+            var showPrivacySafety by remember { mutableStateOf(false) }
             var showPaymentMethods by remember { mutableStateOf(false) }
             // Per-site settings sheet (opened from the lock icon in the address bar).
             var showSiteSettings by remember { mutableStateOf(false) }
@@ -3071,6 +3126,35 @@ class MainActivity : FragmentActivity() {
                     stripTrackingParams = prefs[AppSettings.STRIP_TRACKING_PARAMS] ?: true
                     forgetfulBrowsing = prefs[AppSettings.FORGETFUL_BROWSING] == true
                     forgetfulExceptions = prefs[AppSettings.FORGETFUL_BROWSING_EXCEPTIONS] ?: emptySet()
+                    // Protection + Privacy & Safety settings (Nov 2026):
+                    // seed the states, the live mirrors and the Gecko
+                    // runtime's content-blocking values from one snapshot.
+                    protectionLevel = AppSettings.normalizeProtectionLevel(prefs[AppSettings.PROTECTION_LEVEL])
+                    fingerprintingProtection = prefs[AppSettings.FINGERPRINTING_PROTECTION] != false
+                    blockThirdPartyCookies = prefs[AppSettings.BLOCK_THIRD_PARTY_COOKIES] == true
+                    safeBrowsingEnabled = prefs[AppSettings.SAFE_BROWSING_ENABLED] != false
+                    clearOnExitEnabled = prefs[AppSettings.CLEAR_ON_EXIT] == true
+                    liveProtectionLevel = protectionLevel
+                    liveBlockThirdPartyCookies = blockThirdPartyCookies
+                    liveSafeBrowsingEnabled = safeBrowsingEnabled
+                    clearOnExitCached = clearOnExitEnabled
+                    val loadedProtection = com.click.browser.engine.ProtectionState(
+                        level = protectionLevel,
+                        fingerprinting = fingerprintingProtection,
+                        blockThirdPartyCookies = blockThirdPartyCookies,
+                        safeBrowsing = safeBrowsingEnabled
+                    )
+                    com.click.browser.engine.ProtectionRuntime.update(loadedProtection)
+                    // Apply to the Gecko runtime only if it already exists —
+                    // creating it here would force an eager engine start on
+                    // every launch. A runtime created later is seeded from
+                    // the same persisted values in ExtensionBrowserRuntime.
+                    com.click.browser.extensions.ExtensionBrowserRuntime.peek()?.let { existingRuntime ->
+                        com.click.browser.engine.ProtectionRuntime.applyToRuntime(
+                            existingRuntime,
+                            loadedProtection
+                        )
+                    }
                     // Accessibility settings.
                     forceZoomEnabled = prefs[AppSettings.FORCE_ZOOM] == true
                     readerModeEnabled = prefs[AppSettings.READER_MODE] == true
@@ -3105,6 +3189,12 @@ class MainActivity : FragmentActivity() {
                 backgroundAudioEnabledCached = backgroundAudioEnabled
             }
 
+            // Keep the Protection live mirrors + the onDestroy cache in sync.
+            LaunchedEffect(protectionLevel) { liveProtectionLevel = protectionLevel }
+            LaunchedEffect(blockThirdPartyCookies) { liveBlockThirdPartyCookies = blockThirdPartyCookies }
+            LaunchedEffect(safeBrowsingEnabled) { liveSafeBrowsingEnabled = safeBrowsingEnabled }
+            LaunchedEffect(clearOnExitEnabled) { clearOnExitCached = clearOnExitEnabled }
+
             // Search preference is profile-specific and drives both the visible brand mark
             // and the URL used when a query (rather than a website address) is submitted.
             var currentSearchEngineSetting by remember(activeMode) {
@@ -3129,7 +3219,8 @@ class MainActivity : FragmentActivity() {
 
             // 2. Active overlays, sub-screens, sheets, dialogs & drawers: Back closes the active sheet first.
             val isAnyOverlayOpen = drawerState.isOpen || showBrowserMenu || showInstalledAddonsPanel ||
-                showTabsManager || showSettings || showBookmarks || showHistory || showDownloads ||
+                showTabsManager || showSettings || showProtectionSettings || showPrivacySafety ||
+                showBookmarks || showHistory || showDownloads ||
                 showAiChat || showSiteSettings || showPrivacyGuards || showPrivacySecurity || showLocationSettings ||
                 showQuickTogglesDialog || showFindInPageDialog || showPlaylist || showStreamPlayer ||
                 showClickDiagnostics || showMenuCustomize || showFeatureMenu || showRecentTabs ||
@@ -3144,6 +3235,8 @@ class MainActivity : FragmentActivity() {
                     showInstalledAddonsPanel -> showInstalledAddonsPanel = false
                     showTabsManager -> showTabsManager = false
                     showSettings -> showSettings = false
+                    showProtectionSettings -> showProtectionSettings = false
+                    showPrivacySafety -> showPrivacySafety = false
                     showPrivacySecurity -> showPrivacySecurity = false
                     showBookmarks -> showBookmarks = false
                     showHistory -> showHistory = false
@@ -6889,6 +6982,30 @@ class MainActivity : FragmentActivity() {
                                 }
                             }
 
+                            /**
+                             * Pushes the current Protection state into
+                             * ProtectionRuntime and, when a Gecko runtime
+                             * already exists, into its live content-blocking
+                             * settings. WebView tabs pick the same state up
+                             * through the live mirrors on their next settings
+                             * application. Never creates the Gecko runtime.
+                             */
+                            fun applyProtectionSettings() {
+                                val state = com.click.browser.engine.ProtectionState(
+                                    level = protectionLevel,
+                                    fingerprinting = fingerprintingProtection,
+                                    blockThirdPartyCookies = blockThirdPartyCookies,
+                                    safeBrowsing = safeBrowsingEnabled
+                                )
+                                liveProtectionLevel = protectionLevel
+                                liveBlockThirdPartyCookies = blockThirdPartyCookies
+                                liveSafeBrowsingEnabled = safeBrowsingEnabled
+                                com.click.browser.engine.ProtectionRuntime.update(state)
+                                com.click.browser.extensions.ExtensionBrowserRuntime.peek()?.let { existingRuntime ->
+                                    com.click.browser.engine.ProtectionRuntime.applyToRuntime(existingRuntime, state)
+                                }
+                            }
+
                             // ---- Browser overlay sections ----
                             // The sheets/dialogs below used to sit inline in this Box
                             // and pushed one onCreate lambda past the JVM 64 KB method
@@ -7718,37 +7835,11 @@ class MainActivity : FragmentActivity() {
                                     // system flow as the first-launch prompt.
                                     isDefaultBrowser = isDefaultBrowser,
                                     onSetDefaultBrowser = { requestDefaultBrowser() },
-                                    adBlockerEnabled = adBlockerEnabled,
-                                    onToggleAdBlocker = { adBlockerEnabled = it },
-                                    httpsMode = httpsMode,
-                                    onHttpsModeChange = { mode ->
-                                        httpsMode = AppSettings.normalizeMode(mode)
-                                        scope.launch { dataStore.edit { prefs -> prefs[AppSettings.HTTPS_MODE] = httpsMode } }
-                                    },
-                                    httpsStrictExceptions = httpsStrictExceptions,
-                                    onAddHttpsException = { host ->
-                                        val clean = host.trim().lowercase().removePrefix("http://").removePrefix("https://").substringBefore("/")
-                                        if (clean.isNotEmpty() && !httpsStrictExceptions.contains(clean)) {
-                                            httpsStrictExceptions = httpsStrictExceptions + clean
-                                            scope.launch {
-                                                dataStore.edit { prefs ->
-                                                    prefs[AppSettings.HTTPS_STRICT_EXCEPTIONS] =
-                                                        AppSettings.hostsToJson(httpsStrictExceptions)
-                                                }
-                                            }
-                                        }
-                                    },
-                                    onRemoveHttpsException = { host ->
-                                        httpsStrictExceptions = httpsStrictExceptions - host
-                                        scope.launch {
-                                            dataStore.edit { prefs ->
-                                                prefs[AppSettings.HTTPS_STRICT_EXCEPTIONS] =
-                                                    AppSettings.hostsToJson(httpsStrictExceptions)
-                                            }
-                                        }
-                                    },
-                                    jsEnabled = javaScriptEnabledGlobal,
-                                    onToggleJs = { javaScriptEnabledGlobal = it },
+                                    // Brave-style sections: Protection and
+                                    // Privacy & Safety are dedicated screens.
+                                    protectionLevel = protectionLevel,
+                                    onOpenProtection = { showSettings = false; showProtectionSettings = true },
+                                    onOpenPrivacySafety = { showSettings = false; showPrivacySafety = true },
                                     dataSaver = dataSaverEnabled,
                                     onToggleDataSaver = { dataSaverEnabled = it },
                                     currentTabEngine = currentTab.engine,
@@ -7773,36 +7864,6 @@ class MainActivity : FragmentActivity() {
                                             }
                                         }
                                     },
-                                    biometricLockEnabled = biometricLockEnabled,
-                                    onToggleBiometricLock = { v ->
-                                        if (v && !com.click.browser.engine.PrivateTabLock.canLock(this@MainActivity)) {
-                                            // Graceful fallback: no biometric/PIN enrolled —
-                                            // explain instead of enabling a dead toggle.
-                                            Toast.makeText(
-                                                this@MainActivity,
-                                                com.click.browser.engine.PrivateTabLock.unavailableReason(this@MainActivity),
-                                                Toast.LENGTH_LONG
-                                            ).show()
-                                        } else {
-                                            biometricLockEnabled = v
-                                            liveBiometricLockEnabled = v
-                                            scope.launch {
-                                                dataStore.edit { prefs ->
-                                                    prefs[AppSettings.BIOMETRIC_TAB_LOCK] = v
-                                                }
-                                            }
-                                            if (v) Toast.makeText(
-                                                this@MainActivity,
-                                                if (hasStrongBiometric) "Private tabs will lock behind biometrics"
-                                                else "Private tabs will lock behind your device PIN",
-                                                Toast.LENGTH_SHORT
-                                            ).show()
-                                        }
-                                    },
-                                    biometricStatusText = if (com.click.browser.engine.PrivateTabLock.canLock(this@MainActivity))
-                                        if (hasStrongBiometric) "Re-lock private tabs behind fingerprint/face when the app backgrounds"
-                                        else "Re-lock private tabs behind your device PIN when the app backgrounds"
-                                    else com.click.browser.engine.PrivateTabLock.unavailableReason(this@MainActivity),
                                     globalTextScale = globalTextScale,
                                     onGlobalTextScaleChange = { v ->
                                         val clamped = com.click.browser.engine.TextScaleStore.clamp(v)
@@ -7811,22 +7872,6 @@ class MainActivity : FragmentActivity() {
                                         scope.launch {
                                             com.click.browser.engine.TextScaleStore.setGlobal(this@MainActivity, clamped)
                                         }
-                                    },
-                                    // Brave-inspired privacy quick wins (persisted to DataStore).
-                                    stripTrackingParams = stripTrackingParams,
-                                    onToggleStripTrackingParams = { v ->
-                                        stripTrackingParams = v
-                                        scope.launch { dataStore.edit { prefs -> prefs[AppSettings.STRIP_TRACKING_PARAMS] = v } }
-                                    },
-                                    forgetfulBrowsing = forgetfulBrowsing,
-                                    onToggleForgetfulBrowsing = { v ->
-                                        forgetfulBrowsing = v
-                                        scope.launch { dataStore.edit { prefs -> prefs[AppSettings.FORGETFUL_BROWSING] = v } }
-                                    },
-                                    forgetfulExceptions = forgetfulExceptions,
-                                    onForgetfulExceptionsChange = { v ->
-                                        forgetfulExceptions = v
-                                        scope.launch { dataStore.edit { prefs -> prefs[AppSettings.FORGETFUL_BROWSING_EXCEPTIONS] = v } }
                                     },
                                     animationsEnabled = flagsUi.tabAnimations,
                                     onToggleAnimations = { enabled ->
@@ -7851,69 +7896,12 @@ class MainActivity : FragmentActivity() {
                                         // user sees the change immediately.
                                         currentTab.browserSession?.reload()
                                     },
-                                    onClearHistoryForMode = { mode ->
-                                        discardPendingTabUndoForMode(mode)
-                                        scope.launch {
-                                            RecentlyClosedTabs.clearHistoryAndRecentlyClosedForMode(mode) { historyMode ->
-                                                repository.clearHistoryFor(historyMode)
-                                            }
-                                            val historyScope = if (mode == BrowserMode.ADVANCED) {
-                                                "Advance"
-                                            } else {
-                                                "Simple/Developer/Power shared"
-                                            }
-                                            Toast.makeText(
-                                                this@MainActivity,
-                                                "$historyScope history and recently closed tabs cleared",
-                                                Toast.LENGTH_SHORT
-                                            ).show()
-                                        }
-                                    },
-                                    onClearCookies = {
-                                        // CookieManager is pinned to the current engine's data
-                                        // directory — this clears the CURRENT mode's cookies only.
-                                        if (currentTab.engine == BrowserTabEngine.GECKOVIEW) {
-                                            Toast.makeText(
-                                                this@MainActivity,
-                                                "Gecko per-category cookie clearing is unavailable; use Clear all current mode data.",
-                                                Toast.LENGTH_LONG
-                                            ).show()
-                                        } else {
-                                            CookieStore.clearAll {
-                                                Toast.makeText(this@MainActivity, "Cookies cleared (current profile)", Toast.LENGTH_SHORT).show()
-                                            }
-                                        }
-                                    },
-                                    onClearCache = {
-                                        if (currentTab.engine == BrowserTabEngine.GECKOVIEW) {
-                                            Toast.makeText(
-                                                this@MainActivity,
-                                                "Gecko per-category cache clearing is unavailable; use Clear all current mode data.",
-                                                Toast.LENGTH_LONG
-                                            ).show()
-                                        } else {
-                                            currentTab.webView?.clearCache(true)
-                                            Toast.makeText(this@MainActivity, "Cache cleared (current profile)", Toast.LENGTH_SHORT).show()
-                                        }
-                                    },
-                                    onClearAllCurrentMode = ::performCurrentModeDataClear,
-                                    onOpenCookieManager = { showSettings = false; showCookieManager = true },
-                                    onOpenSiteSettings = {
-                                        siteSettingsReturnToAdvancedSecurity = false
-                                        showSettings = false
-                                        showSiteSettingsList = true
-                                    },
-                                    onOpenAdvancedSecurity = { showSettings = false; showAdvancedSecurity = true },
-                                    onOpenV9Shield = { showSettings = false; showV9Shield = true },
                                     onOpenTabGroups = { showSettings = false; showTabGroups = true },
                                     onOpenAccessibility = { showSettings = false; showAccessibility = true },
                                     onOpenLanguage = { showSettings = false; showLanguage = true },
                                     onOpenDownloadSettings = { showSettings = false; showDownloadSettings = true },
                                     onOpenReports = { showSettings = false; showReports = true },
                                     onOpenCatLog = { showSettings = false; showClickDiagnostics = true },
-                                    onOpenPrivacySecurity = { showSettings = false; showPrivacySecurity = true },
-                                    locationSummary = LocationGuard.websitesWillSee(),
-                                    onOpenLocationSettings = { showLocationSettings = true },
                                     aiApiKey = aiApiKey,
                                     builtInKeyActive = BuildConfig.GROQ_API_KEY_OBF.isNotBlank(),
                                     onAiApiKeyChange = { v ->
@@ -8194,6 +8182,212 @@ class MainActivity : FragmentActivity() {
                                             "strip_params" -> stripTrackingParams = true
                                         }
                                     }
+                                )
+                            }
+                            // Protection (Settings → Protection): protection
+                            // level, fingerprinting, third-party cookies,
+                            // HTTPS mode and the JavaScript switch — all wired
+                            // to ProtectionRuntime / the live mirrors.
+                            if (showProtectionSettings) {
+                                com.click.browser.ui.screens.ProtectionSettingsScreen(
+                                    theme = theme,
+                                    protectionLevel = protectionLevel,
+                                    onProtectionLevelChange = { level ->
+                                        protectionLevel =
+                                            com.click.browser.engine.ProtectionPolicy.normalizeLevel(level)
+                                        applyProtectionSettings()
+                                        scope.launch {
+                                            dataStore.edit { prefs ->
+                                                prefs[AppSettings.PROTECTION_LEVEL] = protectionLevel
+                                            }
+                                        }
+                                    },
+                                    fingerprintingProtection = fingerprintingProtection,
+                                    onToggleFingerprintingProtection = { v ->
+                                        fingerprintingProtection = v
+                                        applyProtectionSettings()
+                                        scope.launch {
+                                            dataStore.edit { prefs ->
+                                                prefs[AppSettings.FINGERPRINTING_PROTECTION] = v
+                                            }
+                                        }
+                                    },
+                                    blockThirdPartyCookies = blockThirdPartyCookies,
+                                    onToggleBlockThirdPartyCookies = { v ->
+                                        blockThirdPartyCookies = v
+                                        applyProtectionSettings()
+                                        scope.launch {
+                                            dataStore.edit { prefs ->
+                                                prefs[AppSettings.BLOCK_THIRD_PARTY_COOKIES] = v
+                                            }
+                                        }
+                                    },
+                                    httpsMode = httpsMode,
+                                    onHttpsModeChange = { mode ->
+                                        httpsMode = AppSettings.normalizeMode(mode)
+                                        scope.launch { dataStore.edit { prefs -> prefs[AppSettings.HTTPS_MODE] = httpsMode } }
+                                    },
+                                    httpsStrictExceptions = httpsStrictExceptions,
+                                    onAddHttpsException = { host ->
+                                        val clean = host.trim().lowercase().removePrefix("http://").removePrefix("https://").substringBefore("/")
+                                        if (clean.isNotEmpty() && !httpsStrictExceptions.contains(clean)) {
+                                            httpsStrictExceptions = httpsStrictExceptions + clean
+                                            scope.launch {
+                                                dataStore.edit { prefs ->
+                                                    prefs[AppSettings.HTTPS_STRICT_EXCEPTIONS] =
+                                                        AppSettings.hostsToJson(httpsStrictExceptions)
+                                                }
+                                            }
+                                        }
+                                    },
+                                    onRemoveHttpsException = { host ->
+                                        httpsStrictExceptions = httpsStrictExceptions - host
+                                        scope.launch {
+                                            dataStore.edit { prefs ->
+                                                prefs[AppSettings.HTTPS_STRICT_EXCEPTIONS] =
+                                                    AppSettings.hostsToJson(httpsStrictExceptions)
+                                            }
+                                        }
+                                    },
+                                    jsEnabled = javaScriptEnabledGlobal,
+                                    onToggleJs = { javaScriptEnabledGlobal = it },
+                                    currentTabEngine = currentTab.engine,
+                                    onClose = { showProtectionSettings = false }
+                                )
+                            }
+                            // Privacy & Safety (Settings → Privacy & Safety):
+                            // Safe Browsing, tracking signals, clear-on-exit,
+                            // clear browsing data and links into the existing
+                            // privacy/security screens.
+                            if (showPrivacySafety) {
+                                com.click.browser.ui.screens.PrivacySafetySettingsScreen(
+                                    theme = theme,
+                                    activeMode = activeMode,
+                                    safeBrowsingEnabled = safeBrowsingEnabled,
+                                    onToggleSafeBrowsing = { v ->
+                                        safeBrowsingEnabled = v
+                                        applyProtectionSettings()
+                                        scope.launch {
+                                            dataStore.edit { prefs ->
+                                                prefs[AppSettings.SAFE_BROWSING_ENABLED] = v
+                                            }
+                                        }
+                                    },
+                                    dntEnabled = dntEnabled,
+                                    onToggleDnt = { v ->
+                                        dntEnabled = v
+                                        scope.launch { dataStore.edit { prefs -> prefs[AppSettings.DNT_ENABLED] = v } }
+                                    },
+                                    stripTrackingParams = stripTrackingParams,
+                                    onToggleStripTrackingParams = { v ->
+                                        stripTrackingParams = v
+                                        scope.launch { dataStore.edit { prefs -> prefs[AppSettings.STRIP_TRACKING_PARAMS] = v } }
+                                    },
+                                    forgetfulBrowsing = forgetfulBrowsing,
+                                    onToggleForgetfulBrowsing = { v ->
+                                        forgetfulBrowsing = v
+                                        scope.launch { dataStore.edit { prefs -> prefs[AppSettings.FORGETFUL_BROWSING] = v } }
+                                    },
+                                    forgetfulExceptions = forgetfulExceptions,
+                                    onForgetfulExceptionsChange = { v ->
+                                        forgetfulExceptions = v
+                                        scope.launch { dataStore.edit { prefs -> prefs[AppSettings.FORGETFUL_BROWSING_EXCEPTIONS] = v } }
+                                    },
+                                    biometricLockEnabled = biometricLockEnabled,
+                                    onToggleBiometricLock = { v ->
+                                        if (v && !com.click.browser.engine.PrivateTabLock.canLock(this@MainActivity)) {
+                                            // Graceful fallback: no biometric/PIN enrolled —
+                                            // explain instead of enabling a dead toggle.
+                                            Toast.makeText(
+                                                this@MainActivity,
+                                                com.click.browser.engine.PrivateTabLock.unavailableReason(this@MainActivity),
+                                                Toast.LENGTH_LONG
+                                            ).show()
+                                        } else {
+                                            biometricLockEnabled = v
+                                            liveBiometricLockEnabled = v
+                                            scope.launch {
+                                                dataStore.edit { prefs ->
+                                                    prefs[AppSettings.BIOMETRIC_TAB_LOCK] = v
+                                                }
+                                            }
+                                            if (v) Toast.makeText(
+                                                this@MainActivity,
+                                                if (hasStrongBiometric) "Private tabs will lock behind biometrics"
+                                                else "Private tabs will lock behind your device PIN",
+                                                Toast.LENGTH_SHORT
+                                            ).show()
+                                        }
+                                    },
+                                    biometricStatusText = if (com.click.browser.engine.PrivateTabLock.canLock(this@MainActivity))
+                                        if (hasStrongBiometric) "Re-lock private tabs behind fingerprint/face when the app backgrounds"
+                                        else "Re-lock private tabs behind your device PIN when the app backgrounds"
+                                    else com.click.browser.engine.PrivateTabLock.unavailableReason(this@MainActivity),
+                                    locationSummary = LocationGuard.websitesWillSee(),
+                                    onOpenLocationSettings = { showLocationSettings = true },
+                                    clearOnExitEnabled = clearOnExitEnabled,
+                                    onToggleClearOnExit = { v ->
+                                        clearOnExitEnabled = v
+                                        clearOnExitCached = v
+                                        scope.launch { dataStore.edit { prefs -> prefs[AppSettings.CLEAR_ON_EXIT] = v } }
+                                    },
+                                    onClearHistoryForMode = { mode ->
+                                        discardPendingTabUndoForMode(mode)
+                                        scope.launch {
+                                            RecentlyClosedTabs.clearHistoryAndRecentlyClosedForMode(mode) { historyMode ->
+                                                repository.clearHistoryFor(historyMode)
+                                            }
+                                            val historyScope = if (mode == BrowserMode.ADVANCED) {
+                                                "Advance"
+                                            } else {
+                                                "Simple/Developer/Power shared"
+                                            }
+                                            Toast.makeText(
+                                                this@MainActivity,
+                                                "$historyScope history and recently closed tabs cleared",
+                                                Toast.LENGTH_SHORT
+                                            ).show()
+                                        }
+                                    },
+                                    onClearCookies = {
+                                        // CookieManager is pinned to the current engine's data
+                                        // directory — this clears the CURRENT mode's cookies only.
+                                        if (currentTab.engine == BrowserTabEngine.GECKOVIEW) {
+                                            Toast.makeText(
+                                                this@MainActivity,
+                                                "Gecko per-category cookie clearing is unavailable; use Clear all current mode data.",
+                                                Toast.LENGTH_LONG
+                                            ).show()
+                                        } else {
+                                            CookieStore.clearAll {
+                                                Toast.makeText(this@MainActivity, "Cookies cleared (current profile)", Toast.LENGTH_SHORT).show()
+                                            }
+                                        }
+                                    },
+                                    onClearCache = {
+                                        if (currentTab.engine == BrowserTabEngine.GECKOVIEW) {
+                                            Toast.makeText(
+                                                this@MainActivity,
+                                                "Gecko per-category cache clearing is unavailable; use Clear all current mode data.",
+                                                Toast.LENGTH_LONG
+                                            ).show()
+                                        } else {
+                                            currentTab.webView?.clearCache(true)
+                                            Toast.makeText(this@MainActivity, "Cache cleared (current profile)", Toast.LENGTH_SHORT).show()
+                                        }
+                                    },
+                                    onClearAllCurrentMode = ::performCurrentModeDataClear,
+                                    onOpenCookieManager = { showPrivacySafety = false; showCookieManager = true },
+                                    onOpenSiteSettings = {
+                                        siteSettingsReturnToAdvancedSecurity = false
+                                        showPrivacySafety = false
+                                        showSiteSettingsList = true
+                                    },
+                                    onOpenPrivacySecurity = { showPrivacySafety = false; showPrivacySecurity = true },
+                                    onOpenAdvancedSecurity = { showPrivacySafety = false; showAdvancedSecurity = true },
+                                    onOpenV9Shield = { showPrivacySafety = false; showV9Shield = true },
+                                    onOpenPrivacyGuards = { showPrivacySafety = false; showPrivacyGuards = true },
+                                    onClose = { showPrivacySafety = false }
                                 )
                             }
                             if (showPaymentMethods) {

@@ -112,7 +112,10 @@ internal class GeckoBrowserTabSession(
     private val contextId = geckoContextIdFor(mode)
     private val settings = GeckoSessionSettings.Builder()
         .usePrivateMode(false)
-        .useTrackingProtection(true)
+        // Tracking protection follows the user's Protection level: the
+        // per-session switch stays on unless the level is Off (the
+        // runtime's anti-tracking categories carry the actual level).
+        .useTrackingProtection(ProtectionRuntime.current.level != ProtectionPolicy.LEVEL_OFF)
         .contextId(contextId)
         .viewportMode(DesktopLayoutPolicy.geckoViewportMode(wideLayoutForUrl(initialUrl)))
         .build()

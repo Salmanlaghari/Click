@@ -183,6 +183,30 @@ object AppSettings {
      *  last 30 days are revoked once per app launch. Default OFF. */
     val AUTO_REMOVE_PERMISSIONS = booleanPreferencesKey("auto_remove_permissions")
 
+    // ---- Brave-style Settings: Protection + Privacy & Safety (Nov 2026) ----
+    /** Global protection level: "off" | "standard" | "strong". Default
+     *  "standard" — GeckoView anti-tracking DEFAULT categories plus
+     *  fingerprinting, and Click's filter-list blocking in WebView tabs.
+     *  Applied to the Gecko runtime through ProtectionRuntime and to
+     *  WebView tabs through the existing AdBlocker path. */
+    val PROTECTION_LEVEL = stringPreferencesKey("protection_level")
+    /** Fingerprinting protection inside the Gecko engine's tracking
+     *  protection categories. Default ON (blocks known fingerprinters). */
+    val FINGERPRINTING_PROTECTION = booleanPreferencesKey("fingerprinting_protection")
+    /** Block third-party cookies globally. Default OFF. Gecko tabs use
+     *  CookieBehavior.ACCEPT_FIRST_PARTY; WebView tabs use the per-WebView
+     *  CookieManager flag (per-site overrides still win there). */
+    val BLOCK_THIRD_PARTY_COOKIES = booleanPreferencesKey("block_third_party_cookies")
+    /** Safe Browsing (harmful-site warnings). Default ON — matches the
+     *  historical always-on behavior in both engines. Gecko tabs use the
+     *  ContentBlocking safe-browsing categories; WebView tabs use the
+     *  system Safe Browsing setting. */
+    val SAFE_BROWSING_ENABLED = booleanPreferencesKey("safe_browsing_enabled")
+    /** Clear browsing data on exit: when ON, closing Click clears the
+     *  current profile's history, cookies and engine site data. Opt-in,
+     *  default OFF. Implemented in MainActivity.onDestroy (isFinishing). */
+    val CLEAR_ON_EXIT = booleanPreferencesKey("clear_on_exit")
+
     // ---- Background news notifications (WhatsApp-style alerts) ----
     // Opt-in, default OFF (Play-policy friendly): the user enables them in
     // Settings → General → News Notifications and picks topics. A
@@ -231,6 +255,13 @@ object AppSettings {
         when (value?.lowercase()) {
             "off", "standard", "strict" -> value.lowercase()
             else -> default
+        }
+
+    /** Normalizes a protection level to "off" | "standard" | "strong". */
+    fun normalizeProtectionLevel(value: String?): String =
+        when (value?.lowercase()) {
+            "off", "standard", "strong" -> value.lowercase()
+            else -> "standard"
         }
 
     /**
