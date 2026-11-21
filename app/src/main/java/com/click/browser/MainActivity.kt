@@ -249,6 +249,16 @@ private data class PendingSelectedTextTranslation(
     val selection: AiSelectedTextPolicy.PreparedSelection
 )
 
+/**
+ * A pending "open this link in its app?" confirmation (1.8.6 external app
+ * handoff): a page navigated to an app destination without a user
+ * gesture, so the user decides before Click switches apps.
+ */
+private class PendingExternalAppPrompt(
+    val appLabel: String,
+    val intent: Intent
+)
+
 
 /**
  * Page transition wrapper — subtle fade + slide on every navigation start.
@@ -2387,6 +2397,73 @@ class MainActivity : FragmentActivity() {
             // The one media URL the user chose "Open" for — loads normally
             // this once instead of offering again.
             var directMediaBypassUrl by remember { mutableStateOf<String?>(null) }
+            // External app handoff prompt (1.8.6): non-null while the
+            // "Open in <app>?" confirmation is on screen.
+            var externalAppPrompt by remember {
+                mutableStateOf<PendingExternalAppPrompt?>(null)
+            }
+
+            /**
+             * External app handoff (1.8.6, see [ExternalSchemePolicy]): a
+             * page navigated to a destination that is not a web page — a
+             * custom app scheme or an intent:// URI, e.g. TikTok's
+             * "continue in app" sign-in step. Builds the Android intent,
+             * checks an installed app can take it, and either launches it
+             * (user tapped the link), asks first (the page navigated on
+             * its own, and only when [allowPrompt] — never a surprise
+             * dialog over another tab), or reports the web fallback the
+             * link itself named. A website can never hand Click's own
+             * screens to itself this way: a destination that resolves
+             * into Click's own package is refused.
+             */
+            fun handleExternalAppHandoff(
+                rawUrl: String,
+                hasUserGesture: Boolean,
+                allowPrompt: Boolean
+            ): ExternalHandoffResult {
+                val intent = runCatching {
+                    if (ExternalSchemePolicy.isIntentUri(rawUrl)) {
+                        Intent.parseUri(rawUrl, Intent.URI_INTENT_SCHEME)
+                    } else {
+                        Intent(Intent.ACTION_VIEW, android.net.Uri.parse(rawUrl))
+                    }
+                }.getOrNull() ?: return ExternalHandoffResult.NotHandled
+                val resolved = runCatching {
+                    packageManager.resolveActivity(intent, PackageManager.MATCH_DEFAULT_ONLY)
+                }.getOrNull()
+                if (resolved == null ||
+                    resolved.activityInfo.packageName == packageName
+                ) {
+                    val fallback = ExternalSchemePolicy.fallbackUrlOf(rawUrl)
+                    return if (fallback != null) {
+                        ExternalHandoffResult.LoadFallback(fallback)
+                    } else {
+                        ExternalHandoffResult.NotHandled
+                    }
+                }
+                val appLabel = runCatching {
+                    packageManager.getApplicationLabel(
+                        packageManager.getApplicationInfo(resolved.activityInfo.packageName, 0)
+                    ).toString()
+                }.getOrDefault(resolved.activityInfo.packageName)
+                return when (ExternalSchemePolicy.launchDecision(hasUserGesture)) {
+                    ExternalLaunchDecision.LAUNCH_NOW -> {
+                        val launched = runCatching { startActivity(intent) }.isSuccess
+                        if (launched) {
+                            ExternalHandoffResult.Handled
+                        } else {
+                            ExternalSchemePolicy.fallbackUrlOf(rawUrl)
+                                ?.let { ExternalHandoffResult.LoadFallback(it) }
+                                ?: ExternalHandoffResult.NotHandled
+                        }
+                    }
+                    ExternalLaunchDecision.ASK_FIRST -> {
+                        if (!allowPrompt) return ExternalHandoffResult.NotHandled
+                        externalAppPrompt = PendingExternalAppPrompt(appLabel, intent)
+                        ExternalHandoffResult.Handled
+                    }
+                }
+            }
             var viewingPdfFile by remember { mutableStateOf<java.io.File?>(null) }
             var pdfDownloading by remember { mutableStateOf(false) }
             val safeBrowsingHit by com.click.browser.engine.SafeBrowsingManager.pendingHit
@@ -5105,6 +5182,12 @@ class MainActivity : FragmentActivity() {
                                                                 }
                                                                 // Website sign-in/OAuth pages stay in this Click tab
                                                                 // (Prince, 2026-11-10): no Custom Tab / Chrome handoff.
+                                                                // App-scheme destinations (tiktok://, intent://, …)
+                                                                // never reach this gate: ExternalSchemePolicy
+                                                                // offers them to the installed app first (1.8.6).
+                                                                // What still lands here is only a destination no
+                                                                // app could take, or a scheme that must never
+                                                                // leave the browser — both stay denied.
                                                                 if (!targetUrl.startsWith("http://") && !targetUrl.startsWith("https://")) {
                                                                     return@navigation null
                                                                 }
@@ -5168,6 +5251,17 @@ class MainActivity : FragmentActivity() {
                                                                     else -> "This destination is not available in the Gecko tab."
                                                                 }
                                                                 Toast.makeText(this@MainActivity, message, Toast.LENGTH_SHORT).show()
+                                                            },
+                                                            onExternalSchemeRequest = { externalUri, hasGesture ->
+                                                                // The confirmation prompt may only
+                                                                // appear over the tab the user is
+                                                                // actually looking at.
+                                                                handleExternalAppHandoff(
+                                                                    externalUri,
+                                                                    hasGesture,
+                                                                    allowPrompt =
+                                                                        tabs.getOrNull(activeTabIndex)?.id == tabId
+                                                                )
                                                             },
                                                             onNewSession = { uri, childSession ->
                                                                 val scheme = runCatching {
@@ -5645,6 +5739,34 @@ class MainActivity : FragmentActivity() {
                                                                     // Query-param stripping (Brave-style): drop tracking
                                                                     // params before anything else touches the URL.
                                                                     urlStr = cleanTrackingUrl(urlStr)
+                                                                    // External app handoff (1.8.6, parity with Gecko
+                                                                    // tabs): a destination that is not a web page —
+                                                                    // an app scheme / intent:// URI, e.g. an app
+                                                                    // sign-in step — goes to the installed app
+                                                                    // instead of dying here. Web URLs are untouched,
+                                                                    // including the redirect rule below; app
+                                                                    // destinations are classified before it so a
+                                                                    // redirect that ends at an app still hands off.
+                                                                    if (ExternalSchemePolicy.kindOf(urlStr) ==
+                                                                        NavigationSchemeKind.EXTERNAL_APP
+                                                                    ) {
+                                                                        val ownerTab = view?.let { v ->
+                                                                            tabs.firstOrNull { it.webView === v }
+                                                                        }
+                                                                        when (val handoff = handleExternalAppHandoff(
+                                                                            urlStr,
+                                                                            request?.hasGesture() ?: true,
+                                                                            allowPrompt = ownerTab != null &&
+                                                                                ownerTab.id == currentTab.id
+                                                                        )) {
+                                                                            ExternalHandoffResult.Handled -> return true
+                                                                            is ExternalHandoffResult.LoadFallback -> {
+                                                                                view?.loadUrl(handoff.url)
+                                                                                return true
+                                                                            }
+                                                                            ExternalHandoffResult.NotHandled -> return false
+                                                                        }
+                                                                    }
                                                                     // PDF: offer in-app viewing instead of navigating.
                                                                     if (isPdfUrl(urlStr)) {
                                                                         pdfOfferUrl = urlStr
@@ -5713,6 +5835,31 @@ class MainActivity : FragmentActivity() {
                                                                     var urlStr = url ?: ""
                                                                     // Query-param stripping (Brave-style).
                                                                     urlStr = cleanTrackingUrl(urlStr)
+                                                                    // External app handoff (1.8.6, parity with Gecko
+                                                                    // tabs). This legacy callback carries no gesture
+                                                                    // information; it only fires for user-driven
+                                                                    // main-frame navigations, so the navigation is
+                                                                    // treated as gesture-backed.
+                                                                    if (ExternalSchemePolicy.kindOf(urlStr) ==
+                                                                        NavigationSchemeKind.EXTERNAL_APP
+                                                                    ) {
+                                                                        val ownerTab = view?.let { v ->
+                                                                            tabs.firstOrNull { it.webView === v }
+                                                                        }
+                                                                        when (val handoff = handleExternalAppHandoff(
+                                                                            urlStr,
+                                                                            hasUserGesture = true,
+                                                                            allowPrompt = ownerTab != null &&
+                                                                                ownerTab.id == currentTab.id
+                                                                        )) {
+                                                                            ExternalHandoffResult.Handled -> return true
+                                                                            is ExternalHandoffResult.LoadFallback -> {
+                                                                                view?.loadUrl(handoff.url)
+                                                                                return true
+                                                                            }
+                                                                            ExternalHandoffResult.NotHandled -> return false
+                                                                        }
+                                                                    }
                                                                     // Sign-in/OAuth pages stay in this tab (no handoff).
                                                                     // HTTPS mode handling FIRST (see above).
                                                                     // PDF: offer in-app viewing instead of navigating.
@@ -8150,6 +8297,39 @@ class MainActivity : FragmentActivity() {
                                         }
                                     },
                                     onClose = { showQuickTogglesDialog = false }
+                                )
+                            }
+                            externalAppPrompt?.let { prompt ->
+                                AlertDialog(
+                                    onDismissRequest = { externalAppPrompt = null },
+                                    title = { Text("Open in ${prompt.appLabel}?") },
+                                    text = {
+                                        Text(
+                                            "This website wants to continue in the " +
+                                                "${prompt.appLabel} app. Open it to carry on " +
+                                                "there, or stay here in Click."
+                                        )
+                                    },
+                                    confirmButton = {
+                                        TextButton(onClick = {
+                                            externalAppPrompt = null
+                                            val launched = runCatching {
+                                                this@MainActivity.startActivity(prompt.intent)
+                                            }.isSuccess
+                                            if (!launched) {
+                                                Toast.makeText(
+                                                    this@MainActivity,
+                                                    "${prompt.appLabel} could not be opened.",
+                                                    Toast.LENGTH_SHORT
+                                                ).show()
+                                            }
+                                        }) { Text("Open") }
+                                    },
+                                    dismissButton = {
+                                        TextButton(onClick = { externalAppPrompt = null }) {
+                                            Text("Stay here")
+                                        }
+                                    }
                                 )
                             }
                             if (showPostInstallGeckoSwitchConfirmation) {
