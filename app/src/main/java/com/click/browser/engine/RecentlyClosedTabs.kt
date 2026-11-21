@@ -60,12 +60,8 @@ object RecentlyClosedTabs {
         else stack.removeAll { it.mode == mode }
     }
 
-    /** ProfileData.kt maps Simple, Developer and Power to one history store; Advance is isolated. */
-    internal fun historyScopeModesFor(mode: BrowserMode): List<BrowserMode> = when (mode) {
-        BrowserMode.SIMPLE, BrowserMode.DEVELOPER, BrowserMode.HACK ->
-            listOf(BrowserMode.SIMPLE, BrowserMode.DEVELOPER, BrowserMode.HACK)
-        BrowserMode.ADVANCED -> listOf(BrowserMode.ADVANCED)
-    }
+    /** Per-mode profiles: every mode has its own history store (ProfileData.kt), so the scope is the mode itself. */
+    internal fun historyScopeModesFor(mode: BrowserMode): List<BrowserMode> = listOf(mode)
 
     @Synchronized
     internal fun clearForHistoryScope(mode: BrowserMode) {

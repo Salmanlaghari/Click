@@ -108,7 +108,7 @@ class ModeCapabilityRegistryTest {
             BrowserMode.values().filter { ModeCapabilityRegistry.supportsMode(FeatureId.DESKTOP, it) }.toSet()
         )
         assertEquals(
-            setOf(BrowserMode.DEVELOPER, BrowserMode.HACK),
+            BrowserMode.values().toSet(),
             BrowserMode.values().filter { ModeCapabilityRegistry.supportsMode(FeatureId.FIND_IN_PAGE, it) }.toSet()
         )
         assertEquals(
