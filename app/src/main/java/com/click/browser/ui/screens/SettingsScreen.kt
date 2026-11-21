@@ -37,22 +37,26 @@ import com.click.browser.engine.BrowserMode
 import com.click.browser.engine.BrowserSetting
 import com.click.browser.engine.BrowserSettingCapabilityPolicy
 import com.click.browser.engine.BrowserTabEngine
-import com.click.browser.engine.ClickInternalPages
 import com.click.browser.engine.LightThemeVariant
 import com.click.browser.engine.ModePersonalization
 import com.click.browser.engine.ModeTheme
 import com.click.browser.engine.NewsNotifications
+import com.click.browser.engine.ProtectionPolicy
 import com.click.browser.engine.SafetyCheck
-import kotlinx.coroutines.launch
 
 private const val PLAY_STORE_PACKAGE = "com.teampkai.clickbrowser"
 
 /**
  * Unified Settings screen — the single home for every app setting.
  *
- * Sections: General / Safety & DNS / Browser / Modes / About.
- * Replaces the old fragmented settings (PremiumSettingsScreen). Every
- * toggle and button here is wired to a real action — no dead controls.
+ * Section-wise structure (Nov 2026): the home page lists General /
+ * Protection / Privacy & Safety / Appearance / Modes / Accessibility /
+ * About with icons. General, Appearance, Modes and About render as pages
+ * inside this screen; Protection and Privacy & Safety are their own
+ * screens (ProtectionSettingsScreen / PrivacySafetySettingsScreen) opened
+ * through [onOpenProtection] / [onOpenPrivacySafety], and Accessibility
+ * keeps its existing dedicated screen. Every toggle and button here is
+ * wired to a real action — no dead controls.
  *
  * WebView cookies/cache are separate per profile. Simple, Developer and Power
  * share app-level history/bookmarks/passwords; Advance has a separate app-data store.
@@ -77,6 +81,10 @@ fun SettingsScreen(
     onOpenAccessibility: () -> Unit,
     onOpenLanguage: () -> Unit,
     onOpenDownloadSettings: () -> Unit,
+    // --- Protection + Privacy & Safety (dedicated screens) ---
+    protectionLevel: String,
+    onOpenProtection: () -> Unit,
+    onOpenPrivacySafety: () -> Unit,
     // --- Reports ---
     onOpenReports: () -> Unit,
     onOpenCatLog: () -> Unit,
@@ -88,49 +96,15 @@ fun SettingsScreen(
     // --- Default browser ---
     isDefaultBrowser: Boolean,
     onSetDefaultBrowser: () -> Unit,
-    // --- Privacy toggles ---
-    adBlockerEnabled: Boolean,
-    onToggleAdBlocker: (Boolean) -> Unit,
-    httpsMode: String,
-    onHttpsModeChange: (String) -> Unit,
-    httpsStrictExceptions: List<String>,
-    onAddHttpsException: (String) -> Unit,
-    onRemoveHttpsException: (String) -> Unit,
-    jsEnabled: Boolean,
-    onToggleJs: (Boolean) -> Unit,
+    // --- Browsing toggles kept on the General page ---
     dataSaver: Boolean,
     onToggleDataSaver: (Boolean) -> Unit,
     currentTabEngine: BrowserTabEngine,
     backgroundAudioEnabled: Boolean,
     onToggleBackgroundAudio: (Boolean) -> Unit,
-    // --- Biometric private-tab lock ---
-    biometricLockEnabled: Boolean,
-    onToggleBiometricLock: (Boolean) -> Unit,
-    biometricStatusText: String,
     // --- Text scaling (accessibility) ---
     globalTextScale: Int,
     onGlobalTextScaleChange: (Int) -> Unit,
-    // --- Brave-inspired privacy quick wins ---
-    stripTrackingParams: Boolean,
-    onToggleStripTrackingParams: (Boolean) -> Unit,
-    forgetfulBrowsing: Boolean,
-    onToggleForgetfulBrowsing: (Boolean) -> Unit,
-    forgetfulExceptions: Set<String>,
-    onForgetfulExceptionsChange: (Set<String>) -> Unit,
-    // --- Clear browsing data ---
-    onClearHistoryForMode: (BrowserMode) -> Unit,
-    onClearCookies: () -> Unit,
-    onClearCache: () -> Unit,
-    onClearAllCurrentMode: () -> Unit,
-    onOpenCookieManager: () -> Unit,
-    onOpenSiteSettings: () -> Unit = {},
-    onOpenAdvancedSecurity: () -> Unit,
-    onOpenV9Shield: () -> Unit,
-    // --- Privacy & Security suite ---
-    onOpenPrivacySecurity: () -> Unit,
-    // --- LocationGuard ---
-    locationSummary: String,
-    onOpenLocationSettings: () -> Unit,
     // --- UI animations ---
     animationsEnabled: Boolean,
     onToggleAnimations: (Boolean) -> Unit,
@@ -160,18 +134,18 @@ fun SettingsScreen(
     onClose: () -> Unit
 ) {
     val context = LocalContext.current
-    val scope = rememberCoroutineScope()
-    androidx.activity.compose.BackHandler(onBack = onClose)
     val listState = rememberLazyListState()
-    val javaScriptAvailability = BrowserSettingCapabilityPolicy.availability(
-        BrowserSetting.JAVASCRIPT, currentTabEngine
-    )
     val dataSaverAvailability = BrowserSettingCapabilityPolicy.availability(
         BrowserSetting.DATA_SAVER, currentTabEngine
     )
 
     var showAiKey by remember { mutableStateOf(false) }
-    var historyModeTarget by remember { mutableStateOf(activeMode) }
+    // Internal page: "home" lists the sections; the other values render the
+    // matching rows below. Protection / Privacy & Safety / Accessibility
+    // open their own screens instead.
+    var page by remember { mutableStateOf("home") }
+    val goBack: () -> Unit = { if (page != "home") page = "home" else onClose() }
+    androidx.activity.compose.BackHandler(onBack = goBack)
 
     // Gallery picker for the custom home-screen wallpaper. OpenDocument gives
     // a persistable URI permission so the wallpaper survives app restarts.
@@ -189,13 +163,12 @@ fun SettingsScreen(
         }
     }
 
-    // ---- Row model: each row optionally opens a named section ----
-    data class Row(val section: String?, val content: @Composable () -> Unit)
+    // ---- Row model: every row is tagged with the page it belongs to ----
+    data class Row(val section: String, val content: @Composable () -> Unit)
     val rows = remember(
-        theme, lightThemeVariant, autoRotateThemes, wallpaperUri, activeMode, onOpenV9Shield,
+        theme, lightThemeVariant, autoRotateThemes, wallpaperUri, activeMode,
         currentSearchEngineSetting, addressBarPosition,
-        adBlockerEnabled,
-        httpsMode, httpsStrictExceptions, jsEnabled, dataSaver, currentTabEngine, historyModeTarget,
+        dataSaver, currentTabEngine, backgroundAudioEnabled,
         aiApiKey, aiProvider, aiModel, showAiKey, animationsEnabled, isDefaultBrowser, advanceIntroEnabled,
         sharpViewEnabled,
         newsNotificationsEnabled, newsTopics
@@ -205,98 +178,7 @@ fun SettingsScreen(
             add(Row("General") {
                 SectionHeader("General", Icons.Default.Tune, theme)
             })
-            add(Row(null) {
-                CardRow(theme) {
-                    Text("Appearance", color = theme.onSurface, fontWeight = FontWeight.SemiBold, fontSize = 14.sp)
-                    Text(
-                        "Choose a soft light palette. Click stays light in every profile.",
-                        fontSize = 11.sp, color = theme.onSurface.copy(alpha = 0.6f)
-                    )
-                    Spacer(Modifier.height(8.dp))
-                    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                        LightThemeVariant.values().toList().chunked(2).forEach { variants ->
-                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                variants.forEach { variant ->
-                                    FilterChip(
-                                        selected = lightThemeVariant == variant,
-                                        onClick = { onLightThemeVariantChange(variant) },
-                                        label = { Text(variant.label, fontSize = 12.sp) }
-                                    )
-                                }
-                            }
-                        }
-                    }
-                    HorizontalDivider(color = theme.onSurface.copy(alpha = 0.1f))
-                    ToggleRow(
-                        "Rotate theme on launch",
-                        "Advance to the next light palette each time Click launches",
-                        autoRotateThemes,
-                        onToggleAutoRotateThemes,
-                        theme
-                    )
-                }
-            })
-            add(Row(null) {
-                CardRow(theme) {
-                    Text("Text Size (Global Default)", color = theme.onSurface, fontWeight = FontWeight.SemiBold, fontSize = 14.sp)
-                    Text(
-                        "Default text size for every website — override per site from the Text Size menu. Applies on next page load.",
-                        fontSize = 11.sp, color = theme.onSurface.copy(alpha = 0.6f)
-                    )
-                    Spacer(Modifier.height(4.dp))
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        modifier = Modifier.fillMaxWidth()
-                    ) {
-                        Text(
-                            "$globalTextScale%",
-                            color = theme.onSurface,
-                            fontWeight = FontWeight.Bold,
-                            fontSize = 16.sp,
-                            modifier = Modifier.width(64.dp)
-                        )
-                        Slider(
-                            value = globalTextScale.toFloat(),
-                            onValueChange = { onGlobalTextScaleChange(it.toInt()) },
-                            valueRange = 50f..300f,
-                            steps = 24,
-                            modifier = Modifier.weight(1f)
-                        )
-                    }
-                }
-            })
-            add(Row(null) {
-                CardRow(theme) {
-                    Text("Home Wallpaper", color = theme.onSurface, fontWeight = FontWeight.SemiBold, fontSize = 14.sp)
-                    Text(
-                        if (wallpaperUri == null) "No custom wallpaper — using the mode theme background."
-                        else "Custom wallpaper set.",
-                        fontSize = 11.sp, color = theme.onSurface.copy(alpha = 0.6f)
-                    )
-                    Spacer(Modifier.height(8.dp))
-                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        Button(
-                            onClick = { wallpaperPicker.launch(arrayOf("image/*")) },
-                            modifier = Modifier.weight(1f)
-                        ) {
-                            Icon(Icons.Default.Image, contentDescription = null, modifier = Modifier.size(18.dp))
-                            Spacer(Modifier.width(4.dp))
-                            Text("Pick image")
-                        }
-                        if (wallpaperUri != null) {
-                            OutlinedButton(
-                                onClick = { onWallpaperChange(null) },
-                                modifier = Modifier.weight(1f)
-                            ) {
-                                Icon(Icons.Default.Refresh, contentDescription = null, modifier = Modifier.size(18.dp))
-                                Spacer(Modifier.width(4.dp))
-                                Text("Reset")
-                            }
-                        }
-                    }
-                }
-            })
-            add(Row(null) {
+            add(Row("General") {
                 CardRow(theme) {
                     Text("Default Search Engine", color = theme.onSurface, fontWeight = FontWeight.SemiBold, fontSize = 14.sp)
                     Text(
@@ -322,64 +204,7 @@ fun SettingsScreen(
                     }
                 }
             })
-            add(Row(null) {
-                CardRow(theme) {
-                    ToggleRow(
-                        "UI Animations",
-                        "Tab close & page transition effects",
-                        animationsEnabled, onToggleAnimations, theme
-                    )
-                    HorizontalDivider(color = theme.onSurface.copy(alpha = 0.1f))
-                    ToggleRow(
-                        "Advance intro animation",
-                        "5-second intro when entering Advance mode (tap skips)",
-                        advanceIntroEnabled, onToggleAdvanceIntro, theme
-                    )
-                    HorizontalDivider(color = theme.onSurface.copy(alpha = 0.1f))
-                    ToggleRow(
-                        "Sharp View",
-                        "Full-density page rendering for crisp text & images (applies on next page load)",
-                        sharpViewEnabled, onToggleSharpView, theme
-                    )
-                }
-            })
-            // ---- Address bar position (Brave/Chrome style) ----
-            add(Row(null) {
-                CardRow(theme) {
-                    Text("Address Bar Position", color = theme.onSurface, fontWeight = FontWeight.SemiBold, fontSize = 14.sp)
-                    Text(
-                        "Move the URL bar to the top or bottom of the screen — works in all 4 modes.",
-                        fontSize = 11.sp, color = theme.onSurface.copy(alpha = 0.6f)
-                    )
-                    Spacer(Modifier.height(8.dp))
-                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        FilterChip(
-                            selected = addressBarPosition == "top",
-                            onClick = { onAddressBarPositionChange("top") },
-                            label = { Text("⬆️ Top") }
-                        )
-                        FilterChip(
-                            selected = addressBarPosition == "bottom",
-                            onClick = { onAddressBarPositionChange("bottom") },
-                            label = { Text("⬇️ Bottom") }
-                        )
-                    }
-                }
-            })
-            // ---- Customize browser menu ----
-            add(Row(null) {
-                CardRow(theme) {
-                    ActionRow(
-                        "Customize Menu",
-                        "Reorder & hide items in the browser menu",
-                        Icons.Default.Tune,
-                        theme,
-                        onCustomizeMenu
-                    )
-                }
-            })
-            // ---- Default browser ----
-            add(Row(null) {
+            add(Row("General") {
                 CardRow(theme) {
                     Text("Default Browser", color = theme.onSurface, fontWeight = FontWeight.SemiBold, fontSize = 14.sp)
                     Text(
@@ -402,8 +227,43 @@ fun SettingsScreen(
                     }
                 }
             })
+            add(Row("General") {
+                CardRow(theme) {
+                    ToggleRow(
+                        title = "Data Saver",
+                        desc = dataSaverAvailability.description,
+                        checked = dataSaver,
+                        onCheckedChange = onToggleDataSaver,
+                        theme = theme,
+                        enabled = dataSaverAvailability.enabled
+                    )
+                    HorizontalDivider(color = theme.onSurface.copy(alpha = 0.1f))
+                    ToggleRow(
+                        "Background audio",
+                        "Let web-page audio keep playing when the app is in the background",
+                        backgroundAudioEnabled, onToggleBackgroundAudio, theme
+                    )
+                }
+            })
+            add(Row("General") {
+                CardRow(theme) {
+                    ActionRow("Tab Groups", "Named, color-coded tab collections", Icons.Default.FolderCopy, theme, onOpenTabGroups)
+                    HorizontalDivider(color = theme.onSurface.copy(alpha = 0.1f))
+                    ActionRow("Language", "App language + on-device page translate", Icons.Default.Translate, theme, onOpenLanguage)
+                    HorizontalDivider(color = theme.onSurface.copy(alpha = 0.1f))
+                    ActionRow("Downloads", "Download location — phone storage by default", Icons.Default.Download, theme, onOpenDownloadSettings)
+                    HorizontalDivider(color = theme.onSurface.copy(alpha = 0.1f))
+                    ActionRow(
+                        "Customize Menu",
+                        "Reorder & hide items in the browser menu",
+                        Icons.Default.Tune,
+                        theme,
+                        onCustomizeMenu
+                    )
+                }
+            })
             // ---- AI Assistant (kept from the old settings) ----
-            add(Row(null) {
+            add(Row("General") {
                 CardRow(theme) {
                     Text("AI Assistant", color = theme.onSurface, fontWeight = FontWeight.SemiBold, fontSize = 14.sp)
                     Text(
@@ -462,7 +322,7 @@ fun SettingsScreen(
             })
 
             // ---- News Notifications (background alerts, opt-in) ----
-            add(Row(null) {
+            add(Row("General") {
                 CardRow(theme) {
                     Text("News Notifications", color = theme.onSurface, fontWeight = FontWeight.SemiBold, fontSize = 14.sp)
                     Text(
@@ -506,242 +366,143 @@ fun SettingsScreen(
                 }
             })
 
-            // ================= SAFETY & DNS =================
-            add(Row("Safety & DNS") {
-                SectionHeader("Safety & DNS", Icons.Default.Shield, theme)
+            // ================= APPEARANCE =================
+            add(Row("Appearance") {
+                SectionHeader("Appearance", Icons.Default.Palette, theme)
             })
-            add(Row(null) {
+            add(Row("Appearance") {
                 CardRow(theme) {
-                    ToggleRow("Ad Blocker", "Block intrusive ads & tracker scripts", adBlockerEnabled, onToggleAdBlocker, theme)
-                    HorizontalDivider(color = theme.onSurface.copy(alpha = 0.1f))
-                    ActionRow(
-                        "V9 Shield",
-                        "DNS protection only · not a VPN",
-                        Icons.Default.Shield,
-                        theme,
-                        onOpenV9Shield
-                    )
-                    HorizontalDivider(color = theme.onSurface.copy(alpha = 0.1f))
-                    // ---- HTTPS mode: Off / Standard / Strict ----
+                    Text("Appearance", color = theme.onSurface, fontWeight = FontWeight.SemiBold, fontSize = 14.sp)
                     Text(
-                        "HTTPS Mode",
-                        color = theme.onSurface, fontWeight = FontWeight.SemiBold, fontSize = 14.sp
-                    )
-                    Text(
-                        "Standard upgrades http to https. Strict BLOCKS plain-http pages " +
-                            "(per-site exceptions below). Off allows http.",
+                        "Choose a soft light palette. Click stays light in every profile.",
                         fontSize = 11.sp, color = theme.onSurface.copy(alpha = 0.6f)
                     )
                     Spacer(Modifier.height(8.dp))
-                    ModeOptionRow("off", "Off", "Allow plain-http pages (least safe)",
-                        selected = httpsMode == "off",
-                        onSelect = { onHttpsModeChange("off") }, theme)
-                    ModeOptionRow("standard", "Standard", "Upgrade http to https automatically",
-                        selected = httpsMode == "standard",
-                        onSelect = { onHttpsModeChange("standard") }, theme)
-                    ModeOptionRow("strict", "Strict", "Block plain-http pages entirely",
-                        selected = httpsMode == "strict",
-                        onSelect = { onHttpsModeChange("strict") }, theme)
-                    // ---- HTTPS-Strict per-site exceptions ----
-                    if (httpsMode == "strict") {
-                        Spacer(Modifier.height(8.dp))
-                        Text(
-                            "Strict exceptions",
-                            color = theme.onSurface, fontWeight = FontWeight.SemiBold, fontSize = 13.sp
-                        )
-                        Text(
-                            "These sites may load over plain http even in Strict mode.",
-                            fontSize = 11.sp, color = theme.onSurface.copy(alpha = 0.6f)
-                        )
-                        Spacer(Modifier.height(4.dp))
-                        var newException by remember { mutableStateOf("") }
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(8.dp)
-                        ) {
-                            OutlinedTextField(
-                                value = newException,
-                                onValueChange = { newException = it },
-                                placeholder = { Text("example.com", fontSize = 13.sp) },
-                                singleLine = true,
-                                modifier = Modifier.weight(1f),
-                                textStyle = LocalTextStyle.current.copy(fontSize = 13.sp)
-                            )
-                            Button(onClick = {
-                                onAddHttpsException(newException)
-                                newException = ""
-                            }) { Text("Add") }
-                        }
-                        Spacer(Modifier.height(4.dp))
-                        if (httpsStrictExceptions.isEmpty()) {
-                            Text(
-                                "No exceptions yet.",
-                                fontSize = 12.sp, color = theme.onSurface.copy(alpha = 0.5f)
-                            )
-                        } else {
-                            httpsStrictExceptions.forEach { host ->
-                                Row(
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .padding(vertical = 2.dp),
-                                    verticalAlignment = Alignment.CenterVertically
-                                ) {
-                                    Text(
-                                        host, fontSize = 13.sp,
-                                        color = theme.onSurface, modifier = Modifier.weight(1f)
+                    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                        LightThemeVariant.values().toList().chunked(2).forEach { variants ->
+                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                variants.forEach { variant ->
+                                    FilterChip(
+                                        selected = lightThemeVariant == variant,
+                                        onClick = { onLightThemeVariantChange(variant) },
+                                        label = { Text(variant.label, fontSize = 12.sp) }
                                     )
-                                    TextButton(onClick = { onRemoveHttpsException(host) }) {
-                                        Text("Remove", fontSize = 12.sp)
-                                    }
                                 }
                             }
                         }
                     }
                     HorizontalDivider(color = theme.onSurface.copy(alpha = 0.1f))
                     ToggleRow(
-                        title = "JavaScript",
-                        desc = javaScriptAvailability.description,
-                        checked = jsEnabled,
-                        onCheckedChange = onToggleJs,
-                        theme = theme,
-                        enabled = javaScriptAvailability.enabled
-                    )
-                    HorizontalDivider(color = theme.onSurface.copy(alpha = 0.1f))
-                    ToggleRow(
-                        title = "Data Saver",
-                        desc = dataSaverAvailability.description,
-                        checked = dataSaver,
-                        onCheckedChange = onToggleDataSaver,
-                        theme = theme,
-                        enabled = dataSaverAvailability.enabled
-                    )
-                    HorizontalDivider(color = theme.onSurface.copy(alpha = 0.1f))
-                    ToggleRow("Lock Private Tabs", biometricStatusText, biometricLockEnabled, onToggleBiometricLock, theme)
-                    HorizontalDivider(color = theme.onSurface.copy(alpha = 0.1f))
-                    ToggleRow(
-                        "Background audio",
-                        "Let web-page audio keep playing when the app is in the background",
-                        backgroundAudioEnabled, onToggleBackgroundAudio, theme
-                    )
-                    HorizontalDivider(color = theme.onSurface.copy(alpha = 0.1f))
-                    ToggleRow(
-                        "Strip Tracking Links",
-                        "Auto-remove utm_*, gclid, fbclid & other trackers from URLs",
-                        stripTrackingParams, onToggleStripTrackingParams, theme
-                    )
-                    HorizontalDivider(color = theme.onSurface.copy(alpha = 0.1f))
-                    ToggleRow(
-                        "Forgetful Browsing",
-                        "Wipe a site's cookies & data when its last tab closes",
-                        forgetfulBrowsing, onToggleForgetfulBrowsing, theme
-                    )
-                    if (forgetfulBrowsing) {
-                        ForgetfulExceptionsRow(
-                            exceptions = forgetfulExceptions,
-                            onExceptionsChange = onForgetfulExceptionsChange,
-                            theme = theme
-                        )
-                    }
-                    HorizontalDivider(color = theme.onSurface.copy(alpha = 0.1f))
-                    // Location permission behavior is transparent and never fabricates coordinates.
-                    ActionRow(
-                        "Location",
-                        "Websites will see: $locationSummary",
-                        Icons.Default.LocationOn,
-                        theme,
-                        onOpenLocationSettings
+                        "Rotate theme on launch",
+                        "Advance to the next light palette each time Click launches",
+                        autoRotateThemes,
+                        onToggleAutoRotateThemes,
+                        theme
                     )
                 }
             })
-            add(Row(null) {
+            add(Row("Appearance") {
                 CardRow(theme) {
-                    Text("Clear Browsing Data", color = theme.onSurface, fontWeight = FontWeight.SemiBold, fontSize = 14.sp)
+                    Text("Text Size (Global Default)", color = theme.onSurface, fontWeight = FontWeight.SemiBold, fontSize = 14.sp)
                     Text(
-                        "WebView cookies and cache are separate per profile. History is shared by Simple, Developer and Power; Advance has separate app data.",
+                        "Default text size for every website — override per site from the Text Size menu. Applies on next page load.",
+                        fontSize = 11.sp, color = theme.onSurface.copy(alpha = 0.6f)
+                    )
+                    Spacer(Modifier.height(4.dp))
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Text(
+                            "$globalTextScale%",
+                            color = theme.onSurface,
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 16.sp,
+                            modifier = Modifier.width(64.dp)
+                        )
+                        Slider(
+                            value = globalTextScale.toFloat(),
+                            onValueChange = { onGlobalTextScaleChange(it.toInt()) },
+                            valueRange = 50f..300f,
+                            steps = 24,
+                            modifier = Modifier.weight(1f)
+                        )
+                    }
+                }
+            })
+            add(Row("Appearance") {
+                CardRow(theme) {
+                    Text("Home Wallpaper", color = theme.onSurface, fontWeight = FontWeight.SemiBold, fontSize = 14.sp)
+                    Text(
+                        if (wallpaperUri == null) "No custom wallpaper — using the mode theme background."
+                        else "Custom wallpaper set.",
                         fontSize = 11.sp, color = theme.onSurface.copy(alpha = 0.6f)
                     )
                     Spacer(Modifier.height(8.dp))
                     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        OutlinedButton(onClick = onClearCookies, modifier = Modifier.weight(1f)) { Text("Cookies") }
-                        OutlinedButton(onClick = onClearCache, modifier = Modifier.weight(1f)) { Text("Cache") }
-                    }
-                    Spacer(Modifier.height(8.dp))
-                    // Per-mode history clearing (DataStore-backed, safe for any mode).
-                    Text("Clear history for:", color = theme.onSurface, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
-                    Spacer(Modifier.height(4.dp))
-                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                        listOf(BrowserMode.SIMPLE, BrowserMode.ADVANCED).forEach { mode ->
-                            val isShared = mode != BrowserMode.ADVANCED
-                            FilterChip(
-                                selected = if (isShared) historyModeTarget != BrowserMode.ADVANCED
-                                    else historyModeTarget == BrowserMode.ADVANCED,
-                                onClick = { historyModeTarget = if (isShared) BrowserMode.SIMPLE else BrowserMode.ADVANCED },
-                                label = {
-                                    Text(
-                                        if (isShared) "Simple / Developer / Power" else "Advance",
-                                        fontSize = 11.sp
-                                    )
-                                }
-                            )
+                        Button(
+                            onClick = { wallpaperPicker.launch(arrayOf("image/*")) },
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            Icon(Icons.Default.Image, contentDescription = null, modifier = Modifier.size(18.dp))
+                            Spacer(Modifier.width(4.dp))
+                            Text("Pick image")
+                        }
+                        if (wallpaperUri != null) {
+                            OutlinedButton(
+                                onClick = { onWallpaperChange(null) },
+                                modifier = Modifier.weight(1f)
+                            ) {
+                                Icon(Icons.Default.Refresh, contentDescription = null, modifier = Modifier.size(18.dp))
+                                Spacer(Modifier.width(4.dp))
+                                Text("Reset")
+                            }
                         }
                     }
-                    Spacer(Modifier.height(8.dp))
-                    OutlinedButton(
-                        onClick = { onClearHistoryForMode(historyModeTarget) },
-                        modifier = Modifier.fillMaxWidth()
-                    ) {
-                        Icon(Icons.Default.History, contentDescription = null, modifier = Modifier.size(18.dp))
-                        Spacer(Modifier.width(4.dp))
-                        Text(if (historyModeTarget == BrowserMode.ADVANCED) "Clear Advance history" else "Clear shared-profile history")
-                    }
-                    Spacer(Modifier.height(8.dp))
-                    Button(
-                        onClick = onClearAllCurrentMode,
-                        colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error),
-                        modifier = Modifier.fillMaxWidth()
-                    ) {
-                        Text("Clear cookies, cache & history", color = MaterialTheme.colorScheme.onError)
-                    }
                 }
             })
-            add(Row(null) {
+            add(Row("Appearance") {
                 CardRow(theme) {
-                    ActionRow("Cookie Manager", "Inspect & delete cookies per site", Icons.Default.Cookie, theme, onOpenCookieManager)
-                    HorizontalDivider(color = theme.onSurface.copy(alpha = 0.1f))
-                    ActionRow(
-                        "Site settings",
-                        "Review & reset per-site choices for all websites",
-                        Icons.Default.Shield, theme, onOpenSiteSettings
+                    ToggleRow(
+                        "UI Animations",
+                        "Tab close & page transition effects",
+                        animationsEnabled, onToggleAnimations, theme
                     )
                     HorizontalDivider(color = theme.onSurface.copy(alpha = 0.1f))
-                    ActionRow(
-                        "Privacy & Security",
-                        "Protection status, site controls, private browsing, accounts and passwords",
-                        Icons.Default.VerifiedUser, theme, onOpenPrivacySecurity
+                    ToggleRow(
+                        "Advance intro animation",
+                        "5-second intro when entering Advance mode (tap skips)",
+                        advanceIntroEnabled, onToggleAdvanceIntro, theme
                     )
                     HorizontalDivider(color = theme.onSurface.copy(alpha = 0.1f))
-                    ActionRow(
-                        "Advanced Security",
-                        "Safety Check, Safe Browsing, site settings and app integrity",
-                        Icons.Default.Shield, theme, onOpenAdvancedSecurity
+                    ToggleRow(
+                        "Sharp View",
+                        "Full-density page rendering for crisp text & images (applies on next page load)",
+                        sharpViewEnabled, onToggleSharpView, theme
                     )
                 }
             })
-
-            // ================= BROWSER =================
-            add(Row("Browser") {
-                SectionHeader("Browser", Icons.Default.Web, theme)
-            })
-            add(Row(null) {
+            // ---- Address bar position ----
+            add(Row("Appearance") {
                 CardRow(theme) {
-                    ActionRow("Tab Groups", "Named, color-coded tab collections", Icons.Default.FolderCopy, theme, onOpenTabGroups)
-                    HorizontalDivider(color = theme.onSurface.copy(alpha = 0.1f))
-                    ActionRow("Accessibility", "Force zoom, reader mode, reduced motion", Icons.Default.Accessibility, theme, onOpenAccessibility)
-                    HorizontalDivider(color = theme.onSurface.copy(alpha = 0.1f))
-                    ActionRow("Language", "App language + on-device page translate", Icons.Default.Translate, theme, onOpenLanguage)
-                    HorizontalDivider(color = theme.onSurface.copy(alpha = 0.1f))
-                    ActionRow("Downloads", "Download location — phone storage by default", Icons.Default.Download, theme, onOpenDownloadSettings)
+                    Text("Address Bar Position", color = theme.onSurface, fontWeight = FontWeight.SemiBold, fontSize = 14.sp)
+                    Text(
+                        "Move the URL bar to the top or bottom of the screen — works in all 4 modes.",
+                        fontSize = 11.sp, color = theme.onSurface.copy(alpha = 0.6f)
+                    )
+                    Spacer(Modifier.height(8.dp))
+                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        FilterChip(
+                            selected = addressBarPosition == "top",
+                            onClick = { onAddressBarPositionChange("top") },
+                            label = { Text("⬆️ Top") }
+                        )
+                        FilterChip(
+                            selected = addressBarPosition == "bottom",
+                            onClick = { onAddressBarPositionChange("bottom") },
+                            label = { Text("⬇️ Bottom") }
+                        )
+                    }
                 }
             })
 
@@ -749,7 +510,7 @@ fun SettingsScreen(
             add(Row("Modes") {
                 SectionHeader("Modes", Icons.Default.Apps, theme)
             })
-            add(Row(null) {
+            add(Row("Modes") {
                 CardRow(theme) {
                     Text(
                         "Each profile has separate WebView cookies/cache. Simple, Developer and Power share app-level history, bookmarks and passwords; Advance also isolates app data. Switching restarts into that profile.",
@@ -802,7 +563,7 @@ fun SettingsScreen(
             add(Row("About") {
                 SectionHeader("About", Icons.Default.Info, theme)
             })
-            add(Row(null) {
+            add(Row("About") {
                 CardRow(theme) {
                     InfoLine("App version", "${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE})", theme)
                     InfoLine("Browser profiles", "Android System WebView · 4 data profiles", theme)
@@ -810,7 +571,7 @@ fun SettingsScreen(
                     InfoLine("Developer", "TEAM PK AI", theme)
                 }
             })
-            add(Row(null) {
+            add(Row("About") {
                 CardRow(theme) {
                     ActionRow(
                         "Check for updates",
@@ -878,26 +639,12 @@ fun SettingsScreen(
         }
     }
 
-    val headerIndex = remember(rows) {
-        buildMap {
-            rows.forEachIndexed { i, row -> row.section?.let { put(it, i) } }
-        }
-    }
-    val sections = listOf(
-        "General" to Icons.Default.Tune,
-        "Safety & DNS" to Icons.Default.Shield,
-        "Browser" to Icons.Default.Language,
-        "Modes" to Icons.Default.Speed,
-        "About" to Icons.Default.Info
-    )
-    var activeSection by remember { mutableStateOf("General") }
-
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text("Settings", fontWeight = FontWeight.Bold) },
+                title = { Text(if (page == "home") "Settings" else page, fontWeight = FontWeight.Bold) },
                 navigationIcon = {
-                    IconButton(onClick = onClose) {
+                    IconButton(onClick = goBack) {
                         Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
                     }
                 },
@@ -909,73 +656,74 @@ fun SettingsScreen(
         },
         containerColor = theme.background
     ) { padding ->
-        Column(Modifier.padding(padding).fillMaxSize()) {
-            // Section quick-nav chips
-            ScrollableTabRow(
-                selectedTabIndex = sections.indexOfFirst { it.first == activeSection }.coerceAtLeast(0),
-                containerColor = theme.background,
-                contentColor = theme.primary,
-                edgePadding = 16.dp
-            ) {
-                sections.forEach { (s, icon) ->
-                    Tab(
-                        selected = activeSection == s,
-                        onClick = {
-                            activeSection = s
-                            headerIndex[s]?.let { idx ->
-                                scope.launch { listState.animateScrollToItem(idx) }
-                            }
-                        },
-                        text = {
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                Icon(
-                                    icon,
-                                    contentDescription = null,
-                                    tint = if (activeSection == s) theme.primary else theme.onSurface.copy(alpha = 0.62f),
-                                    modifier = Modifier.size(16.dp)
-                                )
-                                Spacer(Modifier.width(6.dp))
-                                Text(s, fontSize = 12.sp)
-                            }
-                        }
-                    )
+        LazyColumn(
+            state = listState,
+            modifier = Modifier
+                .padding(padding)
+                .fillMaxSize()
+                .padding(horizontal = 16.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+            contentPadding = PaddingValues(bottom = 24.dp)
+        ) {
+            if (page == "home") {
+                item {
+                    CardRow(theme) {
+                        ActionRow(
+                            "General",
+                            "Search engine, default browser, AI assistant, downloads",
+                            Icons.Default.Tune,
+                            theme
+                        ) { page = "General" }
+                        HorizontalDivider(color = theme.onSurface.copy(alpha = 0.1f))
+                        ActionRow(
+                            "Protection",
+                            "Trackers & ads blocking — currently ${ProtectionPolicy.levelLabel(protectionLevel)}",
+                            Icons.Default.Shield,
+                            theme,
+                            onOpenProtection
+                        )
+                        HorizontalDivider(color = theme.onSurface.copy(alpha = 0.1f))
+                        ActionRow(
+                            "Privacy & Safety",
+                            "Safe Browsing, clear browsing data, Do Not Track, site settings",
+                            Icons.Default.VerifiedUser,
+                            theme,
+                            onOpenPrivacySafety
+                        )
+                        HorizontalDivider(color = theme.onSurface.copy(alpha = 0.1f))
+                        ActionRow(
+                            "Appearance",
+                            "Theme, text size, wallpaper, address bar",
+                            Icons.Default.Palette,
+                            theme
+                        ) { page = "Appearance" }
+                        HorizontalDivider(color = theme.onSurface.copy(alpha = 0.1f))
+                        ActionRow(
+                            "Modes",
+                            "Switch between your browser profiles",
+                            Icons.Default.Apps,
+                            theme
+                        ) { page = "Modes" }
+                        HorizontalDivider(color = theme.onSurface.copy(alpha = 0.1f))
+                        ActionRow(
+                            "Accessibility",
+                            "Force zoom, reader mode, reduced motion",
+                            Icons.Default.Accessibility,
+                            theme,
+                            onOpenAccessibility
+                        )
+                        HorizontalDivider(color = theme.onSurface.copy(alpha = 0.1f))
+                        ActionRow(
+                            "About",
+                            "Version, licenses, privacy policy, help",
+                            Icons.Default.Info,
+                            theme
+                        ) { page = "About" }
+                    }
                 }
-            }
-            LazyColumn(
-                state = listState,
-                modifier = Modifier
-                    .fillMaxSize()
-                    .padding(horizontal = 16.dp),
-                verticalArrangement = Arrangement.spacedBy(8.dp),
-                contentPadding = PaddingValues(bottom = 24.dp)
-            ) {
-                items(rows.size) { i -> rows[i].content() }
-            }
-        }
-    }
-}
-
-@Composable
-private fun HourPicker(
-    label: String,
-    hour: Int,
-    theme: ModeTheme,
-    onChange: (Int) -> Unit
-) {
-    var expanded by remember { mutableStateOf(false) }
-    Column {
-        Text(label, fontSize = 11.sp, color = theme.onSurface.copy(alpha = 0.6f))
-        Box {
-            OutlinedButton(onClick = { expanded = true }) {
-                Text("%02d:00".format(hour), fontSize = 13.sp)
-            }
-            DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
-                (0..23).forEach { h ->
-                    DropdownMenuItem(
-                        text = { Text("%02d:00".format(h), fontSize = 13.sp) },
-                        onClick = { onChange(h); expanded = false }
-                    )
-                }
+            } else {
+                val visibleRows = rows.filter { it.section == page }
+                items(visibleRows.size) { i -> visibleRows[i].content() }
             }
         }
     }
@@ -1013,31 +761,6 @@ private fun CardRow(theme: ModeTheme, content: @Composable ColumnScope.() -> Uni
         modifier = Modifier.fillMaxWidth()
     ) {
         Column(Modifier.animateContentSize().padding(16.dp), content = content)
-    }
-}
-
-@Composable
-private fun ModeOptionRow(
-    value: String,
-    title: String,
-    desc: String,
-    selected: Boolean,
-    onSelect: () -> Unit,
-    theme: ModeTheme
-) {
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clickable(onClick = onSelect)
-            .padding(vertical = 6.dp),
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        RadioButton(selected = selected, onClick = onSelect)
-        Spacer(Modifier.width(8.dp))
-        Column(Modifier.weight(1f)) {
-            Text(title, fontSize = 14.sp, color = theme.onSurface, fontWeight = FontWeight.Medium)
-            Text(desc, fontSize = 11.sp, color = theme.onSurface.copy(alpha = 0.6f))
-        }
     }
 }
 
@@ -1113,97 +836,5 @@ private fun InfoLine(label: String, value: String, theme: ModeTheme) {
     ) {
         Text(label, color = theme.onSurface.copy(alpha = 0.6f), fontSize = 13.sp)
         Text(value, color = theme.onSurface, fontWeight = FontWeight.SemiBold, fontSize = 13.sp)
-    }
-}
-
-/**
- * Forgetful Browsing per-site exceptions: sites whose cookies/data are kept
- * even when their last tab closes. Add/remove hosts; input is normalized
- * ("https://Example.com/" -> "example.com") and invalid hosts are rejected.
- */
-@Composable
-private fun ForgetfulExceptionsRow(
-    exceptions: Set<String>,
-    onExceptionsChange: (Set<String>) -> Unit,
-    theme: ModeTheme
-) {
-    var showDialog by remember { mutableStateOf(false) }
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clickable { showDialog = true }
-            .padding(vertical = 10.dp),
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        Icon(Icons.Default.Shield, contentDescription = null, tint = theme.primary, modifier = Modifier.size(22.dp))
-        Spacer(Modifier.width(12.dp))
-        Column(Modifier.weight(1f)) {
-            Text("Forgetful exceptions", color = theme.onSurface, fontWeight = FontWeight.SemiBold, fontSize = 14.sp)
-            Text(
-                if (exceptions.isEmpty()) "No exceptions — every site is forgotten"
-                else "${exceptions.size} site(s) always remembered",
-                fontSize = 11.sp, color = theme.onSurface.copy(alpha = 0.6f)
-            )
-        }
-        Icon(Icons.AutoMirrored.Filled.ArrowForward, contentDescription = null, tint = Color.Gray, modifier = Modifier.size(18.dp))
-    }
-    if (showDialog) {
-        var input by remember { mutableStateOf("") }
-        var error by remember { mutableStateOf<String?>(null) }
-        AlertDialog(
-            onDismissRequest = { showDialog = false },
-            title = { Text("Remember these sites", color = theme.onSurface) },
-            text = {
-                Column {
-                    Text(
-                        "Excepted sites keep their cookies & data when tabs close.",
-                        fontSize = 12.sp, color = theme.onSurface.copy(alpha = 0.6f)
-                    )
-                    Spacer(Modifier.height(8.dp))
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        OutlinedTextField(
-                            value = input,
-                            onValueChange = { input = it; error = null },
-                            label = { Text("example.com") },
-                            singleLine = true,
-                            isError = error != null,
-                            modifier = Modifier.weight(1f)
-                        )
-                        Spacer(Modifier.width(8.dp))
-                        Button(onClick = {
-                            val host = com.click.browser.engine.ForgetfulBrowsing.normalizeException(input)
-                            if (host == null) {
-                                error = "Not a valid host"
-                            } else {
-                                onExceptionsChange(exceptions + host)
-                                input = ""
-                            }
-                        }) { Text("Add") }
-                    }
-                    if (error != null) {
-                        Text(error!!, color = MaterialTheme.colorScheme.error, fontSize = 12.sp)
-                    }
-                    Spacer(Modifier.height(8.dp))
-                    if (exceptions.isEmpty()) {
-                        Text("No exceptions yet.", fontSize = 12.sp, color = theme.onSurface.copy(alpha = 0.6f))
-                    } else {
-                        exceptions.sorted().forEach { host ->
-                            Row(
-                                modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Text(host, modifier = Modifier.weight(1f), fontSize = 14.sp, color = theme.onSurface)
-                                IconButton(onClick = { onExceptionsChange(exceptions - host) }) {
-                                    Icon(Icons.Default.Delete, contentDescription = "Remove $host", tint = MaterialTheme.colorScheme.error)
-                                }
-                            }
-                        }
-                    }
-                }
-            },
-            confirmButton = {
-                TextButton(onClick = { showDialog = false }) { Text("Done") }
-            }
-        )
     }
 }

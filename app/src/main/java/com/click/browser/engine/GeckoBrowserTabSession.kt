@@ -112,7 +112,14 @@ internal class GeckoBrowserTabSession(
     private val contextId = geckoContextIdFor(mode)
     private val settings = GeckoSessionSettings.Builder()
         .usePrivateMode(false)
-        .useTrackingProtection(true)
+        // Tracking protection follows the user's Protection level: the
+        // per-session switch stays on unless the level is Off. The switch
+        // is only a gate — the actual blocking is driven by the runtime's
+        // anti-tracking categories, which ProtectionRuntime updates live,
+        // so changing the level (including to Off, which commits
+        // AntiTracking.NONE + ETP NONE) takes effect in existing sessions
+        // too, without recreating them.
+        .useTrackingProtection(ProtectionRuntime.current.level != ProtectionPolicy.LEVEL_OFF)
         .contextId(contextId)
         .viewportMode(DesktopLayoutPolicy.geckoViewportMode(wideLayoutForUrl(initialUrl)))
         .build()
