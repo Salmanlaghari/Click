@@ -168,8 +168,8 @@ internal class NormalTabExtensionRouter(
         runtime.webExtensionController.list().accept(
             { installed ->
                 val permitted = installed.orEmpty().filter { extension ->
-                    !extension.isBuiltIn && extension.metaData.enabled &&
-                        extensionPolicyBlockers(extension).isEmpty()
+                    canExposeExtensionActions(extension) && extension.metaData.enabled &&
+                        effectivePolicyBlockers(extension).isEmpty()
                 }
                 val permittedIds = permitted.mapTo(mutableSetOf()) { it.id }
                 defaultActions.keys.retainAll(permittedIds)
@@ -213,8 +213,8 @@ internal class NormalTabExtensionRouter(
     ): NormalTabActionDispatchResult = dispatchNormalTabActionClick(
         tabId = tabId,
         attachedTabIds = sessions.keys,
-        isEnabled = !item.extension.isBuiltIn && item.extension.metaData.enabled,
-        isPolicyApproved = extensionPolicyBlockers(item.extension).isEmpty(),
+        isEnabled = canExposeExtensionActions(item.extension) && item.extension.metaData.enabled,
+        isPolicyApproved = effectivePolicyBlockers(item.extension).isEmpty(),
         isSupportedPage = supportsNormalTabExtensionActions(currentUrl),
         activateTab = { setSelected(it, true) },
         clickAction = { item.action.click() }
@@ -257,7 +257,7 @@ internal class NormalTabExtensionRouter(
     private fun createPopup(extension: WebExtension): GeckoResult<GeckoSession>? {
         val owner = activeTabId ?: return null
         val ownerSession = sessions[owner] ?: return null
-        if (!extension.metaData.enabled || extensionPolicyBlockers(extension).isNotEmpty()) return null
+        if (!extension.metaData.enabled || effectivePolicyBlockers(extension).isNotEmpty()) return null
 
         closePopup()
         val settings = GeckoSessionSettings.Builder()
@@ -353,8 +353,8 @@ internal class NormalTabExtensionRouter(
         action: WebExtension.Action,
         pageAction: Boolean
     ): NormalTabExtensionAction? {
-        if (extension.isBuiltIn || !extension.metaData.enabled ||
-            extensionPolicyBlockers(extension).isNotEmpty()
+        if (!canExposeExtensionActions(extension) || !extension.metaData.enabled ||
+            effectivePolicyBlockers(extension).isNotEmpty()
         ) return null
         if (pageAction && action.enabled != true) return null
         if (!pageAction && action.enabled == false) return null

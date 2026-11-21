@@ -91,4 +91,53 @@ class InstalledAddonsPanelTest {
         assertFalse(blockedAddon.canOpenOptions)
         assertFalse(noSafeOptionsAddon.canOpenOptions)
     }
+
+    @Test
+    fun panelRowsPutPreinstalledAddonsUnderTheirOwnHeader() {
+        val builtIn = InstalledAddonPanelItem(
+            id = "builtin@example",
+            name = "Built-in",
+            version = "1.0",
+            enabled = true,
+            policyBlockers = emptyList(),
+            builtIn = true,
+            iconAssetPath = "preinstalled_extensions/example/icon.png"
+        )
+        val userAddon = InstalledAddonPanelItem(
+            id = "user@example",
+            name = "User add-on",
+            version = "2.0",
+            enabled = true,
+            policyBlockers = emptyList()
+        )
+
+        val rows = installedAddonPanelRows(listOf(userAddon, builtIn))
+
+        assertEquals(
+            listOf(
+                InstalledAddonPanelRow.Header("Already installed — ready to use"),
+                InstalledAddonPanelRow.Entry(builtIn),
+                InstalledAddonPanelRow.Header("Installed by you"),
+                InstalledAddonPanelRow.Entry(userAddon)
+            ),
+            rows
+        )
+    }
+
+    @Test
+    fun panelRowsHaveNoHeadersWithoutPreinstalledAddons() {
+        val userAddon = InstalledAddonPanelItem(
+            id = "user@example",
+            name = "User add-on",
+            version = "2.0",
+            enabled = false,
+            policyBlockers = emptyList()
+        )
+
+        assertEquals(
+            listOf(InstalledAddonPanelRow.Entry(userAddon)),
+            installedAddonPanelRows(listOf(userAddon))
+        )
+        assertEquals(emptyList<InstalledAddonPanelRow>(), installedAddonPanelRows(emptyList()))
+    }
 }
