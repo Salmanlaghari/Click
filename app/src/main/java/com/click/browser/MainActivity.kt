@@ -138,8 +138,19 @@ class TabItem(
     initialEngine: BrowserTabEngine = defaultBrowserTabEngine(isIncognito),
     initialGeckoSessionState: String? = null,
     initialGeckoSession: org.mozilla.geckoview.GeckoSession? = null,
-    initialOpenerTabId: String? = null
+    initialOpenerTabId: String? = null,
+    initialFirstLoadIsRestore: Boolean = false
 ) {
+    /**
+     * True when this tab's page was already open before its current session
+     * existed — restored from the saved snapshot, or a session recreated
+     * after the LRU unload destroyed the previous one. The Gecko session
+     * factory passes this to the session so a URL-only re-display load is
+     * marked as a restore load (transient cold-start failures retry
+     * silently instead of becoming the error card). Set at restore time
+     * and whenever the LRU path unloads this tab's session.
+     */
+    internal var firstLoadIsRestore: Boolean = initialFirstLoadIsRestore
     /**
      * The tab that opened this one via window.open / target=_blank, if any.
      * A popup tab's own history holds only the popup page, so Back uses
@@ -1769,6 +1780,10 @@ class MainActivity : FragmentActivity() {
                                 session.destroy()
                             } catch (_: Exception) { }
                             tab.attachBrowserSession(null)
+                            // The tab's page was already open; when its
+                            // session is recreated on selection, that first
+                            // load is a re-display, not a fresh navigation.
+                            tab.firstLoadIsRestore = true
                         }
                 }
             }
@@ -1796,7 +1811,8 @@ class MainActivity : FragmentActivity() {
                                 url = it.url,
                                 title = it.title,
                                 initialEngine = it.engine,
-                                initialGeckoSessionState = it.geckoSessionState
+                                initialGeckoSessionState = it.geckoSessionState,
+                                initialFirstLoadIsRestore = true
                             )
                         })
                         // Default landing is the previously active restored
@@ -5164,6 +5180,7 @@ class MainActivity : FragmentActivity() {
                                                                 }
                                                             },
                                                             initialGeckoSession = currentTab.takePendingGeckoSession(),
+                                                            initialLoadIsRestore = currentTab.firstLoadIsRestore,
                                                             initiallySelected = true,
                                                             initiallyResumed = lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED),
                                                             navigationTarget = navigation@{ requestedUrl ->
