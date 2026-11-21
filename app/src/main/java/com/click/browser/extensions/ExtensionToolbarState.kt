@@ -86,12 +86,12 @@ internal object ExtensionToolbarState {
 
     fun updateFromExtensions(context: Context, extensions: Iterable<WebExtension>) {
         val candidates = extensions.asSequence()
-            .filterNot { it.isBuiltIn }
+            .filter { canExposeExtensionActions(it) }
             .map { extension ->
                 ExtensionToolbarCandidate(
                     id = extension.id,
                     enabled = extension.metaData.enabled,
-                    policyApproved = extensionPolicyBlockers(extension).isEmpty()
+                    policyApproved = effectivePolicyBlockers(extension).isEmpty()
                 )
             }
             .toList()

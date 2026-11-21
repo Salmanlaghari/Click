@@ -1,5 +1,8 @@
 package com.click.browser.extensions
 
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -8,6 +11,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -25,15 +29,22 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.produceState
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 
 internal data class InstalledAddonPanelAction(
     val label: String,
@@ -50,7 +61,11 @@ internal data class InstalledAddonPanelItem(
     val optionsPageUrl: String? = null,
     val optionsPageBaseUrl: String? = null,
     val hasDeclaredOptionsPage: Boolean = optionsPageUrl != null,
-    val toolbarAction: InstalledAddonPanelAction? = null
+    val toolbarAction: InstalledAddonPanelAction? = null,
+    /** True for the extensions Click ships pre-installed in the APK. */
+    val builtIn: Boolean = false,
+    /** The add-on's own icon inside the APK assets (pre-installed add-ons only). */
+    val iconAssetPath: String? = null
 ) {
     val statusLabel: String
         get() = when {
@@ -77,6 +92,36 @@ internal fun safeBuildInstalledAddonPanelItems(
     Result.failure(exception)
 }
 
+/** One row of the panel list: a section header or an add-on card. */
+internal sealed interface InstalledAddonPanelRow {
+    data class Header(val title: String) : InstalledAddonPanelRow
+    data class Entry(val item: InstalledAddonPanelItem) : InstalledAddonPanelRow
+}
+
+/**
+ * Panel order: the pre-installed extensions first, under an "Already
+ * installed" header so the user sees they came with Click and are ready to
+ * use; the user's own add-ons follow under their own header. When nothing
+ * is pre-installed the list renders exactly as before (no headers).
+ */
+internal fun installedAddonPanelRows(
+    addOns: List<InstalledAddonPanelItem>
+): List<InstalledAddonPanelRow> {
+    val builtIns = addOns.filter { it.builtIn }
+    val userAddOns = addOns.filterNot { it.builtIn }
+    if (builtIns.isEmpty()) {
+        return userAddOns.map { InstalledAddonPanelRow.Entry(it) }
+    }
+    return buildList {
+        add(InstalledAddonPanelRow.Header("Already installed — ready to use"))
+        builtIns.mapTo(this) { InstalledAddonPanelRow.Entry(it) }
+        if (userAddOns.isNotEmpty()) {
+            add(InstalledAddonPanelRow.Header("Installed by you"))
+            userAddOns.mapTo(this) { InstalledAddonPanelRow.Entry(it) }
+        }
+    }
+}
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 internal fun InstalledAddonsPanel(
@@ -86,6 +131,7 @@ internal fun InstalledAddonsPanel(
     onRefresh: () -> Unit,
     onOpenAction: (String) -> Unit,
     onOpenOptions: (String) -> Unit,
+    onToggleEnabled: (String, Boolean) -> Unit = { _, _ -> },
     onOpenStore: () -> Unit,
     currentTabUsesGecko: Boolean,
     currentPageSupportsActions: Boolean,
@@ -157,7 +203,26 @@ internal fun InstalledAddonsPanel(
                     modifier = Modifier.fillMaxWidth().heightIn(max = 360.dp),
                     verticalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
-                    items(addOns, key = InstalledAddonPanelItem::id) { addOn ->
+                    val rows = installedAddonPanelRows(addOns)
+                    items(
+                        rows,
+                        key = { row ->
+                            when (row) {
+                                is InstalledAddonPanelRow.Header -> "header:${row.title}"
+                                is InstalledAddonPanelRow.Entry -> row.item.id
+                            }
+                        }
+                    ) { row ->
+                        when (row) {
+                            is InstalledAddonPanelRow.Header -> Text(
+                                row.title,
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 13.sp,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.padding(top = 4.dp)
+                            )
+                            is InstalledAddonPanelRow.Entry -> {
+                                val addOn = row.item
                         Card(
                             modifier = Modifier.fillMaxWidth(),
                             colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
@@ -166,18 +231,32 @@ internal fun InstalledAddonsPanel(
                                 modifier = Modifier.fillMaxWidth().padding(14.dp),
                                 verticalArrangement = Arrangement.spacedBy(6.dp)
                             ) {
-                                Text(
-                                    addOn.name,
-                                    fontWeight = FontWeight.SemiBold,
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis
-                                )
-                                Text(
-                                    "Version ${addOn.version} · ${addOn.statusLabel}",
-                                    color = if (addOn.policyBlockers.isNotEmpty()) MaterialTheme.colorScheme.error
-                                    else MaterialTheme.colorScheme.onSurfaceVariant,
-                                    fontSize = 12.sp
-                                )
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    AddonPanelIcon(addOn)
+                                    Column(modifier = Modifier.weight(1f).padding(start = 10.dp)) {
+                                        Text(
+                                            addOn.name,
+                                            fontWeight = FontWeight.SemiBold,
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis
+                                        )
+                                        Text(
+                                            "Version ${addOn.version} · ${addOn.statusLabel}",
+                                            color = if (addOn.policyBlockers.isNotEmpty()) MaterialTheme.colorScheme.error
+                                            else MaterialTheme.colorScheme.onSurfaceVariant,
+                                            fontSize = 12.sp
+                                        )
+                                    }
+                                    if (addOn.policyBlockers.isEmpty()) {
+                                        Switch(
+                                            checked = addOn.enabled,
+                                            onCheckedChange = { enabled -> onToggleEnabled(addOn.id, enabled) }
+                                        )
+                                    }
+                                }
                                 addOn.description?.takeIf(String::isNotBlank)?.let { description ->
                                     Text(
                                         description,
@@ -257,6 +336,8 @@ internal fun InstalledAddonsPanel(
                                     }
                                 }
                             }
+                            }
+                            }
                         }
                     }
                 }
@@ -268,5 +349,42 @@ internal fun InstalledAddonsPanel(
                 Text("Open Mozilla Add-ons Store", modifier = Modifier.padding(start = 8.dp))
             }
         }
+    }
+}
+
+/**
+ * The add-on's own icon. Pre-installed add-ons bundle their manifest icon
+ * PNG inside the APK assets, so it renders with no network and no store
+ * round-trip; anything without a bundled icon gets the generic glyph.
+ */
+@Composable
+private fun AddonPanelIcon(addOn: InstalledAddonPanelItem) {
+    val context = LocalContext.current
+    val iconPath = addOn.iconAssetPath
+    val bitmap by produceState<Bitmap?>(initialValue = null, iconPath) {
+        value = if (iconPath.isNullOrBlank()) {
+            null
+        } else {
+            withContext(Dispatchers.IO) {
+                runCatching {
+                    context.assets.open(iconPath).use { stream -> BitmapFactory.decodeStream(stream) }
+                }.getOrNull()
+            }
+        }
+    }
+    val loaded = bitmap
+    if (loaded != null) {
+        Image(
+            bitmap = loaded.asImageBitmap(),
+            contentDescription = addOn.name,
+            modifier = Modifier.size(30.dp)
+        )
+    } else {
+        Icon(
+            Icons.Default.Extension,
+            contentDescription = addOn.name,
+            modifier = Modifier.size(30.dp),
+            tint = MaterialTheme.colorScheme.onSurfaceVariant
+        )
     }
 }

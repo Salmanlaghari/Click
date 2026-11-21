@@ -392,7 +392,9 @@ private fun ExtensionBrowserScreen(
                 val appExtensions = extensions.orEmpty().filterNot { it.isBuiltIn }
                 installedExtensionIds = appExtensions.map { it.id }.toSet()
                 extensionListLoaded = true
-                ExtensionToolbarState.updateFromExtensions(context, appExtensions)
+                // Toolbar state filters internally, so it gets the full list:
+                // the pre-installed built-ins count toward the toolbar action.
+                ExtensionToolbarState.updateFromExtensions(context, extensions.orEmpty())
                 val disallowed = appExtensions.filter { extensionPolicyBlockers(it).isNotEmpty() }
                 disallowed.filter { it.metaData.enabled }.forEach { extension ->
                     controller.disable(extension, WebExtensionController.EnableSource.APP)

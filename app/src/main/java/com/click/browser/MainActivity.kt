@@ -112,7 +112,9 @@ import com.click.browser.extensions.NormalTabExtensionAction
 import com.click.browser.extensions.NormalTabActionDispatchResult
 import com.click.browser.extensions.NormalTabExtensionPopup
 import com.click.browser.extensions.NormalTabExtensionRouter
-import com.click.browser.extensions.extensionPolicyBlockers
+import com.click.browser.extensions.PreinstalledExtensions
+import com.click.browser.extensions.canExposeExtensionActions
+import com.click.browser.extensions.effectivePolicyBlockers
 import com.click.browser.ui.screens.*
 import androidx.datastore.preferences.core.edit
 import kotlinx.coroutines.Dispatchers
@@ -2114,7 +2116,7 @@ class MainActivity : FragmentActivity() {
             LaunchedEffect(geckoTabPopupState.value) {
                 if (geckoTabPopupState.value != null) showInstalledAddonsPanel = false
             }
-            fun refreshInstalledAddonPanel() {
+            fun loadInstalledAddonPanelItems() {
                 val requestId = ++installedAddonPanelRequestId
                 installedAddonPanelLoading = true
                 installedAddonPanelError = null
@@ -2123,7 +2125,7 @@ class MainActivity : FragmentActivity() {
                         { extensions ->
                             val itemResult = safeBuildInstalledAddonPanelItems {
                                 extensions.orEmpty()
-                                    .filterNot { it.isBuiltIn }
+                                    .filter { extension -> canExposeExtensionActions(extension) }
                                     .map { extension ->
                                         val metadata = extension.metaData
                                         val safeOptionsUrl = ExtensionInstallPolicy.safeExtensionOptionsPageUrl(
@@ -2132,17 +2134,24 @@ class MainActivity : FragmentActivity() {
                                         )
                                         InstalledAddonPanelItem(
                                             id = extension.id,
-                                            name = metadata.name?.takeIf(String::isNotBlank) ?: "Unnamed add-on",
+                                            name = metadata.name?.takeIf(String::isNotBlank)
+                                                ?: PreinstalledExtensions.entry(extension.id)?.displayName
+                                                ?: "Unnamed add-on",
                                             version = metadata.version.takeIf(String::isNotBlank) ?: "Unknown",
                                             enabled = metadata.enabled,
-                                            policyBlockers = extensionPolicyBlockers(extension),
+                                            policyBlockers = effectivePolicyBlockers(extension),
                                             description = metadata.description?.takeIf(String::isNotBlank),
                                             optionsPageUrl = safeOptionsUrl,
                                             optionsPageBaseUrl = metadata.baseUrl.takeIf { safeOptionsUrl != null },
-                                            hasDeclaredOptionsPage = !metadata.optionsPageUrl.isNullOrBlank()
+                                            hasDeclaredOptionsPage = !metadata.optionsPageUrl.isNullOrBlank(),
+                                            builtIn = extension.isBuiltIn,
+                                            iconAssetPath = PreinstalledExtensions.entry(extension.id)?.iconAssetPath
                                         )
                                     }
-                                    .sortedBy { it.name.lowercase(Locale.ROOT) }
+                                    .sortedWith(
+                                        compareBy<InstalledAddonPanelItem> { !it.builtIn }
+                                            .thenBy { it.name.lowercase(Locale.ROOT) }
+                                    )
                             }
                             itemResult.fold(
                                 onSuccess = { items ->
@@ -2176,6 +2185,15 @@ class MainActivity : FragmentActivity() {
                 } catch (error: Exception) {
                     installedAddonPanelLoading = false
                     installedAddonPanelError = "Couldn't load installed add-ons: ${error.message ?: "GeckoView error"}"
+                }
+            }
+            fun refreshInstalledAddonPanel() {
+                installedAddonPanelLoading = true
+                installedAddonPanelError = null
+                // The pre-installed extensions must be in the runtime before
+                // the list is read, or a first-ever panel open could miss them.
+                PreinstalledExtensions.ensureInstalled(applicationContext) {
+                    loadInstalledAddonPanelItems()
                 }
             }
             var showWebViewSwitchConfirmation by remember { mutableStateOf(false) }
@@ -3020,6 +3038,12 @@ class MainActivity : FragmentActivity() {
             LaunchedEffect(webrtcBlocked) {
                 liveWebRtcBlocked = webrtcBlocked
                 com.click.browser.engine.WebRtcGuard.sync(this@MainActivity, webrtcBlocked)
+            }
+            // Pre-installed extensions: make sure the bundled essentials are
+            // installed in the GeckoView runtime from the first launch on, so
+            // they are already there when the user opens the extensions panel.
+            LaunchedEffect(Unit) {
+                PreinstalledExtensions.ensureInstalled(applicationContext)
             }
             LaunchedEffect(forceNightModeWebsites) { liveNightMode = forceNightModeWebsites }
             LaunchedEffect(dataSaverEnabled) { liveDataSaver = dataSaverEnabled }
@@ -7193,7 +7217,7 @@ class MainActivity : FragmentActivity() {
                                             { extensions ->
                                                 runOnUiThread {
                                                     val extension = extensions.orEmpty().firstOrNull {
-                                                        it.id == extensionId && !it.isBuiltIn
+                                                        it.id == extensionId && canExposeExtensionActions(it)
                                                     }
                                                     val metadata = extension?.metaData
                                                     val optionsUrl = metadata?.let {
@@ -7204,7 +7228,7 @@ class MainActivity : FragmentActivity() {
                                                     }
                                                     val baseUrl = metadata?.baseUrl?.takeIf { optionsUrl != null }
                                                     val policyBlocked = extension?.let {
-                                                        extensionPolicyBlockers(it).isNotEmpty()
+                                                        effectivePolicyBlockers(it).isNotEmpty()
                                                     } ?: true
                                                     if (tabs.getOrNull(activeTabIndex)?.id != tab.id ||
                                                         tab.engine != BrowserTabEngine.GECKOVIEW || tab.isIncognito ||
@@ -7248,6 +7272,41 @@ class MainActivity : FragmentActivity() {
                                                 }
                                             }
                                         )
+                                    },
+                                    onToggleEnabled = { extensionId, enable ->
+                                        try {
+                                            val controller = ExtensionBrowserRuntime.get(applicationContext).webExtensionController
+                                            controller.list().accept(
+                                                { extensions ->
+                                                    val target = extensions.orEmpty()
+                                                        .firstOrNull { it.id == extensionId }
+                                                    if (target == null ||
+                                                        (enable && effectivePolicyBlockers(target).isNotEmpty())
+                                                    ) {
+                                                        runOnUiThread { refreshInstalledAddonPanel() }
+                                                    } else {
+                                                        val toggleResult = if (enable) {
+                                                            controller.enable(
+                                                                target,
+                                                                org.mozilla.geckoview.WebExtensionController.EnableSource.USER
+                                                            )
+                                                        } else {
+                                                            controller.disable(
+                                                                target,
+                                                                org.mozilla.geckoview.WebExtensionController.EnableSource.USER
+                                                            )
+                                                        }
+                                                        toggleResult.accept(
+                                                            { runOnUiThread { refreshInstalledAddonPanel() } },
+                                                            { runOnUiThread { refreshInstalledAddonPanel() } }
+                                                        )
+                                                    }
+                                                },
+                                                { runOnUiThread { refreshInstalledAddonPanel() } }
+                                            )
+                                        } catch (_: Exception) {
+                                            refreshInstalledAddonPanel()
+                                        }
                                     },
                                     onOpenStore = {
                                         val tab = currentTab
