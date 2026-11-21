@@ -565,6 +565,32 @@ errorCode = WebRequestError.ERROR_UNKNOWN_HOST
     }
 
     @Test
+    fun clearedLoadMarksDoNotLeakIntoTheNextNavigation() {
+        // If the load that was meant to consume a restore/auto-retry mark
+        // never starts (its dispatch threw), the mark is dropped: the next,
+        // unrelated navigation stays a plain foreground navigation whose
+        // transient failure cards immediately instead of being retried.
+        val url = "https://example.test/typed-by-user"
+        val tracker = GeckoNavigationTracker()
+        tracker.markNextLoadAsRestore()
+        tracker.markNextLoadAsAutoRetry()
+        tracker.clearPendingLoadMarks()
+
+        tracker.begin(url, geckoSafeRetryUrl("GET", url))
+        assertTrue(
+            tracker.markLoadError(
+                url,
+                "Server address could not be found (DNS)",
+                errorCode = WebRequestError.ERROR_UNKNOWN_HOST
+            )
+        )
+        val completion = tracker.complete(success = false)!!
+
+        assertNull(completion.autoRetryUrl)
+        assertEquals(url, completion.outcome.failure?.failedUrl)
+    }
+
+    @Test
     fun transientLoadErrorClassification() {
         assertTrue(isTransientGeckoLoadError(WebRequestError.ERROR_UNKNOWN_HOST))
         assertTrue(isTransientGeckoLoadError(WebRequestError.ERROR_NET_TIMEOUT))

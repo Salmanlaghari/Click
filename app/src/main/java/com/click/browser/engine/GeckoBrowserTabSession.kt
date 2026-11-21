@@ -646,8 +646,13 @@ internal class GeckoBrowserTabSession(
             }
             GeckoRecoveryPlan.REOPEN_AND_LOAD_CURRENT_URL -> {
                 navigationTracker.markNextLoadAsRestore()
-                session.open(runtime)
-                session.loadUri(lastKnownPageUrl)
+                try {
+                    session.open(runtime)
+                    session.loadUri(lastKnownPageUrl)
+                } catch (error: Exception) {
+                    navigationTracker.clearPendingLoadMarks()
+                    throw error
+                }
             }
             GeckoRecoveryPlan.REOPEN_BLANK -> {
                 session.open(runtime)
@@ -809,15 +814,23 @@ internal class GeckoBrowserTabSession(
         // restore so a transient resume-time failure is retried silently
         // instead of surfacing the recovery card.
         navigationTracker.markNextLoadAsRestore()
-        val restoredState = latestSessionState
-            ?.takeIf { it.isNotBlank() }
-            ?.let { encoded -> runCatching { GeckoSession.SessionState.fromString(encoded) }.getOrNull() }
-        if (restoredState != null) {
-            session.restoreState(restoredState)
-            return true
+        try {
+            val restoredState = latestSessionState
+                ?.takeIf { it.isNotBlank() }
+                ?.let { encoded -> runCatching { GeckoSession.SessionState.fromString(encoded) }.getOrNull() }
+            if (restoredState != null) {
+                session.restoreState(restoredState)
+                return true
+            }
+            session.loadUri(fallbackUrl.ifBlank { "about:blank" })
+            return false
+        } catch (error: Exception) {
+            // The marked load never started: drop the mark so it cannot
+            // leak into an unrelated later navigation, then let the
+            // caller's existing failure handling run.
+            navigationTracker.clearPendingLoadMarks()
+            throw error
         }
-        session.loadUri(fallbackUrl.ifBlank { "about:blank" })
-        return false
     }
 
     /**
@@ -839,7 +852,10 @@ internal class GeckoBrowserTabSession(
                 session.loadUri(url)
             } catch (_: Exception) {
                 // Session closed underneath us; the recovery path owns
-                // restoring this tab and will load the page itself.
+                // restoring this tab and will load the page itself. Drop
+                // the unconsumed auto-retry mark so it cannot leak into
+                // that (or any other) later navigation.
+                navigationTracker.clearPendingLoadMarks()
             }
         }, RESTORE_AUTO_RETRY_DELAY_MS)
     }

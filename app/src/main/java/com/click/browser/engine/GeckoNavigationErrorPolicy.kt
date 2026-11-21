@@ -132,6 +132,15 @@ internal class GeckoNavigationTracker {
         autoRetryNextLoad = true
     }
 
+    /** Drops any not-yet-consumed next-load marks. Used when the load that
+     *  was supposed to consume a mark failed to even start (its dispatch
+     *  threw), so the mark cannot leak into an unrelated later navigation
+     *  and wrongly make that navigation eligible for a silent retry. */
+    fun clearPendingLoadMarks() = synchronized(lock) {
+        restoreNextLoad = false
+        autoRetryNextLoad = false
+    }
+
     fun updateCurrentUrl(url: String) = synchronized(lock) {
         active?.url = url
     }
