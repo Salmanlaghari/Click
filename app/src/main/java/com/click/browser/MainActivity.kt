@@ -763,15 +763,8 @@ class MainActivity : FragmentActivity() {
     }
 
     /** True for direct PDF links — intercepted for the in-app viewer offer. */
-    private fun isPdfUrl(url: String): Boolean {
-        return try {
-            val path = android.net.Uri.parse(url).path?.lowercase().orEmpty()
-            (url.startsWith("http://") || url.startsWith("https://")) &&
-                (path.endsWith(".pdf"))
-        } catch (_: Exception) {
-            false
-        }
-    }
+    private fun isPdfUrl(url: String): Boolean =
+        com.click.browser.engine.DirectDownloadPolicy.isPdfFileUrl(url)
 
     /**
      * Long-press menu helpers (links + images). All actions are real —
@@ -2305,6 +2298,16 @@ class MainActivity : FragmentActivity() {
             // Built-in engines (Safe Browsing / Translate / PDF)
             var showTranslateSheet by remember { mutableStateOf(false) }
             var pdfOfferUrl by remember { mutableStateOf<String?>(null) }
+            // Direct media file offer (Gecko tabs): a tapped .mp3/.mp4 link
+            // used to land on Gecko's inline player with no way to save the
+            // file the site offered. The navigation is held and this sheet
+            // offers Download / Open instead.
+            var directMediaOffer by remember {
+                mutableStateOf<com.click.browser.engine.DirectMediaOffer?>(null)
+            }
+            // The one media URL the user chose "Open" for — loads normally
+            // this once instead of offering again.
+            var directMediaBypassUrl by remember { mutableStateOf<String?>(null) }
             var viewingPdfFile by remember { mutableStateOf<java.io.File?>(null) }
             var pdfDownloading by remember { mutableStateOf(false) }
             val safeBrowsingHit by com.click.browser.engine.SafeBrowsingManager.pendingHit
@@ -4990,6 +4993,39 @@ class MainActivity : FragmentActivity() {
                                                                     }
                                                                 }
                                                                 if (liveMode == BrowserMode.HACK) targetUrl = forceDesktopHost(targetUrl)
+                                                                // Direct file detection (Prince, 2026-11-21):
+                                                                // a site that serves a file at a plain URL
+                                                                // should hand the user a download, not a
+                                                                // dead end. Only the ACTIVE tab's navigation
+                                                                // is held for the offer — background tabs and
+                                                                // restores load normally, no surprise sheets.
+                                                                if (tabs.getOrNull(activeTabIndex)?.id == tabId) {
+                                                                    when (com.click.browser.engine.DirectDownloadPolicy
+                                                                        .navigationAction(targetUrl, directMediaBypassUrl)) {
+                                                                        com.click.browser.engine.DirectNavigationAction.OFFER_PDF -> {
+                                                                            // Gecko parity with WebView tabs:
+                                                                            // same view/download offer sheet.
+                                                                            pdfOfferUrl = targetUrl
+                                                                            return@navigation null
+                                                                        }
+                                                                        com.click.browser.engine.DirectNavigationAction.OFFER_MEDIA -> {
+                                                                            directMediaOffer =
+                                                                                com.click.browser.engine.DirectMediaOffer(
+                                                                                    url = targetUrl,
+                                                                                    fileName = com.click.browser.engine
+                                                                                        .DirectDownloadPolicy.fileNameOf(targetUrl),
+                                                                                    tabId = tabId
+                                                                                )
+                                                                            return@navigation null
+                                                                        }
+                                                                        com.click.browser.engine.DirectNavigationAction.ALLOW -> Unit
+                                                                    }
+                                                                    // The one "Open" bypass is consumed by
+                                                                    // the navigation it was granted for.
+                                                                    if (targetUrl == directMediaBypassUrl) {
+                                                                        directMediaBypassUrl = null
+                                                                    }
+                                                                }
                                                                 targetUrl
                                                             },
                                                             wideLayoutForUrl = ::wideLayoutEnabledForUrl,
@@ -5307,6 +5343,23 @@ class MainActivity : FragmentActivity() {
                                                                     Toast.makeText(
                                                                         this@MainActivity,
                                                                         "This download response cannot be saved.",
+                                                                        Toast.LENGTH_SHORT
+                                                                    ).show()
+                                                                } else if (liveSiteSettings.forHost(
+                                                                        runCatching {
+                                                                            android.net.Uri.parse(response.uri).host
+                                                                                ?.lowercase().orEmpty()
+                                                                        }.getOrDefault("")
+                                                                    )?.autoDownloads == false
+                                                                ) {
+                                                                    // Same per-site "Automatic downloads"
+                                                                    // gate the URL download funnel honors —
+                                                                    // a blocked site must not slip a file
+                                                                    // through the response path either.
+                                                                    runCatching { body.close() }
+                                                                    Toast.makeText(
+                                                                        this@MainActivity,
+                                                                        "Downloads are blocked for this site in Site settings",
                                                                         Toast.LENGTH_SHORT
                                                                     ).show()
                                                                 } else {
@@ -8876,6 +8929,28 @@ class MainActivity : FragmentActivity() {
                                                 showPlaylist = true
                                             }
                                         },
+                                    // Direct file links only (zip/pdf/mp3/apk/…):
+                                    // download the linked file itself into Click's
+                                    // download manager. Streaming-service hosts are
+                                    // excluded inside DirectDownloadPolicy.
+                                    onDownloadLink = longPressLinkUrl
+                                        ?.takeIf {
+                                            com.click.browser.engine.DirectDownloadPolicy
+                                                .looksLikeDirectFileUrl(it)
+                                        }
+                                        ?.let { _ ->
+                                            { url: String ->
+                                                showLongPressMenu = false
+                                                longPressLinkUrl = null
+                                                longPressImageUrl = null
+                                                val fileName = android.webkit.URLUtil.guessFileName(
+                                                    url, null, null
+                                                )
+                                                scope.launch {
+                                                    enqueueAndRecordDownload(url, fileName)
+                                                }
+                                            }
+                                        },
                                     onDismiss = {
                                         showLongPressMenu = false
                                         longPressLinkUrl = null
@@ -8932,6 +9007,34 @@ class MainActivity : FragmentActivity() {
                                         pdfOfferUrl = null
                                     },
                                     onDismiss = { pdfOfferUrl = null }
+                                )
+                            }
+                            // Direct media file: offer download or open when a
+                            // media link is tapped in a Gecko tab.
+                            val mediaOffer = directMediaOffer
+                            if (mediaOffer != null) {
+                                com.click.browser.ui.screens.DirectMediaOfferSheet(
+                                    theme = theme,
+                                    offer = mediaOffer,
+                                    onDownload = {
+                                        directMediaOffer = null
+                                        scope.launch {
+                                            enqueueAndRecordDownload(mediaOffer.url, mediaOffer.fileName)
+                                        }
+                                    },
+                                    onOpen = {
+                                        directMediaOffer = null
+                                        directMediaBypassUrl = mediaOffer.url
+                                        val offerTab = tabs.firstOrNull { it.id == mediaOffer.tabId }
+                                        val offerSession = offerTab?.browserSession
+                                        if (offerTab != null && offerSession != null) {
+                                            offerSession.loadUrl(mediaOffer.url)
+                                        } else {
+                                            tabs.add(TabItem(url = mediaOffer.url, title = "New Tab"))
+                                            activeTabIndex = tabs.lastIndex
+                                        }
+                                    },
+                                    onDismiss = { directMediaOffer = null }
                                 )
                             }
                             // Full-screen in-app PDF viewer.
