@@ -52,6 +52,10 @@ class ClickApplication : Application() {
         // Background news alerts: re-schedule the battery-friendly periodic
         // check if the user previously opted in (default OFF).
         CoroutineScope(Dispatchers.IO).launch {
+            // One-time seed for the per-mode profile split (Developer/Power
+            // stores start empty; copy the legacy shared store once).
+            runCatching { com.click.browser.engine.migrateLegacyProfileDataIfNeeded(this@ClickApplication) }
+                .onFailure { Log.w("ClickApplication", "profile migration failed", it) }
             try {
                 val enabled = dataStore.data.first()[AppSettings.NEWS_NOTIFICATIONS_ENABLED] == true
                 if (enabled) NewsNotificationScheduler.schedule(this@ClickApplication)

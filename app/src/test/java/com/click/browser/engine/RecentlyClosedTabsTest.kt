@@ -68,7 +68,7 @@ class RecentlyClosedTabsTest {
     }
 
     @Test
-    fun sharedHistoryClearRemovesAllSharedRecentlyClosedEntriesAfterStoredHistorySucceeds() = runBlocking {
+    fun perModeHistoryClearRemovesOnlyThatModesRecentlyClosedEntries() = runBlocking {
         RecentlyClosedTabs.push("Simple", "https://simple.example", false, BrowserMode.SIMPLE)
         RecentlyClosedTabs.push("Developer", "https://developer.example", false, BrowserMode.DEVELOPER)
         RecentlyClosedTabs.push("Power", "https://power.example", false, BrowserMode.HACK)
@@ -80,10 +80,11 @@ class RecentlyClosedTabsTest {
             clearedModes.add(mode)
         }
 
+        // Per-mode profiles: clearing Developer history touches only Developer.
         assertEquals(listOf(BrowserMode.DEVELOPER), clearedModes)
-        assertTrue(RecentlyClosedTabs.list(BrowserMode.SIMPLE).isEmpty())
+        assertEquals(listOf("https://simple.example"), RecentlyClosedTabs.list(BrowserMode.SIMPLE).map { it.url })
         assertTrue(RecentlyClosedTabs.list(BrowserMode.DEVELOPER).isEmpty())
-        assertTrue(RecentlyClosedTabs.list(BrowserMode.HACK).isEmpty())
+        assertEquals(listOf("https://power.example"), RecentlyClosedTabs.list(BrowserMode.HACK).map { it.url })
         assertEquals(listOf("https://advanced.example"), RecentlyClosedTabs.list(BrowserMode.ADVANCED).map { it.url })
     }
 

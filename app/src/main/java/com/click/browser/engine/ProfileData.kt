@@ -3,7 +3,9 @@ package com.click.browser.engine
 import android.content.Context
 import androidx.datastore.core.DataStore
 import androidx.datastore.preferences.core.Preferences
+import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.preferencesDataStore
+import kotlinx.coroutines.flow.first
 
 /**
  * Per-profile (per-mode) app data — the foundation of Click Advance.
@@ -50,6 +52,32 @@ fun Context.profileDataStoreFor(mode: BrowserMode): DataStore<Preferences> {
         BrowserMode.DEVELOPER -> developerDataStore
         BrowserMode.HACK -> hackDataStore
         BrowserMode.SIMPLE -> dataStore
+    }
+}
+
+/**
+ * One-time migration for the per-mode profile split: DEVELOPER and HACK used
+ * to share SIMPLE's legacy store, so on the first launch after the split an
+ * EMPTY developer/hack store is seeded with a copy of the legacy store's
+ * contents (bookmarks, history, saved passwords, settings). From then on the
+ * profiles diverge independently. A store that already holds anything is
+ * never touched, which makes this idempotent. Gecko-side cookies/sign-ins
+ * cannot be copied between storage partitions by any GeckoView API; the old
+ * partition stays assigned to SIMPLE, so that data is not deleted — it
+ * remains visible in Simple mode.
+ */
+suspend fun migrateLegacyProfileDataIfNeeded(context: Context) {
+    val legacy = context.dataStore.data.first()
+    if (legacy.asMap().isEmpty()) return
+    listOf(context.developerDataStore, context.hackDataStore).forEach { target ->
+        if (target.data.first().asMap().isEmpty()) {
+            target.edit { prefs ->
+                legacy.asMap().forEach { (key, value) ->
+                    @Suppress("UNCHECKED_CAST")
+                    prefs[key as Preferences.Key<Any>] = value
+                }
+            }
+        }
     }
 }
 

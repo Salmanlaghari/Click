@@ -328,7 +328,7 @@ class BrowserRepository(private val context: Context) {
         list.sortedByDescending { it.timestamp }
     }
 
-    /** Downloads saved in the requested profile; Simple/Developer/Power share their store. */
+    /** Downloads saved in the requested profile; every mode has its own store. */
     fun downloadsFlowFor(mode: BrowserMode): Flow<List<DownloadItem>> =
         context.profileDataStoreFor(mode).data.map { preferences ->
             parseDownloadItems(preferences[DOWNLOADS_KEY])

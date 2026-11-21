@@ -261,7 +261,7 @@ fun PrivacySafetySettingsScreen(
                     )
                     HorizontalDivider(color = theme.onSurface.copy(alpha = 0.1f))
                     Text(
-                        "WebView cookies and cache are separate per profile. History is shared by Simple, Developer and Power; Advance has separate app data.",
+                        "Every mode is its own profile: cookies, cache, history and app data are separate in Simple, Advance, Developer and Power.",
                         fontSize = 11.sp, color = theme.onSurface.copy(alpha = 0.6f)
                     )
                     Spacer(Modifier.height(8.dp))
@@ -274,18 +274,17 @@ fun PrivacySafetySettingsScreen(
                     Text("Clear history for:", color = theme.onSurface, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
                     Spacer(Modifier.height(4.dp))
                     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                        listOf(BrowserMode.SIMPLE, BrowserMode.ADVANCED).forEach { mode ->
-                            val isShared = mode != BrowserMode.ADVANCED
+                        BrowserMode.values().forEach { mode ->
+                            val label = when (mode) {
+                                BrowserMode.SIMPLE -> "Simple"
+                                BrowserMode.ADVANCED -> "Advance"
+                                BrowserMode.DEVELOPER -> "Developer"
+                                BrowserMode.HACK -> "Power"
+                            }
                             FilterChip(
-                                selected = if (isShared) historyModeTarget != BrowserMode.ADVANCED
-                                    else historyModeTarget == BrowserMode.ADVANCED,
-                                onClick = { historyModeTarget = if (isShared) BrowserMode.SIMPLE else BrowserMode.ADVANCED },
-                                label = {
-                                    Text(
-                                        if (isShared) "Simple / Developer / Power" else "Advance",
-                                        fontSize = 11.sp
-                                    )
-                                }
+                                selected = historyModeTarget == mode,
+                                onClick = { historyModeTarget = mode },
+                                label = { Text(label, fontSize = 11.sp) }
                             )
                         }
                     }
@@ -296,7 +295,14 @@ fun PrivacySafetySettingsScreen(
                     ) {
                         Icon(Icons.Default.History, contentDescription = null, modifier = Modifier.size(18.dp))
                         Spacer(Modifier.width(4.dp))
-                        Text(if (historyModeTarget == BrowserMode.ADVANCED) "Clear Advance history" else "Clear shared-profile history")
+                        Text(
+                            "Clear " + when (historyModeTarget) {
+                                BrowserMode.SIMPLE -> "Simple"
+                                BrowserMode.ADVANCED -> "Advance"
+                                BrowserMode.DEVELOPER -> "Developer"
+                                BrowserMode.HACK -> "Power"
+                            } + " history"
+                        )
                     }
                     Spacer(Modifier.height(8.dp))
                     Button(

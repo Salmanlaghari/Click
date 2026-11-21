@@ -7229,11 +7229,7 @@ class MainActivity : FragmentActivity() {
                                 CookieStore.clearAll()
                                 currentTab.webView?.clearCache(true)
                                 requestGeckoModeDataClear(modeToClear)
-                                val historyScope = if (modeToClear == BrowserMode.ADVANCED) {
-                                    "Advance"
-                                } else {
-                                    "Simple/Developer/Power shared"
-                                }
+                                val historyScope = modeToClear.display().title
                                 scope.launch {
                                     RecentlyClosedTabs.clearHistoryAndRecentlyClosedForMode(modeToClear) { historyMode ->
                                         repository.clearHistoryFor(historyMode)
@@ -8669,11 +8665,7 @@ class MainActivity : FragmentActivity() {
                                             RecentlyClosedTabs.clearHistoryAndRecentlyClosedForMode(mode) { historyMode ->
                                                 repository.clearHistoryFor(historyMode)
                                             }
-                                            val historyScope = if (mode == BrowserMode.ADVANCED) {
-                                                "Advance"
-                                            } else {
-                                                "Simple/Developer/Power shared"
-                                            }
+                                            val historyScope = mode.display().title
                                             Toast.makeText(
                                                 this@MainActivity,
                                                 "$historyScope history and recently closed tabs cleared",
@@ -9106,16 +9098,8 @@ class MainActivity : FragmentActivity() {
                                         onDismiss = { showSiteSettings = false },
                                         // Protection status and site data for the active host.
                                         cookieCount = siteCookieCount,
-                                        historyScopeDescription = if (V9Engine.bootMode == BrowserMode.ADVANCED) {
-                                            "Advanced history"
-                                        } else {
-                                            "shared Simple, Developer, and Power history"
-                                        },
-                                        otherHistoryScopeDescription = if (V9Engine.bootMode == BrowserMode.ADVANCED) {
-                                            "shared Simple, Developer, and Power history"
-                                        } else {
-                                            "Advanced history"
-                                        },
+                                        historyScopeDescription = V9Engine.bootMode.display().title + " history",
+                                        otherHistoryScopeDescription = "another mode's history",
                                         onClearHistoryForHost = { targetHost ->
                                             repository.clearHistoryForHost(targetHost)
                                         },
@@ -10273,7 +10257,7 @@ class MainActivity : FragmentActivity() {
                                     title = { Text("Delete browsing data?") },
                                     text = {
                                         Text(
-                                            "This closes all open tabs (including private tabs), clears Click history and recently closed tabs for the current history profile (shared by Simple/Developer/Power, separate in Advance), and clears the current mode's session snapshot. It waits for WebView cookie removal and requests WebView cache/DOM-storage deletion. GeckoView's mode-specific purge is requested after its sessions close; GeckoView 153 exposes no completion result for this context-scoped API, so Click cannot verify that backend purge finished. A fresh blank tab will open."
+                                            "This closes all open tabs (including private tabs), clears Click history and recently closed tabs for the current mode profile (each mode has its own separate profile), and clears the current mode's session snapshot. It waits for WebView cookie removal and requests WebView cache/DOM-storage deletion. GeckoView's mode-specific purge is requested after its sessions close; GeckoView 153 exposes no completion result for this context-scoped API, so Click cannot verify that backend purge finished. A fresh blank tab will open."
                                         )
                                     },
                                     confirmButton = {
