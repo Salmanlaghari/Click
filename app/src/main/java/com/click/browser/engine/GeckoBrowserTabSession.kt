@@ -89,6 +89,7 @@ internal class GeckoBrowserTabSession(
     private val navigationTarget: (String) -> String?,
     private val wideLayoutForUrl: (String) -> Boolean,
     private val onNavigationBlocked: (String) -> Unit,
+    private val onExternalSchemeRequest: (String, Boolean) -> ExternalHandoffResult,
     private val onNewSession: (String, GeckoSession) -> GeckoResult<GeckoSession>?,
     private val onUrlChanged: (String) -> Unit,
     private val onConnectionSecurityChanged: (ConnectionSecurityInfo) -> Unit,
@@ -279,7 +280,49 @@ internal class GeckoBrowserTabSession(
                 if (request.target == GeckoSession.NavigationDelegate.TARGET_WINDOW_NEW) {
                     return GeckoResult.fromValue(AllowOrDeny.ALLOW)
                 }
-                val target = navigationTarget(request.uri)
+                // External app handoff (1.8.6): a navigation whose
+                // destination is not a web page at all — a custom app
+                // scheme or an intent:// URI, e.g. TikTok's "continue in
+                // app" sign-in step — is offered to the installed app
+                // first. Before this, such navigations only met the
+                // http(s) gate in navigationTarget and died there, so
+                // app-based sign-ins could never complete. When no app
+                // takes the destination (NotHandled) the navigation falls
+                // through to the existing policy unchanged.
+                if (ExternalSchemePolicy.kindOf(request.uri) ==
+                    NavigationSchemeKind.EXTERNAL_APP
+                ) {
+                    when (val handoff =
+                        onExternalSchemeRequest(request.uri, request.hasUserGesture)) {
+                        ExternalHandoffResult.Handled ->
+                            return GeckoResult.fromValue(AllowOrDeny.DENY)
+                        is ExternalHandoffResult.LoadFallback -> {
+                            session.loadUri(handoff.url)
+                            return GeckoResult.fromValue(AllowOrDeny.DENY)
+                        }
+                        ExternalHandoffResult.NotHandled -> Unit
+                    }
+                }
+                // Redirect pass-through (1.8.6): a hop the server itself
+                // sent (LoadRequest.isRedirect, available since GeckoView
+                // 72) is let through exactly as sent — navigationTarget's
+                // rewrites (HTTPS upgrade, desktop host, download offers)
+                // must never restart it. Restarting an http hop as a fresh
+                // https navigation made Click's upgrade and the server's
+                // redirect chase each other into ERROR_REDIRECT_LOOP on
+                // real sign-in chains (Facebook, 2026-11-21). Click's
+                // WebView path has always held this rule ("never manually
+                // re-load a redirect"); this gives the Gecko path the same
+                // exemption. Only ordinary web hops qualify — internal,
+                // external and unclassifiable destinations keep the full
+                // policy below even mid-chain.
+                val target = if (request.isRedirect &&
+                    ExternalSchemePolicy.shouldLetRedirectPassThrough(request.uri)
+                ) {
+                    request.uri
+                } else {
+                    navigationTarget(request.uri)
+                }
                 if (target == null) {
                     pendingSafeRetryUrl = null
                     navigationTracker.updateCurrentRetryUrl(null)
@@ -311,6 +354,27 @@ internal class GeckoBrowserTabSession(
             }
 
             override fun onNewSession(session: GeckoSession, uri: String): GeckoResult<GeckoSession>? {
+                // App links that arrive as a new-window request get the
+                // same handoff as a same-tab navigation, so a sign-in
+                // that opens its app step with target=_blank / window.open
+                // does not die either. GeckoView only surfaces new-window
+                // requests for user-triggered opens (its own popup rules),
+                // so the request is treated as gesture-backed.
+                if (ExternalSchemePolicy.kindOf(uri) ==
+                    NavigationSchemeKind.EXTERNAL_APP
+                ) {
+                    return when (val handoff = onExternalSchemeRequest(uri, true)) {
+                        ExternalHandoffResult.Handled -> null
+                        is ExternalHandoffResult.LoadFallback ->
+                            onNewSession(handoff.url, GeckoSession(settings))
+                        ExternalHandoffResult.NotHandled -> {
+                            if (GoogleAuthPolicy.shouldShowBlockedNavigationNotice(uri)) {
+                                onNavigationBlocked(uri)
+                            }
+                            null
+                        }
+                    }
+                }
                 if (!shouldAcceptGeckoNewWindowUri(uri, navigationTarget(uri))) {
                     if (GoogleAuthPolicy.shouldShowBlockedNavigationNotice(uri)) {
                         onNavigationBlocked(uri)
