@@ -90,11 +90,12 @@ class MenuCustomizationTest {
         assertEquals(customizedItems, powerItems)
         assertEquals(
             customizedItems.filterNot {
-                it == MenuCustomization.MenuItemId.FIND_IN_PAGE ||
-                    it == MenuCustomization.MenuItemId.RECENT_TABS
+                it == MenuCustomization.MenuItemId.RECENT_TABS
             },
             simpleItems
         )
+        // Find in page is a basic browser feature: available in every mode.
+        assertTrue(simpleItems.contains(MenuCustomization.MenuItemId.FIND_IN_PAGE))
         assertFalse(simpleItems.contains(MenuCustomization.MenuItemId.SHARE))
 
         val developerItems = MenuCustomization.filterItemsForMode(customizedItems, BrowserMode.DEVELOPER)
@@ -103,7 +104,7 @@ class MenuCustomizationTest {
         assertFalse(developerItems.contains(MenuCustomization.MenuItemId.RECENT_TABS))
 
         val advanceItems = MenuCustomization.filterItemsForMode(customizedItems, BrowserMode.ADVANCED)
-        assertFalse(advanceItems.contains(MenuCustomization.MenuItemId.FIND_IN_PAGE))
+        assertTrue(advanceItems.contains(MenuCustomization.MenuItemId.FIND_IN_PAGE))
         assertTrue(advanceItems.contains(MenuCustomization.MenuItemId.DESKTOP_SITE))
         assertFalse(advanceItems.contains(MenuCustomization.MenuItemId.RECENT_TABS))
     }
