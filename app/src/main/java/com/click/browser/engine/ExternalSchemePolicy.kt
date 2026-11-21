@@ -133,11 +133,18 @@ object ExternalSchemePolicy {
      * The web fallback an `intent://` URI carries in its
      * `S.browser_fallback_url` extra — where the user should land when no
      * app can take the intent. Null for non-intent URIs and when absent.
+     *
+     * The value is page-controlled text and the caller loads it in the
+     * tab, so only a real web URL is ever returned: a fallback naming a
+     * `javascript:`, `file:`, internal or app destination is rejected
+     * (treated as no fallback), never loaded.
      */
     fun fallbackUrlOf(rawUrl: String): String? {
         if (!isIntentUri(rawUrl)) return null
-        return intentFragmentParams(rawUrl)["S.browser_fallback_url"]
-            ?.takeIf { it.isNotBlank() }
+        val fallback = intentFragmentParams(rawUrl)["S.browser_fallback_url"]
+            ?.takeIf { it.isNotBlank() } ?: return null
+        val scheme = schemeOf(fallback)
+        return if (scheme == "http" || scheme == "https") fallback else null
     }
 
     /** The package an `intent://` URI names (`package=`), when present. */

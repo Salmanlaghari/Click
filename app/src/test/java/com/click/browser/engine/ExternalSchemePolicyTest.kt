@@ -144,6 +144,31 @@ class ExternalSchemePolicyTest {
     }
 
     @Test
+    fun fallbackUrlAcceptsPlainHttpToo() {
+        val uri = "intent://example.com/x#Intent;scheme=https;" +
+            "S.browser_fallback_url=http%3A%2F%2Fexample.com%2Fx;end"
+        assertEquals("http://example.com/x", ExternalSchemePolicy.fallbackUrlOf(uri))
+    }
+
+    @Test
+    fun fallbackUrlRejectsNonWebDestinations() {
+        // The fallback is loaded in the tab, so a page-controlled value
+        // naming anything but a web page must never come back.
+        val badFallbacks = listOf(
+            "javascript%3Aalert(1)",
+            "file%3A%2F%2F%2Fsdcard%2Fsecret.txt",
+            "click%3A%2F%2Fflags",
+            "intent%3A%2F%2Fscan%2F%23Intent%3Bscheme%3Dzxing%3Bend",
+            "data%3Atext%2Fhtml%2C%3Cb%3Ehi%3C%2Fb%3E"
+        )
+        for (bad in badFallbacks) {
+            val uri = "intent://example.com/#Intent;scheme=https;" +
+                "S.browser_fallback_url=$bad;end"
+            assertNull(bad, ExternalSchemePolicy.fallbackUrlOf(uri))
+        }
+    }
+
+    @Test
     fun targetPackageAndWrappedSchemeAreReadFromIntentFragment() {
         val uri = "intent://scan/#Intent;scheme=zxing;package=com.google.zxing.client.android;end"
         assertEquals("com.google.zxing.client.android", ExternalSchemePolicy.targetPackageOf(uri))
