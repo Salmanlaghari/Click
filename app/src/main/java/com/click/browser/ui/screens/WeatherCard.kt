@@ -55,8 +55,14 @@ fun WeatherCard(
     val context = LocalContext.current
     var result by remember { mutableStateOf<WeatherResult?>(null) }
     LaunchedEffect(Unit) {
-        val location = withContext(Dispatchers.IO) { WeatherFeed.resolveLocation(context) }
-        result = WeatherFeed.getWeather(context, location)
+        // Belt and braces: WeatherFeed already guards its own failures, but
+        // nothing in this effect may ever crash the home screen.
+        result = try {
+            val location = withContext(Dispatchers.IO) { WeatherFeed.resolveLocation(context) }
+            WeatherFeed.getWeather(context, location)
+        } catch (_: Exception) {
+            WeatherResult(null, WeatherStatus.ERROR)
+        }
     }
     val current = result
     val weather = current?.weather
