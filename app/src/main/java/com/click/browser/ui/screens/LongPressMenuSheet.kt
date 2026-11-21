@@ -42,6 +42,7 @@ import com.click.browser.engine.ModeTheme
  * Shown when the user long-presses a link or an image on a web page.
  * Every item actually works — no dead buttons:
  * - Link: Open in new tab / Copy link / Share link
+ *   (+ Download link when the link points at a direct file)
  * - Image: Save image (Downloads) / Copy image URL / Share image / Open image in new tab
  * - Linked image (anchor wrapping an <img>): both sections are shown.
  *
@@ -61,6 +62,7 @@ fun LongPressMenuSheet(
     onCopyImageUrl: (String) -> Unit,
     onShareImage: (String) -> Unit,
     onAddToPlaylist: ((String) -> Unit)? = null,
+    onDownloadLink: ((String) -> Unit)? = null,
     onDismiss: () -> Unit
 ) {
     ModalBottomSheet(
@@ -173,6 +175,17 @@ fun LongPressMenuSheet(
                     label = "Share link",
                     onClick = { onShareLink(linkUrl) }
                 )
+                // Only shown for direct file links — the file the site
+                // itself serves at this URL goes straight into Click's
+                // download manager, without navigating to it first.
+                if (onDownloadLink != null) {
+                    LongPressMenuRow(
+                        theme = theme,
+                        icon = Icons.Default.Download,
+                        label = "Download link",
+                        onClick = { onDownloadLink(linkUrl) }
+                    )
+                }
                 // Only shown for direct media file links — never for
                 // streaming-service pages (Playlist refuses those).
                 if (onAddToPlaylist != null) {
