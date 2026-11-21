@@ -54,6 +54,22 @@ internal fun geckoSessionStartupPlan(
     else -> GeckoSessionStartupPlan(true, false, false)
 }
 
+/**
+ * Whether the session's initial-URL load re-displays a page its tab already
+ * had — a tab restored from the saved snapshot whose Gecko state did not
+ * survive (never captured, over the snapshot size cap, or unparseable), or
+ * a session recreated for an existing tab after the tab was unloaded —
+ * rather than a fresh navigation the user just asked for. Re-display loads
+ * get the same transient-failure protection as state restores: at a cold
+ * start the network/DNS/VPN path may still be coming back, and a plain
+ * unmarked load would turn that into the sticky "Page couldn't load" card
+ * (Prince's minimize → return report, 2026-11-21).
+ */
+internal fun geckoInitialUrlLoadIsRestore(
+    plan: GeckoSessionStartupPlan,
+    tabAlreadyHadPage: Boolean
+): Boolean = tabAlreadyHadPage && plan.loadInitialUrl
+
 /** Grace period after which a recovery that produced neither a composite nor
  *  a new crash is treated as a silent no-op and Reload is re-enabled. */
 private const val RECOVERY_WATCHDOG_MS = 12_000L
@@ -86,6 +102,12 @@ internal class GeckoBrowserTabSession(
     initialGeckoSession: GeckoSession? = null,
     initiallySelected: Boolean,
     initiallyResumed: Boolean,
+    /** True when this session re-displays a page the tab already had
+     *  (snapshot restore without surviving state, or a recreated session
+     *  for an existing tab): the initial-URL load is then marked as a
+     *  restore load so a transient cold-start failure is retried silently
+     *  instead of becoming the error card. See [geckoInitialUrlLoadIsRestore]. */
+    private val initialLoadIsRestore: Boolean = false,
     private val navigationTarget: (String) -> String?,
     private val wideLayoutForUrl: (String) -> Boolean,
     private val onNavigationBlocked: (String) -> Unit,
@@ -549,7 +571,17 @@ internal class GeckoBrowserTabSession(
             session.restoreState(restoredState)
         } else if (startup.loadInitialUrl) {
             pendingSafeRetryUrl = geckoSafeRetryUrl("GET", initialUrl)
-            session.loadUri(initialUrl)
+            if (geckoInitialUrlLoadIsRestore(startup, initialLoadIsRestore)) {
+                navigationTracker.markNextLoadAsRestore()
+            }
+            try {
+                session.loadUri(initialUrl)
+            } catch (error: Exception) {
+                // The marked load never started: drop the mark so it
+                // cannot leak into an unrelated later navigation.
+                navigationTracker.clearPendingLoadMarks()
+                throw error
+            }
         }
         updateActiveState()
     }

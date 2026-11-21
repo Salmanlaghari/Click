@@ -163,6 +163,37 @@ class GeckoTabMigrationPolicyTest {
     }
 
     @Test
+    fun initialUrlLoadIsRestoreOnlyForTabsThatAlreadyHadThePage() {
+        val urlOnlyPlan = geckoSessionStartupPlan(false, false, "https://restored.example/")
+        // Restored snapshot tab whose Gecko state did not survive: its
+        // URL-only first load is a re-display and gets restore protection.
+        assertTrue(geckoInitialUrlLoadIsRestore(urlOnlyPlan, tabAlreadyHadPage = true))
+        // A brand-new tab opening the same URL is a fresh navigation: a
+        // failure must surface normally, never be silently retried.
+        assertFalse(geckoInitialUrlLoadIsRestore(urlOnlyPlan, tabAlreadyHadPage = false))
+        // State restores already carry their own marking, and blank or
+        // adopted sessions load nothing here at all.
+        assertFalse(
+            geckoInitialUrlLoadIsRestore(
+                geckoSessionStartupPlan(false, true, "https://restored.example/"),
+                tabAlreadyHadPage = true
+            )
+        )
+        assertFalse(
+            geckoInitialUrlLoadIsRestore(
+                geckoSessionStartupPlan(false, false, "about:blank"),
+                tabAlreadyHadPage = true
+            )
+        )
+        assertFalse(
+            geckoInitialUrlLoadIsRestore(
+                geckoSessionStartupPlan(true, false, "https://child.example/"),
+                tabAlreadyHadPage = true
+            )
+        )
+    }
+
+    @Test
     fun ordinarySessionOpensOnceAndChoosesRestoreStateOrInitialUrl() {
         assertEquals(
             GeckoSessionStartupPlan(openLocally = true, restoreSavedState = true, loadInitialUrl = false),
