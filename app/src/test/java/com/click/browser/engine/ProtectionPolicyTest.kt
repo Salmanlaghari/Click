@@ -85,9 +85,9 @@ class ProtectionPolicyTest {
 
     @Test
     fun `effective combinations with flags`() {
-        assertTrue(ProtectionPolicy.effectiveAggressive("strong", flagsAggressive = false))
-        assertTrue(ProtectionPolicy.effectiveAggressive("standard", flagsAggressive = true))
-        assertFalse(ProtectionPolicy.effectiveAggressive("standard", flagsAggressive = false))
+        assertTrue(ProtectionPolicy.shouldUseAggressiveFilterList("strong", flagsAggressive = false))
+        assertTrue(ProtectionPolicy.shouldUseAggressiveFilterList("standard", flagsAggressive = true))
+        assertFalse(ProtectionPolicy.shouldUseAggressiveFilterList("standard", flagsAggressive = false))
 
         assertTrue(ProtectionPolicy.effectiveBlockThirdPartyCookies(true, flagsValue = false))
         assertTrue(ProtectionPolicy.effectiveBlockThirdPartyCookies(false, flagsValue = true))

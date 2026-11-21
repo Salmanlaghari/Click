@@ -29,8 +29,16 @@ object ProtectionRuntime {
     var current: ProtectionState = ProtectionState()
         private set
 
+    /** True once [current] reflects the persisted choices (or newer edits
+     *  made on top of them). Lets runtime creation skip a redundant disk
+     *  read when the state was already loaded this process. */
+    @Volatile
+    var persistedLoaded: Boolean = false
+        private set
+
     fun update(state: ProtectionState) {
         current = state
+        persistedLoaded = true
     }
 
     /** Reads the persisted Protection choices (blocking; use at startup or

@@ -257,12 +257,11 @@ object AppSettings {
             else -> default
         }
 
-    /** Normalizes a protection level to "off" | "standard" | "strong". */
+    /** Normalizes a protection level to "off" | "standard" | "strong".
+     *  The single implementation lives in ProtectionPolicy (which owns the
+     *  level constants); this delegates so existing call sites keep working. */
     fun normalizeProtectionLevel(value: String?): String =
-        when (value?.lowercase()) {
-            "off", "standard", "strong" -> value.lowercase()
-            else -> "standard"
-        }
+        ProtectionPolicy.normalizeLevel(value)
 
     /**
      * Appends a user-flagged AI response to the on-device report log

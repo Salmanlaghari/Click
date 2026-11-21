@@ -1042,7 +1042,7 @@ class MainActivity : FragmentActivity() {
         }
         // Strong protection uses the aggressive WebView filter list even
         // when the click://flags experiment is off.
-        AdBlocker.aggressive = com.click.browser.engine.ProtectionPolicy.effectiveAggressive(
+        AdBlocker.aggressive = com.click.browser.engine.ProtectionPolicy.shouldUseAggressiveFilterList(
             liveProtectionLevel, f.aggressiveAdblock
         )
         // Per-site overrides win over the global values set above. This

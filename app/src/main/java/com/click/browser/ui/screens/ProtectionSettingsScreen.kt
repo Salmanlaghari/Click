@@ -266,8 +266,9 @@ fun ProtectionSettingsScreen(
                     Text("Scripts", color = theme.onSurface, fontWeight = FontWeight.SemiBold, fontSize = 14.sp)
                     Spacer(Modifier.height(4.dp))
                     ProtectionToggleRow(
-                        title = "Block scripts (JavaScript off)",
-                        desc = javaScriptAvailability.description,
+                        title = "Block scripts",
+                        desc = "When on, pages load without JavaScript. " +
+                            javaScriptAvailability.description,
                         checked = !jsEnabled,
                         onCheckedChange = { blocked -> onToggleJs(!blocked) },
                         theme = theme,

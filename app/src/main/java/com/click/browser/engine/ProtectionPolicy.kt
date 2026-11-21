@@ -23,7 +23,11 @@ object ProtectionPolicy {
     const val LEVEL_STANDARD = "standard"
     const val LEVEL_STRONG = "strong"
 
-    fun normalizeLevel(value: String?): String = AppSettings.normalizeProtectionLevel(value)
+    fun normalizeLevel(value: String?): String =
+        when (value?.lowercase()) {
+            LEVEL_OFF, LEVEL_STANDARD, LEVEL_STRONG -> value.lowercase()
+            else -> LEVEL_STANDARD
+        }
 
     fun levelLabel(level: String): String = when (normalizeLevel(level)) {
         LEVEL_OFF -> "Off"
@@ -90,7 +94,7 @@ object ProtectionPolicy {
 
     /** The click://flags aggressive-adblock experiment ORs with the level:
      *  Strong protection always uses the aggressive WebView filter list. */
-    fun effectiveAggressive(level: String, flagsAggressive: Boolean): Boolean =
+    fun shouldUseAggressiveFilterList(level: String, flagsAggressive: Boolean): Boolean =
         flagsAggressive || normalizeLevel(level) == LEVEL_STRONG
 
     /** The Privacy & Safety toggle ORs with the click://flags experiment. */

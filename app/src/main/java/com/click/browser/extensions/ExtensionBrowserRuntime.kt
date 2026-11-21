@@ -24,8 +24,18 @@ internal object ExtensionBrowserRuntime {
             // level, cookie behavior and Safe Browsing categories from the
             // first page. Later changes go through
             // ProtectionRuntime.applyToRuntime (live setters, no restart).
-            val protectionState = ProtectionRuntime.readPersisted(appContext)
-            ProtectionRuntime.update(protectionState)
+            // The sync DataStore read matches the codebase's existing
+            // startup pattern (V9Engine's boot-mode read in
+            // ClickApplication.onCreate); it is skipped when the state was
+            // already loaded this process. It must happen here — not only in
+            // MainActivity — because this runtime is also created by
+            // ExtensionBrowserActivity, which never runs MainActivity's
+            // preference loader.
+            val protectionState = if (ProtectionRuntime.persistedLoaded) {
+                ProtectionRuntime.current
+            } else {
+                ProtectionRuntime.readPersisted(appContext).also { ProtectionRuntime.update(it) }
+            }
             val runtimeSettings = GeckoRuntimeSettings.Builder()
                 .contentBlocking(ProtectionRuntime.buildContentBlockingSettings(protectionState))
                 .build()
