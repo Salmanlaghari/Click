@@ -3836,10 +3836,12 @@ class MainActivity : FragmentActivity() {
             MaterialTheme(colorScheme = themeColors) {
                 ModalNavigationDrawer(
                     drawerState = drawerState,
-                    // Gestures OFF: the drawer opens ONLY via the hamburger icon.
-                    // (Edge-swipe was misfiring on vertical page scrolls and
-                    // opening the drawer by itself — Prince's bug report.)
-                    gesturesEnabled = false,
+                    // Gestures ON: the drawer opens via the hamburger icon AND
+                    // the left-edge swipe. (Restored 2026-11-21 on Prince's
+                    // order; was disabled 2026-10-08 in e787e929 after the
+                    // edge-swipe misfired on vertical scrolls. Prince asked to
+                    // bring it back so users get the choice.)
+                    gesturesEnabled = true,
                     drawerContent = {
                         ModalDrawerSheet(
                             modifier = Modifier.width(300.dp),
