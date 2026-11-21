@@ -42,6 +42,17 @@ object PasswordManager {
     private val PASSWORDS_KEY = stringPreferencesKey("saved_passwords_v1")
     private val ENABLED_KEY = booleanPreferencesKey("password_manager_enabled")
 
+    // In-memory copy of the decrypted vault and of the enabled flag, kept
+    // fresh by every read/write below. The GeckoView autocomplete storage
+    // delegate is invoked on the UI thread, so it answers fetches from this
+    // cache instead of blocking on a disk read (see
+    // ClickAutocompleteStorageDelegate).
+    @Volatile
+    private var cache: List<SavedPassword>? = null
+
+    @Volatile
+    private var cachedEnabled: Boolean? = null
+
     private fun getOrCreateKey(): SecretKey {
         val ks = KeyStore.getInstance(ANDROID_KEYSTORE).apply { load(null) }
         (ks.getEntry(KEYSTORE_ALIAS, null) as? KeyStore.SecretKeyEntry)?.let {
@@ -84,12 +95,15 @@ object PasswordManager {
     }
 
     suspend fun isEnabled(context: Context): Boolean {
-        return context.profileDataStore.data.map { it[ENABLED_KEY] ?: true }.first()
+        val enabled = context.profileDataStore.data.map { it[ENABLED_KEY] ?: true }.first()
+        cachedEnabled = enabled
+        return enabled
     }
 
     suspend fun setEnabled(context: Context, enabled: Boolean): Boolean {
         return try {
             context.profileDataStore.edit { it[ENABLED_KEY] = enabled }
+            cachedEnabled = enabled
             true
         } catch (e: Exception) {
             android.util.Log.w("PasswordManager", "setEnabled failed", e)
@@ -98,6 +112,38 @@ object PasswordManager {
     }
 
     suspend fun getAll(context: Context): List<SavedPassword> {
+        val loaded = loadAll(context)
+        if (loaded != null) cache = loaded
+        return loaded ?: cache ?: emptyList()
+    }
+
+    /** All saved logins whose host is exactly [host] (case-insensitive). */
+    suspend fun getAllForHost(context: Context, host: String): List<SavedPassword> =
+        savedPasswordsForExactHost(getAll(context), host)
+
+    /**
+     * Cache-only variant of [getAllForHost] for callers that must not block
+     * (the GeckoView storage delegate runs on the UI thread): null while
+     * the vault has not been loaded this process OR while the enabled state
+     * is still unknown (the caller then falls back to the async path, which
+     * checks the flag on disk first). Otherwise the exact-host matches —
+     * empty when the password manager is disabled.
+     */
+    fun cachedLoginsForHost(host: String): List<SavedPassword>? {
+        val all = cache ?: return null
+        val enabled = cachedEnabled ?: return null
+        if (!enabled) return emptyList()
+        return savedPasswordsForExactHost(all, host)
+    }
+
+    /** Loads the vault and the enabled flag into the in-memory cache. */
+    suspend fun warmCache(context: Context) {
+        isEnabled(context)
+        getAll(context)
+    }
+
+    /** Disk read behind [getAll]; null means the read itself failed. */
+    private suspend fun loadAll(context: Context): List<SavedPassword>? {
         return try {
             val json = context.profileDataStore.data.map { it[PASSWORDS_KEY].orEmpty() }.first()
             if (json.isBlank()) return emptyList()
@@ -120,7 +166,7 @@ object PasswordManager {
                     )
                 } catch (_: Exception) { null }
             }
-        } catch (_: Exception) { emptyList() }
+        } catch (_: Exception) { null }
     }
 
     suspend fun getForHost(context: Context, host: String): SavedPassword? {
@@ -175,6 +221,7 @@ object PasswordManager {
             })
         }
         context.profileDataStore.edit { it[PASSWORDS_KEY] = arr.toString() }
+        cache = trimmed
     }
 
     suspend fun delete(context: Context, host: String, username: String) {
@@ -204,9 +251,27 @@ object PasswordManager {
             })
         }
         context.profileDataStore.edit { it[PASSWORDS_KEY] = arr.toString() }
+        cache = entries
     }
 
     suspend fun clearAll(context: Context) {
         context.profileDataStore.edit { it.remove(PASSWORDS_KEY) }
+        cache = emptyList()
     }
+}
+
+/**
+ * Exact-host filter for GeckoView autofill: a record matches only when its
+ * stored host is exactly [host] (case-insensitive). Subdomains, parent
+ * domains and look-alike hosts never match, so a login saved for one site
+ * cannot leak into another. Matched records keep their stored origin, so
+ * Gecko's own origin check still separates non-default ports.
+ */
+internal fun savedPasswordsForExactHost(
+    logins: List<SavedPassword>,
+    host: String
+): List<SavedPassword> {
+    val wanted = host.trim().lowercase()
+    if (wanted.isEmpty()) return emptyList()
+    return logins.filter { it.host.lowercase() == wanted }
 }

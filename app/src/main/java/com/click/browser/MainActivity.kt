@@ -299,6 +299,12 @@ class MainActivity : FragmentActivity() {
     // onDestroy, which runs outside composition. Synced from composable state.
     @Volatile private var clearOnExitCached: Boolean = false
 
+    // Guards the deferred pre-installed-extensions pass: it runs once, after
+    // the first successful page load, instead of racing the first page's
+    // first composite at startup (1.8.5 ANR fix).
+    private val preinstalledExtensionsKicked =
+        java.util.concurrent.atomic.AtomicBoolean(false)
+
     // Deep-link URL from a news notification tap (NewsNotifications.EXTRA_OPEN_URL).
     // Set from onCreate (cold start) or onNewIntent (warm, singleTask); consumed
     // once by the composable, which opens it in a new tab.
@@ -3039,12 +3045,14 @@ class MainActivity : FragmentActivity() {
                 liveWebRtcBlocked = webrtcBlocked
                 com.click.browser.engine.WebRtcGuard.sync(this@MainActivity, webrtcBlocked)
             }
-            // Pre-installed extensions: make sure the bundled essentials are
-            // installed in the GeckoView runtime from the first launch on, so
-            // they are already there when the user opens the extensions panel.
-            LaunchedEffect(Unit) {
-                PreinstalledExtensions.ensureInstalled(applicationContext)
-            }
+            // Pre-installed extensions: the install pass is deliberately
+            // NOT started here. It used to run at first composition and its
+            // Gecko-side installs raced the first page's first composite,
+            // stretching the black screen on cold starts (1.8.5 ANR fix).
+            // It now runs once after the first successful page load (see
+            // the onPageLoaded callback) — and immediately whenever the
+            // user opens the extensions panel, which refreshes through
+            // PreinstalledExtensions.ensureInstalled itself.
             LaunchedEffect(forceNightModeWebsites) { liveNightMode = forceNightModeWebsites }
             LaunchedEffect(dataSaverEnabled) { liveDataSaver = dataSaverEnabled }
             LaunchedEffect(advanceIntroEnabled) { liveAdvanceIntroEnabled = advanceIntroEnabled }
@@ -5200,6 +5208,19 @@ class MainActivity : FragmentActivity() {
                                                                 tabs.firstOrNull { it.id == tabId }?.title = title
                                                             },
                                                             onPageLoaded = { url ->
+                                                                // First successful page load: the
+                                                                // first composite is on screen, so
+                                                                // the deferred pre-installed
+                                                                // extensions pass may run now
+                                                                // without stretching the startup
+                                                                // black screen (1.8.5 ANR fix).
+                                                                if (preinstalledExtensionsKicked
+                                                                        .compareAndSet(false, true)
+                                                                ) {
+                                                                    PreinstalledExtensions.ensureInstalled(
+                                                                        applicationContext
+                                                                    )
+                                                                }
                                                                 val loadedTab = tabs.firstOrNull { it.id == tabId }
                                                                 if (loadedTab != null &&
                                                                     (url.startsWith("http://") || url.startsWith("https://"))
