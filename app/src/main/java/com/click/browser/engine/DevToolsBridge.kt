@@ -233,11 +233,17 @@ internal object DevToolsBridge {
                 }
 
                 override fun onDisconnect(port: WebExtension.Port) {
-                    if (bridge.port === port) bridge.port = null
+                    val wasCurrentPort = bridge.port === port
+                    if (wasCurrentPort) bridge.port = null
                     val stranded = bridge.pending.values.toList()
                     bridge.pending.clear()
                     val error = JSONObject().put("error", "disconnected")
                     mainHandler.post { stranded.forEach { it.invoke(error) } }
+                    // Drop the per-session entry once its port is gone so
+                    // closed tabs do not accumulate in the map for the
+                    // process lifetime. A later page load reconnects and
+                    // re-creates the entry via getOrPut.
+                    if (wasCurrentPort) sessions.remove(session, bridge)
                 }
             })
         }

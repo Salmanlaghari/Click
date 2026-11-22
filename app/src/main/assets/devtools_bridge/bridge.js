@@ -76,6 +76,12 @@
     if (typeof message.code !== 'string') return;
     var result;
     try {
+      // By design: `message.code` can only arrive over this native port
+      // from the app itself — it is either one of Click's own bounded
+      // inspection snippets (DevToolsInspectionPolicy, the same scripts
+      // the WebView path runs through evaluateJavascript) or a command
+      // the user personally typed into the DevTools console. Page or
+      // remote code has no way to post to this port.
       var value = (new Function('return (' + message.code + ')'))();
       result = JSON.stringify(value === undefined || value === null ? null : String(value));
     } catch (err) {
