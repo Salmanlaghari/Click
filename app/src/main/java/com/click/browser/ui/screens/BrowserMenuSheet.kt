@@ -78,6 +78,7 @@ fun BrowserMenuSheet(
     onRecentTabs: () -> Unit,
     onShare: () -> Unit,
     onOpenInApp: () -> Unit = {},
+    onUserscripts: () -> Unit = {},
     onFindInPage: () -> Unit,
     onTranslate: () -> Unit,
     onToggleDesktopSite: () -> Unit,
@@ -190,6 +191,10 @@ fun BrowserMenuSheet(
                         MenuCustomization.MenuItemId.OPEN_IN_APP -> MenuRow(
                             theme = theme, icon = Icons.Default.OpenInNew,
                             label = "Open in app", onClick = onOpenInApp
+                        )
+                        MenuCustomization.MenuItemId.USERSCRIPTS -> MenuRow(
+                            theme = theme, icon = Icons.Default.Code,
+                            label = "Userscripts", onClick = onUserscripts
                         )
                         MenuCustomization.MenuItemId.FIND_IN_PAGE -> MenuRow(
                             theme = theme, icon = Icons.Default.Search,

@@ -32,6 +32,7 @@ object MenuCustomization {
         RECENT_TABS("Recent tabs", FeatureId.RECENT_TABS),
         SHARE("Share…"),
         OPEN_IN_APP("Open in app"),
+        USERSCRIPTS("Userscripts"),
         FIND_IN_PAGE("Find in page", FeatureId.FIND_IN_PAGE),
         TRANSLATE("Translate"),
         DESKTOP_SITE("Wide layout", FeatureId.DESKTOP),

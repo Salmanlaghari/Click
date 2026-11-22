@@ -183,6 +183,7 @@ internal class GeckoBrowserTabSession(
         isSessionActive = { !destroyed && session.isOpen }
     )
     private var extensionAttached = false
+    private var userscriptDelegateAttached = false
     @Volatile private var lastKnownPageUrl: String = initialUrl.ifBlank { "about:blank" }
     @Volatile private var latestConnectionSecurityInfo = ConnectionSecurityPolicy.unknown(initialUrl)
     @Volatile private var latestSessionState: String? = initialSessionState
@@ -984,9 +985,26 @@ internal class GeckoBrowserTabSession(
             extensionRouter.attach(tabId, session)
             extensionAttached = true
         }
+        attachUserscriptEngineIfOpen()
+    }
+
+    /**
+     * Userscripts (B1): registers the userscript engine's native-message
+     * delegate on this session. The delegate is what lets the built-in
+     * engine extension's runner ask which scripts apply to a page; a
+     * private session's delegate never hands out scripts.
+     */
+    private fun attachUserscriptEngineIfOpen() {
+        if (!userscriptDelegateAttached && session.isOpen) {
+            UserscriptEngine.attachSession(runtime, session, isIncognito)
+            userscriptDelegateAttached = true
+        }
     }
 
     private fun detachExtensionRouterAfterRendererFailure() {
+        // The userscript delegate registration is cheap to redo and the
+        // recovered session may be a fresh one — always allow re-attach.
+        userscriptDelegateAttached = false
         if (!extensionAttached) return
         extensionRouter?.detachCrashedSession(tabId, session)
         extensionAttached = false
