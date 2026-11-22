@@ -71,10 +71,12 @@ object ThemeController {
             prefs[AppSettings.THEME_MODE] = normalized
             prefs[AppSettings.APPEARANCE_MODE] = normalized
             prefs[AppSettings.UI_DARK_MODE] = normalized == MODE_DARK
+            // The single app-wide choice replaces the legacy per-mode flags.
+            BrowserMode.values().forEach { prefs[AppSettings.darkModeKey(it)] = false }
         }
     }
 
-    suspend fun isDarkNow(context: Context, mode: BrowserMode): Boolean =
+    suspend fun isDarkNow(context: Context): Boolean =
         isDarkForMode(context, themeMode(context))
 
     fun isDarkForMode(context: Context, themeMode: String): Boolean =

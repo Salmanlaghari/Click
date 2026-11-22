@@ -175,8 +175,9 @@ object ModeThemes {
             BrowserMode.ADVANCED -> Unit // handled below with the variant palettes
         }
         // ADVANCED in dark: one warm dark palette (the light variants only
-        // tune the light look); the bronze identity is kept.
-        if (dark) {
+        // tune the light look); the bronze identity is kept. The mode check
+        // is explicit so a future mode can never fall into this palette.
+        if (dark && mode == BrowserMode.ADVANCED) {
             return ModeTheme(
                 mode = mode,
                 dark = true,
