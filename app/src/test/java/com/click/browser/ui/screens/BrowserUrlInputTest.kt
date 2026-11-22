@@ -61,6 +61,32 @@ class BrowserUrlInputTest {
     }
 
     @Test
+    fun displayUrlForBarDropsSchemeAndLeadsWithTheSiteName() {
+        assertEquals("example.com", displayUrlForBar("https://example.com"))
+        assertEquals("example.com", displayUrlForBar("https://example.com/"))
+        assertEquals("example.com", displayUrlForBar("http://example.com"))
+        assertEquals(
+            "en.wikipedia.org/wiki/Click",
+            displayUrlForBar("https://en.wikipedia.org/wiki/Click")
+        )
+        assertEquals(
+            "shop.example.pk/item/42?color=blue",
+            displayUrlForBar("https://shop.example.pk/item/42?color=blue")
+        )
+        assertEquals(
+            "example.com:8080/a",
+            displayUrlForBar("http://example.com:8080/a")
+        )
+    }
+
+    @Test
+    fun displayUrlForBarLeavesNonWebValuesUntouched() {
+        assertEquals("", displayUrlForBar(""))
+        assertEquals("about:blank", displayUrlForBar("about:blank"))
+        assertEquals("click://settings", displayUrlForBar("click://settings"))
+    }
+
+    @Test
     fun clickInternalSchemeRemainsNormalizedForNativeInterception() {
         assertEquals(
             "click://settings",

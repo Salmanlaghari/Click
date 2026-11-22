@@ -2506,17 +2506,25 @@ fun CompactBrowseBar(
     onSearchEngineClick: () -> Unit = {},
     historyItems: List<HistoryItem> = emptyList()
 ) {
-    var textInput by remember(currentUrl) { mutableStateOf(currentUrl) }
+    // Display/edit split (1.8.7 overhaul, A-list #3): while the bar is not
+    // focused it shows the short display form of the current URL (site name
+    // first, no scheme); tapping it switches to the full URL for editing.
+    // editText only lives while the bar is focused.
+    var editText by remember { mutableStateOf("") }
+    var barFocused by remember { mutableStateOf(false) }
+    val textInput = if (barFocused) editText else displayUrlForBar(currentUrl)
     val keyboardController = LocalSoftwareKeyboardController.current
     val focusManager = LocalFocusManager.current
-    // Suggestions show only while the user is actually editing the bar —
-    // not when it merely displays the current page's URL.
-    var barFocused by remember { mutableStateOf(false) }
-    val editingBar = barFocused && textInput.isNotBlank()
-    val suggestions = rememberSearchSuggestions(textInput, editingBar, searchEngine, historyItems)
+    val onBarFocusChange: (androidx.compose.ui.focus.FocusState) -> Unit = { focusState ->
+        if (focusState.isFocused && !barFocused) editText = currentUrl
+        barFocused = focusState.isFocused
+    }
+    // Suggestions show only while the user is actually editing the bar.
+    val editingBar = barFocused && editText.isNotBlank()
+    val suggestions = rememberSearchSuggestions(editText, editingBar, searchEngine, historyItems)
     val pickSuggestion: (SearchSuggestion) -> Unit = { suggestion ->
         val target = suggestion.url ?: suggestion.text
-        textInput = target
+        editText = target
         keyboardController?.hide()
         focusManager.clearFocus(force = true)
         onNavigate(target)
@@ -2738,7 +2746,7 @@ fun CompactBrowseBar(
                         }
                         androidx.compose.foundation.text.BasicTextField(
                             value = textInput,
-                            onValueChange = { textInput = it },
+                            onValueChange = { editText = it },
                             singleLine = true,
                             maxLines = 1,
                             textStyle = androidx.compose.ui.text.TextStyle(
@@ -2767,11 +2775,11 @@ fun CompactBrowseBar(
                             modifier = Modifier
                                 .weight(1f)
                                 .padding(horizontal = 6.dp, vertical = 8.dp)
-                                .onFocusChanged { barFocused = it.isFocused }
+                                .onFocusChanged(onBarFocusChange)
                         )
-                        if (textInput.isNotEmpty()) {
+                        if (barFocused && textInput.isNotEmpty()) {
                             IconButton(
-                                onClick = { textInput = "" },
+                                onClick = { editText = "" },
                                 modifier = Modifier.size(32.dp)
                             ) {
                                 Icon(
@@ -2874,7 +2882,7 @@ fun CompactBrowseBar(
                         )
                         androidx.compose.foundation.text.BasicTextField(
                             value = textInput,
-                            onValueChange = { textInput = it },
+                            onValueChange = { editText = it },
                             singleLine = true,
                             maxLines = 1,
                             textStyle = androidx.compose.ui.text.TextStyle(
@@ -2903,11 +2911,11 @@ fun CompactBrowseBar(
                             modifier = Modifier
                                 .weight(1f)
                                 .padding(horizontal = 8.dp, vertical = 12.dp)
-                                .onFocusChanged { barFocused = it.isFocused }
+                                .onFocusChanged(onBarFocusChange)
                         )
-                        if (textInput.isNotEmpty()) {
+                        if (barFocused && textInput.isNotEmpty()) {
                             IconButton(
-                                onClick = { textInput = "" },
+                                onClick = { editText = "" },
                                 modifier = Modifier.size(34.dp)
                             ) {
                                 Icon(
