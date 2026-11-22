@@ -17,6 +17,9 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.datastore.preferences.core.edit
 import com.click.browser.engine.AppSettings
+import com.click.browser.engine.BrowserSetting
+import com.click.browser.engine.BrowserSettingCapabilityPolicy
+import com.click.browser.engine.BrowserTabEngine
 import com.click.browser.engine.ModeTheme
 import com.click.browser.engine.dataStore
 import kotlinx.coroutines.flow.first
@@ -26,13 +29,27 @@ import kotlinx.coroutines.launch
 /**
  * Accessibility settings: force zoom, reader mode, reduced motion.
  * (Global text scaling lives in Settings → Text Size.)
+ *
+ * All three are injected into WebView tabs only; on a GeckoView tab the
+ * toggles are disabled with the capability policy's explanation instead of
+ * silently doing nothing.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun AccessibilityScreen(
     theme: ModeTheme,
+    currentTabEngine: BrowserTabEngine,
     onClose: () -> Unit
 ) {
+    val forceZoomAvailability = BrowserSettingCapabilityPolicy.availability(
+        BrowserSetting.FORCE_ZOOM, currentTabEngine
+    )
+    val readerModeAvailability = BrowserSettingCapabilityPolicy.availability(
+        BrowserSetting.READER_MODE, currentTabEngine
+    )
+    val reducedMotionAvailability = BrowserSettingCapabilityPolicy.availability(
+        BrowserSetting.REDUCED_MOTION, currentTabEngine
+    )
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
 
@@ -82,30 +99,42 @@ fun AccessibilityScreen(
             A11yCard(theme) {
                 A11yToggle(
                     title = "Force zoom",
-                    desc = "Allow pinch-zoom on every site, even pages that try to block it. Applies on next page load.",
+                    desc = if (forceZoomAvailability.enabled) {
+                        "Allow pinch-zoom on every site, even pages that try to block it. Applies on next page load."
+                    } else {
+                        forceZoomAvailability.description
+                    },
                     icon = Icons.Default.ZoomIn,
                     checked = forceZoom,
-                    enabled = loaded,
+                    enabled = loaded && forceZoomAvailability.enabled,
                     theme = theme,
                     onChange = { forceZoom = it; save(AppSettings.FORCE_ZOOM, it) }
                 )
                 HorizontalDivider(color = theme.onSurface.copy(alpha = 0.08f))
                 A11yToggle(
                     title = "Reader mode",
-                    desc = "Show a clean reading view for articles (distraction-free text). Applies on next page load.",
+                    desc = if (readerModeAvailability.enabled) {
+                        "Show a clean reading view for articles (distraction-free text). Applies on next page load."
+                    } else {
+                        readerModeAvailability.description
+                    },
                     icon = Icons.Default.Article,
                     checked = readerMode,
-                    enabled = loaded,
+                    enabled = loaded && readerModeAvailability.enabled,
                     theme = theme,
                     onChange = { readerMode = it; save(AppSettings.READER_MODE, it) }
                 )
                 HorizontalDivider(color = theme.onSurface.copy(alpha = 0.08f))
                 A11yToggle(
                     title = "Reduced motion",
-                    desc = "Minimize animations and transitions across the app. Applies on next page load.",
+                    desc = if (reducedMotionAvailability.enabled) {
+                        "Minimize animations and transitions across the app. Applies on next page load."
+                    } else {
+                        reducedMotionAvailability.description
+                    },
                     icon = Icons.Default.MotionPhotosOff,
                     checked = reducedMotion,
-                    enabled = loaded,
+                    enabled = loaded && reducedMotionAvailability.enabled,
                     theme = theme,
                     onChange = { reducedMotion = it; save(AppSettings.REDUCED_MOTION, it) }
                 )

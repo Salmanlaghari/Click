@@ -8820,6 +8820,7 @@ class MainActivity : FragmentActivity() {
                             if (showAccessibility) {
                                 com.click.browser.ui.screens.AccessibilityScreen(
                                     theme = theme,
+                                    currentTabEngine = currentTab.engine,
                                     onClose = { showAccessibility = false }
                                 )
                             }
@@ -10411,7 +10412,15 @@ class MainActivity : FragmentActivity() {
                                             currentTab.webView?.settings?.textZoom = globalTextScale
                                         }
                                     },
-                                    onDismiss = { showTextScaleSheet = false }
+                                    onDismiss = { showTextScaleSheet = false },
+                                    unavailableMessage = if (currentTab.engine == BrowserTabEngine.GECKOVIEW) {
+                                        com.click.browser.engine.BrowserSettingCapabilityPolicy.availability(
+                                            com.click.browser.engine.BrowserSetting.TEXT_SIZE,
+                                            currentTab.engine
+                                        ).description
+                                    } else {
+                                        null
+                                    }
                                 )
                             }
 
