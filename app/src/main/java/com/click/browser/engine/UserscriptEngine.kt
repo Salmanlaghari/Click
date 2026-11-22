@@ -143,6 +143,7 @@ internal object UserscriptEngine {
                 },
                 { error -> Log.w(TAG, "Could not install the built-in userscript engine", error) }
             )
+            Unit
         }
         if (Looper.myLooper() == Looper.getMainLooper()) install() else mainHandler.post(install)
     }
