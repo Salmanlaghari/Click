@@ -16,12 +16,15 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.ContentCopy
+import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -29,6 +32,7 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import com.click.browser.engine.vpn.VpnConfigBuilder
 import com.click.browser.engine.vpn.VpnController
+import com.click.browser.engine.vpn.VlessLink
 import com.click.browser.engine.vpn.VpnServer
 import com.click.browser.engine.vpn.VpnState
 import kotlinx.coroutines.launch
@@ -39,7 +43,8 @@ import kotlinx.coroutines.launch
  * HONEST LIMITATIONS (shown in UI, not hidden):
  * - The built-in server sits in one country; you cannot pick a country
  *   with it. Country selection needs your own server (paste a
- *   vless://, vmess://, trojan:// or ss:// link).
+ *   vless://, vmess://, trojan:// or ss:// link, import it from the
+ *   clipboard, or fill the manual VLESS form field by field).
  * - Free public servers from the internet are slow and unreliable.
  * - Fast, stable USA/UK exits need a paid VPN or a self-hosted server.
  *
@@ -59,6 +64,7 @@ fun VpnScreen(onClose: () -> Unit) {
     var selectedId by remember { mutableStateOf<String?>(null) }
     var acked by remember { mutableStateOf<Boolean?>(null) }
     var showAddDialog by remember { mutableStateOf(false) }
+    var editingServer by remember { mutableStateOf<VpnServer?>(null) }
     var starting by remember { mutableStateOf(false) }
 
     // The service owns the truth: once it reports any state change, the
@@ -245,6 +251,9 @@ fun VpnScreen(onClose: () -> Unit) {
                             selectedId = server.id
                         }
                     },
+                    onEdit = if (server.kind == VpnServer.ServerKind.CUSTOM) {
+                        { editingServer = server }
+                    } else null,
                     onDelete = if (server.kind == VpnServer.ServerKind.CUSTOM) {
                         {
                             scope.launch {
@@ -288,9 +297,10 @@ fun VpnScreen(onClose: () -> Unit) {
     }
 
     if (showAddDialog) {
-        AddServerDialog(
+        ServerEditorDialog(
+            initial = null,
             onDismiss = { showAddDialog = false },
-            onAdd = { name, url, onResult ->
+            onSave = { name, url, onResult ->
                 scope.launch {
                     val saved = runCatching {
                         VpnController.addCustomServer(context, name, url)
@@ -306,6 +316,36 @@ fun VpnScreen(onClose: () -> Unit) {
             }
         )
     }
+
+    editingServer?.let { server ->
+        ServerEditorDialog(
+            initial = server,
+            onDismiss = { editingServer = null },
+            onSave = { name, url, onResult ->
+                scope.launch {
+                    val saved = runCatching {
+                        VpnController.updateCustomServer(context, server.id, name, url)
+                    }.getOrDefault(false)
+                    if (saved) {
+                        val wasLive = server.id == selectedId &&
+                            vpnState == VpnState.CONNECTED
+                        editingServer = null
+                        refresh()
+                        onResult(null)
+                        if (wasLive) {
+                            android.widget.Toast.makeText(
+                                context,
+                                "Server updated — reconnect the tunnel to use the new settings.",
+                                android.widget.Toast.LENGTH_LONG
+                            ).show()
+                        }
+                    } else {
+                        onResult("Couldn't save this server. Check the link and try again.")
+                    }
+                }
+            }
+        )
+    }
 }
 
 @Composable
@@ -313,6 +353,7 @@ private fun ServerRow(
     server: VpnServer,
     selected: Boolean,
     onSelect: () -> Unit,
+    onEdit: (() -> Unit)?,
     onDelete: (() -> Unit)?,
 ) {
     Card(
@@ -332,7 +373,8 @@ private fun ServerRow(
                 Text(
                     when (server.kind) {
                         VpnServer.ServerKind.BUILT_IN_VLESS -> "Fixed location • Canada"
-                        VpnServer.ServerKind.CUSTOM -> "Custom server"
+                        VpnServer.ServerKind.CUSTOM ->
+                            VlessLink.parse(server.config)?.summary() ?: "Custom server"
                     },
                     fontSize = 12.sp,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
@@ -341,6 +383,11 @@ private fun ServerRow(
             if (selected) {
                 Icon(Icons.Filled.Check, contentDescription = "Selected",
                     tint = MaterialTheme.colorScheme.primary)
+            }
+            if (onEdit != null) {
+                IconButton(onClick = onEdit) {
+                    Icon(Icons.Filled.Edit, contentDescription = "Edit")
+                }
             }
             if (onDelete != null) {
                 IconButton(onClick = onDelete) {
@@ -352,59 +399,274 @@ private fun ServerRow(
 }
 
 @Composable
-private fun AddServerDialog(
-    onDismiss: () -> Unit,
-    onAdd: (name: String, url: String, onResult: (String?) -> Unit) -> Unit,
+private fun ServerTextField(
+    label: String,
+    value: String,
+    onChange: (String) -> Unit,
+    placeholder: String = "",
 ) {
-    var name by remember { mutableStateOf("") }
-    var url by remember { mutableStateOf("") }
+    OutlinedTextField(
+        value = value, onValueChange = onChange,
+        label = { Text(label) },
+        placeholder = if (placeholder.isNotEmpty()) ({ Text(placeholder) }) else null,
+        modifier = Modifier.fillMaxWidth(), singleLine = true
+    )
+    Spacer(Modifier.height(8.dp))
+}
+
+@Composable
+@OptIn(ExperimentalMaterial3Api::class)
+private fun ServerFieldDropdown(
+    label: String,
+    options: List<Pair<String, String>>,
+    selected: String,
+    onSelect: (String) -> Unit,
+) {
+    var expanded by remember { mutableStateOf(false) }
+    ExposedDropdownMenuBox(
+        expanded = expanded,
+        onExpandedChange = { expanded = it }
+    ) {
+        OutlinedTextField(
+            value = options.firstOrNull { it.first == selected }?.second ?: selected,
+            onValueChange = {},
+            readOnly = true,
+            label = { Text(label) },
+            trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = expanded) },
+            modifier = Modifier.fillMaxWidth().menuAnchor()
+        )
+        ExposedDropdownMenu(
+            expanded = expanded,
+            onDismissRequest = { expanded = false }
+        ) {
+            options.forEach { (value, text) ->
+                DropdownMenuItem(
+                    text = { Text(text) },
+                    onClick = { onSelect(value); expanded = false }
+                )
+            }
+        }
+    }
+    Spacer(Modifier.height(8.dp))
+}
+
+/**
+ * Add/edit dialog for custom servers (B4). Two ways in, HA Tunnel style:
+ * paste a share link (with clipboard import), or fill the manual VLESS
+ * form field by field — both end up as the same validated share link.
+ * The manual form only covers VLESS; other schemes edit as raw links.
+ */
+@Composable
+private fun ServerEditorDialog(
+    initial: VpnServer?,
+    onDismiss: () -> Unit,
+    onSave: (name: String, url: String, onResult: (String?) -> Unit) -> Unit,
+) {
+    val clipboard = LocalClipboardManager.current
+    val initialVless = remember { initial?.let { VlessLink.parse(it.config) } }
+    val manualAvailable = initial == null || initialVless != null
+    var manualMode by remember { mutableStateOf(initial != null && initialVless != null) }
+    var name by remember { mutableStateOf(initial?.name ?: initialVless?.name ?: "") }
+    var url by remember { mutableStateOf(initial?.config ?: "") }
     var error by remember { mutableStateOf("") }
     var saving by remember { mutableStateOf(false) }
 
+    // Manual VLESS form fields.
+    var fUuid by remember { mutableStateOf(initialVless?.uuid ?: "") }
+    var fHost by remember { mutableStateOf(initialVless?.host ?: "") }
+    var fPort by remember { mutableStateOf((initialVless?.port ?: 443).toString()) }
+    var fFlow by remember { mutableStateOf(initialVless?.flow ?: "") }
+    var fNetwork by remember { mutableStateOf(initialVless?.network ?: "tcp") }
+    var fSecurity by remember { mutableStateOf(initialVless?.security ?: "reality") }
+    var fSni by remember { mutableStateOf(initialVless?.sni ?: "") }
+    var fFingerprint by remember { mutableStateOf(initialVless?.fingerprint ?: "") }
+    var fPublicKey by remember { mutableStateOf(initialVless?.publicKey ?: "") }
+    var fShortId by remember { mutableStateOf(initialVless?.shortId ?: "") }
+    var fPath by remember { mutableStateOf(initialVless?.path ?: "") }
+    var fHostHeader by remember { mutableStateOf(initialVless?.hostHeader ?: "") }
+    var fServiceName by remember { mutableStateOf(initialVless?.serviceName ?: "") }
+    var fAllowInsecure by remember { mutableStateOf(initialVless?.allowInsecure ?: false) }
+
+    fun submit() {
+        val finalUrl: String
+        if (manualMode) {
+            val port = fPort.trim().toIntOrNull()
+            if (fUuid.isBlank() || fHost.isBlank()) {
+                error = "UUID and server address are required."
+                return
+            }
+            if (port == null || port !in 1..65535) {
+                error = "Port must be a number between 1 and 65535."
+                return
+            }
+            if (fSecurity == "reality" && fPublicKey.isBlank()) {
+                error = "Reality servers need the public key (pbk)."
+                return
+            }
+            if (fFlow.isNotBlank() && fSecurity == "none") {
+                error = "The vision flow needs TLS or Reality security."
+                return
+            }
+            finalUrl = VlessLink(
+                uuid = fUuid.trim(),
+                host = fHost.trim(),
+                port = port,
+                name = name.trim(),
+                flow = fFlow,
+                network = fNetwork,
+                security = fSecurity,
+                sni = fSni.trim(),
+                fingerprint = fFingerprint.trim(),
+                publicKey = fPublicKey.trim(),
+                shortId = fShortId.trim(),
+                path = fPath.trim(),
+                hostHeader = fHostHeader.trim(),
+                serviceName = fServiceName.trim(),
+                // Fields the form does not edit must survive a save —
+                // dropping them silently breaks working servers.
+                encryption = initialVless?.encryption ?: "none",
+                allowInsecure = fAllowInsecure
+            ).toShareLink()
+        } else {
+            finalUrl = url.trim()
+            if (finalUrl.isBlank()) {
+                error = "Paste a proxy URL first."
+                return
+            }
+        }
+        val pastedVless = if (!manualMode) VlessLink.parse(finalUrl) else null
+        if (pastedVless != null && pastedVless.security == "reality" && pastedVless.publicKey.isBlank()) {
+            error = "Reality servers need the public key (pbk) in the link."
+            return
+        }
+        if (runCatching { VpnConfigBuilder.buildCustomConfig(finalUrl) }.getOrNull() == null) {
+            error = "This server isn't valid or supported. Use vless://, vmess://, trojan://, or ss://."
+            return
+        }
+        saving = true
+        error = ""
+        onSave(name.trim(), finalUrl) { failure ->
+            saving = false
+            if (failure != null) error = failure
+        }
+    }
+
     Dialog(onDismissRequest = onDismiss) {
         Card(shape = RoundedCornerShape(16.dp)) {
-            Column(Modifier.padding(20.dp)) {
-                Text("Add custom server",
-                    fontWeight = FontWeight.Bold, fontSize = 18.sp)
+            Column(
+                Modifier.padding(20.dp)
+                    .heightIn(max = 600.dp)
+                    .verticalScroll(rememberScrollState())
+            ) {
+                Text(
+                    if (initial == null) "Add custom server" else "Edit server",
+                    fontWeight = FontWeight.Bold, fontSize = 18.sp
+                )
                 Spacer(Modifier.height(12.dp))
-                OutlinedTextField(
-                    value = name, onValueChange = { name = it },
-                    label = { Text("Name (e.g. My USA server)") },
-                    modifier = Modifier.fillMaxWidth(), singleLine = true
-                )
-                Spacer(Modifier.height(8.dp))
-                OutlinedTextField(
-                    value = url, onValueChange = { url = it; error = "" },
-                    label = { Text("Proxy URL") },
-                    placeholder = { Text("vless://… / vmess://… / trojan://… / ss://…") },
-                    modifier = Modifier.fillMaxWidth(), minLines = 3
-                )
+                if (manualAvailable) {
+                    Row(Modifier.fillMaxWidth()) {
+                        FilterChip(
+                            selected = !manualMode,
+                            onClick = { manualMode = false; error = "" },
+                            label = { Text("Paste link") }
+                        )
+                        Spacer(Modifier.width(8.dp))
+                        FilterChip(
+                            selected = manualMode,
+                            onClick = { manualMode = true; error = "" },
+                            label = { Text("Manual form (VLESS)") }
+                        )
+                    }
+                    Spacer(Modifier.height(12.dp))
+                }
+                ServerTextField("Name (e.g. My USA server)", name, { name = it })
+                if (manualMode) {
+                    ServerTextField("Server address", fHost, { fHost = it }, "node.example.com or 203.0.113.10")
+                    ServerTextField("Port", fPort, { fPort = it.filter { c -> c.isDigit() } }, "443")
+                    ServerTextField("UUID", fUuid, { fUuid = it })
+                    ServerFieldDropdown(
+                        "Transport",
+                        listOf("tcp" to "TCP", "ws" to "WebSocket", "grpc" to "gRPC"),
+                        fNetwork
+                    ) { fNetwork = it }
+                    ServerFieldDropdown(
+                        "Security",
+                        listOf("reality" to "Reality", "tls" to "TLS", "none" to "None"),
+                        fSecurity
+                    ) { fSecurity = it }
+                    ServerFieldDropdown(
+                        "Flow",
+                        listOf("" to "None", "xtls-rprx-vision" to "xtls-rprx-vision"),
+                        fFlow
+                    ) { fFlow = it }
+                    if (fSecurity != "none") {
+                        ServerTextField("SNI", fSni, { fSni = it }, "www.example.com")
+                        ServerTextField("Fingerprint", fFingerprint, { fFingerprint = it }, "chrome")
+                    }
+                    if (fSecurity == "reality") {
+                        ServerTextField("Reality public key (pbk)", fPublicKey, { fPublicKey = it })
+                        ServerTextField("Reality short ID (sid)", fShortId, { fShortId = it })
+                    }
+                    if (fNetwork == "ws") {
+                        ServerTextField("WebSocket path", fPath, { fPath = it }, "/")
+                        ServerTextField("WebSocket Host header", fHostHeader, { fHostHeader = it })
+                    }
+                    if (fNetwork == "grpc") {
+                        ServerTextField("gRPC service name", fServiceName, { fServiceName = it })
+                    }
+                    if (fSecurity == "tls") {
+                        Row(
+                            Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Column(Modifier.weight(1f)) {
+                                Text("Allow insecure certificates", fontSize = 14.sp)
+                                Text(
+                                    "Only for self-signed servers you trust",
+                                    fontSize = 12.sp,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                            Switch(
+                                checked = fAllowInsecure,
+                                onCheckedChange = { fAllowInsecure = it }
+                            )
+                        }
+                        Spacer(Modifier.height(8.dp))
+                    }
+                } else {
+                    OutlinedTextField(
+                        value = url, onValueChange = { url = it; error = "" },
+                        label = { Text("Proxy URL") },
+                        placeholder = { Text("vless://… / vmess://… / trojan://… / ss://…") },
+                        modifier = Modifier.fillMaxWidth(), minLines = 3
+                    )
+                    Spacer(Modifier.height(8.dp))
+                    OutlinedButton(
+                        onClick = {
+                            clipboard.getText()?.text?.takeIf { it.isNotBlank() }?.let {
+                                url = it.trim()
+                                error = ""
+                            }
+                        },
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Icon(Icons.Filled.ContentCopy, contentDescription = null)
+                        Spacer(Modifier.width(8.dp))
+                        Text("Import from clipboard")
+                    }
+                }
                 if (error.isNotEmpty()) {
-                    Text(error, color = MaterialTheme.colorScheme.error,
-                        fontSize = 12.sp)
+                    Spacer(Modifier.height(4.dp))
+                    Text(error, color = MaterialTheme.colorScheme.error, fontSize = 12.sp)
                 }
                 Spacer(Modifier.height(12.dp))
-                Row(Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.End) {
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
                     TextButton(onClick = onDismiss, enabled = !saving) { Text("Cancel") }
                     Spacer(Modifier.width(8.dp))
-                    Button(enabled = !saving, onClick = {
-                        if (url.isBlank()) {
-                            error = "Paste a proxy URL first."
-                        } else if (runCatching {
-                                VpnConfigBuilder.buildCustomConfig(url.trim())
-                            }.getOrNull() == null
-                        ) {
-                            error = "This link isn't valid or supported. Use vless://, vmess://, trojan://, or ss://."
-                        } else {
-                            saving = true
-                            error = ""
-                            onAdd(name.trim(), url.trim()) { failure ->
-                                saving = false
-                                error = failure.orEmpty()
-                            }
-                        }
-                    }) { Text(if (saving) "Adding…" else "Add") }
+                    Button(enabled = !saving, onClick = { submit() }) {
+                        Text(if (saving) "Saving…" else if (initial == null) "Add" else "Save")
+                    }
                 }
             }
         }
