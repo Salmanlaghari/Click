@@ -28,7 +28,6 @@ internal object ModeCapabilityRegistry {
     private val modeRestrictions: Map<FeatureId, Set<BrowserMode>> = mapOf(
         FeatureId.DEVTOOLS to setOf(BrowserMode.DEVELOPER),
         FeatureId.FLAGS to setOf(BrowserMode.DEVELOPER, BrowserMode.ADVANCED),
-        FeatureId.FIND_IN_PAGE to setOf(BrowserMode.DEVELOPER, BrowserMode.HACK),
         FeatureId.RECENT_TABS to setOf(BrowserMode.HACK),
         FeatureId.FULLSCREEN to setOf(BrowserMode.HACK),
         FeatureId.STORAGE to setOf(BrowserMode.ADVANCED),

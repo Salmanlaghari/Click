@@ -97,16 +97,22 @@ class GeckoTabMigrationPolicyTest {
     }
 
     @Test
-    fun geckoContextsMatchExistingProfileSharingAndIsolation() {
-        val defaultProfile = geckoContextIdFor(BrowserMode.SIMPLE)
-        assertEquals(defaultProfile, geckoContextIdFor(BrowserMode.DEVELOPER))
-        assertEquals(defaultProfile, geckoContextIdFor(BrowserMode.HACK))
-        assertEquals(defaultProfile, geckoContextIdFor(BrowserMode.SIMPLE))
-        assertNotEquals(defaultProfile, geckoContextIdFor(BrowserMode.ADVANCED))
+    fun geckoContextsAreIsolatedPerModeProfile() {
+        // Per-mode profiles: every mode gets its own Gecko storage partition.
+        // SIMPLE and ADVANCED keep their historical ids so existing users keep
+        // their signed-in sessions; DEVELOPER and HACK start fresh by design.
+        assertEquals("click-profile-default", geckoContextIdFor(BrowserMode.SIMPLE))
+        assertEquals("click-profile-advanced", geckoContextIdFor(BrowserMode.ADVANCED))
+        assertEquals("click-profile-developer", geckoContextIdFor(BrowserMode.DEVELOPER))
+        assertEquals("click-profile-hack", geckoContextIdFor(BrowserMode.HACK))
+        assertEquals(
+            BrowserMode.values().size,
+            BrowserMode.values().map { geckoContextIdFor(it) }.distinct().size
+        )
     }
 
     @Test
-    fun exitCleanupIncludesBootAndUsedContextsAndDeduplicatesSharedModes() {
+    fun exitCleanupIncludesBootAndUsedContextsAndDeduplicates() {
         val defaultProfile = geckoContextIdFor(BrowserMode.SIMPLE)
         val advancedProfile = geckoContextIdFor(BrowserMode.ADVANCED)
 
@@ -126,7 +132,18 @@ class GeckoTabMigrationPolicyTest {
             listOf(defaultProfile),
             geckoContextIdsToClearOnExit(
                 BrowserMode.SIMPLE,
-                listOf(defaultProfile, geckoContextIdFor(BrowserMode.DEVELOPER), geckoContextIdFor(BrowserMode.HACK))
+                listOf(defaultProfile, defaultProfile)
+            )
+        )
+        assertEquals(
+            listOf(
+                defaultProfile,
+                geckoContextIdFor(BrowserMode.DEVELOPER),
+                geckoContextIdFor(BrowserMode.HACK)
+            ),
+            geckoContextIdsToClearOnExit(
+                BrowserMode.SIMPLE,
+                listOf(geckoContextIdFor(BrowserMode.DEVELOPER), geckoContextIdFor(BrowserMode.HACK))
             )
         )
     }

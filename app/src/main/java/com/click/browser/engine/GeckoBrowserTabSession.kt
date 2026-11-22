@@ -19,9 +19,21 @@ import org.mozilla.geckoview.WebResponse
 import com.click.browser.extensions.NormalTabExtensionRouter
 import java.util.ArrayDeque
 
-/** Stable Gecko storage partition identifier matching Click's existing profile groups. */
-internal fun geckoContextIdFor(mode: BrowserMode): String =
-    if (mode == BrowserMode.ADVANCED) "click-profile-advanced" else "click-profile-default"
+/**
+ * Stable Gecko storage partition identifier for [mode].
+ *
+ * Per-mode profiles (Prince's product vision, 21 Nov 2026): every mode is its
+ * own profile with isolated cookies / storage / site data. SIMPLE keeps the
+ * historical "click-profile-default" partition and ADVANCED keeps
+ * "click-profile-advanced", so existing users keep their signed-in sessions;
+ * DEVELOPER and HACK get their own partitions and start fresh by design.
+ */
+internal fun geckoContextIdFor(mode: BrowserMode): String = when (mode) {
+    BrowserMode.SIMPLE -> "click-profile-default"
+    BrowserMode.ADVANCED -> "click-profile-advanced"
+    BrowserMode.DEVELOPER -> "click-profile-developer"
+    BrowserMode.HACK -> "click-profile-hack"
+}
 
 internal fun geckoContextIdsToClearOnExit(
     bootMode: BrowserMode,
