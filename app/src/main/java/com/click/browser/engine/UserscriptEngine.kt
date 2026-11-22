@@ -1,6 +1,8 @@
 package com.click.browser.engine
 
 import android.content.Context
+import android.os.Handler
+import android.os.Looper
 import android.util.Log
 import com.click.browser.extensions.ExtensionBrowserRuntime
 import kotlinx.coroutines.CoroutineScope
@@ -61,6 +63,10 @@ internal object UserscriptEngine {
     private const val XHR_TIMEOUT_SECONDS = 30L
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    // GeckoView runtime and WebExtensionController APIs require a Looper/Handler
+    // thread. Keep store/network work on [scope], but marshal every Gecko call
+    // back to the Android main thread before touching the extension engine.
+    private val mainHandler = Handler(Looper.getMainLooper())
     private val httpClient: OkHttpClient by lazy {
         OkHttpClient.Builder()
             .connectTimeout(XHR_TIMEOUT_SECONDS, TimeUnit.SECONDS)
@@ -98,14 +104,19 @@ internal object UserscriptEngine {
                     cacheLoaded = true
                 }
             }.onFailure { Log.w(TAG, "store snapshot failed", it) }
-            val runtime = try {
-                ExtensionBrowserRuntime.get(appContext)
-            } catch (t: Throwable) {
-                Log.w(TAG, "Gecko runtime unavailable for userscript sync", t)
-                return@launch
-            }
             desiredEnabled = cachedScripts.any { it.enabled }
-            reconcile(runtime)
+            // Do not create or touch GeckoRuntime from Dispatchers.IO. GeckoView
+            // throws "Must be ran on a thread with a Handler!" when its runtime
+            // or WebExtensionController is initialized from a worker thread.
+            mainHandler.post {
+                val runtime = try {
+                    ExtensionBrowserRuntime.get(appContext)
+                } catch (t: Throwable) {
+                    Log.w(TAG, "Gecko runtime unavailable for userscript sync", t)
+                    return@post
+                }
+                reconcile(runtime)
+            }
         }
     }
 
@@ -115,22 +126,25 @@ internal object UserscriptEngine {
      * never hands out scripts.
      */
     fun attachSession(runtime: GeckoRuntime, session: GeckoSession, incognito: Boolean) {
-        runtime.webExtensionController.ensureBuiltIn(EXTENSION_LOCATION, EXTENSION_ID).accept(
-            { extension ->
-                if (extension == null) {
-                    Log.w(TAG, "ensureBuiltIn returned no extension for $EXTENSION_ID")
-                    return@accept
-                }
-                runCatching {
-                    session.webExtensionController.setMessageDelegate(
-                        extension,
-                        SessionMessageDelegate(incognito),
-                        NATIVE_APP
-                    )
-                }.onFailure { Log.w(TAG, "setMessageDelegate failed (session closed?)", it) }
-            },
-            { error -> Log.w(TAG, "Could not install the built-in userscript engine", error) }
-        )
+        val install = {
+            runtime.webExtensionController.ensureBuiltIn(EXTENSION_LOCATION, EXTENSION_ID).accept(
+                { extension ->
+                    if (extension == null) {
+                        Log.w(TAG, "ensureBuiltIn returned no extension for $EXTENSION_ID")
+                        return@accept
+                    }
+                    runCatching {
+                        session.webExtensionController.setMessageDelegate(
+                            extension,
+                            SessionMessageDelegate(incognito),
+                            NATIVE_APP
+                        )
+                    }.onFailure { Log.w(TAG, "setMessageDelegate failed (session closed?)", it) }
+                },
+                { error -> Log.w(TAG, "Could not install the built-in userscript engine", error) }
+            )
+        }
+        if (Looper.myLooper() == Looper.getMainLooper()) install() else mainHandler.post(install)
     }
 
     private fun reconcile(runtime: GeckoRuntime) {
