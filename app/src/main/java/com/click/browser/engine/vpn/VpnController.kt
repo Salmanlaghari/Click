@@ -160,6 +160,29 @@ object VpnController {
         true
     }
 
+    /**
+     * Replaces the name/config of an existing custom server (B4 edit
+     * flow). Validated the same way as [addCustomServer]; returns false
+     * when the id is unknown or the new link does not build.
+     */
+    suspend fun updateCustomServer(
+        context: Context, id: String, name: String, proxyUrl: String,
+    ): Boolean = withContext(Dispatchers.IO) {
+        if (VpnConfigBuilder.buildCustomConfig(proxyUrl) == null) return@withContext false
+        val current = getCustomServers(context)
+        if (current.none { it.id == id }) return@withContext false
+        val updated = current.map { server ->
+            if (server.id == id) {
+                server.copy(
+                    name = name.ifBlank { server.name },
+                    config = proxyUrl,
+                )
+            } else server
+        }
+        saveCustomServers(context, updated)
+        true
+    }
+
     suspend fun removeCustomServer(context: Context, id: String) {
         withContext(Dispatchers.IO) {
             val updated = getCustomServers(context).filter { it.id != id }

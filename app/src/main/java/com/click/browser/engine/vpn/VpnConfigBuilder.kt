@@ -136,48 +136,69 @@ object VpnConfigBuilder {
     // ---------- proxy URL parsers ----------
 
     private fun parseVless(url: String): JSONObject? = try {
-        // vless://uuid@host:port?encryption=none&security=reality&...#name
-        val uri = URI(url)
-        val params = parseQuery(uri.rawQuery)
-        val o = JSONObject()
-            .put("type", "vless")
-            .put("server", uri.host)
-            .put("server_port", if (uri.port > 0) uri.port else 443)
-            .put("uuid", uri.userInfo ?: "")
-        // NOTE (sing-box >= 1.14): the "encryption" field was REMOVED from
-        // the vless outbound (it's always "none" now) — never emit it.
-        // XTLS vision flow (e.g. flow=xtls-rprx-vision).
-        params["flow"]?.takeIf { it.isNotBlank() }?.let { o.put("flow", it) }
-        val security = params["security"].orEmpty()
-        if (security == "reality") {
-            val tls = JSONObject()
-                .put("enabled", true)
-                .put("server_name", params["sni"].orEmpty())
-            // uTLS fingerprint (fp=chrome) — matters for Reality.
-            params["fp"]?.takeIf { it.isNotBlank() }?.let { fp ->
-                tls.put("utls", JSONObject()
-                    .put("enabled", true)
-                    .put("fingerprint", fp))
+        // B4: links are parsed by VlessLink — the same model the VPN
+        // screen's manual form edits — so a pasted link and a hand-typed
+        // server can never drift apart.
+        val link = VlessLink.parse(url)
+        if (link == null) {
+            null
+        } else {
+            val o = JSONObject()
+                .put("type", "vless")
+                .put("server", link.host)
+                .put("server_port", link.port)
+                .put("uuid", link.uuid)
+            // NOTE (sing-box >= 1.14): the "encryption" field was REMOVED from
+            // the vless outbound (it's always "none" now) — never emit it.
+            // XTLS vision flow (e.g. flow=xtls-rprx-vision).
+            if (link.flow.isNotBlank()) o.put("flow", link.flow)
+            when (link.security) {
+                "reality" -> {
+                    val tls = JSONObject()
+                        .put("enabled", true)
+                        .put("server_name", link.sni)
+                    // uTLS fingerprint (fp) — matters for Reality.
+                    if (link.fingerprint.isNotBlank()) {
+                        tls.put("utls", JSONObject()
+                            .put("enabled", true)
+                            .put("fingerprint", link.fingerprint))
+                    }
+                    tls.put("reality", JSONObject()
+                        .put("enabled", true)
+                        .put("public_key", link.publicKey)
+                        .put("short_id", link.shortId))
+                    o.put("tls", tls)
+                }
+                "tls" -> {
+                    val tls = JSONObject()
+                        .put("enabled", true)
+                        // Fall back to the server host when no SNI is given;
+                        // an empty server_name breaks the TLS handshake.
+                        .put("server_name", link.sni.ifBlank { link.host })
+                    if (link.fingerprint.isNotBlank()) {
+                        tls.put("utls", JSONObject()
+                            .put("enabled", true)
+                            .put("fingerprint", link.fingerprint))
+                    }
+                    if (link.allowInsecure) tls.put("insecure", true)
+                    o.put("tls", tls)
+                }
             }
-            tls.put("reality", JSONObject()
-                .put("enabled", true)
-                .put("public_key", params["pbk"].orEmpty())
-                .put("short_id", params["sid"].orEmpty()))
-            o.put("tls", tls)
-        } else if (security == "tls") {
-            o.put("tls", JSONObject()
-                .put("enabled", true)
-                .put("server_name", params["sni"].orEmpty()))
-        }
-        params["type"]?.let { net ->
-            if (net != "tcp") {
-                o.put("transport", JSONObject().put("type", net).apply {
-                    params["path"]?.let { put("path", it) }
-                    params["host"]?.let { put("headers", JSONObject().put("Host", it)) }
+            when (link.network) {
+                "ws" -> o.put("transport", JSONObject().put("type", "ws").apply {
+                    put("path", link.path.ifBlank { "/" })
+                    if (link.hostHeader.isNotBlank()) {
+                        put("headers", JSONObject().put("Host", link.hostHeader))
+                    }
+                })
+                // sing-box gRPC transport takes service_name — the old
+                // parser wrongly emitted the ws path/headers shape here.
+                "grpc" -> o.put("transport", JSONObject().put("type", "grpc").apply {
+                    if (link.serviceName.isNotBlank()) put("service_name", link.serviceName)
                 })
             }
+            o
         }
-        o
     } catch (t: Throwable) {
         Log.w(TAG, "VLESS parse failed", t); null
     }
