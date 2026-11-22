@@ -50,6 +50,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.ArrowForward
+import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.LocationOn
 import androidx.compose.material.icons.filled.Close
@@ -133,7 +134,9 @@ import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
 import androidx.datastore.preferences.core.edit
 import com.click.browser.BuildConfig
+import androidx.compose.ui.focus.onFocusChanged
 import com.click.browser.data.Bookmark
+import com.click.browser.data.HistoryItem
 import com.click.browser.data.BrowserRepository
 import com.click.browser.data.ClickDownloadStore
 import com.click.browser.engine.AppSettings
@@ -148,6 +151,8 @@ import com.click.browser.engine.ConnectionSecurityInfo
 import com.click.browser.engine.ConnectionSecurityPolicy
 import com.click.browser.engine.ConnectionSecurityStatus
 import com.click.browser.engine.SearchEngineBrands
+import com.click.browser.engine.SearchSuggestion
+import com.click.browser.engine.SearchSuggestions
 import com.click.browser.engine.ModePersonalization
 import com.click.browser.engine.QuickSiteDef
 import kotlinx.coroutines.launch
@@ -254,6 +259,7 @@ fun ClickHomeScreen(
     onProfileClick: () -> Unit,
     recentlyClosedTabs: List<ClosedTab> = emptyList(),
     onReopenRecentTab: (ClosedTab) -> Unit = {},
+    historyItems: List<HistoryItem> = emptyList(),
     onV9ShieldClick: () -> Unit = {},
     onShieldToggle: () -> Unit = {},
     onGamesClick: () -> Unit = {},
@@ -348,7 +354,8 @@ fun ClickHomeScreen(
                     activeMode = activeMode,
                     searchEngine = searchEngine,
                     onNavigate = onNavigate,
-                    onSearchEngineClick = onSearchEngineClick
+                    onSearchEngineClick = onSearchEngineClick,
+                    historyItems = historyItems
                 )
                 HomeTopRow(
                     theme = theme,
@@ -365,7 +372,8 @@ fun ClickHomeScreen(
                     activeMode = activeMode,
                     searchEngine = searchEngine,
                     onNavigate = onNavigate,
-                    onSearchEngineClick = onSearchEngineClick
+                    onSearchEngineClick = onSearchEngineClick,
+                    historyItems = historyItems
                 )
                 BookmarksBar(theme = theme, onNavigate = onNavigate)
             }
@@ -375,7 +383,8 @@ fun ClickHomeScreen(
                     activeMode = activeMode,
                     searchEngine = searchEngine,
                     onNavigate = onNavigate,
-                    onSearchEngineClick = onSearchEngineClick
+                    onSearchEngineClick = onSearchEngineClick,
+                    historyItems = historyItems
                 )
             }
         }
@@ -694,12 +703,94 @@ private fun ModeFocusCard(
  * toast, so the dead control is gone instead of fake.) */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
+/**
+ * Live suggestion state for one search/address field: instant local history
+ * matches first, then the selected engine's remote phrases after a short
+ * debounce. Empty while the field is not actively being edited.
+ */
+@Composable
+private fun rememberSearchSuggestions(
+    query: String,
+    active: Boolean,
+    searchEngine: String,
+    historyItems: List<HistoryItem>
+): List<SearchSuggestion> {
+    var suggestions by remember { mutableStateOf<List<SearchSuggestion>>(emptyList()) }
+    LaunchedEffect(query, active, searchEngine, historyItems) {
+        if (!active || query.trim().length < 2) {
+            suggestions = emptyList()
+            return@LaunchedEffect
+        }
+        val local = SearchSuggestions.localMatches(query, historyItems)
+        suggestions = local
+        delay(250)
+        val remote = SearchSuggestions.fetchRemote(searchEngine, query)
+        suggestions = SearchSuggestions.merge(local, remote, query)
+    }
+    return suggestions
+}
+
+@Composable
+private fun SearchSuggestionList(
+    theme: ModeTheme,
+    suggestions: List<SearchSuggestion>,
+    onPick: (SearchSuggestion) -> Unit
+) {
+    if (suggestions.isEmpty()) return
+    Surface(
+        shape = RoundedCornerShape(12.dp),
+        color = theme.surface,
+        shadowElevation = 6.dp,
+        border = androidx.compose.foundation.BorderStroke(1.dp, theme.onSurface.copy(alpha = 0.10f)),
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Column(modifier = Modifier.padding(vertical = 4.dp)) {
+            suggestions.forEach { suggestion ->
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable { onPick(suggestion) }
+                        .padding(horizontal = 14.dp, vertical = 10.dp)
+                ) {
+                    Icon(
+                        imageVector = if (suggestion.fromHistory) Icons.Default.History else Icons.Default.Search,
+                        contentDescription = null,
+                        tint = theme.onSurface.copy(alpha = 0.55f),
+                        modifier = Modifier.size(17.dp)
+                    )
+                    Spacer(modifier = Modifier.width(10.dp))
+                    Column {
+                        Text(
+                            suggestion.text,
+                            color = theme.onSurface,
+                            fontSize = 13.5.sp,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                        if (suggestion.url != null) {
+                            Text(
+                                suggestion.url,
+                                color = theme.onSurface.copy(alpha = 0.5f),
+                                fontSize = 11.sp,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
 private fun SmartSearchBar(
     theme: ModeTheme,
     activeMode: BrowserMode,
     searchEngine: String,
     onNavigate: (String) -> Unit,
-    onSearchEngineClick: () -> Unit = {}
+    onSearchEngineClick: () -> Unit = {},
+    historyItems: List<HistoryItem> = emptyList()
 ) {
     var query by remember { mutableStateOf("") }
     val keyboardController = LocalSoftwareKeyboardController.current
@@ -713,6 +804,14 @@ private fun SmartSearchBar(
             onNavigate(submittedQuery)
         }
     }
+    var fieldFocused by remember { mutableStateOf(false) }
+    val suggestions = rememberSearchSuggestions(query, fieldFocused, searchEngine, historyItems)
+    val pickSuggestion: (SearchSuggestion) -> Unit = { suggestion ->
+        query = ""
+        keyboardController?.hide()
+        focusManager.clearFocus(force = true)
+        onNavigate(suggestion.url ?: suggestion.text)
+    }
     // The bar's silhouette follows the mode (ModeTheme.addressBarStyle):
     // Simple gets an extra-tall pill (large touch target), Power a desktop
     // rectangle, Developer a squared technical bar, Advance the premium pill.
@@ -723,6 +822,7 @@ private fun SmartSearchBar(
         ModeAddressBarStyle.STANDARD -> RoundedCornerShape(28.dp)
     }
     val barVerticalPadding = if (theme.addressBarStyle == ModeAddressBarStyle.PILL_LARGE) 10.dp else 4.dp
+    Column {
     Surface(
         shape = barShape,
         color = theme.surface,
@@ -758,12 +858,19 @@ private fun SmartSearchBar(
                     focusedTextColor = theme.onSurface,
                     unfocusedTextColor = theme.onSurface
                 ),
-                modifier = Modifier.weight(1f)
+                modifier = Modifier
+                    .weight(1f)
+                    .onFocusChanged { fieldFocused = it.isFocused }
             )
             VoiceMicButton(theme = theme, onHeard = { heard ->
                 onNavigate(heard)
             })
         }
+    }
+    if (suggestions.isNotEmpty()) {
+        Spacer(modifier = Modifier.height(6.dp))
+        SearchSuggestionList(theme = theme, suggestions = suggestions, onPick = pickSuggestion)
+    }
     }
 }
 
@@ -2396,11 +2503,24 @@ fun CompactBrowseBar(
     onDeveloperToolsClick: () -> Unit = {},
     showExtensionButton: Boolean = false,
     onAddonsClick: () -> Unit = {},
-    onSearchEngineClick: () -> Unit = {}
+    onSearchEngineClick: () -> Unit = {},
+    historyItems: List<HistoryItem> = emptyList()
 ) {
     var textInput by remember(currentUrl) { mutableStateOf(currentUrl) }
     val keyboardController = LocalSoftwareKeyboardController.current
     val focusManager = LocalFocusManager.current
+    // Suggestions show only while the user is actually editing the bar —
+    // not when it merely displays the current page's URL.
+    var barFocused by remember { mutableStateOf(false) }
+    val editingBar = barFocused && textInput.isNotBlank() && textInput != currentUrl
+    val suggestions = rememberSearchSuggestions(textInput, editingBar, searchEngine, historyItems)
+    val pickSuggestion: (SearchSuggestion) -> Unit = { suggestion ->
+        val target = suggestion.url ?: suggestion.text
+        textInput = target
+        keyboardController?.hide()
+        focusManager.clearFocus(force = true)
+        onNavigate(target)
+    }
     val submit = {
         val submittedText = textInput.trim()
         if (submittedText.isNotEmpty()) {
@@ -2646,6 +2766,7 @@ fun CompactBrowseBar(
                             modifier = Modifier
                                 .weight(1f)
                                 .padding(horizontal = 6.dp, vertical = 8.dp)
+                                .onFocusChanged { barFocused = it.isFocused }
                         )
                         if (textInput.isNotEmpty()) {
                             IconButton(
@@ -2780,6 +2901,7 @@ fun CompactBrowseBar(
                             modifier = Modifier
                                 .weight(1f)
                                 .padding(horizontal = 8.dp, vertical = 12.dp)
+                                .onFocusChanged { barFocused = it.isFocused }
                         )
                         if (textInput.isNotEmpty()) {
                             IconButton(
@@ -2796,6 +2918,13 @@ fun CompactBrowseBar(
                         }
                     }
                 }
+            }
+            if (suggestions.isNotEmpty()) {
+                SearchSuggestionList(
+                    theme = theme,
+                    suggestions = suggestions,
+                    onPick = pickSuggestion
+                )
             }
         }
     }

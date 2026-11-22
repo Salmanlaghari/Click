@@ -1553,6 +1553,11 @@ class MainActivity : FragmentActivity() {
             val systemDark = isSystemInDarkTheme()
             val darkActive = ThemeController.resolveDark(themeMode, systemDark)
             var wallpaperUri by remember { mutableStateOf<String?>(null) }
+            // Current profile's history, feeding address-bar suggestions.
+            var historyItems by remember { mutableStateOf<List<HistoryItem>>(emptyList()) }
+            LaunchedEffect(Unit) {
+                repository.historyFlow.collect { historyItems = it }
+            }
             val theme = remember(activeMode, lightThemeVariant, darkActive) {
                 ModeThemes.forMode(activeMode, dark = darkActive, lightVariant = lightThemeVariant)
             }
@@ -4950,6 +4955,7 @@ class MainActivity : FragmentActivity() {
                                                         currentTab.url, currentTab.connectionSecurity
                                                     ),
                                                     searchEngine = currentSearchEngineSetting,
+                                                    historyItems = historyItems,
                                                     canGoBack = !showOverlays && currentTab.canGoBack,
                                                     onBack = { currentTab.browserSession.goBackIfPossible() },
                                                     canGoForward = !showOverlays && currentTab.canGoForward,
@@ -5061,6 +5067,7 @@ class MainActivity : FragmentActivity() {
                                         setHomeNewsFeedEnabled(enabled)
                                     },
                                     wallpaperUri = wallpaperUri,
+                                    historyItems = historyItems,
                                     shieldActive = shieldActive,
                                     onV9ShieldClick = { showV9Shield = true },
                                     onShieldToggle = { toggleDnsShield() },
