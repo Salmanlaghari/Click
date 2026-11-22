@@ -79,9 +79,9 @@ class GeckoTabMigrationPolicyTest {
     }
 
     @Test
-    fun regularTabsDefaultToGeckoAndPrivateTabsRemainWebView() {
+    fun regularAndPrivateTabsBothDefaultToGecko() {
         assertEquals(BrowserTabEngine.GECKOVIEW, defaultBrowserTabEngine(isIncognito = false))
-        assertEquals(BrowserTabEngine.WEBVIEW, defaultBrowserTabEngine(isIncognito = true))
+        assertEquals(BrowserTabEngine.GECKOVIEW, defaultBrowserTabEngine(isIncognito = true))
     }
 
     @Test

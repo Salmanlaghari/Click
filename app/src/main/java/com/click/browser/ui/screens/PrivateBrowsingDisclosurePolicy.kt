@@ -13,21 +13,30 @@ internal object PrivateBrowsingDisclosurePolicy {
         "WebView cookies · current profile only"
 
     fun engineDefaultsDescription(): String {
-        val regularEngine = displayName(defaultBrowserTabEngine(isIncognito = false))
-        val privateEngine = displayName(defaultBrowserTabEngine(isIncognito = true))
-        return "Regular tabs use $regularEngine by default; private tabs use $privateEngine."
+        val regularEngine = defaultBrowserTabEngine(isIncognito = false)
+        val privateEngine = defaultBrowserTabEngine(isIncognito = true)
+        return if (regularEngine == privateEngine) {
+            "Regular and private tabs use ${displayName(regularEngine)} by default; " +
+                "private tabs run in ${displayName(privateEngine)} private mode."
+        } else {
+            "Regular tabs use ${displayName(regularEngine)} by default; " +
+                "private tabs use ${displayName(privateEngine)}."
+        }
     }
 
+    // Private tabs run as Gecko private sessions (1.8.7 overhaul, A-list #4):
+    // their storage is a separate temporary store that the engine discards
+    // when the private session ends — unlike the old shared WebView profile
+    // storage, which closing a tab never cleared.
     val privateTabStorageDescription: String =
         "Private-tab visits are not recorded in local history; private tabs are excluded from session restore and Recent tabs. " +
-            "Private tabs use $profileWebViewStorageScopeDescription, not a temporary private-only store. " +
-            "Closing a private tab does not clear those cookies or site data; they can remain in the profile and may be available to other WebView tabs in the same profile. " +
+            "Private tabs run in GeckoView private mode with their own temporary storage, separate from regular tabs. " +
+            "Cookies and site data from private tabs are discarded when the private session ends. " +
             "Marking an existing tab private does not remove history or site data recorded before it was marked. " +
-            "The experimental Clear data on exit setting requests cleanup when Click closes, but it is not a guaranteed wipe. " +
             "Websites and network providers may still observe parts of your activity; private tabs are not anonymous."
 
     val aboutPrivateTabStorageDescription: String =
-        "Private tabs use $profileWebViewStorageScopeDescription, and site data can remain after a tab closes."
+        "Private tabs run in GeckoView private mode; their cookies and site data are kept separate from regular tabs and discarded when the private session ends."
 
     private fun displayName(engine: BrowserTabEngine): String = when (engine) {
         BrowserTabEngine.GECKOVIEW -> "GeckoView"
