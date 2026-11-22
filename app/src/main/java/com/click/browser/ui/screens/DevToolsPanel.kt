@@ -82,7 +82,13 @@ internal fun DevToolsPanel(
     renderedDomMarkup: String?,
     renderedDomLoading: Boolean,
     onInspectRenderedDom: () -> Unit,
-    onClearRenderedDom: () -> Unit
+    onClearRenderedDom: () -> Unit,
+    /** Engine the panel is inspecting ("WebView" or "GeckoView"). */
+    engineName: String = "WebView",
+    /** When set, the Network tab shows this note instead of a request
+     *  list — GeckoView exposes no per-request stream to the app, and
+     *  the panel says so instead of showing an empty list. */
+    networkUnavailableNote: String? = null
 ) {
     val tabs = listOf("Elements", "Console", "Network", "Sources", "Device")
 
@@ -92,7 +98,7 @@ internal fun DevToolsPanel(
             .background(DevToolsPalette.canvas)
     ) {
         Text(
-            text = "Developer Tools · WebView",
+            text = "Developer Tools · $engineName",
             color = DevToolsPalette.ink,
             fontSize = 15.sp,
             fontWeight = FontWeight.SemiBold,
@@ -131,7 +137,8 @@ internal fun DevToolsPanel(
                     selectedNodePath = selectedNodePath,
                     selectedStyles = selectedStyles,
                     onRefresh = onRefreshPageSnapshot,
-                    onSelectNode = onSelectNode
+                    onSelectNode = onSelectNode,
+                    engineName = engineName
                 )
                 1 -> key(pageSessionKey) {
                     ConsoleTab(
@@ -142,7 +149,19 @@ internal fun DevToolsPanel(
                         onRunConsoleCommand = onRunConsoleCommand
                     )
                 }
-                2 -> NetworkTab(networkRequests, onClearNetwork)
+                2 -> if (networkUnavailableNote != null) {
+                    Column(modifier = Modifier.fillMaxSize()) {
+                        Text("Network", color = DevToolsPalette.ink, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+                        Text(
+                            networkUnavailableNote,
+                            color = DevToolsPalette.muted,
+                            fontSize = 11.sp,
+                            modifier = Modifier.padding(top = 6.dp)
+                        )
+                    }
+                } else {
+                    NetworkTab(networkRequests, onClearNetwork)
+                }
                 3 -> key(pageSessionKey) {
                     SourcesTab(
                         sources = sourcesList,
@@ -165,7 +184,8 @@ private fun ElementsTab(
     selectedNodePath: List<Int>?,
     selectedStyles: DevToolsComputedStyles?,
     onRefresh: () -> Unit,
-    onSelectNode: (List<Int>) -> Unit
+    onSelectNode: (List<Int>) -> Unit,
+    engineName: String = "WebView"
 ) {
     var expandedPaths by remember(snapshot) {
         mutableStateOf(setOf(snapshot?.root?.pathKey.orEmpty()))
@@ -204,7 +224,7 @@ private fun ElementsTab(
         if (snapshot?.root == null) {
             Box(modifier = Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
                 Text(
-                    "Tap Refresh to inspect the current WebView page.",
+                    "Tap Refresh to inspect the current $engineName page.",
                     color = DevToolsPalette.muted,
                     fontSize = 12.sp
                 )

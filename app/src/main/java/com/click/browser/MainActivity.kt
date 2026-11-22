@@ -422,6 +422,9 @@ class MainActivity : FragmentActivity() {
     @Volatile private var devToolsCaptureEnabled: Boolean = false
     @Volatile private var devToolsConsoleCaptureEnabled: Boolean = false
     @Volatile private var devToolsTargetWebView: WebView? = null
+    /** Gecko counterpart of [devToolsTargetWebView] (B2): the bridge
+     *  session whose console stream the open panel is showing. */
+    @Volatile private var devToolsTargetGeckoSession: org.mozilla.geckoview.GeckoSession? = null
     @Volatile private var devToolsSessionGeneration: Long = 0L
     @Volatile private var devToolsConsoleCaptureGeneration: Long = 0L
 
@@ -443,6 +446,29 @@ class MainActivity : FragmentActivity() {
                     capturedGeneration = captureGeneration,
                     currentGeneration = devToolsConsoleCaptureGeneration,
                     targetMatches = devToolsTargetWebView === expectedTarget,
+                    sessionActive = devToolsConsoleCaptureEnabled
+                )
+            ) {
+                devToolsLogs.add(entry)
+                if (devToolsLogs.size > 500) devToolsLogs.removeAt(0)
+            }
+        }
+        if (android.os.Looper.myLooper() == android.os.Looper.getMainLooper()) apply()
+        else runOnUiThread { apply() }
+    }
+
+    /** Gecko console append (B2): same acceptance discipline as
+     *  [addDevToolsLog], keyed on the bridge session instead of a WebView. */
+    private fun addDevToolsGeckoLog(
+        entry: com.click.browser.engine.LogEntry,
+        expectedSession: org.mozilla.geckoview.GeckoSession,
+        captureGeneration: Long
+    ) {
+        val apply = {
+            if (com.click.browser.engine.DevToolsInspectionPolicy.acceptsSessionResult(
+                    capturedGeneration = captureGeneration,
+                    currentGeneration = devToolsConsoleCaptureGeneration,
+                    targetMatches = devToolsTargetGeckoSession === expectedSession,
                     sessionActive = devToolsConsoleCaptureEnabled
                 )
             ) {
@@ -2722,6 +2748,9 @@ class MainActivity : FragmentActivity() {
             var devToolsTab by remember { mutableStateOf(0) }
             var devToolsOpenRequestedTabId by remember { mutableStateOf<String?>(null) }
             var devToolsConsoleMessagesConsent by remember { mutableStateOf(false) }
+            // True while the open DevTools panel targets a Gecko tab and
+            // is served by the bridge extension (B2) instead of a WebView.
+            var devToolsTargetIsGecko by remember { mutableStateOf(false) }
             // DevTools bottom sheet visibility — the panel is a dismissible sheet
             // so the website stays visible (never a fixed top overlay).
             var showDevToolsSheet by remember { mutableStateOf(false) }
@@ -2936,9 +2965,9 @@ class MainActivity : FragmentActivity() {
                     return
                 }
                 if (currentTab.engine == BrowserTabEngine.GECKOVIEW) {
-                    pendingWebViewSwitchTabId = currentTab.id
-                    pendingDevToolsSwitchTabId = currentTab.id
-                    showWebViewSwitchConfirmation = true
+                    // B2: Gecko tabs are inspected directly through the
+                    // DevTools bridge — no WebView reload/switch anymore.
+                    openGeckoDevToolsPanel()
                 } else {
                     devToolsOpenRequestedTabId = currentTab.id
                 }
@@ -3193,6 +3222,14 @@ class MainActivity : FragmentActivity() {
 
             // Keep the WebViewClient-safe live copies in sync with composable state
             LaunchedEffect(activeMode) { liveMode = activeMode }
+            // DevTools bridge (B2): the bridge extension is enabled
+            // exactly while Developer mode is active.
+            LaunchedEffect(activeMode) {
+                com.click.browser.engine.DevToolsBridge.sync(
+                    this@MainActivity,
+                    activeMode == BrowserMode.DEVELOPER
+                )
+            }
             LaunchedEffect(httpsMode) { liveHttpsMode = httpsMode }
             LaunchedEffect(httpsStrictExceptions) { liveHttpsStrictExceptions = httpsStrictExceptions.toSet() }
             LaunchedEffect(dntEnabled) { liveDntEnabled = dntEnabled }
@@ -3706,6 +3743,10 @@ class MainActivity : FragmentActivity() {
              * form values, cookies, or storage values.
              */
             fun refreshDevToolsDeviceInfo() {
+                if (devToolsTargetIsGecko) {
+                    refreshGeckoDevToolsDeviceInfo()
+                    return
+                }
                 val wv = currentTab.webView
                 if (!canInspectDevToolsPage(expectedTab = 4, webView = wv) || wv == null) {
                     devToolsDeviceInfo = null
@@ -3762,6 +3803,10 @@ class MainActivity : FragmentActivity() {
 
             /** Reads a bounded structure-only DOM snapshot while Elements is selected. */
             fun refreshDevToolsPageSnapshot() {
+                if (devToolsTargetIsGecko) {
+                    refreshGeckoDevToolsPageSnapshot()
+                    return
+                }
                 val wv = currentTab.webView
                 val pageUrl = wv?.url.orEmpty()
                 if (!canInspectDevToolsPage(expectedTab = 0, webView = wv) || wv == null) {
@@ -3795,6 +3840,10 @@ class MainActivity : FragmentActivity() {
 
             /** Reads only markup resource references while Sources is selected. */
             fun refreshDevToolsSources() {
+                if (devToolsTargetIsGecko) {
+                    refreshGeckoDevToolsSources()
+                    return
+                }
                 val wv = currentTab.webView
                 val pageUrl = wv?.url.orEmpty()
                 if (!canInspectDevToolsPage(expectedTab = 3, webView = wv) || wv == null) {
@@ -3819,6 +3868,10 @@ class MainActivity : FragmentActivity() {
 
             /** Reads a bounded, redacted rendered-DOM preview only after the user confirms in Sources. */
             fun inspectDevToolsRenderedDom() {
+                if (devToolsTargetIsGecko) {
+                    inspectGeckoDevToolsRenderedDom()
+                    return
+                }
                 val selectedTabAtConfirmation = tabs.getOrNull(activeTabIndex)
                 val wv = selectedTabAtConfirmation?.webView
                 val pageUrl = wv?.url.orEmpty()
@@ -3905,6 +3958,10 @@ class MainActivity : FragmentActivity() {
             }
 
             fun selectDevToolsNode(path: List<Int>) {
+                if (devToolsTargetIsGecko) {
+                    selectGeckoDevToolsNode(path)
+                    return
+                }
                 val wv = currentTab.webView
                 val script = DevToolsInspectionPolicy.buildComputedStylesScript(path)
                 if (script == null || wv == null || !canInspectDevToolsPage(expectedTab = 0, webView = wv)) return
@@ -3926,6 +3983,10 @@ class MainActivity : FragmentActivity() {
             }
 
             fun runDevToolsConsoleCommand(command: String, onResult: (String) -> Unit) {
+                if (devToolsTargetIsGecko) {
+                    runGeckoDevToolsConsoleCommand(command, onResult)
+                    return
+                }
                 val wv = currentTab.webView
                 val script = DevToolsInspectionPolicy.buildConsoleEvaluationScript(command)
                 if (script == null) {
@@ -3949,6 +4010,226 @@ class MainActivity : FragmentActivity() {
                 } catch (_: IllegalStateException) {
                     if (devToolsSessionGeneration == sessionGeneration) {
                         onResult("The current page is no longer available.")
+                    }
+                }
+            }
+
+            // ---- DevTools on Gecko tabs (B2, bridge-served) ----------------
+
+            fun currentGeckoDevToolsSession(): org.mozilla.geckoview.GeckoSession? =
+                (currentTab.browserSession as? GeckoBrowserTabSession)?.session
+
+            /** Gecko counterpart of canInspectDevToolsPage: same discipline
+             *  (panel open, Developer mode, right panel tab, loaded
+             *  inspectable page), keyed on the tab instead of a WebView. */
+            fun canInspectGeckoDevToolsPage(expectedTab: Int): Boolean =
+                showDevToolsSheet && devToolsTargetIsGecko &&
+                    DevToolsAvailabilityPolicy.canCaptureGecko(activeMode, currentTab.engine) &&
+                    devToolsTab == expectedTab && currentTabHasLoadedWebPage()
+
+            /** Opens the DevTools sheet on the current Gecko tab, served
+             *  by the bridge extension. Mirrors the WebView open path's
+             *  state reset; never switches engines or modes. */
+            fun openGeckoDevToolsPanel() {
+                val session = currentGeckoDevToolsSession()
+                if (session == null) {
+                    Toast.makeText(
+                        this@MainActivity,
+                        "The page view is still starting. Wait a moment, then reopen DevTools.",
+                        Toast.LENGTH_LONG
+                    ).show()
+                    return
+                }
+                invalidateDevToolsSession()
+                devToolsConsoleMessagesConsent = false
+                devToolsCaptureEnabled = false
+                devToolsConsoleCaptureEnabled = false
+                devToolsTargetWebView = null
+                devToolsLogs.clear()
+                devToolsNetwork.clear()
+                devToolsSources.clear()
+                devToolsDomSnapshot = null
+                devToolsSelectedNodePath = null
+                devToolsSelectedStyles = null
+                devToolsDeviceInfo = null
+                devToolsTab = 0
+                devToolsTargetIsGecko = true
+                devToolsTargetGeckoSession = session
+                com.click.browser.engine.DevToolsBridge.consoleListener = { entrySession, entry ->
+                    if (entrySession === devToolsTargetGeckoSession) {
+                        addDevToolsGeckoLog(entry, entrySession, devToolsConsoleCaptureGeneration)
+                    }
+                }
+                showDevToolsSheet = true
+            }
+
+            /** True while a bridge callback still belongs to the panel's
+             *  current Gecko target (same tab, same URL, same panel tab,
+             *  same session generation). */
+            fun isCurrentGeckoDevToolsResult(
+                capturedGeneration: Long,
+                capturedTabId: String,
+                capturedUrl: String,
+                expectedTab: Int
+            ): Boolean = capturedGeneration == devToolsSessionGeneration &&
+                showDevToolsSheet && devToolsTargetIsGecko &&
+                currentTab.id == capturedTabId && currentTab.url == capturedUrl &&
+                devToolsTab == expectedTab
+
+            fun refreshGeckoDevToolsPageSnapshot() {
+                val session = currentGeckoDevToolsSession()
+                if (!canInspectGeckoDevToolsPage(expectedTab = 0) || session == null) {
+                    devToolsDomSnapshot = null
+                    devToolsSelectedNodePath = null
+                    devToolsSelectedStyles = null
+                    return
+                }
+                val tabId = currentTab.id
+                val pageUrl = currentTab.url
+                val generation = devToolsSessionGeneration
+                com.click.browser.engine.DevToolsBridge.evaluate(
+                    session, DevToolsInspectionPolicy.domSnapshotScript
+                ) { result ->
+                    if (isCurrentGeckoDevToolsResult(generation, tabId, pageUrl, expectedTab = 0)) {
+                        val snapshot = DevToolsInspectionPolicy.parseDomSnapshot(result)
+                        devToolsDomSnapshot = snapshot
+                        val selectedPath = devToolsSelectedNodePath
+                        fun containsPath(node: DevToolsDomNode?): Boolean = node != null &&
+                            (node.path == selectedPath || node.children.any { containsPath(it) })
+                        if (selectedPath != null && !containsPath(snapshot.root)) {
+                            devToolsSelectedNodePath = null
+                            devToolsSelectedStyles = null
+                        }
+                    }
+                }
+            }
+
+            fun refreshGeckoDevToolsSources() {
+                val session = currentGeckoDevToolsSession()
+                if (!canInspectGeckoDevToolsPage(expectedTab = 3) || session == null) {
+                    devToolsSources.clear()
+                    return
+                }
+                val tabId = currentTab.id
+                val pageUrl = currentTab.url
+                val generation = devToolsSessionGeneration
+                com.click.browser.engine.DevToolsBridge.evaluate(
+                    session, DevToolsInspectionPolicy.sourceReferencesScript
+                ) { result ->
+                    if (isCurrentGeckoDevToolsResult(generation, tabId, pageUrl, expectedTab = 3)) {
+                        val sources = DevToolsInspectionPolicy.parseSourceReferences(result)
+                        devToolsSources.clear()
+                        devToolsSources.addAll(sources)
+                    }
+                }
+            }
+
+            fun inspectGeckoDevToolsRenderedDom() {
+                val session = currentGeckoDevToolsSession()
+                if (!canInspectGeckoDevToolsPage(expectedTab = 3) || session == null) {
+                    devToolsRenderedDomMarkup = null
+                    devToolsRenderedDomLoading = false
+                    return
+                }
+                val tabId = currentTab.id
+                val pageUrl = currentTab.url
+                val generation = devToolsSessionGeneration
+                devToolsRenderedDomLoading = true
+                com.click.browser.engine.DevToolsBridge.evaluate(
+                    session, DevToolsInspectionPolicy.renderedDomSourceScript
+                ) { result ->
+                    if (isCurrentGeckoDevToolsResult(generation, tabId, pageUrl, expectedTab = 3)) {
+                        devToolsRenderedDomMarkup = DevToolsInspectionPolicy.parseRenderedDomSource(result)
+                            ?: "Rendered DOM could not be read for this page."
+                        devToolsRenderedDomLoading = false
+                    }
+                }
+            }
+
+            fun selectGeckoDevToolsNode(path: List<Int>) {
+                val session = currentGeckoDevToolsSession()
+                val script = DevToolsInspectionPolicy.buildComputedStylesScript(path)
+                if (script == null || session == null ||
+                    !canInspectGeckoDevToolsPage(expectedTab = 0)
+                ) return
+                val tabId = currentTab.id
+                val pageUrl = currentTab.url
+                val generation = devToolsSessionGeneration
+                devToolsSelectedNodePath = path.toList()
+                devToolsSelectedStyles = null
+                com.click.browser.engine.DevToolsBridge.evaluate(session, script) { result ->
+                    if (isCurrentGeckoDevToolsResult(generation, tabId, pageUrl, expectedTab = 0) &&
+                        devToolsSelectedNodePath == path
+                    ) {
+                        devToolsSelectedStyles = DevToolsInspectionPolicy.parseComputedStyles(result)
+                    }
+                }
+            }
+
+            fun runGeckoDevToolsConsoleCommand(command: String, onResult: (String) -> Unit) {
+                val session = currentGeckoDevToolsSession()
+                val script = DevToolsInspectionPolicy.buildConsoleEvaluationScript(command)
+                if (script == null) {
+                    onResult("Enter a command first.")
+                    return
+                }
+                if (session == null || !canInspectGeckoDevToolsPage(expectedTab = 1)) {
+                    onResult("Console is no longer active for this page.")
+                    return
+                }
+                val tabId = currentTab.id
+                val pageUrl = currentTab.url
+                val generation = devToolsSessionGeneration
+                com.click.browser.engine.DevToolsBridge.evaluate(session, script) { result ->
+                    if (isCurrentGeckoDevToolsResult(generation, tabId, pageUrl, expectedTab = 1)) {
+                        onResult(DevToolsInspectionPolicy.parseConsoleResult(result))
+                    }
+                }
+            }
+
+            fun refreshGeckoDevToolsDeviceInfo() {
+                val session = currentGeckoDevToolsSession()
+                if (!canInspectGeckoDevToolsPage(expectedTab = 4) || session == null) {
+                    devToolsDeviceInfo = null
+                    return
+                }
+                val tabId = currentTab.id
+                val pageUrl = currentTab.url
+                val generation = devToolsSessionGeneration
+                val script = """(function(){
+                        try {
+                            return JSON.stringify({
+                                viewport: window.innerWidth + 'x' + window.innerHeight,
+                                dpr: String(window.devicePixelRatio || '?'),
+                                ua: navigator.userAgent || '',
+                                screen: screen.width + 'x' + screen.height,
+                                platform: navigator.platform || '',
+                                lang: navigator.language || '',
+                                touch: ('ontouchstart' in window) ? 'yes' : 'no',
+                                cookies: navigator.cookieEnabled ? 'yes' : 'no'
+                            });
+                        } catch(e) { return '{}'; }
+                    })()"""
+                com.click.browser.engine.DevToolsBridge.evaluate(session, script) { result ->
+                    if (!isCurrentGeckoDevToolsResult(generation, tabId, pageUrl, expectedTab = 4)) {
+                        return@evaluate
+                    }
+                    devToolsDeviceInfo = if (result.orEmpty().length > 8_192) null else try {
+                        val inner = if (result.isNullOrBlank() || result == "null") "{}"
+                        else org.json.JSONArray("[$result]").optString(0, "{}")
+                        val json = org.json.JSONObject(inner)
+                        DeviceInfo(
+                            viewport = json.optString("viewport"),
+                            devicePixelRatio = json.optString("dpr"),
+                            userAgent = json.optString("ua"),
+                            screenSize = json.optString("screen"),
+                            platform = json.optString("platform"),
+                            language = json.optString("lang"),
+                            touchSupport = json.optString("touch"),
+                            cookiesEnabled = json.optString("cookies")
+                        )
+                    } catch (_: Exception) {
+                        null
                     }
                 }
             }
@@ -4005,6 +4286,8 @@ class MainActivity : FragmentActivity() {
                     devToolsDeviceInfo = null
                     devToolsTab = tab
                     devToolsTargetWebView = webView
+                    devToolsTargetIsGecko = false
+                    devToolsTargetGeckoSession = null
                     showDevToolsSheet = true
                 }
             }
@@ -4016,6 +4299,9 @@ class MainActivity : FragmentActivity() {
                 devToolsCaptureEnabled = false
                 devToolsConsoleCaptureEnabled = false
                 devToolsTargetWebView = null
+                devToolsTargetIsGecko = false
+                devToolsTargetGeckoSession = null
+                com.click.browser.engine.DevToolsBridge.consoleListener = null
                 devToolsLogs.clear()
                 devToolsNetwork.clear()
                 devToolsSources.clear()
@@ -7785,18 +8071,55 @@ class MainActivity : FragmentActivity() {
                                             }
                                         },
                                         onPageMessagesCaptureConsentChanged = { enabled ->
-                                            val canCapture = enabled && canInspectDevToolsPage(expectedTab = 1)
-                                            if (!canCapture) devToolsConsoleCaptureGeneration += 1
-                                            devToolsConsoleMessagesConsent = canCapture
-                                            devToolsConsoleCaptureEnabled = canCapture
-                                            if (!canCapture) {
-                                                devToolsLogs.clear()
-                                                if (enabled) {
-                                                    Toast.makeText(
-                                                        this@MainActivity,
-                                                        "The webpage is no longer ready. Reopen DevTools after it finishes loading.",
-                                                        Toast.LENGTH_SHORT
-                                                    ).show()
+                                            if (devToolsTargetIsGecko) {
+                                                val canCapture = enabled && canInspectGeckoDevToolsPage(expectedTab = 1)
+                                                if (!canCapture) devToolsConsoleCaptureGeneration += 1
+                                                devToolsConsoleMessagesConsent = canCapture
+                                                devToolsConsoleCaptureEnabled = canCapture
+                                                if (canCapture) {
+                                                    // Seed the panel with the bridge's
+                                                    // buffered messages from this page.
+                                                    currentGeckoDevToolsSession()?.let { session ->
+                                                        com.click.browser.engine.DevToolsBridge.fetchConsoleHistory(session) { entries ->
+                                                            if (devToolsConsoleCaptureEnabled &&
+                                                                canInspectGeckoDevToolsPage(expectedTab = 1)
+                                                            ) {
+                                                                val existing = devToolsLogs
+                                                                    .map { it.timestamp to it.message }
+                                                                    .toSet()
+                                                                entries.filter {
+                                                                    (it.timestamp to it.message) !in existing
+                                                                }.forEach { devToolsLogs.add(it) }
+                                                                while (devToolsLogs.size > 500) {
+                                                                    devToolsLogs.removeAt(0)
+                                                                }
+                                                            }
+                                                        }
+                                                    }
+                                                } else {
+                                                    devToolsLogs.clear()
+                                                    if (enabled) {
+                                                        Toast.makeText(
+                                                            this@MainActivity,
+                                                            "The webpage is no longer ready. Reopen DevTools after it finishes loading.",
+                                                            Toast.LENGTH_SHORT
+                                                        ).show()
+                                                    }
+                                                }
+                                            } else {
+                                                val canCapture = enabled && canInspectDevToolsPage(expectedTab = 1)
+                                                if (!canCapture) devToolsConsoleCaptureGeneration += 1
+                                                devToolsConsoleMessagesConsent = canCapture
+                                                devToolsConsoleCaptureEnabled = canCapture
+                                                if (!canCapture) {
+                                                    devToolsLogs.clear()
+                                                    if (enabled) {
+                                                        Toast.makeText(
+                                                            this@MainActivity,
+                                                            "The webpage is no longer ready. Reopen DevTools after it finishes loading.",
+                                                            Toast.LENGTH_SHORT
+                                                        ).show()
+                                                    }
                                                 }
                                             }
                                         },
@@ -7814,7 +8137,13 @@ class MainActivity : FragmentActivity() {
                                         onClearRenderedDom = {
                                             devToolsRenderedDomMarkup = null
                                             devToolsRenderedDomLoading = false
-                                        }
+                                        },
+                                        engineName = if (devToolsTargetIsGecko) "GeckoView" else "WebView",
+                                        networkUnavailableNote = if (devToolsTargetIsGecko) {
+                                            "Network request logging is not available on GeckoView tabs: " +
+                                                "the engine does not expose a per-request stream to the app. " +
+                                                "Elements, Console, Sources and Device work normally."
+                                        } else null
                                     )
                                 }
                             }

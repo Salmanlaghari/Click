@@ -64,10 +64,12 @@ internal object ModeCapabilityRegistry {
         }
 
         if (feature == FeatureId.DEVTOOLS && engine == BrowserTabEngine.GECKOVIEW && hasLoadedPage) {
+            // B2: DevTools inspects Gecko tabs directly through the
+            // bridge extension — no WebView reload is involved anymore.
             return FeatureAvailability(
                 visible = true,
                 enabled = true,
-                explanation = "Tap to review a WebView reload before opening DevTools."
+                explanation = null
             )
         }
 

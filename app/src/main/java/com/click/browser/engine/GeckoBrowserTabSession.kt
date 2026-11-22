@@ -184,6 +184,7 @@ internal class GeckoBrowserTabSession(
     )
     private var extensionAttached = false
     private var userscriptDelegateAttached = false
+    private var devToolsDelegateAttached = false
     @Volatile private var lastKnownPageUrl: String = initialUrl.ifBlank { "about:blank" }
     @Volatile private var latestConnectionSecurityInfo = ConnectionSecurityPolicy.unknown(initialUrl)
     @Volatile private var latestSessionState: String? = initialSessionState
@@ -999,12 +1000,20 @@ internal class GeckoBrowserTabSession(
             UserscriptEngine.attachSession(runtime, session, isIncognito)
             userscriptDelegateAttached = true
         }
+        // DevTools bridge (B2): same registration shape; the bridge
+        // extension itself stays disabled outside Developer mode, and
+        // private sessions are excluded — DevTools never inspects them.
+        if (!devToolsDelegateAttached && session.isOpen && !isIncognito) {
+            DevToolsBridge.attachSession(runtime, session)
+            devToolsDelegateAttached = true
+        }
     }
 
     private fun detachExtensionRouterAfterRendererFailure() {
         // The userscript delegate registration is cheap to redo and the
         // recovered session may be a fresh one — always allow re-attach.
         userscriptDelegateAttached = false
+        devToolsDelegateAttached = false
         if (!extensionAttached) return
         extensionRouter?.detachCrashedSession(tabId, session)
         extensionAttached = false

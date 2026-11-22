@@ -15,4 +15,13 @@ internal object DevToolsAvailabilityPolicy {
             mode = mode,
             engine = engine
         ).enabled
+
+    /**
+     * Gecko tabs are inspectable through the DevTools bridge extension
+     * (B2) in Developer mode. The bridge provides Elements / Console /
+     * Sources / Device data; the per-request Network log stays
+     * WebView-only because GeckoView exposes no request stream.
+     */
+    fun canCaptureGecko(mode: BrowserMode, engine: BrowserTabEngine): Boolean =
+        engine == BrowserTabEngine.GECKOVIEW && mode == BrowserMode.DEVELOPER
 }

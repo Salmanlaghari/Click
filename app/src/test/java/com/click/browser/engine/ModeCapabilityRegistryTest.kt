@@ -158,7 +158,9 @@ class ModeCapabilityRegistryTest {
         )
         assertTrue(geckoLoaded.visible)
         assertTrue(geckoLoaded.enabled)
-        assertEquals("Tap to review a WebView reload before opening DevTools.", geckoLoaded.explanation)
+        // B2: Gecko tabs are inspected directly via the DevTools bridge,
+        // so there is no WebView-reload explanation anymore.
+        assertEquals(null, geckoLoaded.explanation)
     }
 
     @Test
