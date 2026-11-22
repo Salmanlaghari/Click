@@ -2425,6 +2425,8 @@ class MainActivity : FragmentActivity() {
             }
             // Cookie manager: per-site cookie viewer.
             var showCookieManager by remember { mutableStateOf(false) }
+            // Userscripts manager (B1): install / toggle / delete .user.js scripts.
+            var showUserscripts by remember { mutableStateOf(false) }
             // All-sites settings list (Settings -> Site settings).
             var showSiteSettingsList by remember { mutableStateOf(false) }
             var siteSettingsReturnToAdvancedSecurity by remember { mutableStateOf(false) }
@@ -3200,6 +3202,11 @@ class MainActivity : FragmentActivity() {
             LaunchedEffect(webrtcBlocked) {
                 liveWebRtcBlocked = webrtcBlocked
                 com.click.browser.engine.WebRtcGuard.sync(this@MainActivity, webrtcBlocked)
+            }
+            // Userscripts (B1): load the installed-script snapshot and
+            // reconcile the built-in engine extension once per activity.
+            LaunchedEffect(Unit) {
+                com.click.browser.engine.UserscriptEngine.sync(this@MainActivity)
             }
             // Pre-installed extensions: the install pass is deliberately
             // NOT started here. It used to run at first composition and its
@@ -8824,6 +8831,13 @@ class MainActivity : FragmentActivity() {
                                     onClose = { showCookieManager = false }
                                 )
                             }
+                            // Userscripts manager: install / toggle / delete scripts.
+                            if (showUserscripts) {
+                                com.click.browser.ui.screens.UserscriptsScreen(
+                                    theme = theme,
+                                    onClose = { showUserscripts = false }
+                                )
+                            }
                             // Site settings hub: Chrome-style categories; its
                             // "All sites" row opens the all-sites reset list.
                             if (showSiteSettingsList) {
@@ -10262,6 +10276,7 @@ class MainActivity : FragmentActivity() {
                                         showBrowserMenu = false
                                         this@MainActivity.openPageInExternalApp(currentTab.url)
                                     },
+                                    onUserscripts = { showBrowserMenu = false; showUserscripts = true },
                                     onFindInPage = {
                                         showBrowserMenu = false
                                         findQuery = ""

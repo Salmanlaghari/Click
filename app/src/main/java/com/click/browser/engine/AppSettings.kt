@@ -111,6 +111,11 @@ object AppSettings {
     /** Tab groups JSON: [{id,name,color,tabIds[]}]. */
     val TAB_GROUPS_JSON = stringPreferencesKey("tab_groups_json")
 
+    /** Installed userscripts JSON (records incl. source code) — see UserscriptStore. */
+    val USERSCRIPTS_JSON = stringPreferencesKey("userscripts_json")
+    /** Userscript GM values JSON: {scriptId: {key: value}} — see UserscriptStore. */
+    val USERSCRIPT_VALUES_JSON = stringPreferencesKey("userscript_values_json")
+
     // Biometric private-tab lock: when ON, private/incognito tabs re-lock
     // with the device biometric (or device PIN/pattern fallback) every time
     // the app goes to background and returns.
