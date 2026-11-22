@@ -5366,12 +5366,24 @@ class MainActivity : FragmentActivity() {
                                                 val progress = currentTab.loadProgress
                                                 // B3 premium polish: glide the determinate
                                                 // fill between engine progress reports
-                                                // instead of jumping step to step.
-                                                val animatedLoadProgress by androidx.compose.animation.core.animateFloatAsState(
-                                                    targetValue = progress / 100f,
-                                                    animationSpec = androidx.compose.animation.core.tween(durationMillis = 300),
-                                                    label = "pageLoadProgress"
-                                                )
+                                                // instead of jumping step to step. A new
+                                                // load (target below the current fill)
+                                                // snaps instantly — never glide backwards.
+                                                val loadProgressAnimatable = remember {
+                                                    androidx.compose.animation.core.Animatable(0f)
+                                                }
+                                                LaunchedEffect(progress) {
+                                                    val target = progress / 100f
+                                                    if (target < loadProgressAnimatable.value) {
+                                                        loadProgressAnimatable.snapTo(target)
+                                                    } else {
+                                                        loadProgressAnimatable.animateTo(
+                                                            target,
+                                                            androidx.compose.animation.core.tween(durationMillis = 300)
+                                                        )
+                                                    }
+                                                }
+                                                val animatedLoadProgress = loadProgressAnimatable.value
                                                 androidx.compose.animation.AnimatedVisibility(
                                                     visible = currentTab.isPageLoading || progress in 1..99,
                                                     enter = fadeIn(),
@@ -5415,7 +5427,7 @@ class MainActivity : FragmentActivity() {
                                 // with its own palette — instead of hard-cutting.
                                 androidx.compose.animation.Crossfade(
                                     targetState = activeMode,
-                                    animationSpec = androidx.compose.animation.core.tween(durationMillis = 350),
+                                    animationSpec = androidx.compose.animation.core.tween(durationMillis = 300),
                                     label = "homeModeCrossfade"
                                 ) { mode ->
                                     val modeTheme = remember(mode, lightThemeVariant, darkActive) {
