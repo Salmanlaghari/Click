@@ -51,7 +51,7 @@ class DevToolsAvailabilityPolicyTest {
     }
 
     @Test
-    fun GeckoViewDevToolsOffersAConfirmedSwitchButNeverCapturesPageData() {
+    fun GeckoViewDevToolsInspectsDirectlyViaBridgeButWebViewCaptureStaysWebViewOnly() {
         val access = ModeCapabilityRegistry.availability(
             FeatureId.DEVTOOLS,
             BrowserMode.DEVELOPER,
@@ -61,7 +61,14 @@ class DevToolsAvailabilityPolicyTest {
 
         assertTrue(access.visible)
         assertTrue(access.enabled)
-        assertTrue(access.explanation.orEmpty().contains("reload"))
+        // B2: no WebView-reload explanation anymore — Gecko tabs are
+        // inspected directly through the DevTools bridge extension.
+        assertEquals(null, access.explanation)
+        // The WebView evaluateJavascript capture path stays WebView-only…
         assertFalse(DevToolsAvailabilityPolicy.canCapture(BrowserMode.DEVELOPER, BrowserTabEngine.GECKOVIEW))
+        // …while the bridge capture path is Developer-mode Gecko only.
+        assertTrue(DevToolsAvailabilityPolicy.canCaptureGecko(BrowserMode.DEVELOPER, BrowserTabEngine.GECKOVIEW))
+        assertFalse(DevToolsAvailabilityPolicy.canCaptureGecko(BrowserMode.SIMPLE, BrowserTabEngine.GECKOVIEW))
+        assertFalse(DevToolsAvailabilityPolicy.canCaptureGecko(BrowserMode.DEVELOPER, BrowserTabEngine.WEBVIEW))
     }
 }
