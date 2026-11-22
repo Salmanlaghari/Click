@@ -5369,10 +5369,10 @@ class MainActivity : FragmentActivity() {
                                                 // instead of jumping step to step. A new
                                                 // load (target below the current fill)
                                                 // snaps instantly — never glide backwards.
-                                                val loadProgressAnimatable = remember {
+                                                val loadProgressAnimatable = remember(currentTab.id) {
                                                     androidx.compose.animation.core.Animatable(0f)
                                                 }
-                                                LaunchedEffect(progress) {
+                                                LaunchedEffect(currentTab.id, progress) {
                                                     val target = progress / 100f
                                                     if (target < loadProgressAnimatable.value) {
                                                         loadProgressAnimatable.snapTo(target)
