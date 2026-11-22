@@ -10413,14 +10413,13 @@ class MainActivity : FragmentActivity() {
                                         }
                                     },
                                     onDismiss = { showTextScaleSheet = false },
-                                    unavailableMessage = if (currentTab.engine == BrowserTabEngine.GECKOVIEW) {
-                                        com.click.browser.engine.BrowserSettingCapabilityPolicy.availability(
+                                    unavailableMessage = com.click.browser.engine.BrowserSettingCapabilityPolicy
+                                        .availability(
                                             com.click.browser.engine.BrowserSetting.TEXT_SIZE,
                                             currentTab.engine
-                                        ).description
-                                    } else {
-                                        null
-                                    }
+                                        )
+                                        .takeIf { availability -> !availability.enabled }
+                                        ?.description
                                 )
                             }
 
