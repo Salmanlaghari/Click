@@ -69,7 +69,10 @@ internal object UserscriptEngine {
             .build()
     }
 
-    /** In-memory snapshots so the message path never touches disk. */
+    /** In-memory snapshots so the message path never touches disk.
+     *  Message callbacks arrive from many sessions/threads at once, so
+     *  every read-modify-write on them is serialized through [cacheLock]. */
+    private val cacheLock = Any()
     @Volatile private var cachedScripts: List<InstalledUserscript> = emptyList()
     @Volatile private var cachedValues: Map<String, JSONObject> = emptyMap()
     @Volatile private var cacheLoaded = false
@@ -87,9 +90,13 @@ internal object UserscriptEngine {
         capturedAppContext = appContext
         scope.launch {
             runCatching {
-                cachedScripts = UserscriptStore.list(appContext)
-                cachedValues = UserscriptStore.readValues(appContext)
-                cacheLoaded = true
+                val scripts = UserscriptStore.list(appContext)
+                val values = UserscriptStore.readValues(appContext)
+                synchronized(cacheLock) {
+                    cachedScripts = scripts
+                    cachedValues = values
+                    cacheLoaded = true
+                }
             }.onFailure { Log.w(TAG, "store snapshot failed", it) }
             val runtime = try {
                 ExtensionBrowserRuntime.get(appContext)
@@ -226,9 +233,11 @@ internal object UserscriptEngine {
             val value = if (json.isNull("value")) null else json.opt("value")
             // Update the snapshot first so a page reload sees the new value
             // even before the disk write lands.
-            val updated = (cachedValues[scriptId]?.let { JSONObject(it.toString()) } ?: JSONObject())
-            if (value == null) updated.remove(key) else updated.put(key, value)
-            cachedValues = cachedValues + (scriptId to updated)
+            synchronized(cacheLock) {
+                val updated = (cachedValues[scriptId]?.let { JSONObject(it.toString()) } ?: JSONObject())
+                if (value == null) updated.remove(key) else updated.put(key, value)
+                cachedValues = cachedValues + (scriptId to updated)
+            }
             val appContext = appContextOrNull() ?: return
             scope.launch { UserscriptStore.setValue(appContext, scriptId, key, value) }
         }
@@ -237,9 +246,11 @@ internal object UserscriptEngine {
             val scriptId = json.optString("scriptId")
             val key = json.optString("key")
             if (scriptId.isBlank() || key.isBlank()) return
-            val updated = (cachedValues[scriptId]?.let { JSONObject(it.toString()) } ?: JSONObject())
-            updated.remove(key)
-            cachedValues = cachedValues + (scriptId to updated)
+            synchronized(cacheLock) {
+                val updated = (cachedValues[scriptId]?.let { JSONObject(it.toString()) } ?: JSONObject())
+                updated.remove(key)
+                cachedValues = cachedValues + (scriptId to updated)
+            }
             val appContext = appContextOrNull() ?: return
             scope.launch { UserscriptStore.deleteValue(appContext, scriptId, key) }
         }
@@ -248,8 +259,10 @@ internal object UserscriptEngine {
             val scriptId = json.optString("scriptId")
             val messageText = json.optString("message")
             if (scriptId.isBlank() || messageText.isBlank()) return
-            cachedScripts = cachedScripts.map {
-                if (it.id == scriptId) it.copy(lastError = messageText.take(300)) else it
+            synchronized(cacheLock) {
+                cachedScripts = cachedScripts.map {
+                    if (it.id == scriptId) it.copy(lastError = messageText.take(300)) else it
+                }
             }
             val appContext = appContextOrNull() ?: return
             scope.launch { UserscriptStore.recordError(appContext, scriptId, messageText) }
@@ -336,7 +349,7 @@ internal object UserscriptEngine {
             val buffer = okio.Buffer()
             var total = 0L
             try {
-                while (total <= MAX_XHR_RESPONSE_CHARS) {
+                while (total < MAX_XHR_RESPONSE_CHARS) {
                     val read = source.read(buffer, 8192)
                     if (read == -1L) break
                     total += read
@@ -358,9 +371,4 @@ internal object UserscriptEngine {
     @Volatile private var capturedAppContext: Context? = null
 
     private fun appContextOrNull(): Context? = capturedAppContext
-
-    /** Captures the application context for message-path store writes. */
-    fun captureContext(context: Context) {
-        capturedAppContext = context.applicationContext
-    }
 }

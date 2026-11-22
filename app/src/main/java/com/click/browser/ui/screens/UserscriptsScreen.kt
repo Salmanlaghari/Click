@@ -39,6 +39,34 @@ private data class PendingUserscript(
     val sourceUrl: String?
 )
 
+/** Shared download client for the install-from-URL fetch. */
+private val userscriptFetchClient: OkHttpClient by lazy {
+    OkHttpClient.Builder()
+        .connectTimeout(20, TimeUnit.SECONDS)
+        .readTimeout(20, TimeUnit.SECONDS)
+        .build()
+}
+
+/**
+ * Reads a response body with a hard byte cap (the parser's char cap × 4,
+ * the UTF-8 worst case) so a hostile or broken server cannot make the
+ * installer load an unbounded response into memory. Returns null when
+ * the cap is exceeded.
+ */
+private fun readBodyWithCap(response: okhttp3.Response): String? {
+    val source = response.body?.source() ?: return ""
+    val maxBytes = UserscriptMetadataParser.MAX_SCRIPT_CHARS * 4L + 1024L
+    val buffer = okio.Buffer()
+    var total = 0L
+    while (true) {
+        val read = source.read(buffer, 8192)
+        if (read == -1L) break
+        total += read
+        if (total > maxBytes) return null
+    }
+    return buffer.readString(Charsets.UTF_8)
+}
+
 /**
  * Userscripts manager (overhaul B1): install `.user.js` scripts from a
  * URL, a file, or pasted code; review exactly what will run (name,
@@ -187,20 +215,16 @@ fun UserscriptsScreen(
                                 scope.launch {
                                     val text = withContext(Dispatchers.IO) {
                                         runCatching {
-                                            val client = OkHttpClient.Builder()
-                                                .connectTimeout(20, TimeUnit.SECONDS)
-                                                .readTimeout(20, TimeUnit.SECONDS)
-                                                .build()
-                                            client.newCall(Request.Builder().url(url).build())
+                                            userscriptFetchClient.newCall(Request.Builder().url(url).build())
                                                 .execute().use { resp ->
                                                     if (!resp.isSuccessful) error("HTTP ${resp.code}")
-                                                    resp.body?.string() ?: error("Empty response")
+                                                    readBodyWithCap(resp) ?: error("Response too large")
                                                 }
                                         }.getOrNull()
                                     }
                                     fetching = false
                                     if (text == null) {
-                                        fetchError = "Could not download that URL."
+                                        fetchError = "Could not download that URL (or it was too large)."
                                     } else {
                                         review(text, url)
                                     }
