@@ -29,7 +29,7 @@ class ModeCapabilityRegistryTest {
     }
 
     @Test
-    fun developerDevToolsOnRegularGeckoTabOffersConfirmedSwitch() {
+    fun developerDevToolsOnRegularGeckoTabInspectsDirectly() {
         val access = ModeCapabilityRegistry.availability(
             FeatureId.DEVTOOLS,
             BrowserMode.DEVELOPER,
@@ -38,11 +38,9 @@ class ModeCapabilityRegistryTest {
 
         assertTrue(access.visible)
         assertTrue(access.enabled)
-        assertNotNull(access.explanation)
-        val explanation = access.explanation.orEmpty()
-        assertTrue(explanation.contains("WebView"))
-        assertTrue(explanation.contains("reload"))
-        assertTrue(explanation.contains("DevTools"))
+        // B2: the bridge extension inspects Gecko tabs directly, so the
+        // old "WebView reload" explanation is gone.
+        assertEquals(null, access.explanation)
     }
 
     @Test
@@ -158,7 +156,9 @@ class ModeCapabilityRegistryTest {
         )
         assertTrue(geckoLoaded.visible)
         assertTrue(geckoLoaded.enabled)
-        assertEquals("Tap to review a WebView reload before opening DevTools.", geckoLoaded.explanation)
+        // B2: Gecko tabs are inspected directly via the DevTools bridge,
+        // so there is no WebView-reload explanation anymore.
+        assertEquals(null, geckoLoaded.explanation)
     }
 
     @Test
