@@ -86,6 +86,9 @@ import java.util.concurrent.TimeUnit
  * AMO store and add-on manager surface. It shares Click's GeckoView runtime with normal Gecko tabs,
  * while remaining separate from WebView storage and browser bridges.
  * GeckoView validates Mozilla signatures before installation; this activity never registers native messaging.
+ * Updates are user-initiated from the manager: Click re-verifies the add-on against its live public Android
+ * AMO record (identity, version, compatibility and policy preflight) before installing the verified package
+ * over the existing one, and GeckoView routes any new permissions through the same review prompt as installs.
  * Do not add WebExtensionController.update(): GeckoView may apply same-permission updates without a prompt,
  * and the pinned API cannot preflight the updated add-on's current Android compatibility or AMO package record.
  */
@@ -319,6 +322,7 @@ private fun ExtensionBrowserScreen(
     var pendingPrompt by remember { mutableStateOf<PendingExtensionPrompt?>(null) }
     var pageInstallConfirmation by remember { mutableStateOf<FirefoxAmoCatalogEntry?>(null) }
     var installingCatalogSlug by remember { mutableStateOf<String?>(null) }
+    var updatingExtensionId by remember { mutableStateOf<String?>(null) }
     var verifiedCatalogPackage by remember { mutableStateOf<VerifiedAmoCatalogRecord?>(null) }
 
     val latestInstalledExtensions = rememberUpdatedState(installedExtensions)
@@ -506,6 +510,91 @@ private fun ExtensionBrowserScreen(
         }
     }
 
+    fun beginExtensionUpdate(extension: WebExtension) {
+        val metadata = extension.metaData
+        val name = metadata.name.orEmpty().ifBlank { "This add-on" }
+        val listingSlug = FirefoxAmoCatalog.slugFromOfficialListing(metadata.amoListingUrl)
+        if (listingSlug == null) {
+            statusMessage = "$name cannot be updated here: no official AMO listing was recorded for it. Remove it, then reinstall it from its official AMO listing to re-run Click's safety checks."
+            return
+        }
+        if (installingCatalogSlug != null || updatingExtensionId != null || pendingPrompt != null) return
+        if (!extensionListLoaded) {
+            statusMessage = "Click is still checking the Gecko add-on list. Try again in a moment."
+            refreshExtensions()
+            return
+        }
+        if (extensionPolicyBlockers(extension).isNotEmpty()) {
+            statusMessage = "$name is blocked by Click's safe add-on policy; remove it instead of updating it."
+            return
+        }
+        updatingExtensionId = extension.id
+        statusMessage = "Checking the official AMO record for a newer version of $name…"
+        scope.launch {
+            try {
+                val record = fetchCurrentAmoPackage(listingSlug)
+                if (record == null || record.entry.extensionId != extension.id ||
+                    listingSlug != record.entry.slug.lowercase()
+                ) {
+                    updatingExtensionId = null
+                    statusMessage = "Update stopped: Click could not verify a public, Android-compatible AMO package for $name. Check your connection and try again."
+                    return@launch
+                }
+                val verifiedEntry = record.entry
+                val packageInfo = record.packageInfo
+                val installedVersion = metadata.version.orEmpty()
+                if (!ExtensionUpdatePolicy.isNewerVersion(packageInfo.version, installedVersion)) {
+                    updatingExtensionId = null
+                    statusMessage = "$name is already up to date (v$installedVersion)."
+                    return@launch
+                }
+                val unsupportedPermissions = ExtensionInstallPolicy.unsupportedPermissionNames(verifiedEntry.requiredPermissions)
+                val unreviewableOrigins = ExtensionInstallPolicy.blockedOriginPatterns(verifiedEntry.requiredOrigins)
+                if (unsupportedPermissions.isNotEmpty() || unreviewableOrigins.isNotEmpty()) {
+                    updatingExtensionId = null
+                    statusMessage = ExtensionUiGuidance.blockedCatalogInstallStatus(unsupportedPermissions, unreviewableOrigins)
+                    return@launch
+                }
+                verifiedCatalogPackage = record
+                statusMessage = "AMO confirms $name v${packageInfo.version} supports Android ${packageInfo.minimumAndroidVersion}–${FirefoxAmoCatalog.GECKOVIEW_ANDROID_COMPAT_VERSION}; GeckoView will verify its Mozilla signature and ask before granting any new permissions."
+                controller.install(
+                    packageInfo.downloadUrl,
+                    WebExtensionController.INSTALLATION_METHOD_MANAGER
+                ).accept(
+                    { updated ->
+                        updatingExtensionId = null
+                        verifiedCatalogPackage = null
+                        if (updated == null) {
+                            statusMessage = "Update rejected: GeckoView returned no extension."
+                        } else if (updated.id != packageInfo.extensionId ||
+                            FirefoxAmoCatalog.slugFromOfficialListing(updated.metaData.amoListingUrl) != packageInfo.slug
+                        ) {
+                            controller.disable(updated, WebExtensionController.EnableSource.APP)
+                            statusMessage = "Update stopped: the updated add-on identity did not match the live AMO record, so Click disabled it."
+                            refreshExtensions()
+                        } else {
+                            sourcePrefs.edit().putString(
+                                updated.id,
+                                "Mozilla AMO API-verified Android-compatible package v${packageInfo.version} (${packageInfo.slug})"
+                            ).apply()
+                            statusMessage = "Updated $name to v${packageInfo.version}."
+                            refreshExtensions()
+                        }
+                    },
+                    { error ->
+                        updatingExtensionId = null
+                        verifiedCatalogPackage = null
+                        statusMessage = "Update rejected by GeckoView: ${error?.message?.take(180) ?: "invalid, unsigned, blocked, or incompatible XPI"}"
+                    }
+                )
+            } catch (error: Exception) {
+                updatingExtensionId = null
+                verifiedCatalogPackage = null
+                statusMessage = "Update stopped: ${error.message?.take(180) ?: "AMO verification failed"}"
+            }
+        }
+    }
+
     fun sourceDescription(extension: WebExtension): String {
         val metadata = extension.metaData
         val saved = sourcePrefs.getString(extension.id, null)
@@ -561,7 +650,7 @@ private fun ExtensionBrowserScreen(
                         add("The package was not verified against its current public Android AMO record")
                     }
                 }
-                if (extension.id in installedExtensionIds) {
+                if (kind == "Install extension" && extension.id in installedExtensionIds) {
                     add("This add-on ID is already installed; remove it before importing a replacement")
                 }
                 addAll(extensionPolicyBlockers(extension))
@@ -626,8 +715,21 @@ private fun ExtensionBrowserScreen(
                 newOrigins: Array<out String>,
                 newDataCollectionPermissions: Array<out String>
             ): GeckoResult<AllowOrDeny> {
-                statusMessage = "Updates are not automatic. Remove the extension, then reinstall it from its official AMO listing to re-run Click's safety checks."
-                return GeckoResult.deny()
+                if (pendingPrompt != null) {
+                    return GeckoResult.deny()
+                }
+                val result = GeckoResult<AllowOrDeny>()
+                pendingPrompt = buildPrompt(
+                    kind = "Update extension",
+                    extension = extension,
+                    permissions = newPermissions.toList(),
+                    origins = newOrigins.toList(),
+                    dataCollectionPermissions = newDataCollectionPermissions.toList()
+                ) { allow, _ ->
+                    pendingPrompt = null
+                    result.complete(if (allow) AllowOrDeny.ALLOW else AllowOrDeny.DENY)
+                }
+                return result
             }
         }
     }
@@ -883,6 +985,7 @@ private fun ExtensionBrowserScreen(
             catalogEntries = FirefoxAmoCatalog.entries,
             isImportEnabled = extensionListLoaded,
             installingCatalogSlug = installingCatalogSlug,
+            updatingExtensionId = updatingExtensionId,
             sourceFor = ::sourceDescription,
             onBrowseCatalog = {
                 showManager = false
@@ -953,6 +1056,7 @@ private fun ExtensionBrowserScreen(
                 }
             },
             onRemove = { extension -> removeTarget = extension },
+            onCheckUpdate = ::beginExtensionUpdate,
             onClose = { showManager = false }
         )
     }
@@ -1121,6 +1225,7 @@ private fun ExtensionManagerDialog(
     catalogEntries: List<FirefoxAmoCatalogEntry>,
     isImportEnabled: Boolean,
     installingCatalogSlug: String?,
+    updatingExtensionId: String?,
     sourceFor: (WebExtension) -> String,
     onBrowseCatalog: () -> Unit,
     onInstallCatalogEntry: (FirefoxAmoCatalogEntry) -> Unit,
@@ -1129,6 +1234,7 @@ private fun ExtensionManagerDialog(
     onOpenOptions: (WebExtension) -> Unit,
     onToggle: (WebExtension, Boolean) -> Unit,
     onRemove: (WebExtension) -> Unit,
+    onCheckUpdate: (WebExtension) -> Unit,
     onClose: () -> Unit
 ) {
     val context = LocalContext.current
@@ -1246,6 +1352,15 @@ private fun ExtensionManagerDialog(
                                         else -> "Options blocked: page is not on this add-on's own GeckoView origin."
                                     }
                                     Text(optionsMessage, fontSize = 10.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                }
+                                if (policyBlockers.isEmpty()) {
+                                    OutlinedButton(
+                                        onClick = { onCheckUpdate(extension) },
+                                        enabled = updatingExtensionId == null && installingCatalogSlug == null,
+                                        modifier = Modifier.fillMaxWidth()
+                                    ) {
+                                        Text(if (updatingExtensionId == extension.id) "Checking for updates…" else "Check for updates")
+                                    }
                                 }
                             }
                         }
