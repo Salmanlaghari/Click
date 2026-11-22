@@ -86,9 +86,35 @@ data class VlessLink(
             } catch (_: Exception) {
                 return null
             }
-            val uuid = uri.userInfo?.takeIf { it.isNotBlank() } ?: return null
-            val host = uri.host?.takeIf { it.isNotBlank() } ?: return null
-            val port = if (uri.port > 0) uri.port else 443
+            // java.net.URI only decomposes server-based authorities:
+            // hostnames containing '_' (common on VPS panels) come back
+            // with null host/userInfo/port, so fall back to splitting the
+            // raw authority by hand before giving up.
+            val rawAuthority = uri.rawAuthority?.takeIf { it.isNotBlank() } ?: return null
+            val uuid = uri.userInfo?.takeIf { it.isNotBlank() }
+                ?: rawAuthority.substringBefore('@', "").takeIf {
+                    it.isNotBlank() && rawAuthority.contains('@')
+                }
+                ?: return null
+            val hostPort = rawAuthority.substringAfterLast('@')
+            val host: String
+            val port: Int
+            when {
+                uri.host != null -> {
+                    host = uri.host!!
+                    port = if (uri.port > 0) uri.port else 443
+                }
+                hostPort.startsWith("[") -> {
+                    host = hostPort.drop(1).substringBefore(']')
+                    port = hostPort.substringAfter(']', "").removePrefix(":")
+                        .toIntOrNull() ?: 443
+                }
+                else -> {
+                    host = hostPort.substringBefore(':')
+                    port = hostPort.substringAfter(':', "").toIntOrNull() ?: 443
+                }
+            }
+            if (host.isBlank()) return null
             if (port !in 1..65535) return null
             val params = parseQuery(uri.rawQuery)
             val network = (params["type"] ?: "tcp").lowercase()
@@ -131,7 +157,12 @@ data class VlessLink(
                 val kv = it.split("=", limit = 2)
                 if (kv.size == 2) {
                     try {
-                        URLDecoder.decode(kv[0], "UTF-8") to URLDecoder.decode(kv[1], "UTF-8")
+                        // URLDecoder's form rule maps '+' to a space, which
+                        // corrupts values that legitimately contain '+'
+                        // (standard-base64 Reality keys, ws paths). Escape
+                        // literal pluses first so only %20 means space.
+                        URLDecoder.decode(kv[0].replace("+", "%2B"), "UTF-8") to
+                            URLDecoder.decode(kv[1].replace("+", "%2B"), "UTF-8")
                     } catch (_: Exception) {
                         null
                     }

@@ -120,4 +120,28 @@ class VlessLinkTest {
         assertEquals("ws.example.com:8443 · ws · tls", link.summary())
         assertFalse(link.allowInsecure)
     }
+
+    @Test
+    fun parsesHostnameWithUnderscore() {
+        // java.net.URI returns a null host for '_' hostnames; the parser
+        // must fall back to the raw authority instead of rejecting them.
+        val link = VlessLink.parse(
+            "vless://uuid-1@my_server.example.com:8443?security=tls&type=ws"
+        )!!
+        assertEquals("my_server.example.com", link.host)
+        assertEquals(8443, link.port)
+        assertEquals("uuid-1", link.uuid)
+    }
+
+    @Test
+    fun plusSignsInValuesAreNotTurnedIntoSpaces() {
+        // Standard-base64 Reality keys can contain '+'; form-style
+        // decoding would corrupt them into spaces.
+        val link = VlessLink.parse(
+            "vless://uuid-1@host.example.com:443?security=reality" +
+                "&pbk=Ab+C/d8=&sid=ab+cd&type=tcp"
+        )!!
+        assertEquals("Ab+C/d8=", link.publicKey)
+        assertEquals("ab+cd", link.shortId)
+    }
 }

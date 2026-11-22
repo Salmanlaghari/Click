@@ -156,7 +156,9 @@ object VpnConfigBuilder {
                 "reality" -> {
                     val tls = JSONObject()
                         .put("enabled", true)
-                        .put("server_name", link.sni)
+                        // Same host fallback as the TLS branch: an empty
+                        // server_name breaks the handshake camouflage.
+                        .put("server_name", link.sni.ifBlank { link.host })
                     // uTLS fingerprint (fp) — matters for Reality.
                     if (link.fingerprint.isNotBlank()) {
                         tls.put("utls", JSONObject()

@@ -327,9 +327,18 @@ fun VpnScreen(onClose: () -> Unit) {
                         VpnController.updateCustomServer(context, server.id, name, url)
                     }.getOrDefault(false)
                     if (saved) {
+                        val wasLive = server.id == selectedId &&
+                            vpnState == VpnState.CONNECTED
                         editingServer = null
                         refresh()
                         onResult(null)
+                        if (wasLive) {
+                            android.widget.Toast.makeText(
+                                context,
+                                "Server updated — reconnect the tunnel to use the new settings.",
+                                android.widget.Toast.LENGTH_LONG
+                            ).show()
+                        }
                     } else {
                         onResult("Couldn't save this server. Check the link and try again.")
                     }
@@ -476,6 +485,7 @@ private fun ServerEditorDialog(
     var fPath by remember { mutableStateOf(initialVless?.path ?: "") }
     var fHostHeader by remember { mutableStateOf(initialVless?.hostHeader ?: "") }
     var fServiceName by remember { mutableStateOf(initialVless?.serviceName ?: "") }
+    var fAllowInsecure by remember { mutableStateOf(initialVless?.allowInsecure ?: false) }
 
     fun submit() {
         val finalUrl: String
@@ -493,6 +503,10 @@ private fun ServerEditorDialog(
                 error = "Reality servers need the public key (pbk)."
                 return
             }
+            if (fFlow.isNotBlank() && fSecurity == "none") {
+                error = "The vision flow needs TLS or Reality security."
+                return
+            }
             finalUrl = VlessLink(
                 uuid = fUuid.trim(),
                 host = fHost.trim(),
@@ -507,7 +521,11 @@ private fun ServerEditorDialog(
                 shortId = fShortId.trim(),
                 path = fPath.trim(),
                 hostHeader = fHostHeader.trim(),
-                serviceName = fServiceName.trim()
+                serviceName = fServiceName.trim(),
+                // Fields the form does not edit must survive a save —
+                // dropping them silently breaks working servers.
+                encryption = initialVless?.encryption ?: "none",
+                allowInsecure = fAllowInsecure
             ).toShareLink()
         } else {
             finalUrl = url.trim()
@@ -515,6 +533,11 @@ private fun ServerEditorDialog(
                 error = "Paste a proxy URL first."
                 return
             }
+        }
+        val pastedVless = if (!manualMode) VlessLink.parse(finalUrl) else null
+        if (pastedVless != null && pastedVless.security == "reality" && pastedVless.publicKey.isBlank()) {
+            error = "Reality servers need the public key (pbk) in the link."
+            return
         }
         if (runCatching { VpnConfigBuilder.buildCustomConfig(finalUrl) }.getOrNull() == null) {
             error = "This server isn't valid or supported. Use vless://, vmess://, trojan://, or ss://."
@@ -590,6 +613,26 @@ private fun ServerEditorDialog(
                     }
                     if (fNetwork == "grpc") {
                         ServerTextField("gRPC service name", fServiceName, { fServiceName = it })
+                    }
+                    if (fSecurity == "tls") {
+                        Row(
+                            Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Column(Modifier.weight(1f)) {
+                                Text("Allow insecure certificates", fontSize = 14.sp)
+                                Text(
+                                    "Only for self-signed servers you trust",
+                                    fontSize = 12.sp,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                            Switch(
+                                checked = fAllowInsecure,
+                                onCheckedChange = { fAllowInsecure = it }
+                            )
+                        }
+                        Spacer(Modifier.height(8.dp))
                     }
                 } else {
                     OutlinedTextField(
