@@ -77,6 +77,12 @@ class BrowserUrlInputTest {
             "example.com:8080/a",
             displayUrlForBar("http://example.com:8080/a")
         )
+        assertEquals("example.com:8080", displayUrlForBar("http://example.com:8080"))
+        assertEquals(
+            "Example.COM/Path",
+            displayUrlForBar("HTTPS://Example.COM/Path")
+        )
+        assertEquals("example.com", displayUrlForBar("HtTp://example.com/"))
     }
 
     @Test
