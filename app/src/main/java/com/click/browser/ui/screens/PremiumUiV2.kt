@@ -112,6 +112,7 @@ val ALL_FEATURES: List<FeatureDef> = listOf(
     FeatureDef(FeatureId.TABS, "Tabs", Icons.Default.Tab),
     FeatureDef(FeatureId.RECENT_TABS, "Recent", Icons.Default.Restore),
     FeatureDef(FeatureId.SHARE, "Share", Icons.Default.Share),
+    FeatureDef(FeatureId.OPEN_IN_APP, "Open in app", Icons.Default.OpenInNew),
     FeatureDef(FeatureId.FIND_IN_PAGE, "Find", Icons.Default.Search),
     FeatureDef(FeatureId.ADBLOCK, "AdBlock", Icons.Default.Block),
     FeatureDef(FeatureId.READER, "Reader", Icons.Default.MenuBook),
