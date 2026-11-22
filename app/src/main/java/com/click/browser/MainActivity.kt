@@ -43,6 +43,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -1546,9 +1547,14 @@ class MainActivity : FragmentActivity() {
             // Palette selection is shared across profiles; each mode keeps its own label and behavior.
             var lightThemeVariant by rememberSaveable { mutableStateOf(LightThemeVariant.CREAM) }
             var autoRotateThemes by rememberSaveable { mutableStateOf(false) }
+            // Real theme choice (Light / Dark / Follow system), loaded from
+            // prefs below and changed from Settings → Appearance.
+            var themeMode by rememberSaveable { mutableStateOf(ThemeController.MODE_AUTO) }
+            val systemDark = isSystemInDarkTheme()
+            val darkActive = ThemeController.resolveDark(themeMode, systemDark)
             var wallpaperUri by remember { mutableStateOf<String?>(null) }
-            val theme = remember(activeMode, lightThemeVariant) {
-                ModeThemes.forMode(activeMode, dark = false, lightVariant = lightThemeVariant)
+            val theme = remember(activeMode, lightThemeVariant, darkActive) {
+                ModeThemes.forMode(activeMode, dark = darkActive, lightVariant = lightThemeVariant)
             }
 
             val themeColors = if (theme.dark) {
@@ -3205,19 +3211,25 @@ class MainActivity : FragmentActivity() {
                         storedVariantId,
                         autoRotate && savedInstanceState == null
                     )
-                    val needsLightThemeMigration =
-                        prefs[AppSettings.APPEARANCE_MODE] != "light" ||
-                            prefs[AppSettings.THEME_MODE] != "light" ||
-                            prefs[AppSettings.UI_DARK_MODE] == true ||
-                            BrowserMode.values().any { prefs[AppSettings.darkModeKey(it)] == true }
-                    val needsThemePreferenceWrite = needsLightThemeMigration ||
-                        storedVariantId != launchVariant.id ||
-                        prefs[AppSettings.AUTO_ROTATE_THEMES] == null
+                    // Real theme mode: honor the stored choice (existing
+                    // installs carry "light" from the old light-only era, so
+                    // nobody's look changes until they pick Dark or Follow
+                    // system themselves). Legacy per-mode dark flags are
+                    // cleared once — the single app-wide choice replaces them.
+                    val resolvedThemeMode = ThemeController.normalize(prefs[AppSettings.THEME_MODE])
+                    val needsThemePreferenceWrite =
+                        prefs[AppSettings.THEME_MODE] != resolvedThemeMode ||
+                            prefs[AppSettings.APPEARANCE_MODE] != resolvedThemeMode ||
+                            prefs[AppSettings.UI_DARK_MODE] != (resolvedThemeMode == ThemeController.MODE_DARK) ||
+                            BrowserMode.values().any { prefs[AppSettings.darkModeKey(it)] == true } ||
+                            storedVariantId != launchVariant.id ||
+                            prefs[AppSettings.AUTO_ROTATE_THEMES] == null
                     if (needsThemePreferenceWrite) {
                         dataStore.edit { appearance ->
-                            appearance[AppSettings.APPEARANCE_MODE] = "light"
-                            appearance[AppSettings.THEME_MODE] = "light"
-                            appearance[AppSettings.UI_DARK_MODE] = false
+                            appearance[AppSettings.APPEARANCE_MODE] = resolvedThemeMode
+                            appearance[AppSettings.THEME_MODE] = resolvedThemeMode
+                            appearance[AppSettings.UI_DARK_MODE] =
+                                resolvedThemeMode == ThemeController.MODE_DARK
                             appearance[AppSettings.LIGHT_THEME_VARIANT] = launchVariant.id
                             appearance[AppSettings.AUTO_ROTATE_THEMES] = autoRotate
                             BrowserMode.values().forEach { mode ->
@@ -3225,6 +3237,7 @@ class MainActivity : FragmentActivity() {
                             }
                         }
                     }
+                    themeMode = resolvedThemeMode
                     lightThemeVariant = launchVariant
                     autoRotateThemes = autoRotate
                     // HTTPS mode (default "standard" = historical HTTPS-Only upgrade behavior).
@@ -8082,6 +8095,19 @@ class MainActivity : FragmentActivity() {
                                         scope.launch {
                                             dataStore.edit { prefs ->
                                                 prefs[AppSettings.AUTO_ROTATE_THEMES] = enabled
+                                            }
+                                        }
+                                    },
+                                    themeMode = themeMode,
+                                    onThemeModeChange = { mode ->
+                                        val normalized = ThemeController.normalize(mode)
+                                        themeMode = normalized
+                                        scope.launch {
+                                            dataStore.edit { prefs ->
+                                                prefs[AppSettings.THEME_MODE] = normalized
+                                                prefs[AppSettings.APPEARANCE_MODE] = normalized
+                                                prefs[AppSettings.UI_DARK_MODE] =
+                                                    normalized == ThemeController.MODE_DARK
                                             }
                                         }
                                     },
