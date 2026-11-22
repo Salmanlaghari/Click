@@ -43,6 +43,7 @@ import com.click.browser.engine.ModeTheme
 import com.click.browser.engine.NewsNotifications
 import com.click.browser.engine.ProtectionPolicy
 import com.click.browser.engine.SafetyCheck
+import com.click.browser.engine.ThemeController
 
 private const val PLAY_STORE_PACKAGE = "com.teampkai.clickbrowser"
 
@@ -69,6 +70,8 @@ fun SettingsScreen(
     onLightThemeVariantChange: (LightThemeVariant) -> Unit,
     autoRotateThemes: Boolean,
     onToggleAutoRotateThemes: (Boolean) -> Unit,
+    themeMode: String,
+    onThemeModeChange: (String) -> Unit,
     // --- General ---
     wallpaperUri: String?,
     onWallpaperChange: (String?) -> Unit,
@@ -166,7 +169,7 @@ fun SettingsScreen(
     // ---- Row model: every row is tagged with the page it belongs to ----
     data class Row(val section: String, val content: @Composable () -> Unit)
     val rows = remember(
-        theme, lightThemeVariant, autoRotateThemes, wallpaperUri, activeMode,
+        theme, lightThemeVariant, autoRotateThemes, themeMode, wallpaperUri, activeMode,
         currentSearchEngineSetting, addressBarPosition,
         dataSaver, currentTabEngine, backgroundAudioEnabled,
         aiApiKey, aiProvider, aiModel, showAiKey, animationsEnabled, isDefaultBrowser, advanceIntroEnabled,
@@ -374,10 +377,28 @@ fun SettingsScreen(
                 CardRow(theme) {
                     Text("Appearance", color = theme.onSurface, fontWeight = FontWeight.SemiBold, fontSize = 14.sp)
                     Text(
-                        "Choose a soft light palette. Click stays light in every profile.",
+                        "Theme applies to the app in every profile. Each mode keeps its own colours in light and dark.",
                         fontSize = 11.sp, color = theme.onSurface.copy(alpha = 0.6f)
                     )
                     Spacer(Modifier.height(8.dp))
+                    Text("Theme", color = theme.onSurface, fontWeight = FontWeight.SemiBold, fontSize = 13.sp)
+                    Spacer(Modifier.height(4.dp))
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        listOf(
+                            ThemeController.MODE_LIGHT,
+                            ThemeController.MODE_DARK,
+                            ThemeController.MODE_AUTO
+                        ).forEach { mode ->
+                            FilterChip(
+                                selected = ThemeController.normalize(themeMode) == mode,
+                                onClick = { onThemeModeChange(mode) },
+                                label = { Text(ThemeController.displayName(mode), fontSize = 12.sp) }
+                            )
+                        }
+                    }
+                    Spacer(Modifier.height(8.dp))
+                    Text("Palette (light theme)", color = theme.onSurface, fontWeight = FontWeight.SemiBold, fontSize = 13.sp)
+                    Spacer(Modifier.height(4.dp))
                     Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
                         LightThemeVariant.values().toList().chunked(2).forEach { variants ->
                             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {

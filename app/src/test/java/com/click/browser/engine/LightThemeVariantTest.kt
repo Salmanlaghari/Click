@@ -52,11 +52,11 @@ class LightThemeVariantTest {
 
     @Test
     fun allSelectableSurfacePalettesRemainWarmLightAndDistinct() {
-        // The selectable warm variants now drive the ADVANCED profile (the
-        // standard premium look); other modes have fixed identities.
+        // The selectable warm variants drive the ADVANCED profile's light
+        // look (the standard premium look); other modes have fixed identities.
         val variants = LightThemeVariant.values().toList()
         val themes = variants.map { variant ->
-            ModeThemes.forMode(BrowserMode.ADVANCED, dark = true, lightVariant = variant)
+            ModeThemes.forMode(BrowserMode.ADVANCED, dark = false, lightVariant = variant)
         }
         val expectedBackgrounds = listOf(
             Color(0xFFFBF8F1),
@@ -152,6 +152,54 @@ class LightThemeVariantTest {
             assertTrue("$mode secondary contrast", contrastRatio(theme.secondary, theme.background) >= 4.5)
             assertTrue(theme.modePillText.isNotBlank())
         }
+    }
+
+    @Test
+    fun themeModeNormalizationAndResolution() {
+        assertEquals(ThemeController.MODE_LIGHT, ThemeController.normalize("light"))
+        assertEquals(ThemeController.MODE_DARK, ThemeController.normalize(" DARK "))
+        assertEquals(ThemeController.MODE_AUTO, ThemeController.normalize("auto"))
+        // Legacy scheduled behaved like follow-system; unknown values too.
+        assertEquals(ThemeController.MODE_AUTO, ThemeController.normalize("scheduled"))
+        assertEquals(ThemeController.MODE_AUTO, ThemeController.normalize(null))
+        assertEquals(ThemeController.MODE_AUTO, ThemeController.normalize("legacy-value"))
+
+        assertFalse(ThemeController.resolveDark(ThemeController.MODE_LIGHT, systemDark = true))
+        assertFalse(ThemeController.resolveDark(ThemeController.MODE_LIGHT, systemDark = false))
+        assertTrue(ThemeController.resolveDark(ThemeController.MODE_DARK, systemDark = false))
+        assertTrue(ThemeController.resolveDark(ThemeController.MODE_AUTO, systemDark = true))
+        assertFalse(ThemeController.resolveDark(ThemeController.MODE_AUTO, systemDark = false))
+
+        assertEquals("Light", ThemeController.displayName(ThemeController.MODE_LIGHT))
+        assertEquals("Dark", ThemeController.displayName(ThemeController.MODE_DARK))
+        assertEquals("Follow system", ThemeController.displayName(ThemeController.MODE_AUTO))
+    }
+
+    @Test
+    fun darkPalettesAreGenuinelyDarkDistinctAndReadable() {
+        val modes = BrowserMode.values().toList()
+        val themes = modes.map { mode ->
+            ModeThemes.forMode(mode, dark = true, lightVariant = LightThemeVariant.CREAM)
+        }
+
+        assertEquals(modes.size, themes.map { it.background }.distinct().size)
+        assertEquals(modes.size, themes.map { it.primary }.distinct().size)
+        modes.zip(themes).forEach { (mode, theme) ->
+            assertEquals(mode, theme.mode)
+            assertTrue("$mode is dark when dark is requested", theme.dark)
+            assertTrue("$mode background is dark", theme.background.red < 0.25f)
+            assertTrue("$mode background is dark", theme.background.green < 0.25f)
+            assertTrue("$mode background is dark", theme.background.blue < 0.25f)
+            assertEquals(theme.primary, theme.modeAccent)
+            assertTrue("$mode primary contrast", contrastRatio(theme.primary, theme.background) >= 4.5)
+            assertTrue("$mode secondary contrast", contrastRatio(theme.secondary, theme.background) >= 4.5)
+            assertTrue("$mode text contrast", contrastRatio(theme.onBackground, theme.background) >= 4.5)
+        }
+        // Developer keeps its single dark identity in both theme choices.
+        assertEquals(
+            ModeThemes.forMode(BrowserMode.DEVELOPER, dark = false).background,
+            ModeThemes.forMode(BrowserMode.DEVELOPER, dark = true).background
+        )
     }
 
     private fun contrastRatio(foreground: Color, background: Color): Double {

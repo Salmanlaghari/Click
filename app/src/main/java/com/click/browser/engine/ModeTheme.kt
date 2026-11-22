@@ -78,18 +78,34 @@ object ModeThemes {
     /**
      * Per-mode palettes (Prince, 2026-11-11: modes must be visibly different).
      * Only ADVANCED still follows the selectable warm [LightThemeVariant]
-     * palettes; the other modes have fixed identities so switching modes is
-     * obvious at a glance. The legacy [dark] input is ignored — darkness is
-     * now a property of the Developer mode itself.
+     * palettes in light mode; the other modes have fixed identities so
+     * switching modes is obvious at a glance. [dark] is the user's real
+     * theme choice (1.8.7 overhaul): every mode has a dark palette that keeps
+     * its own accent identity. Developer is dark in both cases.
      */
-    @Suppress("UNUSED_PARAMETER")
     fun forMode(
         mode: BrowserMode,
         dark: Boolean,
         lightVariant: LightThemeVariant = LightThemeVariant.CREAM
     ): ModeTheme {
         when (mode) {
-            BrowserMode.SIMPLE -> return ModeTheme(
+            BrowserMode.SIMPLE -> return if (dark) ModeTheme(
+                mode = mode,
+                dark = true,
+                background = Color(0xFF0E1A21),
+                surface = Color(0xFF16252E),
+                surfaceVariant = Color(0xFF1E303B),
+                primary = Color(0xFF4FC3E8),
+                secondary = Color(0xFF7FA8F5),
+                onBackground = Color(0xFFE3EEF4),
+                onSurface = Color(0xFFD8E6ED),
+                topBarBg = Color(0xFF0B141A),
+                onTopBar = Color(0xFFD8E6ED),
+                modeAccent = Color(0xFF4FC3E8),
+                glow = Color(0xFF2A6E8C),
+                modePillText = "SIMPLE MODE",
+                addressBarStyle = ModeAddressBarStyle.PILL_LARGE
+            ) else ModeTheme(
                 mode = mode,
                 dark = false,
                 background = Color(0xFFF4F9FC),
@@ -123,7 +139,23 @@ object ModeThemes {
                 modePillText = "DEVELOPER MODE",
                 addressBarStyle = ModeAddressBarStyle.TECHNICAL
             )
-            BrowserMode.HACK -> return ModeTheme(
+            BrowserMode.HACK -> return if (dark) ModeTheme(
+                mode = mode,
+                dark = true,
+                background = Color(0xFF11151D),
+                surface = Color(0xFF1A2029),
+                surfaceVariant = Color(0xFF242C38),
+                primary = Color(0xFFA5B4FC),
+                secondary = Color(0xFF2DD4BF),
+                onBackground = Color(0xFFE6EAF2),
+                onSurface = Color(0xFFD9E0EA),
+                topBarBg = Color(0xFF0D1117),
+                onTopBar = Color(0xFFE6EAF2),
+                modeAccent = Color(0xFFA5B4FC),
+                glow = Color(0xFF4338CA),
+                modePillText = "POWER MODE • ACTIVE",
+                addressBarStyle = ModeAddressBarStyle.DESKTOP
+            ) else ModeTheme(
                 mode = mode,
                 dark = false,
                 background = Color(0xFFEDF0F5),
@@ -141,6 +173,28 @@ object ModeThemes {
                 addressBarStyle = ModeAddressBarStyle.DESKTOP
             )
             BrowserMode.ADVANCED -> Unit // handled below with the variant palettes
+        }
+        // ADVANCED in dark: one warm dark palette (the light variants only
+        // tune the light look); the bronze identity is kept. The mode check
+        // is explicit so a future mode can never fall into this palette.
+        if (dark && mode == BrowserMode.ADVANCED) {
+            return ModeTheme(
+                mode = mode,
+                dark = true,
+                background = Color(0xFF1D1710),
+                surface = Color(0xFF282017),
+                surfaceVariant = Color(0xFF352A1D),
+                primary = Color(0xFFD8B98A),
+                secondary = Color(0xFFC4A877),
+                onBackground = Color(0xFFF0E6D6),
+                onSurface = Color(0xFFE8DCC8),
+                topBarBg = Color(0xFF171208),
+                onTopBar = Color(0xFFF0E6D6),
+                modeAccent = Color(0xFFD8B98A),
+                glow = Color(0xFF80684E),
+                modePillText = "ADVANCE MODE",
+                addressBarStyle = ModeAddressBarStyle.STANDARD
+            )
         }
         val palette = when (lightVariant) {
             LightThemeVariant.CREAM -> LightPalette(
