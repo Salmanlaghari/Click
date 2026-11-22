@@ -10,8 +10,10 @@ import android.speech.SpeechRecognizer
 import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.animateContentSize
 import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -2546,9 +2548,16 @@ fun CompactBrowseBar(
         ConnectionSecurityStatus.CHECKING,
         ConnectionSecurityStatus.UNKNOWN -> theme.onSurface.copy(alpha = 0.58f)
     }
+    // B3 premium polish: the bar colour eases between mode/theme
+    // palettes instead of snapping when the mode or theme changes.
+    val animatedBarColor by animateColorAsState(
+        targetValue = theme.topBarBg,
+        animationSpec = tween(durationMillis = 350),
+        label = "browseBarColor"
+    )
     // Home navigation stays on its own row; page controls share the address row.
     Surface(
-        color = theme.topBarBg,
+        color = animatedBarColor,
         shadowElevation = 4.dp,
         modifier = modifier.fillMaxWidth()
     ) {

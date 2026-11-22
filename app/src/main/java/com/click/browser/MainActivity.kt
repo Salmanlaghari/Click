@@ -5364,6 +5364,14 @@ class MainActivity : FragmentActivity() {
                                                 // indeterminate bar before that (progress still 0), so a
                                                 // loading page never looks like a silent blank screen.
                                                 val progress = currentTab.loadProgress
+                                                // B3 premium polish: glide the determinate
+                                                // fill between engine progress reports
+                                                // instead of jumping step to step.
+                                                val animatedLoadProgress by androidx.compose.animation.core.animateFloatAsState(
+                                                    targetValue = progress / 100f,
+                                                    animationSpec = androidx.compose.animation.core.tween(durationMillis = 300),
+                                                    label = "pageLoadProgress"
+                                                )
                                                 androidx.compose.animation.AnimatedVisibility(
                                                     visible = currentTab.isPageLoading || progress in 1..99,
                                                     enter = fadeIn(),
@@ -5371,7 +5379,7 @@ class MainActivity : FragmentActivity() {
                                                 ) {
                                                     if (progress in 1..99) {
                                                         LinearProgressIndicator(
-                                                            progress = { progress / 100f },
+                                                            progress = { animatedLoadProgress },
                                                             modifier = Modifier
                                                                 .fillMaxWidth()
                                                                 .height(2.5.dp),
@@ -5402,10 +5410,21 @@ class MainActivity : FragmentActivity() {
                              */
                             @Composable
                             fun HomeDashboardContent() {
-                                // Overhauled premium dashboard home page
-                                ClickHomeScreen(
-                                    theme = theme,
-                                    activeMode = activeMode,
+                                // B3 premium polish: switching modes crossfades
+                                // between the per-mode dashboards — each rendered
+                                // with its own palette — instead of hard-cutting.
+                                androidx.compose.animation.Crossfade(
+                                    targetState = activeMode,
+                                    animationSpec = androidx.compose.animation.core.tween(durationMillis = 350),
+                                    label = "homeModeCrossfade"
+                                ) { mode ->
+                                    val modeTheme = remember(mode, lightThemeVariant, darkActive) {
+                                        ModeThemes.forMode(mode, dark = darkActive, lightVariant = lightThemeVariant)
+                                    }
+                                    // Overhauled premium dashboard home page
+                                    ClickHomeScreen(
+                                        theme = modeTheme,
+                                        activeMode = mode,
                                     searchEngine = currentSearchEngineSetting,
                                     adBlockStatusLabel = adBlockStatus.label,
                                     adBlockStatusActive = adBlockStatus.active,
@@ -5443,7 +5462,8 @@ class MainActivity : FragmentActivity() {
                                     onOpenPrivacyGuards = { showPrivacyGuards = true },
                                     onOpenDiagnostics = { showClickDiagnostics = true },
                                     onSearchEngineClick = { showSearchEnginePicker = true }
-                                )
+                                    )
+                                }
                             }
 
                             /**
