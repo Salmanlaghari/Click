@@ -66,7 +66,9 @@ object SearchSuggestions {
 
     /**
      * History rows whose title or URL contains the query (case-insensitive),
-     * newest first, one row per URL.
+     * one row per URL. [history] must already be newest-first — that is the
+     * order BrowserRepository.historyFlow guarantees — so matches keep that
+     * order without re-sorting on every keystroke.
      */
     fun localMatches(
         query: String,
@@ -78,7 +80,6 @@ object SearchSuggestions {
         val seenUrls = HashSet<String>()
         return history.asSequence()
             .filter { it.title.lowercase().contains(needle) || it.url.lowercase().contains(needle) }
-            .sortedByDescending { it.timestamp }
             .filter { seenUrls.add(it.url) }
             .take(limit)
             .map {

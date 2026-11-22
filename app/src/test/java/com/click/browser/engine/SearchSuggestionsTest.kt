@@ -39,12 +39,13 @@ class SearchSuggestionsTest {
     }
 
     @Test
-    fun localMatchesFilterSortAndDedupe() {
+    fun localMatchesFilterAndDedupe() {
+        // Input is newest-first, the order BrowserRepository.historyFlow emits.
         val history = listOf(
-            HistoryItem("Weather in Karachi", "https://weather.example/karachi", 100L),
+            HistoryItem("Duplicate", "https://weather.example/karachi", 400L),
             HistoryItem("News", "https://news.example", 300L),
             HistoryItem("Karachi weather radar", "https://radar.example", 200L),
-            HistoryItem("Duplicate", "https://weather.example/karachi", 400L)
+            HistoryItem("Weather in Karachi", "https://weather.example/karachi", 100L)
         )
         val matches = SearchSuggestions.localMatches("weather", history)
         // Newest matching URL first; the duplicate URL appears once.

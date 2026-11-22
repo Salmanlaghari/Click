@@ -2512,7 +2512,7 @@ fun CompactBrowseBar(
     // Suggestions show only while the user is actually editing the bar —
     // not when it merely displays the current page's URL.
     var barFocused by remember { mutableStateOf(false) }
-    val editingBar = barFocused && textInput.isNotBlank() && textInput != currentUrl
+    val editingBar = barFocused && textInput.isNotBlank()
     val suggestions = rememberSearchSuggestions(textInput, editingBar, searchEngine, historyItems)
     val pickSuggestion: (SearchSuggestion) -> Unit = { suggestion ->
         val target = suggestion.url ?: suggestion.text
@@ -2740,6 +2740,7 @@ fun CompactBrowseBar(
                             value = textInput,
                             onValueChange = { textInput = it },
                             singleLine = true,
+                            maxLines = 1,
                             textStyle = androidx.compose.ui.text.TextStyle(
                                 fontSize = 13.sp,
                                 color = theme.onSurface
@@ -2875,6 +2876,7 @@ fun CompactBrowseBar(
                             value = textInput,
                             onValueChange = { textInput = it },
                             singleLine = true,
+                            maxLines = 1,
                             textStyle = androidx.compose.ui.text.TextStyle(
                                 fontSize = 14.sp,
                                 color = theme.onSurface
