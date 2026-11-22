@@ -6070,6 +6070,17 @@ class MainActivity : FragmentActivity() {
                                                             super.doUpdateVisitedHistory(view, url, isReload)
                                                             val target = view ?: return
                                                             val updatedTab = tabs.firstOrNull { it.webView === target } ?: return
+                                                            // History can grow while the URL stays
+                                                            // the same (same-URL pushState): always
+                                                            // resync the back/forward affordances
+                                                            // from the view. This must not sit
+                                                            // behind the DevTools gate below — with
+                                                            // it there, the toolbar Back button
+                                                            // stayed disabled on such pages while
+                                                            // the system back key (which queries
+                                                            // the view live) still worked.
+                                                            updatedTab.canGoBack = target.canGoBack()
+                                                            updatedTab.canGoForward = target.canGoForward()
                                                             val updatedUrl = url ?: target.url.orEmpty()
                                                             if (!DevToolsInspectionPolicy.shouldResetPageSessionForUrlChange(updatedTab.url, updatedUrl)) return
                                                             if (updatedTab === currentTab && showDevToolsSheet) {
@@ -6087,8 +6098,6 @@ class MainActivity : FragmentActivity() {
                                                                 devToolsDeviceInfo = null
                                                             }
                                                             updatedTab.url = updatedUrl
-                                                            updatedTab.canGoBack = target.canGoBack()
-                                                            updatedTab.canGoForward = target.canGoForward()
                                                         }
 
                                                         override fun onPageFinished(view: WebView?, url: String?) {

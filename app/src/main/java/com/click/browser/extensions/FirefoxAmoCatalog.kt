@@ -123,6 +123,9 @@ internal object FirefoxAmoCatalog {
     const val GECKOVIEW_ANDROID_COMPAT_VERSION = "153.0"
     const val CATALOG_ASSET_PATH = "extensions/amo_safe_catalog.json"
 
+    // @Volatile: written by the background parse (ClickApplication starts
+    // it on IO) and read from the main thread by the Extensions hub, so
+    // the parsed catalog is safely published across threads.
     @Volatile
     private var bundledCatalog: BundledAmoCatalog = BundledAmoCatalog(emptyList(), emptyList())
 
