@@ -2955,6 +2955,226 @@ class MainActivity : FragmentActivity() {
             fun currentTabCanRequestDevTools(): Boolean =
                 currentTabHasLoadedWebPage()
 
+            // ---- DevTools on Gecko tabs (B2, bridge-served) ----------------
+
+            fun currentGeckoDevToolsSession(): org.mozilla.geckoview.GeckoSession? =
+                (currentTab.browserSession as? GeckoBrowserTabSession)?.session
+
+            /** Gecko counterpart of canInspectDevToolsPage: same discipline
+             *  (panel open, Developer mode, right panel tab, loaded
+             *  inspectable page), keyed on the tab instead of a WebView. */
+            fun canInspectGeckoDevToolsPage(expectedTab: Int): Boolean =
+                showDevToolsSheet && devToolsTargetIsGecko &&
+                    DevToolsAvailabilityPolicy.canCaptureGecko(activeMode, currentTab.engine) &&
+                    devToolsTab == expectedTab && currentTabHasLoadedWebPage()
+
+            /** Opens the DevTools sheet on the current Gecko tab, served
+             *  by the bridge extension. Mirrors the WebView open path's
+             *  state reset; never switches engines or modes. */
+            fun openGeckoDevToolsPanel() {
+                val session = currentGeckoDevToolsSession()
+                if (session == null) {
+                    Toast.makeText(
+                        this@MainActivity,
+                        "The page view is still starting. Wait a moment, then reopen DevTools.",
+                        Toast.LENGTH_LONG
+                    ).show()
+                    return
+                }
+                invalidateDevToolsSession()
+                devToolsConsoleMessagesConsent = false
+                devToolsCaptureEnabled = false
+                devToolsConsoleCaptureEnabled = false
+                devToolsTargetWebView = null
+                devToolsLogs.clear()
+                devToolsNetwork.clear()
+                devToolsSources.clear()
+                devToolsDomSnapshot = null
+                devToolsSelectedNodePath = null
+                devToolsSelectedStyles = null
+                devToolsDeviceInfo = null
+                devToolsTab = 0
+                devToolsTargetIsGecko = true
+                devToolsTargetGeckoSession = session
+                com.click.browser.engine.DevToolsBridge.consoleListener = { entrySession, entry ->
+                    if (entrySession === devToolsTargetGeckoSession) {
+                        addDevToolsGeckoLog(entry, entrySession, devToolsConsoleCaptureGeneration)
+                    }
+                }
+                showDevToolsSheet = true
+            }
+
+            /** True while a bridge callback still belongs to the panel's
+             *  current Gecko target (same tab, same URL, same panel tab,
+             *  same session generation). */
+            fun isCurrentGeckoDevToolsResult(
+                capturedGeneration: Long,
+                capturedTabId: String,
+                capturedUrl: String,
+                expectedTab: Int
+            ): Boolean = capturedGeneration == devToolsSessionGeneration &&
+                showDevToolsSheet && devToolsTargetIsGecko &&
+                currentTab.id == capturedTabId && currentTab.url == capturedUrl &&
+                devToolsTab == expectedTab
+
+            fun refreshGeckoDevToolsPageSnapshot() {
+                val session = currentGeckoDevToolsSession()
+                if (!canInspectGeckoDevToolsPage(expectedTab = 0) || session == null) {
+                    devToolsDomSnapshot = null
+                    devToolsSelectedNodePath = null
+                    devToolsSelectedStyles = null
+                    return
+                }
+                val tabId = currentTab.id
+                val pageUrl = currentTab.url
+                val generation = devToolsSessionGeneration
+                com.click.browser.engine.DevToolsBridge.evaluate(
+                    session, DevToolsInspectionPolicy.domSnapshotScript
+                ) { result ->
+                    if (isCurrentGeckoDevToolsResult(generation, tabId, pageUrl, expectedTab = 0)) {
+                        val snapshot = DevToolsInspectionPolicy.parseDomSnapshot(result)
+                        devToolsDomSnapshot = snapshot
+                        val selectedPath = devToolsSelectedNodePath
+                        fun containsPath(node: DevToolsDomNode?): Boolean = node != null &&
+                            (node.path == selectedPath || node.children.any { containsPath(it) })
+                        if (selectedPath != null && !containsPath(snapshot.root)) {
+                            devToolsSelectedNodePath = null
+                            devToolsSelectedStyles = null
+                        }
+                    }
+                }
+            }
+
+            fun refreshGeckoDevToolsSources() {
+                val session = currentGeckoDevToolsSession()
+                if (!canInspectGeckoDevToolsPage(expectedTab = 3) || session == null) {
+                    devToolsSources.clear()
+                    return
+                }
+                val tabId = currentTab.id
+                val pageUrl = currentTab.url
+                val generation = devToolsSessionGeneration
+                com.click.browser.engine.DevToolsBridge.evaluate(
+                    session, DevToolsInspectionPolicy.sourceReferencesScript
+                ) { result ->
+                    if (isCurrentGeckoDevToolsResult(generation, tabId, pageUrl, expectedTab = 3)) {
+                        val sources = DevToolsInspectionPolicy.parseSourceReferences(result)
+                        devToolsSources.clear()
+                        devToolsSources.addAll(sources)
+                    }
+                }
+            }
+
+            fun inspectGeckoDevToolsRenderedDom() {
+                val session = currentGeckoDevToolsSession()
+                if (!canInspectGeckoDevToolsPage(expectedTab = 3) || session == null) {
+                    devToolsRenderedDomMarkup = null
+                    devToolsRenderedDomLoading = false
+                    return
+                }
+                val tabId = currentTab.id
+                val pageUrl = currentTab.url
+                val generation = devToolsSessionGeneration
+                devToolsRenderedDomLoading = true
+                com.click.browser.engine.DevToolsBridge.evaluate(
+                    session, DevToolsInspectionPolicy.renderedDomSourceScript
+                ) { result ->
+                    if (isCurrentGeckoDevToolsResult(generation, tabId, pageUrl, expectedTab = 3)) {
+                        devToolsRenderedDomMarkup = DevToolsInspectionPolicy.parseRenderedDomSource(result)
+                            ?: "Rendered DOM could not be read for this page."
+                        devToolsRenderedDomLoading = false
+                    }
+                }
+            }
+
+            fun selectGeckoDevToolsNode(path: List<Int>) {
+                val session = currentGeckoDevToolsSession()
+                val script = DevToolsInspectionPolicy.buildComputedStylesScript(path)
+                if (script == null || session == null ||
+                    !canInspectGeckoDevToolsPage(expectedTab = 0)
+                ) return
+                val tabId = currentTab.id
+                val pageUrl = currentTab.url
+                val generation = devToolsSessionGeneration
+                devToolsSelectedNodePath = path.toList()
+                devToolsSelectedStyles = null
+                com.click.browser.engine.DevToolsBridge.evaluate(session, script) { result ->
+                    if (isCurrentGeckoDevToolsResult(generation, tabId, pageUrl, expectedTab = 0) &&
+                        devToolsSelectedNodePath == path
+                    ) {
+                        devToolsSelectedStyles = DevToolsInspectionPolicy.parseComputedStyles(result)
+                    }
+                }
+            }
+
+            fun runGeckoDevToolsConsoleCommand(command: String, onResult: (String) -> Unit) {
+                val session = currentGeckoDevToolsSession()
+                val script = DevToolsInspectionPolicy.buildConsoleEvaluationScript(command)
+                if (script == null) {
+                    onResult("Enter a command first.")
+                    return
+                }
+                if (session == null || !canInspectGeckoDevToolsPage(expectedTab = 1)) {
+                    onResult("Console is no longer active for this page.")
+                    return
+                }
+                val tabId = currentTab.id
+                val pageUrl = currentTab.url
+                val generation = devToolsSessionGeneration
+                com.click.browser.engine.DevToolsBridge.evaluate(session, script) { result ->
+                    if (isCurrentGeckoDevToolsResult(generation, tabId, pageUrl, expectedTab = 1)) {
+                        onResult(DevToolsInspectionPolicy.parseConsoleResult(result))
+                    }
+                }
+            }
+
+            fun refreshGeckoDevToolsDeviceInfo() {
+                val session = currentGeckoDevToolsSession()
+                if (!canInspectGeckoDevToolsPage(expectedTab = 4) || session == null) {
+                    devToolsDeviceInfo = null
+                    return
+                }
+                val tabId = currentTab.id
+                val pageUrl = currentTab.url
+                val generation = devToolsSessionGeneration
+                val script = """(function(){
+                        try {
+                            return JSON.stringify({
+                                viewport: window.innerWidth + 'x' + window.innerHeight,
+                                dpr: String(window.devicePixelRatio || '?'),
+                                ua: navigator.userAgent || '',
+                                screen: screen.width + 'x' + screen.height,
+                                platform: navigator.platform || '',
+                                lang: navigator.language || '',
+                                touch: ('ontouchstart' in window) ? 'yes' : 'no',
+                                cookies: navigator.cookieEnabled ? 'yes' : 'no'
+                            });
+                        } catch(e) { return '{}'; }
+                    })()"""
+                com.click.browser.engine.DevToolsBridge.evaluate(session, script) { result ->
+                    if (!isCurrentGeckoDevToolsResult(generation, tabId, pageUrl, expectedTab = 4)) {
+                        return@evaluate
+                    }
+                    devToolsDeviceInfo = if (result.orEmpty().length > 8_192) null else try {
+                        val inner = if (result.isNullOrBlank() || result == "null") "{}"
+                        else org.json.JSONArray("[$result]").optString(0, "{}")
+                        val json = org.json.JSONObject(inner)
+                        DeviceInfo(
+                            viewport = json.optString("viewport"),
+                            devicePixelRatio = json.optString("dpr"),
+                            userAgent = json.optString("ua"),
+                            screenSize = json.optString("screen"),
+                            platform = json.optString("platform"),
+                            language = json.optString("lang"),
+                            touchSupport = json.optString("touch"),
+                            cookiesEnabled = json.optString("cookies")
+                        )
+                    } catch (_: Exception) {
+                        null
+                    }
+                }
+            }
+
             fun requestDevToolsForCurrentTab() {
                 if (activeMode != BrowserMode.DEVELOPER) {
                     Toast.makeText(this@MainActivity, "DevTools is only available in Developer mode.", Toast.LENGTH_LONG).show()
@@ -4010,226 +4230,6 @@ class MainActivity : FragmentActivity() {
                 } catch (_: IllegalStateException) {
                     if (devToolsSessionGeneration == sessionGeneration) {
                         onResult("The current page is no longer available.")
-                    }
-                }
-            }
-
-            // ---- DevTools on Gecko tabs (B2, bridge-served) ----------------
-
-            fun currentGeckoDevToolsSession(): org.mozilla.geckoview.GeckoSession? =
-                (currentTab.browserSession as? GeckoBrowserTabSession)?.session
-
-            /** Gecko counterpart of canInspectDevToolsPage: same discipline
-             *  (panel open, Developer mode, right panel tab, loaded
-             *  inspectable page), keyed on the tab instead of a WebView. */
-            fun canInspectGeckoDevToolsPage(expectedTab: Int): Boolean =
-                showDevToolsSheet && devToolsTargetIsGecko &&
-                    DevToolsAvailabilityPolicy.canCaptureGecko(activeMode, currentTab.engine) &&
-                    devToolsTab == expectedTab && currentTabHasLoadedWebPage()
-
-            /** Opens the DevTools sheet on the current Gecko tab, served
-             *  by the bridge extension. Mirrors the WebView open path's
-             *  state reset; never switches engines or modes. */
-            fun openGeckoDevToolsPanel() {
-                val session = currentGeckoDevToolsSession()
-                if (session == null) {
-                    Toast.makeText(
-                        this@MainActivity,
-                        "The page view is still starting. Wait a moment, then reopen DevTools.",
-                        Toast.LENGTH_LONG
-                    ).show()
-                    return
-                }
-                invalidateDevToolsSession()
-                devToolsConsoleMessagesConsent = false
-                devToolsCaptureEnabled = false
-                devToolsConsoleCaptureEnabled = false
-                devToolsTargetWebView = null
-                devToolsLogs.clear()
-                devToolsNetwork.clear()
-                devToolsSources.clear()
-                devToolsDomSnapshot = null
-                devToolsSelectedNodePath = null
-                devToolsSelectedStyles = null
-                devToolsDeviceInfo = null
-                devToolsTab = 0
-                devToolsTargetIsGecko = true
-                devToolsTargetGeckoSession = session
-                com.click.browser.engine.DevToolsBridge.consoleListener = { entrySession, entry ->
-                    if (entrySession === devToolsTargetGeckoSession) {
-                        addDevToolsGeckoLog(entry, entrySession, devToolsConsoleCaptureGeneration)
-                    }
-                }
-                showDevToolsSheet = true
-            }
-
-            /** True while a bridge callback still belongs to the panel's
-             *  current Gecko target (same tab, same URL, same panel tab,
-             *  same session generation). */
-            fun isCurrentGeckoDevToolsResult(
-                capturedGeneration: Long,
-                capturedTabId: String,
-                capturedUrl: String,
-                expectedTab: Int
-            ): Boolean = capturedGeneration == devToolsSessionGeneration &&
-                showDevToolsSheet && devToolsTargetIsGecko &&
-                currentTab.id == capturedTabId && currentTab.url == capturedUrl &&
-                devToolsTab == expectedTab
-
-            fun refreshGeckoDevToolsPageSnapshot() {
-                val session = currentGeckoDevToolsSession()
-                if (!canInspectGeckoDevToolsPage(expectedTab = 0) || session == null) {
-                    devToolsDomSnapshot = null
-                    devToolsSelectedNodePath = null
-                    devToolsSelectedStyles = null
-                    return
-                }
-                val tabId = currentTab.id
-                val pageUrl = currentTab.url
-                val generation = devToolsSessionGeneration
-                com.click.browser.engine.DevToolsBridge.evaluate(
-                    session, DevToolsInspectionPolicy.domSnapshotScript
-                ) { result ->
-                    if (isCurrentGeckoDevToolsResult(generation, tabId, pageUrl, expectedTab = 0)) {
-                        val snapshot = DevToolsInspectionPolicy.parseDomSnapshot(result)
-                        devToolsDomSnapshot = snapshot
-                        val selectedPath = devToolsSelectedNodePath
-                        fun containsPath(node: DevToolsDomNode?): Boolean = node != null &&
-                            (node.path == selectedPath || node.children.any { containsPath(it) })
-                        if (selectedPath != null && !containsPath(snapshot.root)) {
-                            devToolsSelectedNodePath = null
-                            devToolsSelectedStyles = null
-                        }
-                    }
-                }
-            }
-
-            fun refreshGeckoDevToolsSources() {
-                val session = currentGeckoDevToolsSession()
-                if (!canInspectGeckoDevToolsPage(expectedTab = 3) || session == null) {
-                    devToolsSources.clear()
-                    return
-                }
-                val tabId = currentTab.id
-                val pageUrl = currentTab.url
-                val generation = devToolsSessionGeneration
-                com.click.browser.engine.DevToolsBridge.evaluate(
-                    session, DevToolsInspectionPolicy.sourceReferencesScript
-                ) { result ->
-                    if (isCurrentGeckoDevToolsResult(generation, tabId, pageUrl, expectedTab = 3)) {
-                        val sources = DevToolsInspectionPolicy.parseSourceReferences(result)
-                        devToolsSources.clear()
-                        devToolsSources.addAll(sources)
-                    }
-                }
-            }
-
-            fun inspectGeckoDevToolsRenderedDom() {
-                val session = currentGeckoDevToolsSession()
-                if (!canInspectGeckoDevToolsPage(expectedTab = 3) || session == null) {
-                    devToolsRenderedDomMarkup = null
-                    devToolsRenderedDomLoading = false
-                    return
-                }
-                val tabId = currentTab.id
-                val pageUrl = currentTab.url
-                val generation = devToolsSessionGeneration
-                devToolsRenderedDomLoading = true
-                com.click.browser.engine.DevToolsBridge.evaluate(
-                    session, DevToolsInspectionPolicy.renderedDomSourceScript
-                ) { result ->
-                    if (isCurrentGeckoDevToolsResult(generation, tabId, pageUrl, expectedTab = 3)) {
-                        devToolsRenderedDomMarkup = DevToolsInspectionPolicy.parseRenderedDomSource(result)
-                            ?: "Rendered DOM could not be read for this page."
-                        devToolsRenderedDomLoading = false
-                    }
-                }
-            }
-
-            fun selectGeckoDevToolsNode(path: List<Int>) {
-                val session = currentGeckoDevToolsSession()
-                val script = DevToolsInspectionPolicy.buildComputedStylesScript(path)
-                if (script == null || session == null ||
-                    !canInspectGeckoDevToolsPage(expectedTab = 0)
-                ) return
-                val tabId = currentTab.id
-                val pageUrl = currentTab.url
-                val generation = devToolsSessionGeneration
-                devToolsSelectedNodePath = path.toList()
-                devToolsSelectedStyles = null
-                com.click.browser.engine.DevToolsBridge.evaluate(session, script) { result ->
-                    if (isCurrentGeckoDevToolsResult(generation, tabId, pageUrl, expectedTab = 0) &&
-                        devToolsSelectedNodePath == path
-                    ) {
-                        devToolsSelectedStyles = DevToolsInspectionPolicy.parseComputedStyles(result)
-                    }
-                }
-            }
-
-            fun runGeckoDevToolsConsoleCommand(command: String, onResult: (String) -> Unit) {
-                val session = currentGeckoDevToolsSession()
-                val script = DevToolsInspectionPolicy.buildConsoleEvaluationScript(command)
-                if (script == null) {
-                    onResult("Enter a command first.")
-                    return
-                }
-                if (session == null || !canInspectGeckoDevToolsPage(expectedTab = 1)) {
-                    onResult("Console is no longer active for this page.")
-                    return
-                }
-                val tabId = currentTab.id
-                val pageUrl = currentTab.url
-                val generation = devToolsSessionGeneration
-                com.click.browser.engine.DevToolsBridge.evaluate(session, script) { result ->
-                    if (isCurrentGeckoDevToolsResult(generation, tabId, pageUrl, expectedTab = 1)) {
-                        onResult(DevToolsInspectionPolicy.parseConsoleResult(result))
-                    }
-                }
-            }
-
-            fun refreshGeckoDevToolsDeviceInfo() {
-                val session = currentGeckoDevToolsSession()
-                if (!canInspectGeckoDevToolsPage(expectedTab = 4) || session == null) {
-                    devToolsDeviceInfo = null
-                    return
-                }
-                val tabId = currentTab.id
-                val pageUrl = currentTab.url
-                val generation = devToolsSessionGeneration
-                val script = """(function(){
-                        try {
-                            return JSON.stringify({
-                                viewport: window.innerWidth + 'x' + window.innerHeight,
-                                dpr: String(window.devicePixelRatio || '?'),
-                                ua: navigator.userAgent || '',
-                                screen: screen.width + 'x' + screen.height,
-                                platform: navigator.platform || '',
-                                lang: navigator.language || '',
-                                touch: ('ontouchstart' in window) ? 'yes' : 'no',
-                                cookies: navigator.cookieEnabled ? 'yes' : 'no'
-                            });
-                        } catch(e) { return '{}'; }
-                    })()"""
-                com.click.browser.engine.DevToolsBridge.evaluate(session, script) { result ->
-                    if (!isCurrentGeckoDevToolsResult(generation, tabId, pageUrl, expectedTab = 4)) {
-                        return@evaluate
-                    }
-                    devToolsDeviceInfo = if (result.orEmpty().length > 8_192) null else try {
-                        val inner = if (result.isNullOrBlank() || result == "null") "{}"
-                        else org.json.JSONArray("[$result]").optString(0, "{}")
-                        val json = org.json.JSONObject(inner)
-                        DeviceInfo(
-                            viewport = json.optString("viewport"),
-                            devicePixelRatio = json.optString("dpr"),
-                            userAgent = json.optString("ua"),
-                            screenSize = json.optString("screen"),
-                            platform = json.optString("platform"),
-                            language = json.optString("lang"),
-                            touchSupport = json.optString("touch"),
-                            cookiesEnabled = json.optString("cookies")
-                        )
-                    } catch (_: Exception) {
-                        null
                     }
                 }
             }
