@@ -10,27 +10,27 @@ class PrivateBrowsingDisclosurePolicyTest {
     fun engineCopyMatchesRegularAndPrivateTabDefaults() {
         val copy = PrivateBrowsingDisclosurePolicy.engineDefaultsDescription()
 
-        assertTrue(copy.contains("Regular tabs use GeckoView by default"))
-        assertTrue(copy.contains("private tabs use Android System WebView"))
-        assertFalse(copy.contains("Regular tabs use Android System WebView by default"))
+        assertTrue(copy.contains("Regular and private tabs use GeckoView by default"))
+        assertTrue(copy.contains("private mode"))
+        assertFalse(copy.contains("Android System WebView"))
     }
 
     @Test
-    fun privateTabCopyDescribesExcludedRecordsAndPersistentWebViewData() {
+    fun privateTabCopyDescribesExcludedRecordsAndDiscardedPrivateStorage() {
         val copy = PrivateBrowsingDisclosurePolicy.privateTabStorageDescription
 
         assertTrue(copy.contains("not recorded in local history"))
         assertTrue(copy.contains("excluded from session restore"))
         assertTrue(copy.contains("Recent tabs"))
-        assertTrue(copy.contains(PrivateBrowsingDisclosurePolicy.profileWebViewStorageScopeDescription))
-        assertTrue(copy.contains("not a temporary private-only store"))
-        assertTrue(copy.contains("Closing a private tab does not clear those cookies or site data"))
-        assertTrue(copy.contains("may be available to other WebView tabs in the same profile"))
+        assertTrue(copy.contains("GeckoView private mode"))
+        assertTrue(copy.contains("separate from regular tabs"))
+        assertTrue(copy.contains("discarded when the private session ends"))
         assertTrue(copy.contains("Marking an existing tab private does not remove history or site data recorded before it was marked"))
-        assertTrue(copy.contains("Clear data on exit setting requests cleanup when Click closes"))
-        assertTrue(copy.contains("not a guaranteed wipe"))
         assertTrue(copy.contains("private tabs are not anonymous"))
-        assertFalse(copy.contains("private data is erased"))
+        // The old WebView truth must not survive: ending the private session
+        // DOES discard its storage now.
+        assertFalse(copy.contains("does not clear those cookies"))
+        assertFalse(copy.contains("not a temporary private-only store"))
     }
 
     @Test

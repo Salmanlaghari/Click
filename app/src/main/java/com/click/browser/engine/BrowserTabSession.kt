@@ -9,9 +9,16 @@ enum class BrowserTabEngine {
     GECKOVIEW
 }
 
-/** Regular tabs use GeckoView; private tabs stay on WebView until cleanup is verified. */
+/**
+ * Every tab defaults to GeckoView (1.8.7 overhaul, A-list #4). Private tabs
+ * previously stayed on the system WebView because its shared profile storage
+ * could not be cleaned up per tab — which also meant sites that refuse
+ * WebView sign-in broke in private tabs. Gecko sessions run with
+ * usePrivateMode for incognito tabs instead: storage is separate from
+ * regular tabs and is discarded with the private session.
+ */
 internal fun defaultBrowserTabEngine(isIncognito: Boolean): BrowserTabEngine =
-    if (isIncognito) BrowserTabEngine.WEBVIEW else BrowserTabEngine.GECKOVIEW
+    BrowserTabEngine.GECKOVIEW
 
 internal enum class GeckoRenderEvent {
     LOAD_STARTED,

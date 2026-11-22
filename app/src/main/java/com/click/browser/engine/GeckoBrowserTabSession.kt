@@ -151,7 +151,11 @@ internal class GeckoBrowserTabSession(
 ) : BrowserTabSession {
     private val contextId = geckoContextIdFor(mode)
     private val settings = GeckoSessionSettings.Builder()
-        .usePrivateMode(false)
+        // Private tabs get a real Gecko private session (A-list #4): cookies
+        // and site data stay separate from regular tabs and are discarded
+        // when the private session ends, instead of the old shared WebView
+        // profile storage that closing a tab never cleared.
+        .usePrivateMode(isIncognito)
         // Tracking protection follows the user's Protection level: the
         // per-session switch stays on unless the level is Off. The switch
         // is only a gate — the actual blocking is driven by the runtime's

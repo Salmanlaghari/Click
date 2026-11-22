@@ -3571,7 +3571,9 @@ class MainActivity : FragmentActivity() {
 
             fun replaceTabEngine(tab: TabItem, targetEngine: BrowserTabEngine): Boolean {
                 if (tab.engine == targetEngine) return true
-                if (targetEngine == BrowserTabEngine.GECKOVIEW && tab.isIncognito) return false
+                // Private tabs may use GeckoView too (A-list #4): the new
+                // session is created with usePrivateMode for incognito tabs.
+                // (This guard existed only while private tabs were WebView-only.)
 
                 val previousSession = tab.browserSession
                 val currentUrl = (previousSession as? WebViewBrowserTabSession)?.webView?.url
