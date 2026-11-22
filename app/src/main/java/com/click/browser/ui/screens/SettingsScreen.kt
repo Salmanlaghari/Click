@@ -141,6 +141,12 @@ fun SettingsScreen(
     val dataSaverAvailability = BrowserSettingCapabilityPolicy.availability(
         BrowserSetting.DATA_SAVER, currentTabEngine
     )
+    val textSizeAvailability = BrowserSettingCapabilityPolicy.availability(
+        BrowserSetting.TEXT_SIZE, currentTabEngine
+    )
+    val sharpViewAvailability = BrowserSettingCapabilityPolicy.availability(
+        BrowserSetting.SHARP_VIEW, currentTabEngine
+    )
 
     var showAiKey by remember { mutableStateOf(false) }
     // Internal page: "home" lists the sections; the other values render the
@@ -426,7 +432,11 @@ fun SettingsScreen(
                 CardRow(theme) {
                     Text("Text Size (Global Default)", color = theme.onSurface, fontWeight = FontWeight.SemiBold, fontSize = 14.sp)
                     Text(
-                        "Default text size for every website — override per site from the Text Size menu. Applies on next page load.",
+                        if (textSizeAvailability.enabled) {
+                            "Default text size for every website — override per site from the Text Size menu. Applies on next page load."
+                        } else {
+                            textSizeAvailability.description
+                        },
                         fontSize = 11.sp, color = theme.onSurface.copy(alpha = 0.6f)
                     )
                     Spacer(Modifier.height(4.dp))
@@ -446,6 +456,7 @@ fun SettingsScreen(
                             onValueChange = { onGlobalTextScaleChange(it.toInt()) },
                             valueRange = 50f..300f,
                             steps = 24,
+                            enabled = textSizeAvailability.enabled,
                             modifier = Modifier.weight(1f)
                         )
                     }
@@ -497,9 +508,16 @@ fun SettingsScreen(
                     )
                     HorizontalDivider(color = theme.onSurface.copy(alpha = 0.1f))
                     ToggleRow(
-                        "Sharp View",
-                        "Full-density page rendering for crisp text & images (applies on next page load)",
-                        sharpViewEnabled, onToggleSharpView, theme
+                        title = "Sharp View",
+                        desc = if (sharpViewAvailability.enabled) {
+                            "Full-density page rendering for crisp text & images (applies on next page load)"
+                        } else {
+                            sharpViewAvailability.description
+                        },
+                        checked = sharpViewEnabled,
+                        onCheckedChange = onToggleSharpView,
+                        theme = theme,
+                        enabled = sharpViewAvailability.enabled
                     )
                 }
             })

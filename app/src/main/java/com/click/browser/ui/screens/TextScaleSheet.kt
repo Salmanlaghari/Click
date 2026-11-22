@@ -59,8 +59,10 @@ fun TextScaleSheet(
     onScaleChange: (Int) -> Unit,
     onSaveForSite: (Boolean) -> Unit,
     onResetGlobal: () -> Unit,
-    onDismiss: () -> Unit
+    onDismiss: () -> Unit,
+    unavailableMessage: String? = null
 ) {
+    val controlsEnabled = unavailableMessage == null
     Dialog(onDismissRequest = onDismiss) {
         val maxDialogHeight = LocalConfiguration.current.screenHeightDp.dp * 0.85f
         Card(
@@ -85,6 +87,15 @@ fun TextScaleSheet(
                     color = theme.onSurface.copy(alpha = 0.6f),
                     fontSize = 12.sp
                 )
+                if (unavailableMessage != null) {
+                    Spacer(Modifier.height(8.dp))
+                    Text(
+                        unavailableMessage,
+                        color = MaterialTheme.colorScheme.error,
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.SemiBold
+                    )
+                }
                 Spacer(Modifier.height(12.dp))
                 Text(
                     "$currentScale%",
@@ -97,7 +108,10 @@ fun TextScaleSheet(
                     verticalAlignment = Alignment.CenterVertically,
                     modifier = Modifier.fillMaxWidth()
                 ) {
-                    IconButton(onClick = { onScaleChange(currentScale - TextScaleStore.STEP) }) {
+                    IconButton(
+                        onClick = { onScaleChange(currentScale - TextScaleStore.STEP) },
+                        enabled = controlsEnabled
+                    ) {
                         Icon(Icons.Default.ZoomOut, contentDescription = "Smaller", tint = theme.onSurface)
                     }
                     Slider(
@@ -105,9 +119,13 @@ fun TextScaleSheet(
                         onValueChange = { onScaleChange(it.toInt()) },
                         valueRange = TextScaleStore.MIN.toFloat()..TextScaleStore.MAX.toFloat(),
                         steps = (TextScaleStore.MAX - TextScaleStore.MIN) / TextScaleStore.STEP - 1,
+                        enabled = controlsEnabled,
                         modifier = Modifier.weight(1f)
                     )
-                    IconButton(onClick = { onScaleChange(currentScale + TextScaleStore.STEP) }) {
+                    IconButton(
+                        onClick = { onScaleChange(currentScale + TextScaleStore.STEP) },
+                        enabled = controlsEnabled
+                    ) {
                         Icon(Icons.Default.ZoomIn, contentDescription = "Larger", tint = theme.onSurface)
                     }
                 }
@@ -125,7 +143,7 @@ fun TextScaleSheet(
                             fontSize = 11.sp
                         )
                     }
-                    Switch(checked = hostHasOverride, onCheckedChange = onSaveForSite)
+                    Switch(checked = hostHasOverride, onCheckedChange = onSaveForSite, enabled = controlsEnabled)
                 }
                 Spacer(Modifier.height(12.dp))
                 Row(
@@ -134,6 +152,7 @@ fun TextScaleSheet(
                 ) {
                     OutlinedButton(
                         onClick = onResetGlobal,
+                        enabled = controlsEnabled,
                         modifier = Modifier.weight(1f)
                     ) { Text("Reset ($globalScale%)") }
                     Button(
