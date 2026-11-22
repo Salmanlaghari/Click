@@ -124,6 +124,10 @@ internal object FirefoxAmoCatalog {
     const val CATALOG_ASSET_PATH = "extensions/amo_safe_catalog.json"
 
     @Volatile
+    // Written by the background parse (ClickApplication starts it on IO)
+    // and read from the main thread by the Extensions hub — @Volatile so
+    // the parsed catalog is safely published across threads.
+    @Volatile
     private var bundledCatalog: BundledAmoCatalog = BundledAmoCatalog(emptyList(), emptyList())
 
     /** Loads the bundled catalog asset once; safe to call again (no-op after success). */

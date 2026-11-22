@@ -48,7 +48,13 @@ class ClickApplication : Application() {
         com.click.browser.engine.CrashReporter.install(this)
         // Load the bundled AMO catalog asset once so the Extensions hub shows
         // the full browsable catalog, not only the two curated quick picks.
-        runCatching { com.click.browser.extensions.FirefoxAmoCatalog.initialize(this) }
+        // The asset is a ~365 KB JSON file: reading and parsing it here on
+        // the main thread delayed the first frame on every cold start, so
+        // the parse moves to IO. initialize() is idempotent and the hub
+        // re-reads (and re-triggers) the catalog when it opens.
+        CoroutineScope(Dispatchers.IO).launch {
+            runCatching { com.click.browser.extensions.FirefoxAmoCatalog.initialize(this@ClickApplication) }
+        }
         // Background news alerts: re-schedule the battery-friendly periodic
         // check if the user previously opted in (default OFF).
         CoroutineScope(Dispatchers.IO).launch {

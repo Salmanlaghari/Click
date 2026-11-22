@@ -318,6 +318,18 @@ private fun ExtensionBrowserScreen(
     var popupTitle by remember { mutableStateOf("") }
     var extensionListLoaded by remember { mutableStateOf(false) }
     var showManager by remember { mutableStateOf(openManagerOnStart) }
+    // The bundled catalog parses on a background thread at process start;
+    // re-read it when the manager opens so an early open never shows only
+    // the quick picks, and trigger the parse here too if it has not run.
+    var catalogEntries by remember { mutableStateOf(FirefoxAmoCatalog.entries) }
+    LaunchedEffect(showManager) {
+        if (showManager) {
+            withContext(Dispatchers.IO) {
+                runCatching { FirefoxAmoCatalog.initialize(context) }
+            }
+            catalogEntries = FirefoxAmoCatalog.entries
+        }
+    }
     var removeTarget by remember { mutableStateOf<WebExtension?>(null) }
     var pendingPrompt by remember { mutableStateOf<PendingExtensionPrompt?>(null) }
     var pageInstallConfirmation by remember { mutableStateOf<FirefoxAmoCatalogEntry?>(null) }
@@ -982,7 +994,7 @@ private fun ExtensionBrowserScreen(
         ExtensionManagerDialog(
             extensions = installedExtensions,
             installedExtensionIds = installedExtensionIds,
-            catalogEntries = FirefoxAmoCatalog.entries,
+            catalogEntries = catalogEntries,
             isImportEnabled = extensionListLoaded,
             installingCatalogSlug = installingCatalogSlug,
             updatingExtensionId = updatingExtensionId,
