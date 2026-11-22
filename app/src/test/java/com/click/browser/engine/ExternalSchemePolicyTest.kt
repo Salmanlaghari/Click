@@ -117,6 +117,22 @@ class ExternalSchemePolicyTest {
         assertFalse(ExternalSchemePolicy.shouldLetRedirectPassThrough("file:///etc/passwd"))
     }
 
+    // ---- "Open in app" page check ----
+
+    @Test
+    fun onlyHttpAndHttpsPagesAreAppOpenable() {
+        assertTrue(ExternalSchemePolicy.isAppOpenablePage("https://example.com/page"))
+        assertTrue(ExternalSchemePolicy.isAppOpenablePage("http://example.com/page"))
+        assertTrue(ExternalSchemePolicy.isAppOpenablePage("HTTPS://EXAMPLE.COM/PAGE"))
+        assertFalse(ExternalSchemePolicy.isAppOpenablePage("about:blank"))
+        assertFalse(ExternalSchemePolicy.isAppOpenablePage("click://flags"))
+        assertFalse(ExternalSchemePolicy.isAppOpenablePage("intent://x#Intent;end"))
+        assertFalse(ExternalSchemePolicy.isAppOpenablePage("tiktok://user/@x"))
+        assertFalse(ExternalSchemePolicy.isAppOpenablePage("file:///etc/passwd"))
+        assertFalse(ExternalSchemePolicy.isAppOpenablePage("example.com/no-scheme"))
+        assertFalse(ExternalSchemePolicy.isAppOpenablePage(""))
+    }
+
     // ---- intent URI parsing ----
 
     @Test

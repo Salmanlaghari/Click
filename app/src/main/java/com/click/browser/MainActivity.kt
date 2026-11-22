@@ -972,6 +972,41 @@ class MainActivity : FragmentActivity() {
         }
     }
 
+    /**
+     * "Open in app" menu action: hands the current web page to another
+     * installed app — the site's own app when it claims the link, or
+     * another browser. Click itself is excluded from the chooser so the
+     * page can never bounce straight back into Click.
+     */
+    private fun openPageInExternalApp(url: String) {
+        if (!ExternalSchemePolicy.isAppOpenablePage(url)) {
+            Toast.makeText(this, "Open a web page first to open it in an app.", Toast.LENGTH_SHORT).show()
+            return
+        }
+        val viewIntent = Intent(Intent.ACTION_VIEW, android.net.Uri.parse(url))
+            .addCategory(Intent.CATEGORY_BROWSABLE)
+        val handlers = runCatching {
+            packageManager.queryIntentActivities(viewIntent, PackageManager.MATCH_ALL)
+        }.getOrDefault(emptyList())
+        if (handlers.none { it.activityInfo.packageName != packageName }) {
+            Toast.makeText(this, "No other app can open this page.", Toast.LENGTH_SHORT).show()
+            return
+        }
+        val ownComponents = handlers
+            .filter { it.activityInfo.packageName == packageName }
+            .map { android.content.ComponentName(it.activityInfo.packageName, it.activityInfo.name) }
+            .toTypedArray()
+        val chooser = Intent.createChooser(viewIntent, "Open in app").apply {
+            if (ownComponents.isNotEmpty()) {
+                putExtra(Intent.EXTRA_EXCLUDE_COMPONENTS, ownComponents)
+            }
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        }
+        runCatching { startActivity(chooser) }.onFailure {
+            Toast.makeText(this, "Couldn't open another app for this page.", Toast.LENGTH_SHORT).show()
+        }
+    }
+
     /** Applies the privacy toggles to a WebView's settings. Idempotent. */    private fun applyPrivacyToggles(
         webView: WebView,
         httpsMode: String = liveHttpsMode,
@@ -2991,6 +3026,9 @@ class MainActivity : FragmentActivity() {
                             }
                             startActivity(Intent.createChooser(share, "Share page via"))
                         }
+                    }
+                    FeatureId.OPEN_IN_APP -> {
+                        this@MainActivity.openPageInExternalApp(currentTab.url)
                     }
                     FeatureId.FIND_IN_PAGE -> {
                         findQuery = ""
@@ -10196,6 +10234,10 @@ class MainActivity : FragmentActivity() {
                                             }
                                             startActivity(Intent.createChooser(share, "Share page via"))
                                         }
+                                    },
+                                    onOpenInApp = {
+                                        showBrowserMenu = false
+                                        this@MainActivity.openPageInExternalApp(currentTab.url)
                                     },
                                     onFindInPage = {
                                         showBrowserMenu = false

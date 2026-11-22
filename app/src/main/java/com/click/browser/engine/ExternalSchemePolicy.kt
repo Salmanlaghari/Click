@@ -130,6 +130,16 @@ object ExternalSchemePolicy {
     fun isIntentUri(rawUrl: String): Boolean = schemeOf(rawUrl) == "intent"
 
     /**
+     * True for ordinary web pages the "Open in app" menu action can hand to
+     * another installed app. Internal pages (about:, click://) and app
+     * schemes are not pages another app can meaningfully open from a menu.
+     */
+    fun isAppOpenablePage(rawUrl: String): Boolean {
+        val scheme = schemeOf(rawUrl) ?: return false
+        return scheme == "http" || scheme == "https"
+    }
+
+    /**
      * The web fallback an `intent://` URI carries in its
      * `S.browser_fallback_url` extra — where the user should land when no
      * app can take the intent. Null for non-intent URIs and when absent.

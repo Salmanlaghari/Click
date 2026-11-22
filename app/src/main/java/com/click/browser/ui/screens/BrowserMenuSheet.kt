@@ -77,6 +77,7 @@ fun BrowserMenuSheet(
     onGames: () -> Unit,
     onRecentTabs: () -> Unit,
     onShare: () -> Unit,
+    onOpenInApp: () -> Unit = {},
     onFindInPage: () -> Unit,
     onTranslate: () -> Unit,
     onToggleDesktopSite: () -> Unit,
@@ -186,6 +187,10 @@ fun BrowserMenuSheet(
                                 label = "Share…", onClick = onShare
                             )
                         }
+                        MenuCustomization.MenuItemId.OPEN_IN_APP -> MenuRow(
+                            theme = theme, icon = Icons.Default.OpenInNew,
+                            label = "Open in app", onClick = onOpenInApp
+                        )
                         MenuCustomization.MenuItemId.FIND_IN_PAGE -> MenuRow(
                             theme = theme, icon = Icons.Default.Search,
                             label = "Find in page", onClick = onFindInPage
