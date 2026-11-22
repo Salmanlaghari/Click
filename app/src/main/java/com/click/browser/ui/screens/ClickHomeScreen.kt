@@ -698,11 +698,6 @@ private fun ModeFocusCard(
     }
 }
 
-/** Pill search bar: selected search-provider mark · hint · mic. (QR scanner removed: no CameraX /
- * MLKit-barcode stack in the app — the button only showed a "coming soon"
- * toast, so the dead control is gone instead of fake.) */
-@OptIn(ExperimentalMaterial3Api::class)
-@Composable
 /**
  * Live suggestion state for one search/address field: instant local history
  * matches first, then the selected engine's remote phrases after a short
@@ -784,6 +779,11 @@ private fun SearchSuggestionList(
     }
 }
 
+/** Pill search bar: selected search-provider mark · hint · mic. (QR scanner removed: no CameraX /
+ * MLKit-barcode stack in the app — the button only showed a "coming soon"
+ * toast, so the dead control is gone instead of fake.) */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
 private fun SmartSearchBar(
     theme: ModeTheme,
     activeMode: BrowserMode,
