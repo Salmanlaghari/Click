@@ -983,12 +983,26 @@ class MainActivity : FragmentActivity() {
             Toast.makeText(this, "Open a web page first to open it in an app.", Toast.LENGTH_SHORT).show()
             return
         }
-        val viewIntent = Intent(Intent.ACTION_VIEW, android.net.Uri.parse(url))
+        val parsedUri = runCatching { android.net.Uri.parse(url) }.getOrNull()
+        if (parsedUri == null) {
+            Toast.makeText(this, "This page can't be opened in an app.", Toast.LENGTH_SHORT).show()
+            return
+        }
+        val viewIntent = Intent(Intent.ACTION_VIEW, parsedUri)
             .addCategory(Intent.CATEGORY_BROWSABLE)
         val handlers = runCatching {
-            packageManager.queryIntentActivities(viewIntent, PackageManager.MATCH_ALL)
+            if (android.os.Build.VERSION.SDK_INT >= 33) {
+                packageManager.queryIntentActivities(
+                    viewIntent,
+                    PackageManager.ResolveInfoFlags.of(PackageManager.MATCH_ALL.toLong())
+                )
+            } else {
+                @Suppress("DEPRECATION")
+                packageManager.queryIntentActivities(viewIntent, PackageManager.MATCH_ALL)
+            }
         }.getOrDefault(emptyList())
-        if (handlers.none { it.activityInfo.packageName != packageName }) {
+        val externalHandlers = handlers.filter { it.activityInfo.packageName != packageName }
+        if (externalHandlers.isEmpty()) {
             Toast.makeText(this, "No other app can open this page.", Toast.LENGTH_SHORT).show()
             return
         }
