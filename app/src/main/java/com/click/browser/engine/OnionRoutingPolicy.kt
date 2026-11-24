@@ -19,17 +19,21 @@ object OnionRoutingPolicy {
     /** True when [host] is an onion service address (any subdomain depth). */
     fun isOnionHost(host: String?): Boolean {
         val h = host?.lowercase()?.trim()?.trimEnd('.') ?: return false
-        // Bare "onion" is not a service — only the .onion suffix counts.
+        // Bare "onion" is not a service: real onion addresses are a 56-char
+        // v3 name plus the ".onion" suffix, so only the suffix counts.
         return h.endsWith(".onion")
     }
 
     /** True for http(s) URLs whose host is an onion service. */
     fun isOnionUrl(url: String): Boolean {
-        // Scheme check is case-insensitive — "HTTP://x.onion" is onion too.
-        val u = url.trim().lowercase()
-        if (!u.startsWith("http://") && !u.startsWith("https://")) return false
+        // Scheme check is case-insensitive, but parse the ORIGINAL url —
+        // lowercasing the whole thing would corrupt case-sensitive
+        // path/query data; only the host is case-insensitive.
+        val trimmed = url.trim()
+        val lower = trimmed.lowercase()
+        if (!lower.startsWith("http://") && !lower.startsWith("https://")) return false
         val host = try {
-            java.net.URI(u).host
+            java.net.URI(trimmed).host
         } catch (_: Exception) {
             null
         }

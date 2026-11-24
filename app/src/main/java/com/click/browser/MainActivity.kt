@@ -6270,7 +6270,10 @@ class MainActivity : FragmentActivity() {
                                                                     // Held onion offer is moot once this tab
                                                                     // navigates elsewhere — clear it so the sheet
                                                                     // never reappears over an unrelated page.
-                                                                    if (ownerTab != null && ownerTab.id == currentTab.id) onionOfferUrl = null
+                                                                    // Same condition as the Gecko delegate (the
+                                                                    // navigating tab is the active tab), spelled
+                                                                    // the same way in all three callbacks.
+                                                                    if (tabs.getOrNull(activeTabIndex)?.id == ownerTab?.id) onionOfferUrl = null
                                                                     // PDF: offer in-app viewing instead of navigating.
                                                                     if (isPdfUrl(urlStr)) {
                                                                         pdfOfferUrl = urlStr
@@ -6402,7 +6405,10 @@ class MainActivity : FragmentActivity() {
                                                                     // Held onion offer is moot once this tab
                                                                     // navigates elsewhere — clear it so the sheet
                                                                     // never reappears over an unrelated page.
-                                                                    if (ownerTab != null && ownerTab.id == currentTab.id) onionOfferUrl = null
+                                                                    // Same condition as the Gecko delegate (the
+                                                                    // navigating tab is the active tab), spelled
+                                                                    // the same way in all three callbacks.
+                                                                    if (tabs.getOrNull(activeTabIndex)?.id == ownerTab?.id) onionOfferUrl = null
                                                                     // PDF: offer in-app viewing instead of navigating.
                                                                     if (isPdfUrl(urlStr)) {
                                                                         pdfOfferUrl = urlStr
@@ -10131,19 +10137,27 @@ class MainActivity : FragmentActivity() {
                             }
                             // A held onion offer belongs to the tab it was held on —
                             // switching tabs dismisses the sheet instead of showing
-                            // it over another page.
+                            // it over another page. Trade-off, chosen deliberately:
+                            // switching back does NOT restore the sheet — the
+                            // user re-taps the link. A stale Tor sheet over the
+                            // wrong page would be worse.
                             LaunchedEffect(currentTab.id) { onionOfferUrl = null }
                             // .onion navigation held (1.8.9 B10): offer the Tor route.
                             val onionUrl = onionOfferUrl
                             if (onionUrl != null) {
                                 var torBrowserInstalled by remember(onionUrl) { mutableStateOf(false) }
                                 var orbotInstalled by remember(onionUrl) { mutableStateOf(false) }
+                                var installChecksDone by remember(onionUrl) { mutableStateOf(false) }
                                 // Package lookups are Binder IPC — run them in an
-                                // effect, not during composition.
+                                // effect, not during composition. The sheet waits
+                                // for them so the buttons never flash a wrong
+                                // "not installed" state on the first frame.
                                 LaunchedEffect(onionUrl) {
                                     torBrowserInstalled = try { packageManager.getPackageInfo("org.torproject.torbrowser", 0); true } catch (_: Exception) { false }
                                     orbotInstalled = try { packageManager.getPackageInfo("org.torproject.android", 0); true } catch (_: Exception) { false }
+                                    installChecksDone = true
                                 }
+                                if (installChecksDone) {
                                 com.click.browser.ui.screens.OnionOfferSheet(
                                     theme = theme,
                                     url = onionUrl,
@@ -10186,6 +10200,7 @@ class MainActivity : FragmentActivity() {
                                     },
                                     onDismiss = { onionOfferUrl = null }
                                 )
+                                }
                             }
                             // Full-screen in-app PDF viewer.
                             val pdfFile = viewingPdfFile
