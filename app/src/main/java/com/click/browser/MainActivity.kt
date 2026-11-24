@@ -2089,6 +2089,7 @@ class MainActivity : FragmentActivity() {
             var showBookmarks by remember { mutableStateOf(false) }
             var showHistory by remember { mutableStateOf(false) }
             var showDownloads by remember { mutableStateOf(false) }
+            var showQrScanner by remember { mutableStateOf(false) }
             // Address-bar search-engine picker (Prince, 13 Nov): tapping
             // the current engine's badge opens the full engine list.
             var showSearchEnginePicker by remember { mutableStateOf(false) }
@@ -2148,6 +2149,20 @@ class MainActivity : FragmentActivity() {
             }
             // Android 13+ runtime grant for POST_NOTIFICATIONS, requested only
             // when the user opts in to news alerts (never at startup).
+            // QR scanner camera permission (1.8.9 C6).
+            val cameraPermissionLauncher = rememberLauncherForActivityResult(
+                ActivityResultContracts.RequestPermission()
+            ) { granted ->
+                if (granted) {
+                    showQrScanner = true
+                } else {
+                    Toast.makeText(
+                        this@MainActivity,
+                        "QR scanning needs camera permission — allow it in App info → Permissions.",
+                        Toast.LENGTH_LONG
+                    ).show()
+                }
+            }
             val newsPermissionLauncher = rememberLauncherForActivityResult(
                 ActivityResultContracts.RequestPermission()
             ) { granted ->
@@ -2770,6 +2785,9 @@ class MainActivity : FragmentActivity() {
             // DNT + GPC privacy signals (opt-in, default off).
             var dntEnabled by remember { mutableStateOf(false) }
             var gpcEnabled by remember { mutableStateOf(false) }
+            // History recording + remote search suggestions (Privacy & Safety, default ON).
+            var historyRecordingEnabled by remember { mutableStateOf(true) }
+            var remoteSuggestionsEnabled by remember { mutableStateOf(true) }
             // Block WebRTC (opt-in, default off — see AppSettings.WEBRTC_BLOCKED).
             var webrtcBlocked by remember { mutableStateOf(false) }
             var secureDnsEnabled by remember { mutableStateOf(false) }
@@ -3636,6 +3654,8 @@ class MainActivity : FragmentActivity() {
                     httpsStrictExceptions = AppSettings.parseHostList(prefs[AppSettings.HTTPS_STRICT_EXCEPTIONS])
                     dntEnabled = prefs[AppSettings.DNT_ENABLED] == true || prefs[ExperimentalFlags.K_DNT_HEADER] == true
                     gpcEnabled = prefs[AppSettings.GPC_ENABLED] == true
+                    historyRecordingEnabled = prefs[AppSettings.HISTORY_RECORDING_ENABLED] != false
+                    remoteSuggestionsEnabled = prefs[AppSettings.REMOTE_SUGGESTIONS_ENABLED] != false
                     webrtcBlocked = prefs[AppSettings.WEBRTC_BLOCKED] == true
                     secureDnsEnabled = prefs[AppSettings.SECURE_DNS_ENABLED] == true
                     backgroundAudioEnabled = prefs[AppSettings.BACKGROUND_AUDIO_ENABLED] == true
@@ -5375,6 +5395,7 @@ class MainActivity : FragmentActivity() {
                                                     ),
                                                     searchEngine = currentSearchEngineSetting,
                                                     historyItems = historyItems,
+                                                    remoteSuggestionsEnabled = remoteSuggestionsEnabled,
                                                     canGoBack = !showOverlays && currentTab.canGoBack,
                                                     onBack = { currentTab.browserSession.goBackIfPossible() },
                                                     canGoForward = !showOverlays && currentTab.canGoForward,
@@ -5545,7 +5566,19 @@ class MainActivity : FragmentActivity() {
                                     onOpenCookieManager = { showCookieManager = true },
                                     onOpenPrivacyGuards = { showPrivacyGuards = true },
                                     onOpenDiagnostics = { showClickDiagnostics = true },
-                                    onSearchEngineClick = { showSearchEnginePicker = true }
+                                    onSearchEngineClick = { showSearchEnginePicker = true },
+                                    onQrScanClick = {
+                                        if (ContextCompat.checkSelfPermission(
+                                                this@MainActivity,
+                                                android.Manifest.permission.CAMERA
+                                            ) == android.content.pm.PackageManager.PERMISSION_GRANTED
+                                        ) {
+                                            showQrScanner = true
+                                        } else {
+                                            cameraPermissionLauncher.launch(android.Manifest.permission.CAMERA)
+                                        }
+                                    },
+                                    remoteSuggestionsEnabled = remoteSuggestionsEnabled
                                     )
                                 }
                             }
@@ -5787,7 +5820,26 @@ class MainActivity : FragmentActivity() {
                                                                 else runOnUiThread { update() }
                                                             },
                                                             onTitleChanged = { title ->
-                                                                tabs.firstOrNull { it.id == tabId }?.title = title
+                                                                val titledTab = tabs.firstOrNull { it.id == tabId }
+                                                                if (titledTab != null) {
+                                                                    titledTab.title = title
+                                                                    // Page-loaded can record history
+                                                                    // before the real title arrives;
+                                                                    // backfill it so the entry does
+                                                                    // not keep the raw URL as its label.
+                                                                    if (title.isNotBlank() && !titledTab.isIncognito) {
+                                                                        val loadedUrl = titledTab.url
+                                                                        if (loadedUrl.startsWith("http://") ||
+                                                                            loadedUrl.startsWith("https://")
+                                                                        ) {
+                                                                            scope.launch {
+                                                                                runCatching {
+                                                                                    repository.updateHistoryTitle(loadedUrl, title)
+                                                                                }
+                                                                            }
+                                                                        }
+                                                                    }
+                                                                }
                                                             },
                                                             onPageLoaded = { url ->
                                                                 // First successful page load: the
@@ -6217,6 +6269,10 @@ class MainActivity : FragmentActivity() {
                                                                     com.click.browser.engine.SafeBrowsingManager.reportHit(
                                                                         url, threatType, callback
                                                                     )
+                                                                    com.click.browser.engine.SecurityNotifications.notifyDangerousSite(
+                                                                        ctx, url,
+                                                                        com.click.browser.engine.SafeBrowsingManager.threatLabel(threatType)
+                                                                    )
                                                                 }
 
                                                                 override fun shouldOverrideUrlLoading(view: WebView?, request: WebResourceRequest?): Boolean {
@@ -6260,6 +6316,29 @@ class MainActivity : FragmentActivity() {
                                                                         pdfOfferUrl = urlStr
                                                                         return true
                                                                     }
+                                                                    // Direct media file: same open/download offer
+                                                                    // sheet Gecko tabs show (parity, 1.8.9 B8). Only
+                                                                    // the ACTIVE tab is held for the offer.
+                                                                    // (ownerTab is resolved here — the one defined
+                                                                    // above lives inside the external-app block.)
+                                                                    val ownerTab = view?.let { v ->
+                                                                        tabs.firstOrNull { it.webView === v }
+                                                                    }
+                                                                    if (ownerTab != null && ownerTab.id == currentTab.id &&
+                                                                        com.click.browser.engine.DirectDownloadPolicy.navigationAction(
+                                                                            urlStr, directMediaBypassUrl
+                                                                        ) == com.click.browser.engine.DirectNavigationAction.OFFER_MEDIA
+                                                                    ) {
+                                                                        directMediaOffer = com.click.browser.engine.DirectMediaOffer(
+                                                                            url = urlStr,
+                                                                            fileName = com.click.browser.engine.DirectDownloadPolicy.fileNameOf(urlStr),
+                                                                            tabId = ownerTab.id
+                                                                        )
+                                                                        return true
+                                                                    }
+                                                                    // The one "Open" bypass is consumed by the
+                                                                    // navigation it was granted for (Gecko-path rule).
+                                                                    if (urlStr == directMediaBypassUrl) directMediaBypassUrl = null
                                                                     // Website sign-in/OAuth pages load in this tab like any
                                                                     // other page (no Chrome/Custom Tab handoff).
                                                                     if (request != null && request.isRedirect) return false
@@ -6355,6 +6434,29 @@ class MainActivity : FragmentActivity() {
                                                                         pdfOfferUrl = urlStr
                                                                         return true
                                                                     }
+                                                                    // Direct media file: same open/download offer
+                                                                    // sheet Gecko tabs show (parity, 1.8.9 B8). Only
+                                                                    // the ACTIVE tab is held for the offer.
+                                                                    // (ownerTab is resolved here — the one defined
+                                                                    // above lives inside the external-app block.)
+                                                                    val ownerTab = view?.let { v ->
+                                                                        tabs.firstOrNull { it.webView === v }
+                                                                    }
+                                                                    if (ownerTab != null && ownerTab.id == currentTab.id &&
+                                                                        com.click.browser.engine.DirectDownloadPolicy.navigationAction(
+                                                                            urlStr, directMediaBypassUrl
+                                                                        ) == com.click.browser.engine.DirectNavigationAction.OFFER_MEDIA
+                                                                    ) {
+                                                                        directMediaOffer = com.click.browser.engine.DirectMediaOffer(
+                                                                            url = urlStr,
+                                                                            fileName = com.click.browser.engine.DirectDownloadPolicy.fileNameOf(urlStr),
+                                                                            tabId = ownerTab.id
+                                                                        )
+                                                                        return true
+                                                                    }
+                                                                    // The one "Open" bypass is consumed by the
+                                                                    // navigation it was granted for (Gecko-path rule).
+                                                                    if (urlStr == directMediaBypassUrl) directMediaBypassUrl = null
                                                                     if (urlStr.startsWith("http://")) {
                                                                         // IP hosts never upgraded/blocked (see above).
                                                                         val ipHost2 = hostOfUrl(urlStr)
@@ -7808,6 +7910,11 @@ class MainActivity : FragmentActivity() {
                                             }
                                         }
                                     },
+                                    onDeleteItem = { item ->
+                                        scope.launch {
+                                            runCatching { repository.removeHistoryItem(item) }
+                                        }
+                                    },
                                     onClose = { showHistory = false }
                                 )
                             }
@@ -9142,6 +9249,16 @@ class MainActivity : FragmentActivity() {
                                         dntEnabled = v
                                         scope.launch { dataStore.edit { prefs -> prefs[AppSettings.DNT_ENABLED] = v } }
                                     },
+                                    historyRecordingEnabled = historyRecordingEnabled,
+                                    onToggleHistoryRecording = { v ->
+                                        historyRecordingEnabled = v
+                                        scope.launch { dataStore.edit { prefs -> prefs[AppSettings.HISTORY_RECORDING_ENABLED] = v } }
+                                    },
+                                    remoteSuggestionsEnabled = remoteSuggestionsEnabled,
+                                    onToggleRemoteSuggestions = { v ->
+                                        remoteSuggestionsEnabled = v
+                                        scope.launch { dataStore.edit { prefs -> prefs[AppSettings.REMOTE_SUGGESTIONS_ENABLED] = v } }
+                                    },
                                     stripTrackingParams = stripTrackingParams,
                                     onToggleStripTrackingParams = { v ->
                                         stripTrackingParams = v
@@ -10058,6 +10175,10 @@ class MainActivity : FragmentActivity() {
                                         val offerSession = offerTab?.browserSession
                                         if (offerTab != null && offerSession != null) {
                                             offerSession.loadUrl(mediaOffer.url)
+                                        } else if (offerTab?.webView != null) {
+                                            // WebView tab (1.8.9 B8): load in place; the
+                                            // bypass above lets this one navigation through.
+                                            offerTab.webView?.loadUrl(mediaOffer.url)
                                         } else {
                                             tabs.add(TabItem(url = mediaOffer.url, title = "New Tab"))
                                             activeTabIndex = tabs.lastIndex
@@ -10987,6 +11108,24 @@ class MainActivity : FragmentActivity() {
                                 )
                             }
 
+                            // QR scanner (1.8.9 C6): a scan routes exactly like
+                            // typed address-bar input (URL opens, text searches).
+                            if (showQrScanner) {
+                                com.click.browser.ui.screens.QrScannerScreen(
+                                    onScanned = { value ->
+                                        showQrScanner = false
+                                        pendingKeyboardDismissTabId = currentTab.id.takeIf {
+                                            currentTab.engine == BrowserTabEngine.WEBVIEW
+                                        }
+                                        dismissBrowserKeyboard()
+                                        val destination = cleanTrackingUrl(formatUrl(value, currentSearchEngineSetting))
+                                        currentTab.url = destination
+                                        currentTab.browserSession?.loadUrl(destination)
+                                    },
+                                    onClose = { showQrScanner = false }
+                                )
+                            }
+
                             // First launch: feature cards replace the every-launch intro.
                             if (onboardingReady && showOnboarding && !privateLocked) {
                                 FirstRunOnboarding(onFinished = { finishFirstRunOnboarding() })
@@ -11062,7 +11201,7 @@ class MainActivity : FragmentActivity() {
                             }
 
                             // Premium bottom nav (Phase 1): Home · Tabs (count badge) · big glowing
-                            // AI center · Bookmarks · Menu. Theme follows the selected palette
+                            // AI center · Bookmarks · Private · Menu. Theme follows the selected palette
                             // and per-mode light/dark choice.
                             if (showOverlays && !immersiveMode && !videoFullscreenActive) {
                                 ClickBottomNav(
@@ -11075,6 +11214,7 @@ class MainActivity : FragmentActivity() {
                                     onTabs = { showTabsManager = true },
                                     onAi = { if (tamperBlocked) showTamperDialog = true else showAiChat = true },
                                     onBookmarks = { showBookmarks = true },
+                                    onPrivateTab = { handleFeature(FeatureId.PRIVATE_TAB) },
                                     onMenu = { showBrowserMenu = true },
                                     modifier = Modifier.align(Alignment.BottomCenter)
                                 )

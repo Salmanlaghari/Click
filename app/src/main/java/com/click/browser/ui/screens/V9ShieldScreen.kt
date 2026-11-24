@@ -241,6 +241,12 @@ fun V9ShieldScreen(onClose: () -> Unit) {
             DnsOption("Google (8.8.8.8)", dohProvider == V9DohResolver.PROVIDER_GOOGLE) {
                 setProvider(V9DohResolver.PROVIDER_GOOGLE)
             }
+            DnsOption("Quad9 (9.9.9.9)", dohProvider == V9DohResolver.PROVIDER_QUAD9) {
+                setProvider(V9DohResolver.PROVIDER_QUAD9)
+            }
+            DnsOption("AdGuard (94.140.14.14)", dohProvider == V9DohResolver.PROVIDER_ADGUARD) {
+                setProvider(V9DohResolver.PROVIDER_ADGUARD)
+            }
             DnsOption("Custom DoH URL", dohProvider == V9DohResolver.PROVIDER_CUSTOM) {
                 setProvider(V9DohResolver.PROVIDER_CUSTOM)
             }

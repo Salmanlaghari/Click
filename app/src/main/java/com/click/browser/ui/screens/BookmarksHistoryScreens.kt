@@ -13,6 +13,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material.icons.filled.FileDownload
 import androidx.compose.material.icons.filled.FileUpload
 import androidx.compose.material.icons.filled.FolderOpen
 import androidx.compose.material.icons.filled.History
@@ -28,6 +29,7 @@ import androidx.compose.ui.unit.sp
 import com.click.browser.data.Bookmark
 import com.click.browser.data.BookmarkEditResult
 import com.click.browser.data.BookmarkEditValidationError
+import com.click.browser.data.BookmarkExporter
 import com.click.browser.data.BookmarkImporter
 import com.click.browser.data.BookmarkOrganizationPolicy
 import com.click.browser.data.BookmarkOrganizationResult
@@ -116,6 +118,27 @@ fun BookmarksScreen(
         }
     }
 
+    // Export (1.8.9 C5): the mirror of import — writes the standard
+    // Netscape HTML format (readable by Chrome/Firefox and by Click's own
+    // importer) to a user-chosen document.
+    val exportLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.CreateDocument("text/html")
+    ) { uri ->
+        if (uri == null) return@rememberLauncherForActivityResult
+        coroutineScope.launch(Dispatchers.IO) {
+            val message = try {
+                val html = BookmarkExporter.toNetscapeHtml(bookmarks)
+                context.contentResolver.openOutputStream(uri)?.use { output ->
+                    output.write(html.toByteArray(Charsets.UTF_8))
+                } ?: throw IllegalArgumentException("Could not open the chosen file")
+                "Exported ${bookmarks.size} bookmark(s)"
+            } catch (e: Exception) {
+                "Export failed: ${e.message ?: "could not write file"}"
+            }
+            withContext(Dispatchers.Main) { snackbarHostState.showSnackbar(message) }
+        }
+    }
+
     Scaffold(
         snackbarHost = { SnackbarHost(snackbarHostState) },
         topBar = {
@@ -127,6 +150,12 @@ fun BookmarksScreen(
                     }
                 },
                 actions = {
+                    IconButton(
+                        onClick = { exportLauncher.launch("click-bookmarks.html") },
+                        enabled = bookmarks.isNotEmpty()
+                    ) {
+                        Icon(Icons.Filled.FileDownload, contentDescription = "Export bookmarks")
+                    }
                     IconButton(
                         onClick = { importLauncher.launch("text/html") },
                         enabled = !isImporting
@@ -459,9 +488,19 @@ fun HistoryScreen(
     theme: ModeTheme,
     onNavigate: (String) -> Unit,
     onClearHistory: () -> Unit,
+    onDeleteItem: (HistoryItem) -> Unit,
     onClose: () -> Unit
 ) {
     val history by repository.historyFlow.collectAsState(initial = emptyList())
+    var searchQuery by remember { mutableStateOf("") }
+    val visibleHistory = if (searchQuery.isBlank()) {
+        history
+    } else {
+        history.filter {
+            it.title.contains(searchQuery, ignoreCase = true) ||
+                it.url.contains(searchQuery, ignoreCase = true)
+        }
+    }
 
     Scaffold(
         containerColor = theme.background,
@@ -484,50 +523,78 @@ fun HistoryScreen(
             )
         }
     ) { padding ->
-        if (history.isEmpty()) {
-            Box(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .padding(padding),
-                contentAlignment = Alignment.Center
-            ) {
-                Text("No history recorded.", color = theme.onBackground.copy(alpha = 0.6f))
+        Column(modifier = Modifier.fillMaxSize().padding(padding)) {
+            if (history.isNotEmpty()) {
+                OutlinedTextField(
+                    value = searchQuery,
+                    onValueChange = { searchQuery = it },
+                    label = { Text("Search history") },
+                    singleLine = true,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp, vertical = 8.dp)
+                )
             }
-        } else {
-            LazyColumn(modifier = Modifier.padding(padding)) {
-                items(history) { item ->
-                    ListItem(
-                        headlineContent = {
-                            Text(
-                                item.title.ifEmpty { "No Title" },
-                                color = theme.onSurface,
-                                fontWeight = FontWeight.Medium
-                            )
-                        },
-                        supportingContent = {
-                            Text(
-                                item.url,
-                                color = theme.onSurface.copy(alpha = 0.6f),
-                                fontSize = 12.sp,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis
-                            )
-                        },
-                        leadingContent = {
-                            Icon(
-                                Icons.Default.History,
-                                contentDescription = null,
-                                tint = theme.primary,
-                                modifier = Modifier.size(20.dp)
-                            )
-                        },
-                        colors = ListItemDefaults.colors(containerColor = theme.background),
-                        modifier = Modifier.clickable {
-                            onNavigate(item.url)
-                            onClose()
-                        }
-                    )
-                    HorizontalDivider(color = theme.onSurface.copy(alpha = 0.08f))
+            if (history.isEmpty()) {
+                Box(
+                    modifier = Modifier.fillMaxSize(),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text("No history recorded.", color = theme.onBackground.copy(alpha = 0.6f))
+                }
+            } else if (visibleHistory.isEmpty()) {
+                Box(
+                    modifier = Modifier.fillMaxSize(),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text("No matches for your search.", color = theme.onBackground.copy(alpha = 0.6f))
+                }
+            } else {
+                LazyColumn(modifier = Modifier.fillMaxSize()) {
+                    items(visibleHistory) { item ->
+                        ListItem(
+                            headlineContent = {
+                                Text(
+                                    item.title.ifEmpty { "No Title" },
+                                    color = theme.onSurface,
+                                    fontWeight = FontWeight.Medium
+                                )
+                            },
+                            supportingContent = {
+                                Text(
+                                    item.url,
+                                    color = theme.onSurface.copy(alpha = 0.6f),
+                                    fontSize = 12.sp,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                            },
+                            leadingContent = {
+                                Icon(
+                                    Icons.Default.History,
+                                    contentDescription = null,
+                                    tint = theme.primary,
+                                    modifier = Modifier.size(20.dp)
+                                )
+                            },
+                            trailingContent = {
+                                IconButton(onClick = { onDeleteItem(item) }) {
+                                    Icon(
+                                        Icons.Default.Close,
+                                        contentDescription = "Remove from history",
+                                        tint = theme.onSurface.copy(alpha = 0.6f),
+                                        modifier = Modifier.size(18.dp)
+                                    )
+                                }
+                            },
+                            colors = ListItemDefaults.colors(containerColor = theme.background),
+                            modifier = Modifier.clickable {
+                                onNavigate(item.url)
+                                onClose()
+                            }
+                        )
+                        HorizontalDivider(color = theme.onSurface.copy(alpha = 0.08f))
+                    }
                 }
             }
         }
