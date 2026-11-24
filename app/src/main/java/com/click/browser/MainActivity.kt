@@ -2501,6 +2501,8 @@ class MainActivity : FragmentActivity() {
             // The one media URL the user chose "Open" for — loads normally
             // this once instead of offering again.
             var directMediaBypassUrl by remember { mutableStateOf<String?>(null) }
+            // .onion navigation held for the Tor-route sheet (1.8.9 B10).
+            var onionOfferUrl by remember { mutableStateOf<String?>(null) }
             // External app handoff prompt (1.8.6): non-null while the
             // "Open in <app>?" confirmation is on screen.
             var externalAppPrompt by remember {
@@ -5619,6 +5621,16 @@ class MainActivity : FragmentActivity() {
                                                                     }
                                                                 }
                                                                 if (liveMode == BrowserMode.HACK) targetUrl = forceDesktopHost(targetUrl)
+                                                                // .onion sites (1.8.9 B10): never load directly —
+                                                                // they only resolve inside the Tor network. The
+                                                                // ACTIVE tab gets the Tor-route sheet; other
+                                                                // tabs are simply held.
+                                                                if (com.click.browser.engine.OnionRoutingPolicy.isOnionUrl(targetUrl)) {
+                                                                    if (tabs.getOrNull(activeTabIndex)?.id == tabId) {
+                                                                        onionOfferUrl = targetUrl
+                                                                    }
+                                                                    return@navigation null
+                                                                }
                                                                 // Direct file detection (Prince, 2026-11-21):
                                                                 // a site that serves a file at a plain URL
                                                                 // should hand the user a download, not a
@@ -6183,6 +6195,14 @@ class MainActivity : FragmentActivity() {
                                                                             ExternalHandoffResult.NotHandled -> return false
                                                                         }
                                                                     }
+                                                                    // .onion sites (1.8.9 B10): never load directly —
+                                                                    // they only resolve inside the Tor network.
+                                                                    if (com.click.browser.engine.OnionRoutingPolicy.isOnionUrl(urlStr)) {
+                                                                        if (ownerTab != null && ownerTab.id == currentTab.id) {
+                                                                            onionOfferUrl = urlStr
+                                                                        }
+                                                                        return true
+                                                                    }
                                                                     // PDF: offer in-app viewing instead of navigating.
                                                                     if (isPdfUrl(urlStr)) {
                                                                         pdfOfferUrl = urlStr
@@ -6278,6 +6298,14 @@ class MainActivity : FragmentActivity() {
                                                                     }
                                                                     // Sign-in/OAuth pages stay in this tab (no handoff).
                                                                     // HTTPS mode handling FIRST (see above).
+                                                                    // .onion sites (1.8.9 B10): never load directly —
+                                                                    // they only resolve inside the Tor network.
+                                                                    if (com.click.browser.engine.OnionRoutingPolicy.isOnionUrl(urlStr)) {
+                                                                        if (ownerTab != null && ownerTab.id == currentTab.id) {
+                                                                            onionOfferUrl = urlStr
+                                                                        }
+                                                                        return true
+                                                                    }
                                                                     // PDF: offer in-app viewing instead of navigating.
                                                                     if (isPdfUrl(urlStr)) {
                                                                         pdfOfferUrl = urlStr
@@ -9964,6 +9992,58 @@ class MainActivity : FragmentActivity() {
                                         }
                                     },
                                     onDismiss = { directMediaOffer = null }
+                                )
+                            }
+                            // .onion navigation held (1.8.9 B10): offer the Tor route.
+                            val onionUrl = onionOfferUrl
+                            if (onionUrl != null) {
+                                val torBrowserInstalled = remember(onionUrl) {
+                                    try { packageManager.getPackageInfo("org.torproject.torbrowser", 0); true } catch (_: Exception) { false }
+                                }
+                                val orbotInstalled = remember(onionUrl) {
+                                    try { packageManager.getPackageInfo("org.torproject.android", 0); true } catch (_: Exception) { false }
+                                }
+                                com.click.browser.ui.screens.OnionOfferSheet(
+                                    theme = theme,
+                                    url = onionUrl,
+                                    torBrowserInstalled = torBrowserInstalled,
+                                    orbotInstalled = orbotInstalled,
+                                    onOpenTorBrowser = {
+                                        onionOfferUrl = null
+                                        try {
+                                            startActivity(
+                                                Intent(Intent.ACTION_VIEW, android.net.Uri.parse(onionUrl))
+                                                    .setPackage("org.torproject.torbrowser")
+                                                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                                            )
+                                        } catch (e: Exception) {
+                                            Toast.makeText(this@MainActivity, "Couldn't open Tor Browser.", Toast.LENGTH_SHORT).show()
+                                        }
+                                    },
+                                    onOpenOrbot = {
+                                        onionOfferUrl = null
+                                        copyLongPressText(onionUrl, "Onion link copied — paste it in Orbot.")
+                                        try {
+                                            packageManager.getLaunchIntentForPackage("org.torproject.android")?.let { startActivity(it) }
+                                        } catch (e: Exception) {
+                                            Toast.makeText(this@MainActivity, "Couldn't open Orbot.", Toast.LENGTH_SHORT).show()
+                                        }
+                                    },
+                                    onGetTorApp = {
+                                        onionOfferUrl = null
+                                        try {
+                                            startActivity(Intent(Intent.ACTION_VIEW, android.net.Uri.parse("market://details?id=org.torproject.android")))
+                                        } catch (e: Exception) {
+                                            try {
+                                                startActivity(Intent(Intent.ACTION_VIEW, android.net.Uri.parse("https://play.google.com/store/apps/details?id=org.torproject.android")))
+                                            } catch (_: Exception) { }
+                                        }
+                                    },
+                                    onCopyLink = {
+                                        onionOfferUrl = null
+                                        copyLongPressText(onionUrl, "Onion link copied.")
+                                    },
+                                    onDismiss = { onionOfferUrl = null }
                                 )
                             }
                             // Full-screen in-app PDF viewer.
