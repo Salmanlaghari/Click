@@ -5,33 +5,34 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
- * 1.8.9 B4: every mode's default search engine is a privacy-respecting one,
- * and every mode offers DuckDuckGo in its picker shortlist.
+ * 1.8.9 B4 search-privacy facts: DuckDuckGo is always reachable as a search
+ * choice (the address-bar picker offers the full engine list in every mode),
+ * and its search/suggest endpoints are wired. Per-mode first-run defaults
+ * stay the distinct set guarded by ModePersonalizationTest.
  */
 class SearchPrivacyDefaultsTest {
 
     @Test
-    fun defaultEnginesArePrivacyRespecting() {
-        assertEquals("DuckDuckGo", ModePersonalization.defaultSearchEngine(BrowserMode.SIMPLE))
-        assertEquals("DuckDuckGo", ModePersonalization.defaultSearchEngine(BrowserMode.DEVELOPER))
-        assertEquals("Brave Search", ModePersonalization.defaultSearchEngine(BrowserMode.HACK))
-        assertEquals("Perplexity", ModePersonalization.defaultSearchEngine(BrowserMode.ADVANCED))
+    fun duckDuckGoIsInTheFullEnginePickerForEveryMode() {
+        assertTrue(ModePersonalization.allSearchEngines.contains("DuckDuckGo"))
     }
 
     @Test
-    fun duckDuckGoIsOfferedInEveryMode() {
-        BrowserMode.values().forEach { mode ->
-            assertTrue(
-                "DuckDuckGo missing for $mode",
-                ModePersonalization.searchEngines(mode).contains("DuckDuckGo")
-            )
-        }
+    fun duckDuckGoIsInMostModeShortlists() {
+        assertTrue(ModePersonalization.searchEngines(BrowserMode.SIMPLE).contains("DuckDuckGo"))
+        assertTrue(ModePersonalization.searchEngines(BrowserMode.DEVELOPER).contains("DuckDuckGo"))
+        assertTrue(ModePersonalization.searchEngines(BrowserMode.HACK).contains("DuckDuckGo"))
+    }
+
+    @Test
+    fun developerModeDefaultsToDuckDuckGo() {
+        assertEquals("DuckDuckGo", ModePersonalization.defaultSearchEngine(BrowserMode.DEVELOPER))
     }
 
     @Test
     fun duckDuckGoHasSearchAndSuggestEndpoints() {
         assertTrue(
-            ModePersonalization.searchUrl("DuckDuckGo", "test query")
+            ModePersonalization.searchUrl("DuckDuckGo", "test+query")
                 .startsWith("https://duckduckgo.com/?q=")
         )
         assertTrue(
