@@ -166,13 +166,6 @@ fun TextScaleSheet(
 }
 
 /**
- * Full-screen overlay shown when private tabs are locked. Covers the whole
- * browser surface (including the tab switcher) so private content is never
- * visible without authentication. Incognito thumbnails are never captured
- * anyway (see TabThumbnailStore) — this is the second layer.
- */
-@Composable
-/**
  * Whole-app lock overlay (1.8.9 C2): shown above everything when App Lock
  * is on and Click has locked (cold start or backgrounding). Mirrors
  * [PrivateTabLockOverlay]; the unlock itself is the system BiometricPrompt.
@@ -226,6 +219,13 @@ fun AppLockOverlay(
     }
 }
 
+/**
+ * Full-screen overlay shown when private tabs are locked. Covers the whole
+ * browser surface (including the tab switcher) so private content is never
+ * visible without authentication. Incognito thumbnails are never captured
+ * anyway (see TabThumbnailStore) — this is the second layer.
+ */
+@Composable
 fun PrivateTabLockOverlay(
     theme: ModeTheme,
     useBiometricLabel: Boolean,
