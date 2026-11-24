@@ -13,7 +13,10 @@ import android.content.pm.ServiceInfo
 import android.media.AudioAttributes
 import android.media.AudioFocusRequest
 import android.media.AudioManager
+import android.media.MediaMetadata
 import android.media.MediaPlayer
+import android.media.session.MediaSession
+import android.media.session.PlaybackState
 import android.os.Build
 import android.os.IBinder
 import android.util.Log
@@ -38,6 +41,8 @@ import kotlinx.coroutines.launch
  *   Playlist refuses YouTube URLs at add time, so none can reach here.
  * - Runs as a foreground service (type mediaPlayback) with a playback
  *   notification, so audio keeps playing when the app is backgrounded.
+ *   Publishes a media session too, so headset / Bluetooth / lock-screen
+ *   transport controls drive the same play/pause/next/prev actions.
  * - Never marketed for any specific site/service — UI calls this
  *   "Playlist" / "Background audio", nothing more.
  */
@@ -91,6 +96,7 @@ class PlaylistPlaybackService : Service() {
     private var queue: List<PlaylistItem> = emptyList()
     private var index: Int = -1
     private var audioManager: AudioManager? = null
+    private var mediaSession: MediaSession? = null
     private var focusRequest: AudioFocusRequest? = null
     private var resumeOnFocusGain = false
 
@@ -107,6 +113,15 @@ class PlaylistPlaybackService : Service() {
     override fun onCreate() {
         super.onCreate()
         audioManager = getSystemService(Context.AUDIO_SERVICE) as? AudioManager
+        mediaSession = MediaSession(this, "ClickPlaylist").apply {
+            setCallback(object : MediaSession.Callback() {
+                override fun onPlay() = doResume()
+                override fun onPause() = doPause()
+                override fun onSkipToNext() = step(1)
+                override fun onSkipToPrevious() = step(-1)
+                override fun onStop() = doStop()
+            })
+        }
         // API 33+: an explicit exported flag is required for registerReceiver.
         if (Build.VERSION.SDK_INT >= 33) {
             registerReceiver(
@@ -125,6 +140,8 @@ class PlaylistPlaybackService : Service() {
         try { unregisterReceiver(noisyReceiver) } catch (_: Exception) { }
         releasePlayer()
         abandonFocus()
+        try { mediaSession?.release() } catch (_: Exception) { }
+        mediaSession = null
         scope.cancel()
         super.onDestroy()
     }
@@ -277,6 +294,45 @@ class PlaylistPlaybackService : Service() {
             currentUrl = item?.url ?: cur.currentUrl.takeIf { status != Status.IDLE },
             errorMessage = errorMessage
         )
+        syncMediaSession(_state.value)
+    }
+
+    /** Mirror the player state into the media session (system transport controls). */
+    private fun syncMediaSession(st: PlayerState) {
+        val session = mediaSession ?: return
+        try {
+            session.isActive = st.status != Status.IDLE
+            val state = when (st.status) {
+                Status.PLAYING -> PlaybackState.STATE_PLAYING
+                Status.PAUSED -> PlaybackState.STATE_PAUSED
+                Status.PREPARING -> PlaybackState.STATE_BUFFERING
+                Status.ERROR -> PlaybackState.STATE_ERROR
+                Status.IDLE -> PlaybackState.STATE_STOPPED
+            }
+            session.setPlaybackState(
+                PlaybackState.Builder()
+                    .setActions(
+                        PlaybackState.ACTION_PLAY or PlaybackState.ACTION_PAUSE or
+                            PlaybackState.ACTION_PLAY_PAUSE or PlaybackState.ACTION_SKIP_TO_NEXT or
+                            PlaybackState.ACTION_SKIP_TO_PREVIOUS or PlaybackState.ACTION_STOP
+                    )
+                    .setState(state, PlaybackState.PLAYBACK_POSITION_UNKNOWN, 1f)
+                    .apply {
+                        if (st.status == Status.ERROR) {
+                            setErrorMessage(st.errorMessage ?: "Playback error")
+                        }
+                    }
+                    .build()
+            )
+            if (st.status != Status.IDLE) {
+                session.setMetadata(
+                    MediaMetadata.Builder()
+                        .putString(MediaMetadata.METADATA_KEY_TITLE, st.currentTitle ?: "Playlist")
+                        .putString(MediaMetadata.METADATA_KEY_DISPLAY_TITLE, st.currentTitle ?: "Playlist")
+                        .build()
+                )
+            }
+        } catch (_: Exception) { }
     }
 
     // ---------- audio focus ----------
