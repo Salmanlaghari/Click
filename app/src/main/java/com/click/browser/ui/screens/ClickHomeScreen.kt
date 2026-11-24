@@ -11,6 +11,7 @@ import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.animateContentSize
+import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
@@ -19,6 +20,7 @@ import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -86,6 +88,7 @@ import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.ripple
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
@@ -114,8 +117,10 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.text.font.FontFamily
@@ -2244,6 +2249,7 @@ fun ClickBottomNav(
     onMenu: () -> Unit,
     modifier: Modifier = Modifier
 ) {
+    val haptic = LocalHapticFeedback.current
     Surface(
         color = theme.topBarBg,
         border = androidx.compose.foundation.BorderStroke(
@@ -2271,8 +2277,11 @@ fun ClickBottomNav(
                     .sizeIn(minWidth = 48.dp, minHeight = 48.dp)
                     .clickable(
                         interactionSource = remember { MutableInteractionSource() },
-                        indication = null
-                    ) { onTabs() }
+                        indication = ripple(bounded = false, radius = 30.dp)
+                    ) {
+                        haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                        onTabs()
+                    }
             ) {
                 Column(
                     horizontalAlignment = Alignment.CenterHorizontally,
@@ -2284,18 +2293,28 @@ fun ClickBottomNav(
                 }
             }
 
-            // Center: LARGE glowing AI button
+            // Center: LARGE glowing AI button (press-scale + ripple + haptic, 1.8.9 B9)
+            val aiInteraction = remember { MutableInteractionSource() }
+            val aiPressed by aiInteraction.collectIsPressedAsState()
+            val aiScale by animateFloatAsState(
+                targetValue = if (aiPressed) 0.92f else 1f,
+                label = "aiButtonScale"
+            )
             Box(
                 modifier = Modifier
                     .size(62.dp)
+                    .graphicsLayer { scaleX = aiScale; scaleY = aiScale }
                     .shadow(10.dp, CircleShape, spotColor = theme.primary)
                     .clip(CircleShape)
                     .background(Brush.linearGradient(listOf(Color(0xFF72583D), Color(0xFFAA865C), Color(0xFFC7AE8A))))
                     .border(2.dp, Color.White.copy(alpha = 0.35f), CircleShape)
                     .clickable(
-                        interactionSource = remember { MutableInteractionSource() },
-                        indication = null
-                    ) { onAi() },
+                        interactionSource = aiInteraction,
+                        indication = ripple()
+                    ) {
+                        haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                        onAi()
+                    },
                 contentAlignment = Alignment.Center
             ) {
                 Column(horizontalAlignment = Alignment.CenterHorizontally) {
@@ -2318,6 +2337,7 @@ private fun ClickNavItem(
     theme: ModeTheme,
     onClick: () -> Unit
 ) {
+    val haptic = LocalHapticFeedback.current
     Column(
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.Center,
@@ -2325,16 +2345,27 @@ private fun ClickNavItem(
             .sizeIn(minWidth = 48.dp, minHeight = 48.dp)
             .clickable(
                 interactionSource = remember { MutableInteractionSource() },
-                indication = null
-            ) { onClick() }
+                indication = ripple(bounded = false, radius = 30.dp)
+            ) {
+                haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                onClick()
+            }
             .padding(4.dp)
     ) {
-        Icon(
-            icon,
-            contentDescription = label,
-            tint = if (selected) theme.primary else theme.onSurface.copy(alpha = 0.6f),
-            modifier = Modifier.size(24.dp)
-        )
+        Box(
+            modifier = Modifier
+                .clip(RoundedCornerShape(999.dp))
+                .background(if (selected) theme.primary.copy(alpha = 0.15f) else Color.Transparent)
+                .padding(horizontal = 14.dp, vertical = 3.dp),
+            contentAlignment = Alignment.Center
+        ) {
+            Icon(
+                icon,
+                contentDescription = label,
+                tint = if (selected) theme.primary else theme.onSurface.copy(alpha = 0.6f),
+                modifier = Modifier.size(24.dp)
+            )
+        }
         Text(
             label,
             fontSize = 10.sp,
