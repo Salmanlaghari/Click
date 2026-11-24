@@ -6145,6 +6145,10 @@ class MainActivity : FragmentActivity() {
                                                                     com.click.browser.engine.SafeBrowsingManager.reportHit(
                                                                         url, threatType, callback
                                                                     )
+                                                                    com.click.browser.engine.SecurityNotifications.notifyDangerousSite(
+                                                                        ctx, url,
+                                                                        com.click.browser.engine.SafeBrowsingManager.threatLabel(threatType)
+                                                                    )
                                                                 }
 
                                                                 override fun shouldOverrideUrlLoading(view: WebView?, request: WebResourceRequest?): Boolean {
