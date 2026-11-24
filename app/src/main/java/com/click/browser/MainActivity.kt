@@ -714,8 +714,11 @@ class MainActivity : FragmentActivity() {
         if (liveBiometricLockEnabled && liveHasIncognitoTabs) {
             privateLockedFlow.value = true
         }
-        // App lock (1.8.9 C2): the whole app re-locks on backgrounding.
-        if (liveAppLockEnabled) {
+        // App lock (1.8.9 C2): the whole app re-locks on backgrounding —
+        // but only when the device can still authenticate. If the user
+        // removed every biometric/PIN after enabling the lock, re-locking
+        // would strand them on a lock screen they can never open.
+        if (liveAppLockEnabled && com.click.browser.engine.PrivateTabLock.canLock(this@MainActivity)) {
             appLockedFlow.value = true
         }
     }
@@ -1509,7 +1512,9 @@ class MainActivity : FragmentActivity() {
         try {
             prompt.authenticate(infoBuilder.build())
         } catch (_: Exception) {
-            // Biometric stack hiccup — stay locked; retry via the button.
+            // Biometric stack hiccup — stay locked; tell the user to retry
+            // via the button instead of failing silently.
+            Toast.makeText(this, "Couldn't start authentication — tap Unlock to retry", Toast.LENGTH_SHORT).show()
         }
     }
 
@@ -1530,7 +1535,16 @@ class MainActivity : FragmentActivity() {
                 if (enabled && com.click.browser.engine.PrivateTabLock.canLock(this@MainActivity)) {
                     appLockedFlow.value = true
                 }
-            } catch (_: Exception) { }
+            } catch (e: Exception) {
+                // DataStore read failed — fail CLOSED (lock the app) rather
+                // than silently opening it unlocked, but only when the
+                // device can actually authenticate, so we never strand the
+                // user on an unopenable lock screen.
+                android.util.Log.w("ClickAppLock", "App-lock setting read failed", e)
+                if (com.click.browser.engine.PrivateTabLock.canLock(this@MainActivity)) {
+                    appLockedFlow.value = true
+                }
+            }
         }
 
         if (V9Engine.isBootBlocked) {
