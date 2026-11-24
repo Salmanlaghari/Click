@@ -6191,6 +6191,11 @@ class MainActivity : FragmentActivity() {
                                                                     // Direct media file: same open/download offer
                                                                     // sheet Gecko tabs show (parity, 1.8.9 B8). Only
                                                                     // the ACTIVE tab is held for the offer.
+                                                                    // (ownerTab is resolved here — the one defined
+                                                                    // above lives inside the external-app block.)
+                                                                    val ownerTab = view?.let { v ->
+                                                                        tabs.firstOrNull { it.webView === v }
+                                                                    }
                                                                     if (ownerTab != null && ownerTab.id == currentTab.id &&
                                                                         com.click.browser.engine.DirectDownloadPolicy.navigationAction(
                                                                             urlStr, directMediaBypassUrl
@@ -6304,6 +6309,11 @@ class MainActivity : FragmentActivity() {
                                                                     // Direct media file: same open/download offer
                                                                     // sheet Gecko tabs show (parity, 1.8.9 B8). Only
                                                                     // the ACTIVE tab is held for the offer.
+                                                                    // (ownerTab is resolved here — the one defined
+                                                                    // above lives inside the external-app block.)
+                                                                    val ownerTab = view?.let { v ->
+                                                                        tabs.firstOrNull { it.webView === v }
+                                                                    }
                                                                     if (ownerTab != null && ownerTab.id == currentTab.id &&
                                                                         com.click.browser.engine.DirectDownloadPolicy.navigationAction(
                                                                             urlStr, directMediaBypassUrl
