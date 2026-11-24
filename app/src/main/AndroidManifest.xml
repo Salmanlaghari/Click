@@ -28,6 +28,9 @@
     <!-- Runtime notification permission is requested only when the user opts
          in to news alerts or chooses to enable download notifications. -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <!-- QR scanner (1.8.9 C6): camera is used only while the scanner is open. -->
+    <uses-permission android:name="android.permission.CAMERA" />
+    <uses-feature android:name="android.hardware.camera" android:required="false" />
 
     <!-- Lets Click offer to install an APK the user downloaded with Click
          itself (Downloads screen / completion notification). The system

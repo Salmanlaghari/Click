@@ -2021,6 +2021,7 @@ class MainActivity : FragmentActivity() {
             var showBookmarks by remember { mutableStateOf(false) }
             var showHistory by remember { mutableStateOf(false) }
             var showDownloads by remember { mutableStateOf(false) }
+            var showQrScanner by remember { mutableStateOf(false) }
             // Address-bar search-engine picker (Prince, 13 Nov): tapping
             // the current engine's badge opens the full engine list.
             var showSearchEnginePicker by remember { mutableStateOf(false) }
@@ -2080,6 +2081,20 @@ class MainActivity : FragmentActivity() {
             }
             // Android 13+ runtime grant for POST_NOTIFICATIONS, requested only
             // when the user opts in to news alerts (never at startup).
+            // QR scanner camera permission (1.8.9 C6).
+            val cameraPermissionLauncher = rememberLauncherForActivityResult(
+                ActivityResultContracts.RequestPermission()
+            ) { granted ->
+                if (granted) {
+                    showQrScanner = true
+                } else {
+                    Toast.makeText(
+                        this@MainActivity,
+                        "QR scanning needs camera permission — allow it in App info → Permissions.",
+                        Toast.LENGTH_LONG
+                    ).show()
+                }
+            }
             val newsPermissionLauncher = rememberLauncherForActivityResult(
                 ActivityResultContracts.RequestPermission()
             ) { granted ->
@@ -5473,7 +5488,18 @@ class MainActivity : FragmentActivity() {
                                     onOpenCookieManager = { showCookieManager = true },
                                     onOpenPrivacyGuards = { showPrivacyGuards = true },
                                     onOpenDiagnostics = { showClickDiagnostics = true },
-                                    onSearchEngineClick = { showSearchEnginePicker = true }
+                                    onSearchEngineClick = { showSearchEnginePicker = true },
+                                    onQrScanClick = {
+                                        if (ContextCompat.checkSelfPermission(
+                                                this@MainActivity,
+                                                android.Manifest.permission.CAMERA
+                                            ) == android.content.pm.PackageManager.PERMISSION_GRANTED
+                                        ) {
+                                            showQrScanner = true
+                                        } else {
+                                            cameraPermissionLauncher.launch(android.Manifest.permission.CAMERA)
+                                        }
+                                    }
                                     )
                                 }
                             }
@@ -10873,6 +10899,25 @@ class MainActivity : FragmentActivity() {
                                     theme = theme,
                                     useBiometricLabel = hasStrongBiometric,
                                     onUnlock = { promptUnlockPrivateTabs() }
+                                )
+                            }
+
+                            // QR scanner (1.8.9 C6): a scan routes exactly like
+                            // typed address-bar input (URL opens, text searches).
+                            if (showQrScanner) {
+                                com.click.browser.ui.screens.QrScannerScreen(
+                                    theme = theme,
+                                    onScanned = { value ->
+                                        showQrScanner = false
+                                        pendingKeyboardDismissTabId = currentTab.id.takeIf {
+                                            currentTab.engine == BrowserTabEngine.WEBVIEW
+                                        }
+                                        dismissBrowserKeyboard()
+                                        val destination = cleanTrackingUrl(formatUrl(value, currentSearchEngineSetting))
+                                        currentTab.url = destination
+                                        currentTab.browserSession?.loadUrl(destination)
+                                    },
+                                    onClose = { showQrScanner = false }
                                 )
                             }
 
