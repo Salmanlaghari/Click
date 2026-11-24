@@ -6197,6 +6197,11 @@ class MainActivity : FragmentActivity() {
                                                                     }
                                                                     // .onion sites (1.8.9 B10): never load directly —
                                                                     // they only resolve inside the Tor network.
+                                                                    // (ownerTab is resolved here — the one defined
+                                                                    // above lives inside the external-app block.)
+                                                                    val ownerTab = view?.let { v ->
+                                                                        tabs.firstOrNull { it.webView === v }
+                                                                    }
                                                                     if (com.click.browser.engine.OnionRoutingPolicy.isOnionUrl(urlStr)) {
                                                                         if (ownerTab != null && ownerTab.id == currentTab.id) {
                                                                             onionOfferUrl = urlStr
@@ -6300,6 +6305,11 @@ class MainActivity : FragmentActivity() {
                                                                     // HTTPS mode handling FIRST (see above).
                                                                     // .onion sites (1.8.9 B10): never load directly —
                                                                     // they only resolve inside the Tor network.
+                                                                    // (ownerTab is resolved here — the one defined
+                                                                    // above lives inside the external-app block.)
+                                                                    val ownerTab = view?.let { v ->
+                                                                        tabs.firstOrNull { it.webView === v }
+                                                                    }
                                                                     if (com.click.browser.engine.OnionRoutingPolicy.isOnionUrl(urlStr)) {
                                                                         if (ownerTab != null && ownerTab.id == currentTab.id) {
                                                                             onionOfferUrl = urlStr
