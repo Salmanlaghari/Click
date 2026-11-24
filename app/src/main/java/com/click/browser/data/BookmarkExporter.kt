@@ -25,8 +25,9 @@ object BookmarkExporter {
         sb.append("<H1>Bookmarks</H1>\n")
         sb.append("<DL><p>\n")
 
-        val (folderless, byFolder) = bookmarks.partition { it.folder.isNullOrBlank() }
+        val (folderless, foldered) = bookmarks.partition { it.folder.isNullOrBlank() }
         for (bookmark in folderless) appendEntry(sb, bookmark, indent = "    ")
+        val byFolder = foldered.groupBy { it.folder!!.trim() }
         for ((folder, entries) in byFolder.entries.sortedBy { it.key.lowercase() }) {
             sb.append("    <DT><H3>").append(escape(folder.trim())).append("</H3>\n")
             sb.append("    <DL><p>\n")
