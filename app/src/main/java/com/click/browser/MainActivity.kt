@@ -6218,6 +6218,29 @@ class MainActivity : FragmentActivity() {
                                                                         pdfOfferUrl = urlStr
                                                                         return true
                                                                     }
+                                                                    // Direct media file: same open/download offer
+                                                                    // sheet Gecko tabs show (parity, 1.8.9 B8). Only
+                                                                    // the ACTIVE tab is held for the offer.
+                                                                    // (ownerTab is resolved here — the one defined
+                                                                    // above lives inside the external-app block.)
+                                                                    val ownerTab = view?.let { v ->
+                                                                        tabs.firstOrNull { it.webView === v }
+                                                                    }
+                                                                    if (ownerTab != null && ownerTab.id == currentTab.id &&
+                                                                        com.click.browser.engine.DirectDownloadPolicy.navigationAction(
+                                                                            urlStr, directMediaBypassUrl
+                                                                        ) == com.click.browser.engine.DirectNavigationAction.OFFER_MEDIA
+                                                                    ) {
+                                                                        directMediaOffer = com.click.browser.engine.DirectMediaOffer(
+                                                                            url = urlStr,
+                                                                            fileName = com.click.browser.engine.DirectDownloadPolicy.fileNameOf(urlStr),
+                                                                            tabId = ownerTab.id
+                                                                        )
+                                                                        return true
+                                                                    }
+                                                                    // The one "Open" bypass is consumed by the
+                                                                    // navigation it was granted for (Gecko-path rule).
+                                                                    if (urlStr == directMediaBypassUrl) directMediaBypassUrl = null
                                                                     // Website sign-in/OAuth pages load in this tab like any
                                                                     // other page (no Chrome/Custom Tab handoff).
                                                                     if (request != null && request.isRedirect) return false
@@ -6313,6 +6336,29 @@ class MainActivity : FragmentActivity() {
                                                                         pdfOfferUrl = urlStr
                                                                         return true
                                                                     }
+                                                                    // Direct media file: same open/download offer
+                                                                    // sheet Gecko tabs show (parity, 1.8.9 B8). Only
+                                                                    // the ACTIVE tab is held for the offer.
+                                                                    // (ownerTab is resolved here — the one defined
+                                                                    // above lives inside the external-app block.)
+                                                                    val ownerTab = view?.let { v ->
+                                                                        tabs.firstOrNull { it.webView === v }
+                                                                    }
+                                                                    if (ownerTab != null && ownerTab.id == currentTab.id &&
+                                                                        com.click.browser.engine.DirectDownloadPolicy.navigationAction(
+                                                                            urlStr, directMediaBypassUrl
+                                                                        ) == com.click.browser.engine.DirectNavigationAction.OFFER_MEDIA
+                                                                    ) {
+                                                                        directMediaOffer = com.click.browser.engine.DirectMediaOffer(
+                                                                            url = urlStr,
+                                                                            fileName = com.click.browser.engine.DirectDownloadPolicy.fileNameOf(urlStr),
+                                                                            tabId = ownerTab.id
+                                                                        )
+                                                                        return true
+                                                                    }
+                                                                    // The one "Open" bypass is consumed by the
+                                                                    // navigation it was granted for (Gecko-path rule).
+                                                                    if (urlStr == directMediaBypassUrl) directMediaBypassUrl = null
                                                                     if (urlStr.startsWith("http://")) {
                                                                         // IP hosts never upgraded/blocked (see above).
                                                                         val ipHost2 = hostOfUrl(urlStr)
@@ -10003,6 +10049,10 @@ class MainActivity : FragmentActivity() {
                                         val offerSession = offerTab?.browserSession
                                         if (offerTab != null && offerSession != null) {
                                             offerSession.loadUrl(mediaOffer.url)
+                                        } else if (offerTab?.webView != null) {
+                                            // WebView tab (1.8.9 B8): load in place; the
+                                            // bypass above lets this one navigation through.
+                                            offerTab.webView?.loadUrl(mediaOffer.url)
                                         } else {
                                             tabs.add(TabItem(url = mediaOffer.url, title = "New Tab"))
                                             activeTabIndex = tabs.lastIndex
