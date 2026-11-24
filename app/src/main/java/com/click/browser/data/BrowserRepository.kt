@@ -7,7 +7,9 @@ import androidx.datastore.preferences.core.MutablePreferences
 import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.stringPreferencesKey
+import com.click.browser.engine.AppSettings
 import com.click.browser.engine.BrowserMode
+import com.click.browser.engine.dataStore
 import com.click.browser.engine.SiteSettings
 import com.click.browser.engine.WebsitePermissionGlobalDefault
 import com.click.browser.engine.canonicalWebsiteMicrophoneOrigin
@@ -234,6 +236,7 @@ class BrowserRepository(private val context: Context) {
     }
 
     suspend fun addHistoryItem(item: HistoryItem, isIncognitoTab: Boolean) {
+        if (!historyRecordingEnabled()) return
         if (!HistoryRecordingPolicy.shouldRecord(isIncognitoTab, item.url)) return
 
         context.profileDataStore.edit { preferences ->
@@ -268,6 +271,17 @@ class BrowserRepository(private val context: Context) {
                 preferences[HISTORY_KEY] = historyItemsToJson(updated)
             }
         }
+    }
+
+    /**
+     * Master history-recording switch (Privacy & Safety, shared settings).
+     * Default ON; when OFF no profile records history. Read failures keep
+     * recording ON (normal browser behavior) rather than silently losing it.
+     */
+    private suspend fun historyRecordingEnabled(): Boolean = try {
+        context.dataStore.data.first()[AppSettings.HISTORY_RECORDING_ENABLED] != false
+    } catch (_: Exception) {
+        true
     }
 
     suspend fun clearHistory() {

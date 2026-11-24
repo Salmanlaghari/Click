@@ -2702,6 +2702,9 @@ class MainActivity : FragmentActivity() {
             // DNT + GPC privacy signals (opt-in, default off).
             var dntEnabled by remember { mutableStateOf(false) }
             var gpcEnabled by remember { mutableStateOf(false) }
+            // History recording + remote search suggestions (Privacy & Safety, default ON).
+            var historyRecordingEnabled by remember { mutableStateOf(true) }
+            var remoteSuggestionsEnabled by remember { mutableStateOf(true) }
             // Block WebRTC (opt-in, default off — see AppSettings.WEBRTC_BLOCKED).
             var webrtcBlocked by remember { mutableStateOf(false) }
             var secureDnsEnabled by remember { mutableStateOf(false) }
@@ -3566,6 +3569,8 @@ class MainActivity : FragmentActivity() {
                     httpsStrictExceptions = AppSettings.parseHostList(prefs[AppSettings.HTTPS_STRICT_EXCEPTIONS])
                     dntEnabled = prefs[AppSettings.DNT_ENABLED] == true || prefs[ExperimentalFlags.K_DNT_HEADER] == true
                     gpcEnabled = prefs[AppSettings.GPC_ENABLED] == true
+                    historyRecordingEnabled = prefs[AppSettings.HISTORY_RECORDING_ENABLED] != false
+                    remoteSuggestionsEnabled = prefs[AppSettings.REMOTE_SUGGESTIONS_ENABLED] != false
                     webrtcBlocked = prefs[AppSettings.WEBRTC_BLOCKED] == true
                     secureDnsEnabled = prefs[AppSettings.SECURE_DNS_ENABLED] == true
                     backgroundAudioEnabled = prefs[AppSettings.BACKGROUND_AUDIO_ENABLED] == true
@@ -5303,6 +5308,7 @@ class MainActivity : FragmentActivity() {
                                                     ),
                                                     searchEngine = currentSearchEngineSetting,
                                                     historyItems = historyItems,
+                                                    remoteSuggestionsEnabled = remoteSuggestionsEnabled,
                                                     canGoBack = !showOverlays && currentTab.canGoBack,
                                                     onBack = { currentTab.browserSession.goBackIfPossible() },
                                                     canGoForward = !showOverlays && currentTab.canGoForward,
@@ -5473,7 +5479,8 @@ class MainActivity : FragmentActivity() {
                                     onOpenCookieManager = { showCookieManager = true },
                                     onOpenPrivacyGuards = { showPrivacyGuards = true },
                                     onOpenDiagnostics = { showClickDiagnostics = true },
-                                    onSearchEngineClick = { showSearchEnginePicker = true }
+                                    onSearchEngineClick = { showSearchEnginePicker = true },
+                                    remoteSuggestionsEnabled = remoteSuggestionsEnabled
                                     )
                                 }
                             }
@@ -9094,6 +9101,16 @@ class MainActivity : FragmentActivity() {
                                         dntEnabled = v
                                         scope.launch { dataStore.edit { prefs -> prefs[AppSettings.DNT_ENABLED] = v } }
                                     },
+                                    historyRecordingEnabled = historyRecordingEnabled,
+                                    onToggleHistoryRecording = { v ->
+                                        historyRecordingEnabled = v
+                                        scope.launch { dataStore.edit { prefs -> prefs[AppSettings.HISTORY_RECORDING_ENABLED] = v } }
+                                    },
+                                    remoteSuggestionsEnabled = remoteSuggestionsEnabled,
+                                    onToggleRemoteSuggestions = { v ->
+                                        remoteSuggestionsEnabled = v
+                                        scope.launch { dataStore.edit { prefs -> prefs[AppSettings.REMOTE_SUGGESTIONS_ENABLED] = v } }
+                                    },
                                     stripTrackingParams = stripTrackingParams,
                                     onToggleStripTrackingParams = { v ->
                                         stripTrackingParams = v
@@ -10975,7 +10992,7 @@ class MainActivity : FragmentActivity() {
                             }
 
                             // Premium bottom nav (Phase 1): Home · Tabs (count badge) · big glowing
-                            // AI center · Bookmarks · Menu. Theme follows the selected palette
+                            // AI center · Bookmarks · Private · Menu. Theme follows the selected palette
                             // and per-mode light/dark choice.
                             if (showOverlays && !immersiveMode && !videoFullscreenActive) {
                                 ClickBottomNav(
@@ -10988,6 +11005,7 @@ class MainActivity : FragmentActivity() {
                                     onTabs = { showTabsManager = true },
                                     onAi = { if (tamperBlocked) showTamperDialog = true else showAiChat = true },
                                     onBookmarks = { showBookmarks = true },
+                                    onPrivateTab = { handleFeature(FeatureId.PRIVATE_TAB) },
                                     onMenu = { showBrowserMenu = true },
                                     modifier = Modifier.align(Alignment.BottomCenter)
                                 )

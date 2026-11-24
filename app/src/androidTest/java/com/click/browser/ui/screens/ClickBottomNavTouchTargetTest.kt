@@ -59,6 +59,7 @@ class ClickBottomNavTouchTargetTest {
                     onTabs = {},
                     onAi = {},
                     onBookmarks = {},
+                    onPrivateTab = {},
                     onMenu = {}
                 )
             }
@@ -67,7 +68,7 @@ class ClickBottomNavTouchTargetTest {
     }
 
     private fun assertNavigationTargetsMeetMinimumSize() {
-        listOf("Home", "Tabs", "Bookmarks", "Menu").forEach { label ->
+        listOf("Home", "Tabs", "Bookmarks", "Private", "Menu").forEach { label ->
             val target = composeRule.onNodeWithContentDescription(label)
             target.assertWidthIsAtLeast(48.dp)
             target.assertHeightIsAtLeast(48.dp)
