@@ -13,6 +13,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material.icons.filled.FileDownload
 import androidx.compose.material.icons.filled.FileUpload
 import androidx.compose.material.icons.filled.FolderOpen
 import androidx.compose.material.icons.filled.History
@@ -28,6 +29,7 @@ import androidx.compose.ui.unit.sp
 import com.click.browser.data.Bookmark
 import com.click.browser.data.BookmarkEditResult
 import com.click.browser.data.BookmarkEditValidationError
+import com.click.browser.data.BookmarkExporter
 import com.click.browser.data.BookmarkImporter
 import com.click.browser.data.BookmarkOrganizationPolicy
 import com.click.browser.data.BookmarkOrganizationResult
@@ -116,6 +118,27 @@ fun BookmarksScreen(
         }
     }
 
+    // Export (1.8.9 C5): the mirror of import — writes the standard
+    // Netscape HTML format (readable by Chrome/Firefox and by Click's own
+    // importer) to a user-chosen document.
+    val exportLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.CreateDocument("text/html")
+    ) { uri ->
+        if (uri == null) return@rememberLauncherForActivityResult
+        coroutineScope.launch(Dispatchers.IO) {
+            val message = try {
+                val html = BookmarkExporter.toNetscapeHtml(bookmarks)
+                context.contentResolver.openOutputStream(uri)?.use { output ->
+                    output.write(html.toByteArray(Charsets.UTF_8))
+                } ?: throw IllegalArgumentException("Could not open the chosen file")
+                "Exported ${bookmarks.size} bookmark(s)"
+            } catch (e: Exception) {
+                "Export failed: ${e.message ?: "could not write file"}"
+            }
+            withContext(Dispatchers.Main) { snackbarHostState.showSnackbar(message) }
+        }
+    }
+
     Scaffold(
         snackbarHost = { SnackbarHost(snackbarHostState) },
         topBar = {
@@ -127,6 +150,12 @@ fun BookmarksScreen(
                     }
                 },
                 actions = {
+                    IconButton(
+                        onClick = { exportLauncher.launch("click-bookmarks.html") },
+                        enabled = bookmarks.isNotEmpty()
+                    ) {
+                        Icon(Icons.Filled.FileDownload, contentDescription = "Export bookmarks")
+                    }
                     IconButton(
                         onClick = { importLauncher.launch("text/html") },
                         enabled = !isImporting
