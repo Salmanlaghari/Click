@@ -41,7 +41,7 @@ object ModePersonalization {
 
     /** Sensible default search engine per mode (Prince's requirement). */
     fun defaultSearchEngine(mode: BrowserMode): String = when (mode) {
-        BrowserMode.SIMPLE -> "Google"
+        BrowserMode.SIMPLE -> "DuckDuckGo"
         BrowserMode.DEVELOPER -> "DuckDuckGo"
         BrowserMode.HACK -> "Brave Search"
         BrowserMode.ADVANCED -> "Perplexity"
