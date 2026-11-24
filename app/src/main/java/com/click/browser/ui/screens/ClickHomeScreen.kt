@@ -11,6 +11,7 @@ import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.animateContentSize
+import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
@@ -19,6 +20,7 @@ import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -76,6 +78,7 @@ import androidx.compose.material.icons.filled.NetworkCheck
 import androidx.compose.material.icons.filled.Terminal
 import androidx.compose.material.icons.filled.Tab
 import androidx.compose.material.icons.filled.Translate
+import androidx.compose.material.icons.filled.QrCodeScanner
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.Badge
@@ -86,6 +89,7 @@ import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.ripple
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
@@ -114,8 +118,10 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.text.font.FontFamily
@@ -270,6 +276,8 @@ fun ClickHomeScreen(
     onOpenPrivacyGuards: () -> Unit = {},
     onOpenDiagnostics: () -> Unit = {},
     onSearchEngineClick: () -> Unit = {},
+    onQrScanClick: () -> Unit = {},
+    remoteSuggestionsEnabled: Boolean = true,
     modifier: Modifier = Modifier
 ) {
     val cardBg = theme.surface
@@ -355,7 +363,9 @@ fun ClickHomeScreen(
                     searchEngine = searchEngine,
                     onNavigate = onNavigate,
                     onSearchEngineClick = onSearchEngineClick,
-                    historyItems = historyItems
+                    onQrScanClick = onQrScanClick,
+                    historyItems = historyItems,
+                    remoteSuggestionsEnabled = remoteSuggestionsEnabled
                 )
                 HomeTopRow(
                     theme = theme,
@@ -373,7 +383,9 @@ fun ClickHomeScreen(
                     searchEngine = searchEngine,
                     onNavigate = onNavigate,
                     onSearchEngineClick = onSearchEngineClick,
-                    historyItems = historyItems
+                    onQrScanClick = onQrScanClick,
+                    historyItems = historyItems,
+                    remoteSuggestionsEnabled = remoteSuggestionsEnabled
                 )
                 BookmarksBar(theme = theme, onNavigate = onNavigate)
             }
@@ -384,7 +396,9 @@ fun ClickHomeScreen(
                     searchEngine = searchEngine,
                     onNavigate = onNavigate,
                     onSearchEngineClick = onSearchEngineClick,
-                    historyItems = historyItems
+                    onQrScanClick = onQrScanClick,
+                    historyItems = historyItems,
+                    remoteSuggestionsEnabled = remoteSuggestionsEnabled
                 )
             }
         }
@@ -708,16 +722,18 @@ private fun rememberSearchSuggestions(
     query: String,
     active: Boolean,
     searchEngine: String,
-    historyItems: List<HistoryItem>
+    historyItems: List<HistoryItem>,
+    remoteEnabled: Boolean = true
 ): List<SearchSuggestion> {
     var suggestions by remember { mutableStateOf<List<SearchSuggestion>>(emptyList()) }
-    LaunchedEffect(query, active, searchEngine, historyItems) {
+    LaunchedEffect(query, active, searchEngine, historyItems, remoteEnabled) {
         if (!active || query.trim().length < 2) {
             suggestions = emptyList()
             return@LaunchedEffect
         }
         val local = SearchSuggestions.localMatches(query, historyItems)
         suggestions = local
+        if (!remoteEnabled) return@LaunchedEffect
         delay(250)
         val remote = SearchSuggestions.fetchRemote(searchEngine, query)
         suggestions = SearchSuggestions.merge(local, remote, query)
@@ -779,9 +795,9 @@ private fun SearchSuggestionList(
     }
 }
 
-/** Pill search bar: selected search-provider mark · hint · mic. (QR scanner removed: no CameraX /
- * MLKit-barcode stack in the app — the button only showed a "coming soon"
- * toast, so the dead control is gone instead of fake.) */
+/** Pill search bar: selected search-provider mark · hint · mic · QR scan.
+ * The QR button is real since 1.8.9 C6 (CameraX + ML Kit barcode stack) —
+ * it was previously removed as a dead "coming soon" control. */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun SmartSearchBar(
@@ -790,7 +806,9 @@ private fun SmartSearchBar(
     searchEngine: String,
     onNavigate: (String) -> Unit,
     onSearchEngineClick: () -> Unit = {},
-    historyItems: List<HistoryItem> = emptyList()
+    onQrScanClick: () -> Unit = {},
+    historyItems: List<HistoryItem> = emptyList(),
+    remoteSuggestionsEnabled: Boolean = true
 ) {
     var query by remember { mutableStateOf("") }
     val keyboardController = LocalSoftwareKeyboardController.current
@@ -805,7 +823,7 @@ private fun SmartSearchBar(
         }
     }
     var fieldFocused by remember { mutableStateOf(false) }
-    val suggestions = rememberSearchSuggestions(query, fieldFocused, searchEngine, historyItems)
+    val suggestions = rememberSearchSuggestions(query, fieldFocused, searchEngine, historyItems, remoteSuggestionsEnabled)
     val pickSuggestion: (SearchSuggestion) -> Unit = { suggestion ->
         query = ""
         keyboardController?.hide()
@@ -865,6 +883,13 @@ private fun SmartSearchBar(
             VoiceMicButton(theme = theme, onHeard = { heard ->
                 onNavigate(heard)
             })
+            IconButton(onClick = onQrScanClick) {
+                Icon(
+                    Icons.Filled.QrCodeScanner,
+                    contentDescription = "Scan QR code",
+                    tint = theme.onSurface.copy(alpha = 0.7f)
+                )
+            }
         }
     }
     if (suggestions.isNotEmpty()) {
@@ -2230,7 +2255,7 @@ private fun BookmarksBar(
 
 /**
  * Bottom navigation: Home · Tabs (count badge) · big glowing AI center ·
- * Bookmarks · Menu. Shown on the home surface (about:blank).
+ * Bookmarks · Private · Menu. Shown on the home surface (about:blank).
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -2241,9 +2266,11 @@ fun ClickBottomNav(
     onTabs: () -> Unit,
     onAi: () -> Unit,
     onBookmarks: () -> Unit,
+    onPrivateTab: () -> Unit,
     onMenu: () -> Unit,
     modifier: Modifier = Modifier
 ) {
+    val haptic = LocalHapticFeedback.current
     Surface(
         color = theme.topBarBg,
         border = androidx.compose.foundation.BorderStroke(
@@ -2271,8 +2298,11 @@ fun ClickBottomNav(
                     .sizeIn(minWidth = 48.dp, minHeight = 48.dp)
                     .clickable(
                         interactionSource = remember { MutableInteractionSource() },
-                        indication = null
-                    ) { onTabs() }
+                        indication = ripple(bounded = false, radius = 30.dp)
+                    ) {
+                        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                        onTabs()
+                    }
             ) {
                 Column(
                     horizontalAlignment = Alignment.CenterHorizontally,
@@ -2284,18 +2314,31 @@ fun ClickBottomNav(
                 }
             }
 
-            // Center: LARGE glowing AI button
+            // Center: LARGE glowing AI button (press-scale + ripple + haptic, 1.8.9 B9)
+            val aiInteraction = remember { MutableInteractionSource() }
+            val aiPressed by aiInteraction.collectIsPressedAsState()
+            val aiScale by animateFloatAsState(
+                targetValue = if (aiPressed) 0.92f else 1f,
+                label = "aiButtonScale"
+            )
             Box(
                 modifier = Modifier
                     .size(62.dp)
-                    .shadow(10.dp, CircleShape, spotColor = theme.primary)
-                    .clip(CircleShape)
+                    .graphicsLayer { scaleX = aiScale; scaleY = aiScale }
                     .background(Brush.linearGradient(listOf(Color(0xFF72583D), Color(0xFFAA865C), Color(0xFFC7AE8A))))
                     .border(2.dp, Color.White.copy(alpha = 0.35f), CircleShape)
                     .clickable(
-                        interactionSource = remember { MutableInteractionSource() },
-                        indication = null
-                    ) { onAi() },
+                        interactionSource = aiInteraction,
+                        indication = ripple()
+                    ) {
+                        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                        onAi()
+                    }
+                    // Clip AFTER the clickable so the gradient AND the ripple
+                    // are cut to the circle (a clip before them clips
+                    // neither); the shadow goes last so it survives the clip.
+                    .clip(CircleShape)
+                    .shadow(10.dp, CircleShape, spotColor = theme.primary),
                 contentAlignment = Alignment.Center
             ) {
                 Column(horizontalAlignment = Alignment.CenterHorizontally) {
@@ -2305,6 +2348,7 @@ fun ClickBottomNav(
             }
 
             ClickNavItem(icon = Icons.Default.Bookmark, label = "Bookmarks", selected = false, theme = theme, onClick = onBookmarks)
+            ClickNavItem(icon = Icons.Default.Lock, label = "Private", selected = false, theme = theme, onClick = onPrivateTab)
             ClickNavItem(icon = Icons.Default.Menu, label = "Menu", selected = false, theme = theme, onClick = onMenu)
         }
     }
@@ -2318,6 +2362,7 @@ private fun ClickNavItem(
     theme: ModeTheme,
     onClick: () -> Unit
 ) {
+    val haptic = LocalHapticFeedback.current
     Column(
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.Center,
@@ -2325,16 +2370,27 @@ private fun ClickNavItem(
             .sizeIn(minWidth = 48.dp, minHeight = 48.dp)
             .clickable(
                 interactionSource = remember { MutableInteractionSource() },
-                indication = null
-            ) { onClick() }
+                indication = ripple(bounded = false, radius = 30.dp)
+            ) {
+                haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                onClick()
+            }
             .padding(4.dp)
     ) {
-        Icon(
-            icon,
-            contentDescription = label,
-            tint = if (selected) theme.primary else theme.onSurface.copy(alpha = 0.6f),
-            modifier = Modifier.size(24.dp)
-        )
+        Box(
+            modifier = Modifier
+                .clip(RoundedCornerShape(999.dp))
+                .background(if (selected) theme.primary.copy(alpha = 0.15f) else Color.Transparent)
+                .padding(horizontal = 14.dp, vertical = 3.dp),
+            contentAlignment = Alignment.Center
+        ) {
+            Icon(
+                icon,
+                contentDescription = label,
+                tint = if (selected) theme.primary else theme.onSurface.copy(alpha = 0.6f),
+                modifier = Modifier.size(24.dp)
+            )
+        }
         Text(
             label,
             fontSize = 10.sp,
@@ -2504,7 +2560,8 @@ fun CompactBrowseBar(
     showExtensionButton: Boolean = false,
     onAddonsClick: () -> Unit = {},
     onSearchEngineClick: () -> Unit = {},
-    historyItems: List<HistoryItem> = emptyList()
+    historyItems: List<HistoryItem> = emptyList(),
+    remoteSuggestionsEnabled: Boolean = true
 ) {
     // Display/edit split (1.8.7 overhaul, A-list #3): while the bar is not
     // focused it shows the short display form of the current URL (site name
@@ -2521,7 +2578,7 @@ fun CompactBrowseBar(
     }
     // Suggestions show only while the user is actually editing the bar.
     val editingBar = barFocused && editText.isNotBlank()
-    val suggestions = rememberSearchSuggestions(editText, editingBar, searchEngine, historyItems)
+    val suggestions = rememberSearchSuggestions(editText, editingBar, searchEngine, historyItems, remoteSuggestionsEnabled)
     val pickSuggestion: (SearchSuggestion) -> Unit = { suggestion ->
         val target = suggestion.url ?: suggestion.text
         editText = target

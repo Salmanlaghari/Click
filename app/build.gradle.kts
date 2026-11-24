@@ -55,8 +55,8 @@ android {
         // by the unsubmitted 1.8.0 Play draft, so the rebuild that removes
         // the centre loading dialog and makes web pages full-screen
         // (no bottom bar) needs the next code — users still see "1.8.0".
-        versionCode = 29
-        versionName = "1.8.8"
+        versionCode = 30
+        versionName = "1.8.9"
 
         // Built-in Groq key for AI chat, injected at build time from the
         // GROQ_API_KEY env var (GitHub Actions secret in CI). The key is
@@ -196,6 +196,11 @@ dependencies {
     // On-device translation (ML Kit). Language MODELS are downloaded on
     // demand at runtime — nothing is bundled, so the APK stays lean.
     implementation(libs.mlkit.translate)
+    implementation(libs.mlkit.barcode.scanning)
+    implementation(libs.androidx.camera.core)
+    implementation(libs.androidx.camera.camera2)
+    implementation(libs.androidx.camera.lifecycle)
+    implementation(libs.androidx.camera.view)
     // AndroidX BiometricPrompt for the private-tab lock (no custom crypto).
     implementation(libs.androidx.biometric)
     // WorkManager for battery-friendly background news checks (no exact

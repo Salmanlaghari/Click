@@ -1252,17 +1252,21 @@ private fun ExtensionManagerDialog(
     val context = LocalContext.current
     var selectedCategory by remember { mutableStateOf("All") }
     var searchQuery by remember { mutableStateOf("") }
-    val filteredEntries = remember(catalogEntries, selectedCategory, searchQuery) {
+    var sortOrder by remember { mutableStateOf(ExtensionCatalogSort.RECOMMENDED) }
+    var hideInstalled by remember { mutableStateOf(false) }
+    val filteredEntries = remember(catalogEntries, selectedCategory, searchQuery, sortOrder, hideInstalled, installedExtensionIds) {
         val q = searchQuery.trim().lowercase()
-        catalogEntries.filter { entry ->
+        val filtered = catalogEntries.filter { entry ->
             val catMatch = selectedCategory == "All" || entry.category == selectedCategory
             val queryMatch = q.isEmpty() ||
                 entry.name.lowercase().contains(q) ||
                 entry.slug.lowercase().contains(q) ||
                 entry.summary.lowercase().contains(q) ||
                 entry.category.lowercase().contains(q)
-            catMatch && queryMatch
+            val installedMatch = !hideInstalled || entry.extensionId !in installedExtensionIds
+            catMatch && queryMatch && installedMatch
         }
+        sortOrder.apply(filtered)
     }
     AlertDialog(
         onDismissRequest = onClose,
@@ -1308,6 +1312,23 @@ private fun ExtensionManagerDialog(
                                 )
                             }
                         }
+                        Row(
+                            modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+                            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
+                            ExtensionCatalogSort.values().forEach { sort ->
+                                FilterChip(
+                                    selected = sortOrder == sort,
+                                    onClick = { sortOrder = sort },
+                                    label = { Text(sort.label, fontSize = 11.sp) }
+                                )
+                            }
+                            FilterChip(
+                                selected = hideInstalled,
+                                onClick = { hideInstalled = !hideInstalled },
+                                label = { Text("Hide installed", fontSize = 11.sp) }
+                            )
+                        }
                         OutlinedButton(onClick = onBrowseCatalog, enabled = isImportEnabled, modifier = Modifier.fillMaxWidth()) {
                             Icon(Icons.Default.Extension, contentDescription = null, modifier = Modifier.padding(end = 6.dp))
                             Text("Browse the full Firefox for Android catalog")
@@ -1317,7 +1338,7 @@ private fun ExtensionManagerDialog(
 
                 if (extensions.isNotEmpty()) {
                     item(key = "installed-title") {
-                        Text("Installed in Click's GeckoView runtime (${extensions.size})", fontWeight = FontWeight.SemiBold, fontSize = 13.sp)
+                        Text("Installed in Click's GeckoView runtime (${extensions.size} · ${extensions.count { it.metaData.enabled }} enabled)", fontWeight = FontWeight.SemiBold, fontSize = 13.sp)
                     }
                     item(key = "installed-guidance") {
                         Text(
