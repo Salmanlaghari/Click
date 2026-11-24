@@ -1,5 +1,6 @@
 package com.click.browser.ui.screens
 
+import android.widget.Toast
 import androidx.annotation.OptIn
 import androidx.camera.core.CameraSelector
 import androidx.camera.core.ExperimentalGetImage
@@ -34,11 +35,11 @@ import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.compose.LocalLifecycleOwner
-import com.click.browser.engine.ModeTheme
 import com.google.mlkit.vision.barcode.BarcodeScannerOptions
 import com.google.mlkit.vision.barcode.BarcodeScanning
 import com.google.mlkit.vision.barcode.common.Barcode
 import com.google.mlkit.vision.common.InputImage
+import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicBoolean
 
 /**
@@ -47,11 +48,18 @@ import java.util.concurrent.atomic.AtomicBoolean
  * is back with the actual stack behind it. The camera runs only while this
  * screen is open; the first QR value found is reported once via [onScanned]
  * and the caller routes it exactly like typed address-bar input.
+ *
+ * Kilo-review hardening (PR #261): frame analysis runs on a dedicated
+ * background executor (never the main thread), the ML Kit scanner is
+ * closed on dispose, every [androidx.camera.core.ImageProxy] is closed
+ * even when frame conversion throws, and a device without a back camera
+ * falls back to the front camera instead of a silent black preview.
+ * The screen is a full-screen camera UI, so it is intentionally not
+ * mode-themed (black scrim for preview contrast).
  */
 @OptIn(ExperimentalGetImage::class)
 @Composable
 fun QrScannerScreen(
-    theme: ModeTheme,
     onScanned: (String) -> Unit,
     onClose: () -> Unit
 ) {
@@ -59,34 +67,43 @@ fun QrScannerScreen(
     val lifecycleOwner = LocalLifecycleOwner.current
     val previewView = remember { PreviewView(context).apply { scaleType = PreviewView.ScaleType.FILL_CENTER } }
     val cameraProviderRef = remember { arrayOfNulls<ProcessCameraProvider>(1) }
-
-    LaunchedEffect(previewView) {
-        val scanner = BarcodeScanning.getClient(
+    val scanner = remember {
+        BarcodeScanning.getClient(
             BarcodeScannerOptions.Builder()
                 .setBarcodeFormats(Barcode.FORMAT_QR_CODE)
                 .build()
         )
+    }
+    val analysisExecutor = remember { Executors.newSingleThreadExecutor() }
+
+    LaunchedEffect(previewView) {
         val delivered = AtomicBoolean(false)
         val analysis = ImageAnalysis.Builder()
             .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
             .build()
-        analysis.setAnalyzer(ContextCompat.getMainExecutor(context)) { imageProxy ->
-            val mediaImage = imageProxy.image
-            if (mediaImage == null) {
-                imageProxy.close()
-            } else {
-                val input = InputImage.fromMediaImage(mediaImage, imageProxy.imageInfo.rotationDegrees)
-                scanner.process(input)
-                    .addOnSuccessListener { barcodes ->
-                        for (barcode in barcodes) {
-                            val raw = barcode.rawValue
-                            if (!raw.isNullOrBlank() && delivered.compareAndSet(false, true)) {
-                                onScanned(raw)
-                                break
+        analysis.setAnalyzer(analysisExecutor) { imageProxy ->
+            try {
+                val mediaImage = imageProxy.image
+                if (mediaImage == null) {
+                    imageProxy.close()
+                } else {
+                    val input = InputImage.fromMediaImage(mediaImage, imageProxy.imageInfo.rotationDegrees)
+                    scanner.process(input)
+                        .addOnSuccessListener { barcodes ->
+                            for (barcode in barcodes) {
+                                val raw = barcode.rawValue
+                                if (!raw.isNullOrBlank() && delivered.compareAndSet(false, true)) {
+                                    onScanned(raw)
+                                    break
+                                }
                             }
                         }
-                    }
-                    .addOnCompleteListener { imageProxy.close() }
+                        .addOnCompleteListener { imageProxy.close() }
+                }
+            } catch (_: Exception) {
+                // Frame conversion / processing blew up — the proxy must
+                // still be closed or the analysis pipeline stalls.
+                try { imageProxy.close() } catch (_: Exception) { }
             }
         }
         val future = ProcessCameraProvider.getInstance(context)
@@ -97,14 +114,25 @@ fun QrScannerScreen(
                 val preview = Preview.Builder().build()
                 preview.surfaceProvider = previewView.surfaceProvider
                 provider.unbindAll()
-                provider.bindToLifecycle(
-                    lifecycleOwner,
-                    CameraSelector.DEFAULT_BACK_CAMERA,
-                    preview,
-                    analysis
-                )
+                try {
+                    provider.bindToLifecycle(
+                        lifecycleOwner,
+                        CameraSelector.DEFAULT_BACK_CAMERA,
+                        preview,
+                        analysis
+                    )
+                } catch (_: Exception) {
+                    // No usable back camera — fall back to the front camera
+                    // rather than leaving a silent black preview.
+                    provider.bindToLifecycle(
+                        lifecycleOwner,
+                        CameraSelector.DEFAULT_FRONT_CAMERA,
+                        preview,
+                        analysis
+                    )
+                }
             } catch (_: Exception) {
-                // No usable camera — the user can still close the sheet.
+                Toast.makeText(context, "No camera available on this device", Toast.LENGTH_LONG).show()
             }
         }, ContextCompat.getMainExecutor(context))
     }
@@ -112,6 +140,8 @@ fun QrScannerScreen(
     DisposableEffect(Unit) {
         onDispose {
             try { cameraProviderRef[0]?.unbindAll() } catch (_: Exception) { }
+            try { scanner.close() } catch (_: Exception) { }
+            analysisExecutor.shutdown()
         }
     }
 

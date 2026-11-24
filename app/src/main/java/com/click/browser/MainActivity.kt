@@ -10951,7 +10951,6 @@ class MainActivity : FragmentActivity() {
                             // typed address-bar input (URL opens, text searches).
                             if (showQrScanner) {
                                 com.click.browser.ui.screens.QrScannerScreen(
-                                    theme = theme,
                                     onScanned = { value ->
                                         showQrScanner = false
                                         pendingKeyboardDismissTabId = currentTab.id.takeIf {
