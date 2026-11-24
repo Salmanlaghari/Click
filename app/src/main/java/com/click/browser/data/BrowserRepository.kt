@@ -237,29 +237,35 @@ class BrowserRepository(private val context: Context) {
         if (!HistoryRecordingPolicy.shouldRecord(isIncognitoTab, item.url)) return
 
         context.profileDataStore.edit { preferences ->
-            val jsonStr = preferences[HISTORY_KEY] ?: "[]"
-            val array = JSONArray(jsonStr)
+            val items = historyItemsFromJson(preferences[HISTORY_KEY] ?: "[]")
+            preferences[HISTORY_KEY] = historyItemsToJson(HistoryListPolicy.upsert(items, item))
+        }
+    }
 
-            // Limit history size to 100
-            if (array.length() >= 100) {
-                val newArray = JSONArray()
-                for (i in 1 until array.length()) {
-                    newArray.put(array.get(i))
-                }
-                newArray.put(JSONObject().apply {
-                    put("title", item.title)
-                    put("url", item.url)
-                    put("timestamp", item.timestamp)
-                })
-                preferences[HISTORY_KEY] = newArray.toString()
-            } else {
-                val newObj = JSONObject().apply {
-                    put("title", item.title)
-                    put("url", item.url)
-                    put("timestamp", item.timestamp)
-                }
-                array.put(newObj)
-                preferences[HISTORY_KEY] = array.toString()
+    /** Removes a single visit (exact URL + timestamp match) from the current profile store. */
+    suspend fun removeHistoryItem(item: HistoryItem) {
+        context.profileDataStore.edit { preferences ->
+            val items = historyItemsFromJson(preferences[HISTORY_KEY] ?: "[]")
+            val kept = items.filterNot { it.url == item.url && it.timestamp == item.timestamp }
+            if (kept.size != items.size) {
+                preferences[HISTORY_KEY] = historyItemsToJson(kept)
+            }
+        }
+    }
+
+    /**
+     * Backfills the real page title for the latest visit to [url] when the
+     * history entry was recorded before the title arrived (Gecko fires
+     * page-loaded and title-changed independently, so an entry can otherwise
+     * keep the raw URL as its label).
+     */
+    suspend fun updateHistoryTitle(url: String, title: String) {
+        if (title.isBlank()) return
+        context.profileDataStore.edit { preferences ->
+            val items = historyItemsFromJson(preferences[HISTORY_KEY] ?: "[]")
+            val updated = HistoryListPolicy.withUpdatedTitle(items, url, title)
+            if (updated !== items) {
+                preferences[HISTORY_KEY] = historyItemsToJson(updated)
             }
         }
     }
@@ -878,8 +884,8 @@ class BrowserRepository(private val context: Context) {
     // --- Last-visit stamps for saved device-permission choices ---
     //
     // The "Automatically remove permissions" sweep must not trust browsing
-    // history as its "visited recently" signal: history is capped at 100
-    // entries (see addHistoryItem), so a recent visit can silently fall out
+    // history as its "visited recently" signal: history is capped
+    // (see HistoryListPolicy), so a recent visit can silently fall out
     // and a still-used site's choice would be revoked. Instead, every origin
     // with a saved camera / microphone / location choice carries its own
     // last-visit stamp here. Stamps are written when a choice is saved (the
@@ -1124,6 +1130,18 @@ private fun historyItemsFromJson(jsonStr: String): List<HistoryItem> {
         )
     }
     return list
+}
+
+private fun historyItemsToJson(items: List<HistoryItem>): String {
+    val array = JSONArray()
+    for (item in items) {
+        array.put(JSONObject().apply {
+            put("title", item.title)
+            put("url", item.url)
+            put("timestamp", item.timestamp)
+        })
+    }
+    return array.toString()
 }
 
 private fun websitePermissionLastVisitFromJson(json: String?): Map<String, Long> {

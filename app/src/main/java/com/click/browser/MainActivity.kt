@@ -5715,7 +5715,26 @@ class MainActivity : FragmentActivity() {
                                                                 else runOnUiThread { update() }
                                                             },
                                                             onTitleChanged = { title ->
-                                                                tabs.firstOrNull { it.id == tabId }?.title = title
+                                                                val titledTab = tabs.firstOrNull { it.id == tabId }
+                                                                if (titledTab != null) {
+                                                                    titledTab.title = title
+                                                                    // Page-loaded can record history
+                                                                    // before the real title arrives;
+                                                                    // backfill it so the entry does
+                                                                    // not keep the raw URL as its label.
+                                                                    if (title.isNotBlank() && !titledTab.isIncognito) {
+                                                                        val loadedUrl = titledTab.url
+                                                                        if (loadedUrl.startsWith("http://") ||
+                                                                            loadedUrl.startsWith("https://")
+                                                                        ) {
+                                                                            scope.launch {
+                                                                                runCatching {
+                                                                                    repository.updateHistoryTitle(loadedUrl, title)
+                                                                                }
+                                                                            }
+                                                                        }
+                                                                    }
+                                                                }
                                                             },
                                                             onPageLoaded = { url ->
                                                                 // First successful page load: the
@@ -7734,6 +7753,11 @@ class MainActivity : FragmentActivity() {
                                             RecentlyClosedTabs.clearHistoryAndRecentlyClosedForMode(modeToClear) { historyMode ->
                                                 repository.clearHistoryFor(historyMode)
                                             }
+                                        }
+                                    },
+                                    onDeleteItem = { item ->
+                                        scope.launch {
+                                            runCatching { repository.removeHistoryItem(item) }
                                         }
                                     },
                                     onClose = { showHistory = false }
