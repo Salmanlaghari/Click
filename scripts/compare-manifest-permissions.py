@@ -25,6 +25,12 @@ APPROVED_ADDITIONS = {
     # before any release containing it is submitted.
     ("uses-permission", ((ANDROID + "name", "android.permission.CAMERA"),)),
     ("uses-permission", ((ANDROID + "name", "android.permission.ACCESS_FINE_LOCATION"),)),
+    # Prince-approved 2026-11-24 (PR #255): required by Android 14+ for the
+    # Playlist background player's mediaPlayback foreground service — the
+    # service crashes without it. NOTE: a Play Console foreground-service
+    # declaration for media playback is still owed before any release
+    # containing it is submitted.
+    ("uses-permission", ((ANDROID + "name", "android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK"),)),
 }
 
 
