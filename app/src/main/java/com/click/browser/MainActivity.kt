@@ -2584,6 +2584,8 @@ class MainActivity : FragmentActivity() {
             // The one media URL the user chose "Open" for — loads normally
             // this once instead of offering again.
             var directMediaBypassUrl by remember { mutableStateOf<String?>(null) }
+            // .onion navigation held for the Tor-route sheet (1.8.9 B10).
+            var onionOfferUrl by remember { mutableStateOf<String?>(null) }
             // External app handoff prompt (1.8.6): non-null while the
             // "Open in <app>?" confirmation is on screen.
             var externalAppPrompt by remember {
@@ -5724,6 +5726,18 @@ class MainActivity : FragmentActivity() {
                                                                     }
                                                                 }
                                                                 if (liveMode == BrowserMode.HACK) targetUrl = forceDesktopHost(targetUrl)
+                                                                // .onion sites (1.8.9 B10): never load directly —
+                                                                // they only resolve inside the Tor network. The
+                                                                // ACTIVE tab gets the Tor-route sheet; other
+                                                                // tabs are simply held.
+                                                                if (com.click.browser.engine.OnionRoutingPolicy.isOnionUrl(targetUrl)) {
+                                                                    if (tabs.getOrNull(activeTabIndex)?.id == tabId) {
+                                                                        onionOfferUrl = targetUrl
+                                                                    }
+                                                                    return@navigation null
+                                                                }
+                                                                // Held onion offer is moot once this tab navigates elsewhere.
+                                                                if (tabs.getOrNull(activeTabIndex)?.id == tabId) onionOfferUrl = null
                                                                 // Direct file detection (Prince, 2026-11-21):
                                                                 // a site that serves a file at a plain URL
                                                                 // should hand the user a download, not a
@@ -6311,6 +6325,27 @@ class MainActivity : FragmentActivity() {
                                                                             ExternalHandoffResult.NotHandled -> return false
                                                                         }
                                                                     }
+                                                                    // .onion sites (1.8.9 B10): never load directly —
+                                                                    // they only resolve inside the Tor network.
+                                                                    // ownerTab is resolved once here and shared by
+                                                                    // the onion check below and the direct-media
+                                                                    // offer check after the PDF block.
+                                                                    val ownerTab = view?.let { v ->
+                                                                        tabs.firstOrNull { it.webView === v }
+                                                                    }
+                                                                    if (com.click.browser.engine.OnionRoutingPolicy.isOnionUrl(urlStr)) {
+                                                                        if (ownerTab != null && ownerTab.id == currentTab.id) {
+                                                                            onionOfferUrl = urlStr
+                                                                        }
+                                                                        return true
+                                                                    }
+                                                                    // Held onion offer is moot once this tab
+                                                                    // navigates elsewhere — clear it so the sheet
+                                                                    // never reappears over an unrelated page.
+                                                                    // Same condition as the Gecko delegate (the
+                                                                    // navigating tab is the active tab), spelled
+                                                                    // the same way in all three callbacks.
+                                                                    if (tabs.getOrNull(activeTabIndex)?.id == ownerTab?.id) onionOfferUrl = null
                                                                     // PDF: offer in-app viewing instead of navigating.
                                                                     if (isPdfUrl(urlStr)) {
                                                                         pdfOfferUrl = urlStr
@@ -6319,11 +6354,7 @@ class MainActivity : FragmentActivity() {
                                                                     // Direct media file: same open/download offer
                                                                     // sheet Gecko tabs show (parity, 1.8.9 B8). Only
                                                                     // the ACTIVE tab is held for the offer.
-                                                                    // (ownerTab is resolved here — the one defined
-                                                                    // above lives inside the external-app block.)
-                                                                    val ownerTab = view?.let { v ->
-                                                                        tabs.firstOrNull { it.webView === v }
-                                                                    }
+                                                                    // (ownerTab was resolved once above, shared here.)
                                                                     if (ownerTab != null && ownerTab.id == currentTab.id &&
                                                                         com.click.browser.engine.DirectDownloadPolicy.navigationAction(
                                                                             urlStr, directMediaBypassUrl
@@ -6429,6 +6460,27 @@ class MainActivity : FragmentActivity() {
                                                                     }
                                                                     // Sign-in/OAuth pages stay in this tab (no handoff).
                                                                     // HTTPS mode handling FIRST (see above).
+                                                                    // .onion sites (1.8.9 B10): never load directly —
+                                                                    // they only resolve inside the Tor network.
+                                                                    // ownerTab is resolved once here and shared by
+                                                                    // the onion check below and the direct-media
+                                                                    // offer check after the PDF block.
+                                                                    val ownerTab = view?.let { v ->
+                                                                        tabs.firstOrNull { it.webView === v }
+                                                                    }
+                                                                    if (com.click.browser.engine.OnionRoutingPolicy.isOnionUrl(urlStr)) {
+                                                                        if (ownerTab != null && ownerTab.id == currentTab.id) {
+                                                                            onionOfferUrl = urlStr
+                                                                        }
+                                                                        return true
+                                                                    }
+                                                                    // Held onion offer is moot once this tab
+                                                                    // navigates elsewhere — clear it so the sheet
+                                                                    // never reappears over an unrelated page.
+                                                                    // Same condition as the Gecko delegate (the
+                                                                    // navigating tab is the active tab), spelled
+                                                                    // the same way in all three callbacks.
+                                                                    if (tabs.getOrNull(activeTabIndex)?.id == ownerTab?.id) onionOfferUrl = null
                                                                     // PDF: offer in-app viewing instead of navigating.
                                                                     if (isPdfUrl(urlStr)) {
                                                                         pdfOfferUrl = urlStr
@@ -6437,11 +6489,7 @@ class MainActivity : FragmentActivity() {
                                                                     // Direct media file: same open/download offer
                                                                     // sheet Gecko tabs show (parity, 1.8.9 B8). Only
                                                                     // the ACTIVE tab is held for the offer.
-                                                                    // (ownerTab is resolved here — the one defined
-                                                                    // above lives inside the external-app block.)
-                                                                    val ownerTab = view?.let { v ->
-                                                                        tabs.firstOrNull { it.webView === v }
-                                                                    }
+                                                                    // (ownerTab was resolved once above, shared here.)
                                                                     if (ownerTab != null && ownerTab.id == currentTab.id &&
                                                                         com.click.browser.engine.DirectDownloadPolicy.navigationAction(
                                                                             urlStr, directMediaBypassUrl
@@ -10186,6 +10234,73 @@ class MainActivity : FragmentActivity() {
                                     },
                                     onDismiss = { directMediaOffer = null }
                                 )
+                            }
+                            // A held onion offer belongs to the tab it was held on —
+                            // switching tabs dismisses the sheet instead of showing
+                            // it over another page. Trade-off, chosen deliberately:
+                            // switching back does NOT restore the sheet — the
+                            // user re-taps the link. A stale Tor sheet over the
+                            // wrong page would be worse.
+                            LaunchedEffect(currentTab.id) { onionOfferUrl = null }
+                            // .onion navigation held (1.8.9 B10): offer the Tor route.
+                            val onionUrl = onionOfferUrl
+                            if (onionUrl != null) {
+                                var torBrowserInstalled by remember(onionUrl) { mutableStateOf(false) }
+                                var orbotInstalled by remember(onionUrl) { mutableStateOf(false) }
+                                var installChecksDone by remember(onionUrl) { mutableStateOf(false) }
+                                // Package lookups are Binder IPC — run them in an
+                                // effect, not during composition. The sheet waits
+                                // for them so the buttons never flash a wrong
+                                // "not installed" state on the first frame.
+                                LaunchedEffect(onionUrl) {
+                                    torBrowserInstalled = try { packageManager.getPackageInfo("org.torproject.torbrowser", 0); true } catch (_: Exception) { false }
+                                    orbotInstalled = try { packageManager.getPackageInfo("org.torproject.android", 0); true } catch (_: Exception) { false }
+                                    installChecksDone = true
+                                }
+                                if (installChecksDone) {
+                                com.click.browser.ui.screens.OnionOfferSheet(
+                                    theme = theme,
+                                    url = onionUrl,
+                                    torBrowserInstalled = torBrowserInstalled,
+                                    orbotInstalled = orbotInstalled,
+                                    onOpenTorBrowser = {
+                                        onionOfferUrl = null
+                                        try {
+                                            startActivity(
+                                                Intent(Intent.ACTION_VIEW, android.net.Uri.parse(onionUrl))
+                                                    .setPackage("org.torproject.torbrowser")
+                                                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                                            )
+                                        } catch (e: Exception) {
+                                            Toast.makeText(this@MainActivity, "Couldn't open Tor Browser.", Toast.LENGTH_SHORT).show()
+                                        }
+                                    },
+                                    onOpenOrbot = {
+                                        onionOfferUrl = null
+                                        copyLongPressText(onionUrl, "Onion link copied — paste it in Orbot.")
+                                        try {
+                                            packageManager.getLaunchIntentForPackage("org.torproject.android")?.let { startActivity(it) }
+                                        } catch (e: Exception) {
+                                            Toast.makeText(this@MainActivity, "Couldn't open Orbot.", Toast.LENGTH_SHORT).show()
+                                        }
+                                    },
+                                    onGetTorApp = {
+                                        onionOfferUrl = null
+                                        try {
+                                            startActivity(Intent(Intent.ACTION_VIEW, android.net.Uri.parse("market://details?id=org.torproject.android")))
+                                        } catch (e: Exception) {
+                                            try {
+                                                startActivity(Intent(Intent.ACTION_VIEW, android.net.Uri.parse("https://play.google.com/store/apps/details?id=org.torproject.android")))
+                                            } catch (_: Exception) { }
+                                        }
+                                    },
+                                    onCopyLink = {
+                                        onionOfferUrl = null
+                                        copyLongPressText(onionUrl, "Onion link copied.")
+                                    },
+                                    onDismiss = { onionOfferUrl = null }
+                                )
+                                }
                             }
                             // Full-screen in-app PDF viewer.
                             val pdfFile = viewingPdfFile

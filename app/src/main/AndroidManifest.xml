@@ -46,6 +46,12 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
     <uses-permission android:name="android.permission.RUN_USER_INITIATED_JOBS" />
 
+    <!-- .onion support (1.8.9 B10): detect Tor Browser / Orbot installs. -->
+    <queries>
+        <package android:name="org.torproject.torbrowser" />
+        <package android:name="org.torproject.android" />
+    </queries>
+
     <application
         android:name=".ClickApplication"
         android:allowBackup="true"
