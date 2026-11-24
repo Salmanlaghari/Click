@@ -44,6 +44,8 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
+    <!-- Playlist background playback: mediaPlayback foreground service (Android 14+). -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK" />
     <uses-permission android:name="android.permission.RUN_USER_INITIATED_JOBS" />
 
     <!-- .onion support (1.8.9 B10): detect Tor Browser / Orbot installs. -->
@@ -156,6 +158,13 @@
                 android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
                 android:value="Encrypted VPN tunnel routing all device traffic through the selected server (Cloudflare WARP or custom)" />
         </service>
+
+        <!-- Playlist background playback (1.8.9 B7 fix: the service existed
+             but was never declared, so background play could never start). -->
+        <service
+            android:name=".engine.PlaylistPlaybackService"
+            android:foregroundServiceType="mediaPlayback"
+            android:exported="false" />
     </application>
 
 </manifest>
