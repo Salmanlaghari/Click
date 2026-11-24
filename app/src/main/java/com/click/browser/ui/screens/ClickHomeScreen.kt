@@ -2279,7 +2279,7 @@ fun ClickBottomNav(
                         interactionSource = remember { MutableInteractionSource() },
                         indication = ripple(bounded = false, radius = 30.dp)
                     ) {
-                        haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
                         onTabs()
                     }
             ) {
@@ -2304,17 +2304,20 @@ fun ClickBottomNav(
                 modifier = Modifier
                     .size(62.dp)
                     .graphicsLayer { scaleX = aiScale; scaleY = aiScale }
-                    .shadow(10.dp, CircleShape, spotColor = theme.primary)
-                    .clip(CircleShape)
                     .background(Brush.linearGradient(listOf(Color(0xFF72583D), Color(0xFFAA865C), Color(0xFFC7AE8A))))
                     .border(2.dp, Color.White.copy(alpha = 0.35f), CircleShape)
                     .clickable(
                         interactionSource = aiInteraction,
                         indication = ripple()
                     ) {
-                        haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
                         onAi()
-                    },
+                    }
+                    // Clip AFTER the clickable so the gradient AND the ripple
+                    // are cut to the circle (a clip before them clips
+                    // neither); the shadow goes last so it survives the clip.
+                    .clip(CircleShape)
+                    .shadow(10.dp, CircleShape, spotColor = theme.primary),
                 contentAlignment = Alignment.Center
             ) {
                 Column(horizontalAlignment = Alignment.CenterHorizontally) {
@@ -2347,7 +2350,7 @@ private fun ClickNavItem(
                 interactionSource = remember { MutableInteractionSource() },
                 indication = ripple(bounded = false, radius = 30.dp)
             ) {
-                haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                haptic.performHapticFeedback(HapticFeedbackType.LongPress)
                 onClick()
             }
             .padding(4.dp)
