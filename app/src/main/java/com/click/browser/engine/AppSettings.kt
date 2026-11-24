@@ -128,6 +128,9 @@ object AppSettings {
     // with the device biometric (or device PIN/pattern fallback) every time
     // the app goes to background and returns.
     val BIOMETRIC_TAB_LOCK = booleanPreferencesKey("biometric_tab_lock")
+    // Whole-app lock (1.8.9 C2): when ON, Click locks behind the device
+    // biometric/PIN on cold start and whenever the app backgrounds.
+    val APP_LOCK_ENABLED = booleanPreferencesKey("app_lock_enabled")
 
     // Text scaling: global default percent (50..300) + per-host overrides
     // stored as a JSON object { "example.com": 125 }.

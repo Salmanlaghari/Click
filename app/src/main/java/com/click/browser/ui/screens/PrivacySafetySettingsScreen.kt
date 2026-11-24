@@ -98,6 +98,9 @@ fun PrivacySafetySettingsScreen(
     biometricLockEnabled: Boolean,
     onToggleBiometricLock: (Boolean) -> Unit,
     biometricStatusText: String,
+    appLockEnabled: Boolean,
+    onToggleAppLock: (Boolean) -> Unit,
+    appLockStatusText: String,
     locationSummary: String,
     onOpenLocationSettings: () -> Unit,
     clearOnExitEnabled: Boolean,
@@ -233,6 +236,14 @@ fun PrivacySafetySettingsScreen(
                         desc = biometricStatusText,
                         checked = biometricLockEnabled,
                         onCheckedChange = onToggleBiometricLock,
+                        theme = theme
+                    )
+                    HorizontalDivider(color = theme.onSurface.copy(alpha = 0.1f))
+                    PrivacyToggleRow(
+                        title = "App Lock",
+                        desc = appLockStatusText,
+                        checked = appLockEnabled,
+                        onCheckedChange = onToggleAppLock,
                         theme = theme
                     )
                     HorizontalDivider(color = theme.onSurface.copy(alpha = 0.1f))

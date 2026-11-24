@@ -385,6 +385,9 @@ class MainActivity : FragmentActivity() {
     private var liveBiometricLockEnabled = false
     private var liveHasIncognitoTabs = false
     private val privateLockedFlow = kotlinx.coroutines.flow.MutableStateFlow(false)
+    // Whole-app lock (1.8.9 C2): same pattern as the private-tab lock.
+    private var liveAppLockEnabled = false
+    private val appLockedFlow = kotlinx.coroutines.flow.MutableStateFlow(false)
     private val passwordManagerAuthenticatedFlow = MutableStateFlow(false)
     private var passwordAuthenticationInFlight = false
     // Default-browser flow: pending external link from an ACTION_VIEW intent
@@ -710,6 +713,13 @@ class MainActivity : FragmentActivity() {
         // the unlock on return.
         if (liveBiometricLockEnabled && liveHasIncognitoTabs) {
             privateLockedFlow.value = true
+        }
+        // App lock (1.8.9 C2): the whole app re-locks on backgrounding —
+        // but only when the device can still authenticate. If the user
+        // removed every biometric/PIN after enabling the lock, re-locking
+        // would strand them on a lock screen they can never open.
+        if (liveAppLockEnabled && com.click.browser.engine.PrivateTabLock.canLock(this@MainActivity)) {
+            appLockedFlow.value = true
         }
     }
 
@@ -1472,12 +1482,70 @@ class MainActivity : FragmentActivity() {
         }
     }
 
+    /** App-lock prompt (1.8.9 C2): same construction as the private-tab prompt. */
+    fun promptUnlockApp() {
+        val executor = ContextCompat.getMainExecutor(this)
+        val prompt = BiometricPrompt(
+            this,
+            executor,
+            object : BiometricPrompt.AuthenticationCallback() {
+                override fun onAuthenticationSucceeded(result: BiometricPrompt.AuthenticationResult) {
+                    super.onAuthenticationSucceeded(result)
+                    appLockedFlow.value = false
+                }
+
+                override fun onAuthenticationError(errorCode: Int, errString: CharSequence) {
+                    super.onAuthenticationError(errorCode, errString)
+                    // Stay locked — the user can tap Unlock to retry.
+                }
+            }
+        )
+        val infoBuilder = BiometricPrompt.PromptInfo.Builder()
+            .setTitle("Unlock Click")
+            .setSubtitle("Authenticate to open Click")
+        if (android.os.Build.VERSION.SDK_INT >= 30) {
+            infoBuilder.setAllowedAuthenticators(com.click.browser.engine.PrivateTabLock.AUTHENTICATORS)
+        } else {
+            @Suppress("DEPRECATION")
+            infoBuilder.setDeviceCredentialAllowed(true)
+        }
+        try {
+            prompt.authenticate(infoBuilder.build())
+        } catch (_: Exception) {
+            // Biometric stack hiccup — stay locked; tell the user to retry
+            // via the button instead of failing silently.
+            Toast.makeText(this, "Couldn't start authentication — tap Unlock to retry", Toast.LENGTH_SHORT).show()
+        }
+    }
+
     @OptIn(ExperimentalMaterial3Api::class)
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         // API 35+ enforces edge-to-edge for targetSdk 35+ — opt in and handle
         // WindowInsets in Compose so no chrome is hidden behind system bars.
         enableEdgeToEdge()
+
+        // App lock (1.8.9 C2): cold-start locked when enabled and the device
+        // can actually authenticate. One-time read — the overlay + prompt
+        // handle unlocking; the live flag keeps onPause() re-locking.
+        kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.Main).launch {
+            try {
+                val enabled = dataStore.data.first()[AppSettings.APP_LOCK_ENABLED] == true
+                liveAppLockEnabled = enabled
+                if (enabled && com.click.browser.engine.PrivateTabLock.canLock(this@MainActivity)) {
+                    appLockedFlow.value = true
+                }
+            } catch (e: Exception) {
+                // DataStore read failed — fail CLOSED (lock the app) rather
+                // than silently opening it unlocked, but only when the
+                // device can actually authenticate, so we never strand the
+                // user on an unopenable lock screen.
+                android.util.Log.w("ClickAppLock", "App-lock setting read failed", e)
+                if (com.click.browser.engine.PrivateTabLock.canLock(this@MainActivity)) {
+                    appLockedFlow.value = true
+                }
+            }
+        }
 
         if (V9Engine.isBootBlocked) {
             val recoveryModeManager = ModeManager(this)
@@ -2725,12 +2793,14 @@ class MainActivity : FragmentActivity() {
             var secureDnsEnabled by remember { mutableStateOf(false) }
             // Biometric private-tab lock + text scaling (accessibility).
             var biometricLockEnabled by remember { mutableStateOf(false) }
+            var appLockEnabled by remember { mutableStateOf(false) }
             var hasStrongBiometric by remember { mutableStateOf(false) }
             var globalTextScale by remember { mutableStateOf(com.click.browser.engine.TextScaleStore.DEFAULT) }
             var hostTextScales by remember { mutableStateOf<Map<String, Int>>(emptyMap()) }
             var showTextScaleSheet by remember { mutableStateOf(false) }
             var sheetScale by remember { mutableStateOf(com.click.browser.engine.TextScaleStore.DEFAULT) }
             val privateLocked by privateLockedFlow.collectAsState()
+            val appLocked by appLockedFlow.collectAsState()
             var webrtcTestRunning by remember { mutableStateOf(false) }
             var webrtcResult by remember { mutableStateOf<WebRtcTestResult?>(null) }
             var webrtcRunId by remember { mutableStateOf<String?>(null) }
@@ -3647,6 +3717,8 @@ class MainActivity : FragmentActivity() {
                     // Biometric private-tab lock + text scaling.
                     biometricLockEnabled = prefs[AppSettings.BIOMETRIC_TAB_LOCK] == true
                     liveBiometricLockEnabled = biometricLockEnabled
+                    appLockEnabled = prefs[AppSettings.APP_LOCK_ENABLED] == true
+                    liveAppLockEnabled = appLockEnabled
                     hasStrongBiometric = com.click.browser.engine.PrivateTabLock.hasStrongBiometric(this@MainActivity)
                     val (gScale, hScales) = com.click.browser.engine.TextScaleStore.snapshot(this@MainActivity)
                     globalTextScale = gScale
@@ -9232,6 +9304,34 @@ class MainActivity : FragmentActivity() {
                                         if (hasStrongBiometric) "Re-lock private tabs behind fingerprint/face when the app backgrounds"
                                         else "Re-lock private tabs behind your device PIN when the app backgrounds"
                                     else com.click.browser.engine.PrivateTabLock.unavailableReason(this@MainActivity),
+                                    appLockEnabled = appLockEnabled,
+                                    onToggleAppLock = { v ->
+                                        if (v && !com.click.browser.engine.PrivateTabLock.canLock(this@MainActivity)) {
+                                            Toast.makeText(
+                                                this@MainActivity,
+                                                com.click.browser.engine.PrivateTabLock.unavailableReason(this@MainActivity),
+                                                Toast.LENGTH_LONG
+                                            ).show()
+                                        } else {
+                                            appLockEnabled = v
+                                            liveAppLockEnabled = v
+                                            scope.launch {
+                                                dataStore.edit { prefs ->
+                                                    prefs[AppSettings.APP_LOCK_ENABLED] = v
+                                                }
+                                            }
+                                            if (v) Toast.makeText(
+                                                this@MainActivity,
+                                                if (hasStrongBiometric) "Click will lock behind biometrics"
+                                                else "Click will lock behind your device PIN",
+                                                Toast.LENGTH_SHORT
+                                            ).show()
+                                        }
+                                    },
+                                    appLockStatusText = if (com.click.browser.engine.PrivateTabLock.canLock(this@MainActivity))
+                                        if (hasStrongBiometric) "Lock the whole app behind fingerprint/face when it starts or backgrounds"
+                                        else "Lock the whole app behind your device PIN when it starts or backgrounds"
+                                    else com.click.browser.engine.PrivateTabLock.unavailableReason(this@MainActivity),
                                     locationSummary = LocationGuard.websitesWillSee(),
                                     onOpenLocationSettings = { showLocationSettings = true },
                                     clearOnExitEnabled = clearOnExitEnabled,
@@ -10994,6 +11094,17 @@ class MainActivity : FragmentActivity() {
                                     theme = theme,
                                     useBiometricLabel = hasStrongBiometric,
                                     onUnlock = { promptUnlockPrivateTabs() }
+                                )
+                            }
+
+                            // App lock overlay (1.8.9 C2) — above everything,
+                            // including the private-tab lock. Auto-prompts.
+                            if (appLocked) {
+                                LaunchedEffect(Unit) { promptUnlockApp() }
+                                com.click.browser.ui.screens.AppLockOverlay(
+                                    theme = theme,
+                                    useBiometricLabel = hasStrongBiometric,
+                                    onUnlock = { promptUnlockApp() }
                                 )
                             }
 

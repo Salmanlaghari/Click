@@ -166,6 +166,60 @@ fun TextScaleSheet(
 }
 
 /**
+ * Whole-app lock overlay (1.8.9 C2): shown above everything when App Lock
+ * is on and Click has locked (cold start or backgrounding). Mirrors
+ * [PrivateTabLockOverlay]; the unlock itself is the system BiometricPrompt.
+ */
+@Composable
+fun AppLockOverlay(
+    theme: ModeTheme,
+    useBiometricLabel: Boolean,
+    onUnlock: () -> Unit
+) {
+    Surface(
+        modifier = Modifier.fillMaxSize(),
+        color = theme.background
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(32.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.Center
+        ) {
+            Icon(
+                Icons.Default.Lock,
+                contentDescription = null,
+                tint = theme.primary,
+                modifier = Modifier.size(72.dp)
+            )
+            Spacer(Modifier.height(16.dp))
+            Text(
+                "Click is Locked",
+                color = theme.onSurface,
+                fontWeight = FontWeight.Bold,
+                fontSize = 20.sp
+            )
+            Spacer(Modifier.height(8.dp))
+            Text(
+                if (useBiometricLabel)
+                    "Authenticate with your fingerprint or face to open Click"
+                else
+                    "Authenticate with your device PIN to open Click",
+                color = theme.onSurface.copy(alpha = 0.6f),
+                fontSize = 13.sp
+            )
+            Spacer(Modifier.height(24.dp))
+            Button(onClick = onUnlock) {
+                Icon(Icons.Default.Fingerprint, contentDescription = null)
+                Spacer(Modifier.width(8.dp))
+                Text("Unlock")
+            }
+        }
+    }
+}
+
+/**
  * Full-screen overlay shown when private tabs are locked. Covers the whole
  * browser surface (including the tab switcher) so private content is never
  * visible without authentication. Incognito thumbnails are never captured
