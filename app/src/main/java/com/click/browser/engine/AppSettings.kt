@@ -42,6 +42,14 @@ object AppSettings {
     // them; they are requests, not enforcement.
     val DNT_ENABLED = booleanPreferencesKey("dnt_enabled")
     val GPC_ENABLED = booleanPreferencesKey("gpc_enabled")
+    // Browsing-history recording master switch (Privacy & Safety).
+    // Default ON (normal browser behavior); OFF = no profile records any
+    // history at all. Private tabs never record either way.
+    val HISTORY_RECORDING_ENABLED = booleanPreferencesKey("history_recording_enabled")
+    // Remote search suggestions (Privacy & Safety). Default ON; OFF = the
+    // address bar shows only local history matches and sends nothing to the
+    // search engine while the user types.
+    val REMOTE_SUGGESTIONS_ENABLED = booleanPreferencesKey("remote_suggestions_enabled")
     // Block WebRTC (Privacy Guards). OPT-IN, default OFF: WebRTC stays
     // available until the user turns blocking on, because blocking breaks
     // legitimate in-browser calls. Enforced by WebRtcGuard (GeckoView tabs)

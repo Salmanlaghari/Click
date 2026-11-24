@@ -223,6 +223,11 @@ class V9VpnService : VpnService() {
         val response: ByteArray = if (V9Blocklist.isBlocked(query.name)) {
             blockedCount.incrementAndGet()
             _blocked.value = blockedCount.get()
+            // Malicious-class hits (cryptominers) are rare and serious —
+            // alert the user; routine ad/tracker blocks stay silent counts.
+            V9Blocklist.maliciousCategory(query.name)?.let { category ->
+                SecurityNotifications.notifyShieldBlockedMalicious(this, query.name, category)
+            }
             buildDnsResponse(query, sinkhole = true)
         } else {
             val (provider, customUrl, strictDns) = dohConfig()

@@ -33,12 +33,28 @@ object V9Blocklist {
         "webminepool.com", "monerominer.rocks",
     )
 
+    /**
+     * Malicious (not merely annoying) subset of the blocklist: cryptominer
+     * domains. Kept separate so the Shield can alert on these hits — an
+     * ordinary ad/tracker block is routine, a miner is an attack.
+     */
+    private val MALICIOUS_DOMAINS: Set<String> = setOf(
+        "coinhive.com", "coin-hive.com", "cryptoloot.pro", "minero.cc",
+        "webminepool.com", "monerominer.rocks",
+    )
+
     /** True if [host] (or any of its parent domains) is on the blocklist. */
-    fun isBlocked(host: String): Boolean {
+    fun isBlocked(host: String): Boolean = matches(DOMAINS, host)
+
+    /** Threat category for malicious-list hits ("cryptominer"), else null. */
+    fun maliciousCategory(host: String): String? =
+        if (matches(MALICIOUS_DOMAINS, host)) "cryptominer" else null
+
+    private fun matches(domains: Set<String>, host: String): Boolean {
         var h = host.lowercase().trim().trimEnd('.')
         if (h.isEmpty()) return false
         while (true) {
-            if (DOMAINS.contains(h)) return true
+            if (domains.contains(h)) return true
             val dot = h.indexOf('.')
             if (dot < 0) return false
             h = h.substring(dot + 1)

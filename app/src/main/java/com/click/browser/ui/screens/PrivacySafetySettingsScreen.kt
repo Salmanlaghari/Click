@@ -85,6 +85,10 @@ fun PrivacySafetySettingsScreen(
     onToggleSafeBrowsing: (Boolean) -> Unit,
     dntEnabled: Boolean,
     onToggleDnt: (Boolean) -> Unit,
+    historyRecordingEnabled: Boolean,
+    onToggleHistoryRecording: (Boolean) -> Unit,
+    remoteSuggestionsEnabled: Boolean,
+    onToggleRemoteSuggestions: (Boolean) -> Unit,
     stripTrackingParams: Boolean,
     onToggleStripTrackingParams: (Boolean) -> Unit,
     forgetfulBrowsing: Boolean,
@@ -187,6 +191,25 @@ fun PrivacySafetySettingsScreen(
                         desc = "Auto-remove utm_*, gclid, fbclid & other trackers from URLs",
                         checked = stripTrackingParams,
                         onCheckedChange = onToggleStripTrackingParams,
+                        theme = theme
+                    )
+                    HorizontalDivider(color = theme.onSurface.copy(alpha = 0.1f))
+                    PrivacyToggleRow(
+                        title = "Record Browsing History",
+                        desc = "Save visited pages to history in every mode. Turn off and " +
+                            "nothing is recorded — private tabs never record either way.",
+                        checked = historyRecordingEnabled,
+                        onCheckedChange = onToggleHistoryRecording,
+                        theme = theme
+                    )
+                    HorizontalDivider(color = theme.onSurface.copy(alpha = 0.1f))
+                    PrivacyToggleRow(
+                        title = "Search Suggestions",
+                        desc = "Fetch suggestions from your search engine as you type in " +
+                            "the address bar. Turn off and only matches from your own " +
+                            "history are shown — nothing is sent while you type.",
+                        checked = remoteSuggestionsEnabled,
+                        onCheckedChange = onToggleRemoteSuggestions,
                         theme = theme
                     )
                     HorizontalDivider(color = theme.onSurface.copy(alpha = 0.1f))

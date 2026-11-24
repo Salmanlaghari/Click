@@ -272,6 +272,7 @@ fun ClickHomeScreen(
     onOpenDiagnostics: () -> Unit = {},
     onSearchEngineClick: () -> Unit = {},
     onQrScanClick: () -> Unit = {},
+    remoteSuggestionsEnabled: Boolean = true,
     modifier: Modifier = Modifier
 ) {
     val cardBg = theme.surface
@@ -358,7 +359,8 @@ fun ClickHomeScreen(
                     onNavigate = onNavigate,
                     onSearchEngineClick = onSearchEngineClick,
                     onQrScanClick = onQrScanClick,
-                    historyItems = historyItems
+                    historyItems = historyItems,
+                    remoteSuggestionsEnabled = remoteSuggestionsEnabled
                 )
                 HomeTopRow(
                     theme = theme,
@@ -377,7 +379,8 @@ fun ClickHomeScreen(
                     onNavigate = onNavigate,
                     onSearchEngineClick = onSearchEngineClick,
                     onQrScanClick = onQrScanClick,
-                    historyItems = historyItems
+                    historyItems = historyItems,
+                    remoteSuggestionsEnabled = remoteSuggestionsEnabled
                 )
                 BookmarksBar(theme = theme, onNavigate = onNavigate)
             }
@@ -389,7 +392,8 @@ fun ClickHomeScreen(
                     onNavigate = onNavigate,
                     onSearchEngineClick = onSearchEngineClick,
                     onQrScanClick = onQrScanClick,
-                    historyItems = historyItems
+                    historyItems = historyItems,
+                    remoteSuggestionsEnabled = remoteSuggestionsEnabled
                 )
             }
         }
@@ -713,16 +717,18 @@ private fun rememberSearchSuggestions(
     query: String,
     active: Boolean,
     searchEngine: String,
-    historyItems: List<HistoryItem>
+    historyItems: List<HistoryItem>,
+    remoteEnabled: Boolean = true
 ): List<SearchSuggestion> {
     var suggestions by remember { mutableStateOf<List<SearchSuggestion>>(emptyList()) }
-    LaunchedEffect(query, active, searchEngine, historyItems) {
+    LaunchedEffect(query, active, searchEngine, historyItems, remoteEnabled) {
         if (!active || query.trim().length < 2) {
             suggestions = emptyList()
             return@LaunchedEffect
         }
         val local = SearchSuggestions.localMatches(query, historyItems)
         suggestions = local
+        if (!remoteEnabled) return@LaunchedEffect
         delay(250)
         val remote = SearchSuggestions.fetchRemote(searchEngine, query)
         suggestions = SearchSuggestions.merge(local, remote, query)
@@ -796,7 +802,8 @@ private fun SmartSearchBar(
     onNavigate: (String) -> Unit,
     onSearchEngineClick: () -> Unit = {},
     onQrScanClick: () -> Unit = {},
-    historyItems: List<HistoryItem> = emptyList()
+    historyItems: List<HistoryItem> = emptyList(),
+    remoteSuggestionsEnabled: Boolean = true
 ) {
     var query by remember { mutableStateOf("") }
     val keyboardController = LocalSoftwareKeyboardController.current
@@ -811,7 +818,7 @@ private fun SmartSearchBar(
         }
     }
     var fieldFocused by remember { mutableStateOf(false) }
-    val suggestions = rememberSearchSuggestions(query, fieldFocused, searchEngine, historyItems)
+    val suggestions = rememberSearchSuggestions(query, fieldFocused, searchEngine, historyItems, remoteSuggestionsEnabled)
     val pickSuggestion: (SearchSuggestion) -> Unit = { suggestion ->
         query = ""
         keyboardController?.hide()
@@ -2243,7 +2250,7 @@ private fun BookmarksBar(
 
 /**
  * Bottom navigation: Home · Tabs (count badge) · big glowing AI center ·
- * Bookmarks · Menu. Shown on the home surface (about:blank).
+ * Bookmarks · Private · Menu. Shown on the home surface (about:blank).
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -2254,6 +2261,7 @@ fun ClickBottomNav(
     onTabs: () -> Unit,
     onAi: () -> Unit,
     onBookmarks: () -> Unit,
+    onPrivateTab: () -> Unit,
     onMenu: () -> Unit,
     modifier: Modifier = Modifier
 ) {
@@ -2318,6 +2326,7 @@ fun ClickBottomNav(
             }
 
             ClickNavItem(icon = Icons.Default.Bookmark, label = "Bookmarks", selected = false, theme = theme, onClick = onBookmarks)
+            ClickNavItem(icon = Icons.Default.Lock, label = "Private", selected = false, theme = theme, onClick = onPrivateTab)
             ClickNavItem(icon = Icons.Default.Menu, label = "Menu", selected = false, theme = theme, onClick = onMenu)
         }
     }
@@ -2517,7 +2526,8 @@ fun CompactBrowseBar(
     showExtensionButton: Boolean = false,
     onAddonsClick: () -> Unit = {},
     onSearchEngineClick: () -> Unit = {},
-    historyItems: List<HistoryItem> = emptyList()
+    historyItems: List<HistoryItem> = emptyList(),
+    remoteSuggestionsEnabled: Boolean = true
 ) {
     // Display/edit split (1.8.7 overhaul, A-list #3): while the bar is not
     // focused it shows the short display form of the current URL (site name
@@ -2534,7 +2544,7 @@ fun CompactBrowseBar(
     }
     // Suggestions show only while the user is actually editing the bar.
     val editingBar = barFocused && editText.isNotBlank()
-    val suggestions = rememberSearchSuggestions(editText, editingBar, searchEngine, historyItems)
+    val suggestions = rememberSearchSuggestions(editText, editingBar, searchEngine, historyItems, remoteSuggestionsEnabled)
     val pickSuggestion: (SearchSuggestion) -> Unit = { suggestion ->
         val target = suggestion.url ?: suggestion.text
         editText = target
