@@ -5664,6 +5664,8 @@ class MainActivity : FragmentActivity() {
                                                                     }
                                                                     return@navigation null
                                                                 }
+                                                                // Held onion offer is moot once this tab navigates elsewhere.
+                                                                if (tabs.getOrNull(activeTabIndex)?.id == tabId) onionOfferUrl = null
                                                                 // Direct file detection (Prince, 2026-11-21):
                                                                 // a site that serves a file at a plain URL
                                                                 // should hand the user a download, not a
@@ -6265,6 +6267,10 @@ class MainActivity : FragmentActivity() {
                                                                         }
                                                                         return true
                                                                     }
+                                                                    // Held onion offer is moot once this tab
+                                                                    // navigates elsewhere — clear it so the sheet
+                                                                    // never reappears over an unrelated page.
+                                                                    if (ownerTab != null && ownerTab.id == currentTab.id) onionOfferUrl = null
                                                                     // PDF: offer in-app viewing instead of navigating.
                                                                     if (isPdfUrl(urlStr)) {
                                                                         pdfOfferUrl = urlStr
@@ -6393,6 +6399,10 @@ class MainActivity : FragmentActivity() {
                                                                         }
                                                                         return true
                                                                     }
+                                                                    // Held onion offer is moot once this tab
+                                                                    // navigates elsewhere — clear it so the sheet
+                                                                    // never reappears over an unrelated page.
+                                                                    if (ownerTab != null && ownerTab.id == currentTab.id) onionOfferUrl = null
                                                                     // PDF: offer in-app viewing instead of navigating.
                                                                     if (isPdfUrl(urlStr)) {
                                                                         pdfOfferUrl = urlStr
@@ -10119,14 +10129,20 @@ class MainActivity : FragmentActivity() {
                                     onDismiss = { directMediaOffer = null }
                                 )
                             }
+                            // A held onion offer belongs to the tab it was held on —
+                            // switching tabs dismisses the sheet instead of showing
+                            // it over another page.
+                            LaunchedEffect(currentTab.id) { onionOfferUrl = null }
                             // .onion navigation held (1.8.9 B10): offer the Tor route.
                             val onionUrl = onionOfferUrl
                             if (onionUrl != null) {
-                                val torBrowserInstalled = remember(onionUrl) {
-                                    try { packageManager.getPackageInfo("org.torproject.torbrowser", 0); true } catch (_: Exception) { false }
-                                }
-                                val orbotInstalled = remember(onionUrl) {
-                                    try { packageManager.getPackageInfo("org.torproject.android", 0); true } catch (_: Exception) { false }
+                                var torBrowserInstalled by remember(onionUrl) { mutableStateOf(false) }
+                                var orbotInstalled by remember(onionUrl) { mutableStateOf(false) }
+                                // Package lookups are Binder IPC — run them in an
+                                // effect, not during composition.
+                                LaunchedEffect(onionUrl) {
+                                    torBrowserInstalled = try { packageManager.getPackageInfo("org.torproject.torbrowser", 0); true } catch (_: Exception) { false }
+                                    orbotInstalled = try { packageManager.getPackageInfo("org.torproject.android", 0); true } catch (_: Exception) { false }
                                 }
                                 com.click.browser.ui.screens.OnionOfferSheet(
                                     theme = theme,

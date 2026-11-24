@@ -28,5 +28,13 @@ class OnionRoutingPolicyTest {
         assertFalse(OnionRoutingPolicy.isOnionHost(null))
         assertFalse(OnionRoutingPolicy.isOnionHost(""))
         assertFalse(OnionRoutingPolicy.isOnionHost("onion.com"))
+        // Bare "onion" is not a service — only the .onion suffix counts.
+        assertFalse(OnionRoutingPolicy.isOnionHost("onion"))
+    }
+
+    @Test
+    fun schemeCheckIsCaseInsensitive() {
+        assertTrue(OnionRoutingPolicy.isOnionUrl("HTTP://duckduckgogg42xjoc72x3sjasowoarfbgcmvfimaftt6twagswzczad.onion/"))
+        assertTrue(OnionRoutingPolicy.isOnionUrl("Https://sub.deep.onion/"))
     }
 }
