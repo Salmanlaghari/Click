@@ -78,6 +78,7 @@ import androidx.compose.material.icons.filled.NetworkCheck
 import androidx.compose.material.icons.filled.Terminal
 import androidx.compose.material.icons.filled.Tab
 import androidx.compose.material.icons.filled.Translate
+import androidx.compose.material.icons.filled.QrCodeScanner
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.Badge
@@ -275,6 +276,7 @@ fun ClickHomeScreen(
     onOpenPrivacyGuards: () -> Unit = {},
     onOpenDiagnostics: () -> Unit = {},
     onSearchEngineClick: () -> Unit = {},
+    onQrScanClick: () -> Unit = {},
     remoteSuggestionsEnabled: Boolean = true,
     modifier: Modifier = Modifier
 ) {
@@ -361,6 +363,7 @@ fun ClickHomeScreen(
                     searchEngine = searchEngine,
                     onNavigate = onNavigate,
                     onSearchEngineClick = onSearchEngineClick,
+                    onQrScanClick = onQrScanClick,
                     historyItems = historyItems,
                     remoteSuggestionsEnabled = remoteSuggestionsEnabled
                 )
@@ -380,6 +383,7 @@ fun ClickHomeScreen(
                     searchEngine = searchEngine,
                     onNavigate = onNavigate,
                     onSearchEngineClick = onSearchEngineClick,
+                    onQrScanClick = onQrScanClick,
                     historyItems = historyItems,
                     remoteSuggestionsEnabled = remoteSuggestionsEnabled
                 )
@@ -392,6 +396,7 @@ fun ClickHomeScreen(
                     searchEngine = searchEngine,
                     onNavigate = onNavigate,
                     onSearchEngineClick = onSearchEngineClick,
+                    onQrScanClick = onQrScanClick,
                     historyItems = historyItems,
                     remoteSuggestionsEnabled = remoteSuggestionsEnabled
                 )
@@ -790,9 +795,9 @@ private fun SearchSuggestionList(
     }
 }
 
-/** Pill search bar: selected search-provider mark · hint · mic. (QR scanner removed: no CameraX /
- * MLKit-barcode stack in the app — the button only showed a "coming soon"
- * toast, so the dead control is gone instead of fake.) */
+/** Pill search bar: selected search-provider mark · hint · mic · QR scan.
+ * The QR button is real since 1.8.9 C6 (CameraX + ML Kit barcode stack) —
+ * it was previously removed as a dead "coming soon" control. */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun SmartSearchBar(
@@ -801,6 +806,7 @@ private fun SmartSearchBar(
     searchEngine: String,
     onNavigate: (String) -> Unit,
     onSearchEngineClick: () -> Unit = {},
+    onQrScanClick: () -> Unit = {},
     historyItems: List<HistoryItem> = emptyList(),
     remoteSuggestionsEnabled: Boolean = true
 ) {
@@ -877,6 +883,13 @@ private fun SmartSearchBar(
             VoiceMicButton(theme = theme, onHeard = { heard ->
                 onNavigate(heard)
             })
+            IconButton(onClick = onQrScanClick) {
+                Icon(
+                    Icons.Filled.QrCodeScanner,
+                    contentDescription = "Scan QR code",
+                    tint = theme.onSurface.copy(alpha = 0.7f)
+                )
+            }
         }
     }
     if (suggestions.isNotEmpty()) {

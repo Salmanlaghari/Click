@@ -196,6 +196,11 @@ dependencies {
     // On-device translation (ML Kit). Language MODELS are downloaded on
     // demand at runtime — nothing is bundled, so the APK stays lean.
     implementation(libs.mlkit.translate)
+    implementation(libs.mlkit.barcode.scanning)
+    implementation(libs.androidx.camera.core)
+    implementation(libs.androidx.camera.camera2)
+    implementation(libs.androidx.camera.lifecycle)
+    implementation(libs.androidx.camera.view)
     // AndroidX BiometricPrompt for the private-tab lock (no custom crypto).
     implementation(libs.androidx.biometric)
     // WorkManager for battery-friendly background news checks (no exact
