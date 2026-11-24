@@ -20,7 +20,6 @@ import android.media.session.PlaybackState
 import android.os.Build
 import android.os.IBinder
 import android.util.Log
-import androidx.core.app.NotificationCompat
 import com.click.browser.MainActivity
 import com.click.browser.R
 import kotlinx.coroutines.CoroutineScope
@@ -405,7 +404,12 @@ class PlaylistPlaybackService : Service() {
             Intent(this, MainActivity::class.java),
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
-        val builder = NotificationCompat.Builder(this, CHANNEL_ID)
+        // Framework builder (not NotificationCompat): only the framework
+        // MediaStyle accepts this service's framework MediaSession token,
+        // and the lock-screen / headset controls need that binding (Kilo
+        // WARNING on the first B7 build — the session was created but never
+        // attached to the notification).
+        val builder = Notification.Builder(this, CHANNEL_ID)
             .setSmallIcon(R.drawable.ic_launcher_foreground)
             .setContentTitle(st.currentTitle ?: "Playlist")
             .setContentText(
@@ -421,17 +425,24 @@ class PlaylistPlaybackService : Service() {
             .setOngoing(isPlaying)
             .setOnlyAlertOnce(true)
         if (index > 0) builder.addAction(
-            android.R.drawable.ic_media_previous, "Previous", actionIntent(ACTION_PREV)
+            Notification.Action.Builder(android.R.drawable.ic_media_previous, "Previous", actionIntent(ACTION_PREV)).build()
         )
         builder.addAction(
-            if (isPlaying) android.R.drawable.ic_media_pause else android.R.drawable.ic_media_play,
-            if (isPlaying) "Pause" else "Play",
-            actionIntent(if (isPlaying) ACTION_PAUSE else ACTION_RESUME)
+            Notification.Action.Builder(
+                if (isPlaying) android.R.drawable.ic_media_pause else android.R.drawable.ic_media_play,
+                if (isPlaying) "Pause" else "Play",
+                actionIntent(if (isPlaying) ACTION_PAUSE else ACTION_RESUME)
+            ).build()
         )
         if (index in 0 until queue.size - 1) builder.addAction(
-            android.R.drawable.ic_media_next, "Next", actionIntent(ACTION_NEXT)
+            Notification.Action.Builder(android.R.drawable.ic_media_next, "Next", actionIntent(ACTION_NEXT)).build()
         )
-        builder.addAction(android.R.drawable.ic_menu_close_clear_cancel, "Stop", actionIntent(ACTION_STOP))
+        builder.addAction(
+            Notification.Action.Builder(android.R.drawable.ic_menu_close_clear_cancel, "Stop", actionIntent(ACTION_STOP)).build()
+        )
+        mediaSession?.sessionToken?.let { token ->
+            builder.setStyle(Notification.MediaStyle().setMediaSession(token))
+        }
         return builder.build()
     }
 
