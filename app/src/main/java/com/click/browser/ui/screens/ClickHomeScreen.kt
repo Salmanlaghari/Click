@@ -2325,6 +2325,13 @@ fun ClickBottomNav(
                 modifier = Modifier
                     .size(62.dp)
                     .graphicsLayer { scaleX = aiScale; scaleY = aiScale }
+                    .shadow(10.dp, CircleShape, spotColor = theme.primary)
+                    // Clip BEFORE the background: the gradient (and the
+                    // ripple inside the clickable) are cut to the circle.
+                    // (1.8.9 B9 moved this clip after the clickable, which
+                    // left the gradient painting a square — restored to
+                    // the pre-1.8.9 round button on Prince's order.)
+                    .clip(CircleShape)
                     .background(Brush.linearGradient(listOf(Color(0xFF72583D), Color(0xFFAA865C), Color(0xFFC7AE8A))))
                     .border(2.dp, Color.White.copy(alpha = 0.35f), CircleShape)
                     .clickable(
@@ -2333,12 +2340,7 @@ fun ClickBottomNav(
                     ) {
                         haptic.performHapticFeedback(HapticFeedbackType.LongPress)
                         onAi()
-                    }
-                    // Clip AFTER the clickable so the gradient AND the ripple
-                    // are cut to the circle (a clip before them clips
-                    // neither); the shadow goes last so it survives the clip.
-                    .clip(CircleShape)
-                    .shadow(10.dp, CircleShape, spotColor = theme.primary),
+                    },
                 contentAlignment = Alignment.Center
             ) {
                 Column(horizontalAlignment = Alignment.CenterHorizontally) {

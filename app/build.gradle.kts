@@ -55,7 +55,7 @@ android {
         // by the unsubmitted 1.8.0 Play draft, so the rebuild that removes
         // the centre loading dialog and makes web pages full-screen
         // (no bottom bar) needs the next code — users still see "1.8.0".
-        versionCode = 30
+        versionCode = 31
         versionName = "1.8.9"
 
         // Built-in Groq key for AI chat, injected at build time from the
