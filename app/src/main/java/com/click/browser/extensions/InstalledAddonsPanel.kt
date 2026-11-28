@@ -7,18 +7,14 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.lazy.grid.GridCells
-import androidx.compose.foundation.lazy.grid.GridItemSpan
-import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
-import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -47,7 +43,11 @@ import androidx.compose.runtime.produceState
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.role
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
@@ -219,49 +219,60 @@ internal fun InstalledAddonsPanel(
                     // options, guidance) appear once in the detail card
                     // under the grid — the same controls the old full-width
                     // cards repeated for every add-on.
-                    var selectedId by remember(addOns) {
-                        mutableStateOf(addOns.firstOrNull()?.id)
-                    }
+                    //
+                    // The grid is plain Rows inside the sheet's own scroll
+                    // (no nested LazyVerticalGrid) and the column count
+                    // adapts to the sheet width, so narrow screens,
+                    // split-screen and foldables get usable tiles
+                    // (Kilo WARNINGs on PR #271, 2026-11-28).
+                    var selectedId by remember { mutableStateOf<String?>(null) }
                     val selected = addOns.firstOrNull { it.id == selectedId }
                         ?: addOns.firstOrNull()
-                    LazyVerticalGrid(
-                        columns = GridCells.Fixed(4),
-                        modifier = Modifier.fillMaxWidth().heightIn(max = 300.dp),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp),
-                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                    BoxWithConstraints(
+                        modifier = Modifier.fillMaxWidth()
                     ) {
-                        val rows = installedAddonPanelRows(addOns)
-                        items(
-                            rows,
-                            key = { row ->
-                                when (row) {
-                                    is InstalledAddonPanelRow.Header -> "header:${row.title}"
-                                    is InstalledAddonPanelRow.Entry -> row.item.id
+                        val columns = (maxWidth / 88.dp).toInt().coerceIn(3, 5)
+                        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                            var pendingEntries = emptyList<InstalledAddonPanelItem>()
+                            fun flushEntries() {
+                                pendingEntries.chunked(columns).forEach { chunk ->
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                    ) {
+                                        chunk.forEach { item ->
+                                            AddonGridTile(
+                                                addOn = item,
+                                                selected = selected?.id == item.id,
+                                                onClick = { selectedId = item.id },
+                                                modifier = Modifier.weight(1f)
+                                            )
+                                        }
+                                        repeat(columns - chunk.size) {
+                                            Spacer(modifier = Modifier.weight(1f))
+                                        }
+                                    }
                                 }
-                            },
-                            span = { row ->
+                                pendingEntries = emptyList()
+                            }
+                            installedAddonPanelRows(addOns).forEach { row ->
                                 when (row) {
-                                    is InstalledAddonPanelRow.Header ->
-                                        GridItemSpan(maxLineSpan)
-                                    is InstalledAddonPanelRow.Entry ->
-                                        GridItemSpan(1)
+                                    is InstalledAddonPanelRow.Header -> {
+                                        flushEntries()
+                                        Text(
+                                            row.title,
+                                            fontWeight = FontWeight.Bold,
+                                            fontSize = 13.sp,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                            modifier = Modifier.padding(top = 4.dp)
+                                        )
+                                    }
+                                    is InstalledAddonPanelRow.Entry -> {
+                                        pendingEntries = pendingEntries + row.item
+                                    }
                                 }
                             }
-                        ) { row ->
-                            when (row) {
-                                is InstalledAddonPanelRow.Header -> Text(
-                                    row.title,
-                                    fontWeight = FontWeight.Bold,
-                                    fontSize = 13.sp,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                    modifier = Modifier.padding(top = 4.dp)
-                                )
-                                is InstalledAddonPanelRow.Entry -> AddonGridTile(
-                                    addOn = row.item,
-                                    selected = selected?.id == row.item.id,
-                                    onClick = { selectedId = row.item.id }
-                                )
-                            }
+                            flushEntries()
                         }
                     }
                     selected?.let { addOn ->
@@ -294,23 +305,29 @@ internal fun InstalledAddonsPanel(
 private fun AddonGridTile(
     addOn: InstalledAddonPanelItem,
     selected: Boolean,
-    onClick: () -> Unit
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier
 ) {
     val dotColor = when {
         addOn.policyBlockers.isNotEmpty() -> MaterialTheme.colorScheme.error
-        addOn.enabled -> Color(0xFF22C55E)
+        addOn.enabled -> MaterialTheme.colorScheme.primary
         else -> MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f)
     }
     Column(
-        modifier = Modifier
+        modifier = modifier
             .clip(RoundedCornerShape(14.dp))
             .background(
                 if (selected) {
-                    MaterialTheme.colorScheme.primary.copy(alpha = 0.12f)
+                    MaterialTheme.colorScheme.primaryContainer
                 } else {
-                    MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f)
+                    MaterialTheme.colorScheme.surfaceContainerHighest
                 }
             )
+            .semantics(mergeDescendants = true) {
+                role = Role.Button
+                stateDescription = if (selected) "Selected" else "Not selected"
+                contentDescription = addOn.name
+            }
             .clickable(onClick = onClick)
             .padding(vertical = 10.dp, horizontal = 4.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
