@@ -6,7 +6,7 @@ import androidx.compose.runtime.mutableStateListOf
 data class ClosedTab(
     val title: String,
     val url: String,
-    val engine: BrowserTabEngine = BrowserTabEngine.WEBVIEW,
+    val engine: BrowserTabEngine = BrowserTabEngine.GECKOVIEW,
     val mode: BrowserMode = BrowserMode.SIMPLE
 )
 
@@ -26,7 +26,7 @@ object RecentlyClosedTabs {
         url: String,
         isIncognito: Boolean,
         mode: BrowserMode,
-        engine: BrowserTabEngine = BrowserTabEngine.WEBVIEW
+        engine: BrowserTabEngine = BrowserTabEngine.GECKOVIEW
     ) {
         if (isIncognito) return
         if (url.isBlank() || url == "about:blank" || !isHttpOrHttps(url)) return

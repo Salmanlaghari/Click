@@ -1798,7 +1798,14 @@ class MainActivity : FragmentActivity() {
                     cancelPendingTabUndoSnackbar()
                 }
                 tabs.add(
-                    TabItem(url = closedTab.url, title = closedTab.title, initialEngine = closedTab.engine)
+                    TabItem(
+                        url = closedTab.url,
+                        title = closedTab.title,
+                        // One engine only: a reopened tab always comes back
+                        // in GeckoView, even if it was closed as a legacy
+                        // WebView tab — no more GeckoTab/WebTab split.
+                        initialEngine = migrateRestoredRegularTabEngine(closedTab.engine)
+                    )
                 )
                 activeTabIndex = tabs.size - 1
                 RecentlyClosedTabs.remove(closedTab)
@@ -1879,7 +1886,10 @@ class MainActivity : FragmentActivity() {
                                 val restored = TabItem(
                                     url = closedTab.url,
                                     title = closedTab.title.ifBlank { "New Tab" },
-                                    initialEngine = closedTab.engine
+                                    // Same one-engine rule as the Recent
+                                    // tabs reopen: UNDO never resurrects a
+                                    // WebView tab.
+                                    initialEngine = migrateRestoredRegularTabEngine(closedTab.engine)
                                 )
                                 val insertAt = closedTab.index.coerceIn(0, tabs.size)
                                 tabs.add(insertAt, restored)
