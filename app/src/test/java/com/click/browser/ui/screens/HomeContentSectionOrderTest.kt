@@ -19,35 +19,36 @@ import org.junit.Test
 class HomeContentSectionOrderTest {
 
     @Test
-    fun simpleIsShieldWeatherSpeedDialAndContinue() {
-        // Simple mockup: address bar (header) -> shield card -> weather ->
-        // big speed dial -> Continue browsing. Nothing else on the dashboard.
-        // (Weather added 2026-11-21 — Prince: "Weather show Nahin".)
+    fun simpleIsUcStyleSitesContinueNews() {
+        // UC-style homepage (Prince, 2026-11-28): search bar (header) ->
+        // speed-dial sites grid -> Continue browsing -> news feed.
+        // No shield/weather/tool cards on the consumer homepage.
         assertEquals(
             listOf(
-                HomeContentSection.PRIVACY_STATUS,
-                HomeContentSection.WEATHER,
                 HomeContentSection.QUICK_SITES,
-                HomeContentSection.CONTINUE_BROWSING
+                HomeContentSection.CONTINUE_BROWSING,
+                HomeContentSection.OPTIONAL_NEWS_FEED
             ),
             homeContentSections(BrowserMode.SIMPLE)
         )
     }
 
     @Test
-    fun advanceLeadsWithShieldAndPromotesNewsAboveContinue() {
+    fun advanceIsUcStyleSitesContinueNews() {
+        // Same UC-style composition as Simple; the old dashboard cards
+        // (shield, weather, mode focus, quick actions, today update) left
+        // the homepage — the features live in the drawer/menus/Settings.
+        assertEquals(
+            listOf(
+                HomeContentSection.QUICK_SITES,
+                HomeContentSection.CONTINUE_BROWSING,
+                HomeContentSection.OPTIONAL_NEWS_FEED
+            ),
+            homeContentSections(BrowserMode.ADVANCED)
+        )
         val sections = homeContentSections(BrowserMode.ADVANCED)
-        assertEquals(HomeContentSection.PRIVACY_STATUS, sections.first())
-        assertTrue(
-            sections.indexOf(HomeContentSection.OPTIONAL_NEWS_FEED) <
-                sections.indexOf(HomeContentSection.CONTINUE_BROWSING)
-        )
-        // Weather sits right with the news feed, above Continue browsing.
-        assertTrue(sections.contains(HomeContentSection.WEATHER))
-        assertTrue(
-            sections.indexOf(HomeContentSection.WEATHER) <
-                sections.indexOf(HomeContentSection.OPTIONAL_NEWS_FEED)
-        )
+        assertFalse(sections.contains(HomeContentSection.PRIVACY_STATUS))
+        assertFalse(sections.contains(HomeContentSection.WEATHER))
         assertFalse(sections.contains(HomeContentSection.DEVELOPER_STATUS))
         assertFalse(sections.contains(HomeContentSection.DOWNLOADS))
     }

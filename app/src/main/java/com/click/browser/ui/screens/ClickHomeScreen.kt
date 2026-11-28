@@ -200,26 +200,28 @@ internal enum class HomeContentSection {
 }
 
 /**
- * Returns the dashboard sections rendered for [activeMode] in display order —
- * the exact composition of that mode's approved dashboard mockup.
+ * Returns the dashboard sections rendered for [activeMode] in display order.
+ *
+ * SIMPLE + ADVANCED were recomposed on 2026-11-28 for Prince's
+ * professional-browser round: a UC-style homepage — the search bar (header)
+ * leads, then the speed-dial sites grid, Continue browsing, and the news
+ * feed as the main scroll content. The shield card, weather, mode-focus,
+ * quick-actions and today-update cards left the consumer homepages (the
+ * features themselves live on in the drawer, menus and Settings — nothing
+ * was removed from the app). DEVELOPER and HACK (Power) keep their
+ * tool-focused dashboards.
  */
 internal fun homeContentSections(activeMode: BrowserMode): List<HomeContentSection> =
     when (activeMode) {
         BrowserMode.SIMPLE -> listOf(
-            HomeContentSection.PRIVACY_STATUS,
-            HomeContentSection.WEATHER,
             HomeContentSection.QUICK_SITES,
-            HomeContentSection.CONTINUE_BROWSING
+            HomeContentSection.CONTINUE_BROWSING,
+            HomeContentSection.OPTIONAL_NEWS_FEED
         )
         BrowserMode.ADVANCED -> listOf(
-            HomeContentSection.PRIVACY_STATUS,
             HomeContentSection.QUICK_SITES,
-            HomeContentSection.WEATHER,
-            HomeContentSection.OPTIONAL_NEWS_FEED,
             HomeContentSection.CONTINUE_BROWSING,
-            HomeContentSection.MODE_FOCUS,
-            HomeContentSection.QUICK_ACTIONS,
-            HomeContentSection.TODAY_UPDATE
+            HomeContentSection.OPTIONAL_NEWS_FEED
         )
         BrowserMode.HACK -> listOf(
             HomeContentSection.NEWS_WIDGET,
