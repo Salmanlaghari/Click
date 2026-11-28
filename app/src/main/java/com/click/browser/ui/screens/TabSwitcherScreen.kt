@@ -189,10 +189,14 @@ fun TabSwitcherScreen(
                 )
             )
 
+            // Compact tab cards (Prince, 2026-11-28: "tabs ki size kam
+            // karo"): tighter spacing + a shorter thumbnail aspect below
+            // means more tabs visible per screen while previews stay
+            // readable.
             LazyVerticalGrid(
                 columns = GridCells.Fixed(2),
-                horizontalArrangement = Arrangement.spacedBy(12.dp),
-                verticalArrangement = Arrangement.spacedBy(12.dp),
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                verticalArrangement = Arrangement.spacedBy(10.dp),
                 modifier = Modifier
                     .weight(1f)
                     .padding(bottom = 8.dp)
@@ -288,7 +292,7 @@ fun TabSwitcherScreen(
                         modifier = Modifier
                             .fillMaxWidth()
                             .clickable(enabled = idx >= 0) { onSelectTab(idx) },
-                        shape = RoundedCornerShape(18.dp),
+                        shape = RoundedCornerShape(14.dp),
                         colors = CardDefaults.cardColors(
                             containerColor = theme.surface
                         ),
@@ -303,8 +307,8 @@ fun TabSwitcherScreen(
                             Box(
                                 modifier = Modifier
                                     .fillMaxWidth()
-                                    .aspectRatio(0.82f)
-                                    .clip(RoundedCornerShape(topStart = 18.dp, topEnd = 18.dp))
+                                    .aspectRatio(1.05f)
+                                    .clip(RoundedCornerShape(topStart = 14.dp, topEnd = 14.dp))
                                     .background(theme.background)
                             ) {
                                 if (thumb != null && !tab.isIncognito) {

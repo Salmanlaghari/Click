@@ -135,6 +135,44 @@ internal fun installedAddonPanelRows(
     }
 }
 
+
+/** One render block of the add-ons grid: a section header or one tile row. */
+internal sealed interface AddonPanelBlock {
+    data class Header(val title: String) : AddonPanelBlock
+    data class TileRow(val items: List<InstalledAddonPanelItem>) : AddonPanelBlock
+}
+
+/**
+ * Groups panel rows into grid blocks: entries accumulate into tile rows of
+ * [columns]; a header flushes the pending entries and starts a new section.
+ * Pure data shaping (no composables) so the panel can emit blocks with
+ * plain loops inside the sheet's own scroll.
+ */
+internal fun addonPanelBlocks(
+    rows: List<InstalledAddonPanelRow>,
+    columns: Int
+): List<AddonPanelBlock> {
+    val blocks = mutableListOf<AddonPanelBlock>()
+    var pending = mutableListOf<InstalledAddonPanelItem>()
+    fun flush() {
+        pending.chunked(columns).forEach { chunk ->
+            blocks += AddonPanelBlock.TileRow(chunk)
+        }
+        pending = mutableListOf()
+    }
+    rows.forEach { row ->
+        when (row) {
+            is InstalledAddonPanelRow.Header -> {
+                flush()
+                blocks += AddonPanelBlock.Header(row.title)
+            }
+            is InstalledAddonPanelRow.Entry -> pending += row.item
+        }
+    }
+    flush()
+    return blocks
+}
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 internal fun InstalledAddonsPanel(
@@ -232,15 +270,25 @@ internal fun InstalledAddonsPanel(
                         modifier = Modifier.fillMaxWidth()
                     ) {
                         val columns = (maxWidth / 88.dp).toInt().coerceIn(3, 5)
+                        val blocks = addonPanelBlocks(
+                            installedAddonPanelRows(addOns),
+                            columns
+                        )
                         Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                            var pendingEntries = emptyList<InstalledAddonPanelItem>()
-                            fun flushEntries() {
-                                pendingEntries.chunked(columns).forEach { chunk ->
-                                    Row(
+                            for (block in blocks) {
+                                when (block) {
+                                    is AddonPanelBlock.Header -> Text(
+                                        block.title,
+                                        fontWeight = FontWeight.Bold,
+                                        fontSize = 13.sp,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        modifier = Modifier.padding(top = 4.dp)
+                                    )
+                                    is AddonPanelBlock.TileRow -> Row(
                                         modifier = Modifier.fillMaxWidth(),
                                         horizontalArrangement = Arrangement.spacedBy(8.dp)
                                     ) {
-                                        chunk.forEach { item ->
+                                        for (item in block.items) {
                                             AddonGridTile(
                                                 addOn = item,
                                                 selected = selected?.id == item.id,
@@ -248,31 +296,12 @@ internal fun InstalledAddonsPanel(
                                                 modifier = Modifier.weight(1f)
                                             )
                                         }
-                                        repeat(columns - chunk.size) {
+                                        repeat(columns - block.items.size) {
                                             Spacer(modifier = Modifier.weight(1f))
                                         }
                                     }
                                 }
-                                pendingEntries = emptyList()
                             }
-                            installedAddonPanelRows(addOns).forEach { row ->
-                                when (row) {
-                                    is InstalledAddonPanelRow.Header -> {
-                                        flushEntries()
-                                        Text(
-                                            row.title,
-                                            fontWeight = FontWeight.Bold,
-                                            fontSize = 13.sp,
-                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                            modifier = Modifier.padding(top = 4.dp)
-                                        )
-                                    }
-                                    is InstalledAddonPanelRow.Entry -> {
-                                        pendingEntries = pendingEntries + row.item
-                                    }
-                                }
-                            }
-                            flushEntries()
                         }
                     }
                     selected?.let { addOn ->
@@ -326,7 +355,7 @@ private fun AddonGridTile(
             .semantics(mergeDescendants = true) {
                 role = Role.Button
                 stateDescription = if (selected) "Selected" else "Not selected"
-                contentDescription = addOn.name
+                contentDescription = "${addOn.name}, ${addOn.statusLabel}"
             }
             .clickable(onClick = onClick)
             .padding(vertical = 10.dp, horizontal = 4.dp),
