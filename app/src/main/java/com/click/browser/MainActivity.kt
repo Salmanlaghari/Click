@@ -5277,14 +5277,35 @@ class MainActivity : FragmentActivity() {
                                     showBrowseBottomChrome,
                                 toolbarVisible = toolbarVisible
                             ).dp
+                            // Toolbar show/hide with scroll HYSTERESIS (Prince's
+                            // professional-browser round, 2026-11-28): the old
+                            // ±8px instant toggle flickered on every reading
+                            // scroll. Now the bar hides only after ~140px of
+                            // accumulated downward scroll and returns after
+                            // ~60px upward; a direction change resets the
+                            // accumulator so a deliberate reverse flick counts
+                            // at once. This is how the big browsers feel calm.
                             val toolbarScrollConnection = remember {
                                 object : NestedScrollConnection {
+                                    private var accumulatedY = 0f
                                     override fun onPreScroll(
                                         available: Offset,
                                         source: NestedScrollSource
                                     ): Offset {
-                                        if (available.y < -8f) toolbarVisible = false
-                                        else if (available.y > 8f) toolbarVisible = true
+                                        val dy = available.y
+                                        if ((dy > 0f && accumulatedY < 0f) ||
+                                            (dy < 0f && accumulatedY > 0f)
+                                        ) {
+                                            accumulatedY = 0f
+                                        }
+                                        accumulatedY += dy
+                                        if (accumulatedY < -140f) {
+                                            toolbarVisible = false
+                                            accumulatedY = 0f
+                                        } else if (accumulatedY > 60f) {
+                                            toolbarVisible = true
+                                            accumulatedY = 0f
+                                        }
                                         return Offset.Zero
                                     }
                                 }
@@ -5292,40 +5313,12 @@ class MainActivity : FragmentActivity() {
                             // New page → reveal the compact top bar; page scrolling can still hide it.
                             LaunchedEffect(currentTab.url) { toolbarVisible = true }
 
-                            // Periodic privacy-status popup (replaces the persistent
-                            // strip): every ~18s a small glass card fades in for 2.5s
-                            // with the live blocked count, then fades out. Battery-safe:
-                            // one-shot show/hide, no loops; paused when the app is in
-                            // the background; only on the browsing surface.
-                            var showPrivacyPopup by remember { mutableStateOf(false) }
-                            val popupActivity = this@MainActivity
-                            LaunchedEffect(currentTab.url) {
-                                showPrivacyPopup = false
-                                if (currentTab.url == "about:blank") return@LaunchedEffect
-                                var lastShownAt = android.os.SystemClock.uptimeMillis()
-                                while (true) {
-                                    ensureActive()
-                                    kotlinx.coroutines.delay(18_000)
-                                    ensureActive()
-                                    val now = android.os.SystemClock.uptimeMillis()
-                                    val tab = currentTab
-                                    if (tab.url == "about:blank") break
-                                    if (!popupActivity.lifecycle.currentState
-                                            .isAtLeast(Lifecycle.State.RESUMED)
-                                    ) {
-                                        // Backgrounded: restart the 18s window so the
-                                        // popup doesn't fire immediately on resume.
-                                        lastShownAt = now
-                                        continue
-                                    }
-                                    // Require a full 18s of foreground time between popups.
-                                    if (now - lastShownAt < 18_000) continue
-                                    lastShownAt = now
-                                    showPrivacyPopup = true
-                                    kotlinx.coroutines.delay(2_500)
-                                    showPrivacyPopup = false
-                                }
-                            }
+                            // The old periodic privacy-status popup (a glass card
+                            // fading in over the page every ~18s) is REMOVED
+                            // (Prince's professional-browser round, 2026-11-28):
+                            // no professional browser interrupts reading on a
+                            // timer. Protection status now lives in the toolbar
+                            // shield and on the home page stats strip only.
 
                             fun canReloadCurrentTab(): Boolean =
                                 currentTab.engine != BrowserTabEngine.GECKOVIEW ||
@@ -5406,8 +5399,16 @@ class MainActivity : FragmentActivity() {
                                     // PR #214 kept at the top).
                                     AnimatedVisibility(
                                         visible = showAddressBar && !immersiveMode && toolbarVisible,
-                                        enter = expandVertically() + fadeIn(),
-                                        exit = shrinkVertically() + fadeOut()
+                                        enter = androidx.compose.animation.slideInVertically(
+                                            animationSpec = androidx.compose.animation.core.tween(200)
+                                        ) { -it } + fadeIn(
+                                            animationSpec = androidx.compose.animation.core.tween(200)
+                                        ),
+                                        exit = androidx.compose.animation.slideOutVertically(
+                                            animationSpec = androidx.compose.animation.core.tween(200)
+                                        ) { -it } + fadeOut(
+                                            animationSpec = androidx.compose.animation.core.tween(200)
+                                        )
                                     ) {
                                         Crossfade(targetState = theme, label = "topbarTheme") { themed ->
                                             Column {
@@ -7781,55 +7782,6 @@ class MainActivity : FragmentActivity() {
                                             .align(Alignment.BottomEnd)
                                             .padding(end = 16.dp, bottom = 16.dp)
                                     )
-                                }
-
-                                // Periodic verified protection-status popup (top-center). One-shot
-                                // fade in/out every ~18s; browsing surface only.
-                                androidx.compose.animation.AnimatedVisibility(
-                                    visible = showPrivacyPopup && !immersiveMode && !showOverlays,
-                                    enter = androidx.compose.animation.fadeIn() +
-                                        androidx.compose.animation.slideInVertically { -it / 2 },
-                                    exit = androidx.compose.animation.fadeOut(),
-                                    modifier = Modifier
-                                        .align(Alignment.TopCenter)
-                                        .windowInsetsPadding(WindowInsets.statusBars)
-                                        .padding(top = 12.dp)
-                                ) {
-                                    Surface(
-                                        shape = RoundedCornerShape(20.dp),
-                                        color = theme.surface.copy(alpha = 0.88f),
-                                        border = BorderStroke(
-                                            1.dp,
-                                            theme.primary.copy(alpha = 0.35f)
-                                        ),
-                                        shadowElevation = 8.dp
-                                    ) {
-                                        Row(
-                                            modifier = Modifier.padding(
-                                                horizontal = 14.dp,
-                                                vertical = 8.dp
-                                            ),
-                                            verticalAlignment = Alignment.CenterVertically
-                                        ) {
-                                            Icon(
-                                                Icons.Default.Shield,
-                                                contentDescription = null,
-                                                tint = if (adBlockStatus.active) {
-                                                    Color(0xFF22C55E)
-                                                } else {
-                                                    theme.onSurface.copy(alpha = 0.45f)
-                                                },
-                                                modifier = Modifier.size(15.dp)
-                                            )
-                                            Spacer(modifier = Modifier.width(6.dp))
-                                            Text(
-                                                adBlockStatus.label,
-                                                color = theme.onSurface,
-                                                fontSize = 12.sp,
-                                                fontWeight = FontWeight.SemiBold
-                                            )
-                                        }
-                                    }
                                 }
 
                             }
