@@ -2155,7 +2155,9 @@ class MainActivity : FragmentActivity() {
             var backgroundAudioEnabled by remember { mutableStateOf(false) }
             // In-app Home feed (default ON since the UC-style homepage,
             // 2026-11-28) is separate from background news alerts.
-            var homeNewsFeedEnabled by remember { mutableStateOf(false) }
+            // Initial value must match HomeNewsFeedPolicy (Kilo SUGGESTION
+            // on PR #269): until prefs load, the feed is shown, not hidden.
+            var homeNewsFeedEnabled by remember { mutableStateOf(true) }
             fun setHomeNewsFeedEnabled(enabled: Boolean) {
                 homeNewsFeedEnabled = enabled
                 scope.launch {
