@@ -388,6 +388,10 @@ class MainActivity : FragmentActivity() {
     // Whole-app lock (1.8.9 C2): same pattern as the private-tab lock.
     private var liveAppLockEnabled = false
     private val appLockedFlow = kotlinx.coroutines.flow.MutableStateFlow(false)
+    // LockRelockPolicy stamps: when the app last backgrounded while the
+    // corresponding lock was DISENGAGED (0 = no stamp → the lock stays).
+    private var appLockBackgroundedAtMillis = 0L
+    private var privateLockBackgroundedAtMillis = 0L
     private val passwordManagerAuthenticatedFlow = MutableStateFlow(false)
     private var passwordAuthenticationInFlight = false
     // Default-browser flow: pending external link from an ACTION_VIEW intent
@@ -707,6 +711,13 @@ class MainActivity : FragmentActivity() {
                 try { session.pauseTimers() } catch (_: Exception) { }
             }
         }
+        // LockRelockPolicy: remember when we backgrounded from an
+        // unlocked state, per lock, so a quick return can skip the
+        // prompt. Backgrounding while already locked leaves no stamp —
+        // the lock then always stays (fail closed).
+        val backgroundedAt = android.os.SystemClock.elapsedRealtime()
+        if (!privateLockedFlow.value) privateLockBackgroundedAtMillis = backgroundedAt
+        if (!appLockedFlow.value) appLockBackgroundedAtMillis = backgroundedAt
         // Biometric private-tab lock: whenever the app goes to background
         // while the lock is enabled and at least one incognito tab exists,
         // the private tabs re-lock. The overlay + BiometricPrompt handle
@@ -726,6 +737,24 @@ class MainActivity : FragmentActivity() {
     override fun onResume() {
         super.onResume()
         activityResumeCount.value += 1L
+        // LockRelockPolicy: a return within the grace window silently
+        // releases locks that engaged on backgrounding — the app reopens
+        // smoothly instead of demanding a biometric for a one-second
+        // interruption. This runs before composition reads the flows,
+        // so the lock overlay and its automatic prompt never appear.
+        val resumedAt = android.os.SystemClock.elapsedRealtime()
+        if (appLockedFlow.value &&
+            !com.click.browser.engine.LockRelockPolicy.shouldKeepLock(appLockBackgroundedAtMillis, resumedAt)
+        ) {
+            appLockedFlow.value = false
+        }
+        if (privateLockedFlow.value &&
+            !com.click.browser.engine.LockRelockPolicy.shouldKeepLock(privateLockBackgroundedAtMillis, resumedAt)
+        ) {
+            privateLockedFlow.value = false
+        }
+        appLockBackgroundedAtMillis = 0L
+        privateLockBackgroundedAtMillis = 0L
         // Update-available notification tap: offer Play's flexible update flow.
         if (pendingAppUpdate.value) {
             pendingAppUpdate.value = false
