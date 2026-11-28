@@ -2285,14 +2285,30 @@ class MainActivity : FragmentActivity() {
                     enableNewsNotifications()
                 }
             }
-            // News notification deep link: open the tapped article's URL in a
-            // new tab (cold start via onCreate, warm via onNewIntent).
+            // News notification deep link: open the tapped article in the
+            // CURRENT tab (cold start via onCreate, warm via onNewIntent).
+            // Prince's device report (2026-11-28): a notification tap must
+            // not yank him into a brand-new web tab — the article loads
+            // where he already is, and Back returns to what he was doing.
+            // A new tab is only a fallback when there is no current tab.
             val pendingNewsUrl = notificationOpenUrl.value
             LaunchedEffect(pendingNewsUrl) {
                 if (pendingNewsUrl != null) {
                     notificationOpenUrl.value = null
-                    tabs.add(TabItem(url = pendingNewsUrl, title = "New Tab"))
-                    activeTabIndex = tabs.size - 1
+                    val tab = tabs.getOrNull(activeTabIndex)
+                    when {
+                        tab?.browserSession != null ->
+                            tab.browserSession?.loadUrl(pendingNewsUrl)
+                        tab != null ->
+                            // Session not created yet (e.g. a fresh home
+                            // tab): point the tab itself at the article —
+                            // its session loads the tab URL when created.
+                            tab.url = pendingNewsUrl
+                        else -> {
+                            tabs.add(TabItem(url = pendingNewsUrl, title = "New Tab"))
+                            activeTabIndex = tabs.size - 1
+                        }
+                    }
                 }
             }
             var showSettings by remember { mutableStateOf(false) }
