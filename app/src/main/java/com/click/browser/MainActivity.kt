@@ -4516,12 +4516,14 @@ class MainActivity : FragmentActivity() {
             MaterialTheme(colorScheme = themeColors) {
                 ModalNavigationDrawer(
                     drawerState = drawerState,
-                    // Gestures ON: the drawer opens via the hamburger icon AND
-                    // the left-edge swipe. (Restored 2026-11-21 on Prince's
-                    // order; was disabled 2026-10-08 in e787e929 after the
-                    // edge-swipe misfired on vertical scrolls. Prince asked to
-                    // bring it back so users get the choice.)
-                    gesturesEnabled = true,
+                    // Gestures OFF: the drawer opens from the hamburger/menu
+                    // button only. The left-edge swipe was restored on
+                    // 2026-11-21, but Prince reported on 2026-11-28 that the
+                    // side options keep sliding in while he scrolls pages
+                    // down — the same misfire that disabled it on 2026-10-08.
+                    // A drawer that interrupts reading is worse than one
+                    // extra tap, so the swipe stays off.
+                    gesturesEnabled = false,
                     drawerContent = {
                         ModalDrawerSheet(
                             modifier = Modifier.width(300.dp),
