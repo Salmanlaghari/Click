@@ -1798,7 +1798,14 @@ class MainActivity : FragmentActivity() {
                     cancelPendingTabUndoSnackbar()
                 }
                 tabs.add(
-                    TabItem(url = closedTab.url, title = closedTab.title, initialEngine = closedTab.engine)
+                    TabItem(
+                        url = closedTab.url,
+                        title = closedTab.title,
+                        // One engine only: a reopened tab always comes back
+                        // in GeckoView, even if it was closed as a legacy
+                        // WebView tab — no more GeckoTab/WebTab split.
+                        initialEngine = migrateRestoredRegularTabEngine(closedTab.engine)
+                    )
                 )
                 activeTabIndex = tabs.size - 1
                 RecentlyClosedTabs.remove(closedTab)
@@ -1879,7 +1886,10 @@ class MainActivity : FragmentActivity() {
                                 val restored = TabItem(
                                     url = closedTab.url,
                                     title = closedTab.title.ifBlank { "New Tab" },
-                                    initialEngine = closedTab.engine
+                                    // Same one-engine rule as the Recent
+                                    // tabs reopen: UNDO never resurrects a
+                                    // WebView tab.
+                                    initialEngine = migrateRestoredRegularTabEngine(closedTab.engine)
                                 )
                                 val insertAt = closedTab.index.coerceIn(0, tabs.size)
                                 tabs.add(insertAt, restored)
@@ -2285,30 +2295,14 @@ class MainActivity : FragmentActivity() {
                     enableNewsNotifications()
                 }
             }
-            // News notification deep link: open the tapped article in the
-            // CURRENT tab (cold start via onCreate, warm via onNewIntent).
-            // Prince's device report (2026-11-28): a notification tap must
-            // not yank him into a brand-new web tab — the article loads
-            // where he already is, and Back returns to what he was doing.
-            // A new tab is only a fallback when there is no current tab.
+            // News notification deep link: open the tapped article's URL in a
+            // new tab (cold start via onCreate, warm via onNewIntent).
             val pendingNewsUrl = notificationOpenUrl.value
             LaunchedEffect(pendingNewsUrl) {
                 if (pendingNewsUrl != null) {
                     notificationOpenUrl.value = null
-                    val tab = tabs.getOrNull(activeTabIndex)
-                    when {
-                        tab?.browserSession != null ->
-                            tab.browserSession?.loadUrl(pendingNewsUrl)
-                        tab != null ->
-                            // Session not created yet (e.g. a fresh home
-                            // tab): point the tab itself at the article —
-                            // its session loads the tab URL when created.
-                            tab.url = pendingNewsUrl
-                        else -> {
-                            tabs.add(TabItem(url = pendingNewsUrl, title = "New Tab"))
-                            activeTabIndex = tabs.size - 1
-                        }
-                    }
+                    tabs.add(TabItem(url = pendingNewsUrl, title = "New Tab"))
+                    activeTabIndex = tabs.size - 1
                 }
             }
             var showSettings by remember { mutableStateOf(false) }
@@ -2413,7 +2407,6 @@ class MainActivity : FragmentActivity() {
                     loadInstalledAddonPanelItems()
                 }
             }
-            var showWebViewSwitchConfirmation by remember { mutableStateOf(false) }
             val extensionStoreLauncher = rememberLauncherForActivityResult(
                 ActivityResultContracts.StartActivityForResult()
             ) { result ->
@@ -2445,8 +2438,6 @@ class MainActivity : FragmentActivity() {
                     }
                 }
             }
-            var pendingWebViewSwitchTabId by remember { mutableStateOf<String?>(null) }
-            var pendingDevToolsSwitchTabId by remember { mutableStateOf<String?>(null) }
             var showPrivacyPolicy by remember { mutableStateOf(false) }
             var showAboutApp by remember { mutableStateOf(false) }
             var showLicenses by remember { mutableStateOf(false) }
@@ -3797,7 +3788,7 @@ class MainActivity : FragmentActivity() {
                 showQuickTogglesDialog || showFindInPageDialog || showPlaylist || showStreamPlayer ||
                 showClickDiagnostics || showMenuCustomize || showFeatureMenu || showRecentTabs ||
                 showMusicDetails || showVideoDetails || showPdfDetails || showImageDetails ||
-                showWebViewSwitchConfirmation || showPostInstallGeckoSwitchConfirmation ||
+                showPostInstallGeckoSwitchConfirmation ||
                 showPrivacyPolicy || showAboutApp || showLicenses || showV9Shield || showVpn
 
             BackHandler(enabled = isAnyOverlayOpen && exitFullscreenVideo == null) {
@@ -3829,11 +3820,6 @@ class MainActivity : FragmentActivity() {
                     showVideoDetails -> showVideoDetails = false
                     showPdfDetails -> showPdfDetails = false
                     showImageDetails -> showImageDetails = false
-                    showWebViewSwitchConfirmation -> {
-                        showWebViewSwitchConfirmation = false
-                        pendingWebViewSwitchTabId = null
-                        pendingDevToolsSwitchTabId = null
-                    }
                     showPostInstallGeckoSwitchConfirmation -> showPostInstallGeckoSwitchConfirmation = false
                     showPrivacyPolicy -> showPrivacyPolicy = false
                     showAboutApp -> showAboutApp = false
@@ -4532,12 +4518,14 @@ class MainActivity : FragmentActivity() {
             MaterialTheme(colorScheme = themeColors) {
                 ModalNavigationDrawer(
                     drawerState = drawerState,
-                    // Gestures ON: the drawer opens via the hamburger icon AND
-                    // the left-edge swipe. (Restored 2026-11-21 on Prince's
-                    // order; was disabled 2026-10-08 in e787e929 after the
-                    // edge-swipe misfired on vertical scrolls. Prince asked to
-                    // bring it back so users get the choice.)
-                    gesturesEnabled = true,
+                    // Gestures OFF: the drawer opens from the hamburger/menu
+                    // button only. The left-edge swipe was restored on
+                    // 2026-11-21, but Prince reported on 2026-11-28 that the
+                    // side options keep sliding in while he scrolls pages
+                    // down — the same misfire that disabled it on 2026-10-08.
+                    // A drawer that interrupts reading is worse than one
+                    // extra tap, so the swipe stays off.
+                    gesturesEnabled = false,
                     drawerContent = {
                         ModalDrawerSheet(
                             modifier = Modifier.width(300.dp),
@@ -4735,22 +4723,13 @@ class MainActivity : FragmentActivity() {
                                         }
                                     }
                                 }
-                                if (currentTab.engine == BrowserTabEngine.GECKOVIEW && !currentTab.isIncognito) {
-                                    item {
-                                        DrawerItem(
-                                            label = "Switch this tab to WebView",
-                                            subtitle = "Reload this page without add-on support",
-                                            icon = Icons.Default.Web,
-                                            color = Color(0xFF64748B)
-                                        ) {
-                                            scope.launch {
-                                                drawerState.close()
-                                                pendingWebViewSwitchTabId = currentTab.id
-                                                showWebViewSwitchConfirmation = true
-                                            }
-                                        }
-                                    }
-                                }
+                                // No "Switch this tab to WebView" item anymore
+                                // (removed 2026-11-28, Prince's one-engine
+                                // order): every tab runs GeckoView, DevTools
+                                // inspects Gecko tabs directly through its
+                                // bridge, and no user action can turn a
+                                // browsing tab into a second-class WebView
+                                // tab ever again.
                                 item {
                                     DrawerItem(label = "Bookmarks Manager", icon = Icons.Default.Bookmark, color = Color.LightGray) {
                                         scope.launch { drawerState.close(); showBookmarks = true }
@@ -9091,44 +9070,6 @@ class MainActivity : FragmentActivity() {
                                             pendingGeckoSwitchTabId = null
                                             pendingInstalledExtensionName = null
                                         }) { Text("Keep WebView") }
-                                    }
-                                )
-                            }
-                            if (showWebViewSwitchConfirmation) {
-                                AlertDialog(
-                                    onDismissRequest = {
-                                        showWebViewSwitchConfirmation = false
-                                        pendingWebViewSwitchTabId = null
-                                        pendingDevToolsSwitchTabId = null
-                                    },
-                                    title = { Text("Switch this tab to WebView?") },
-                                    text = {
-                                        Text(
-                                            "The same tab will reload in WebView. Gecko cookies, extension data and back history are not copied, and add-ons will not run in this tab. Private mode is not enabled automatically."
-                                        )
-                                    },
-                                    confirmButton = {
-                                        TextButton(onClick = {
-                                            val tabId = pendingWebViewSwitchTabId
-                                            val openDevToolsAfterSwitch = pendingDevToolsSwitchTabId == tabId
-                                            pendingWebViewSwitchTabId = null
-                                            pendingDevToolsSwitchTabId = null
-                                            showWebViewSwitchConfirmation = false
-                                            val tab = tabs.firstOrNull { it.id == tabId }
-                                            if (tab != null && !tab.isIncognito && tab.engine == BrowserTabEngine.GECKOVIEW) {
-                                                val switched = replaceTabEngine(tab, BrowserTabEngine.WEBVIEW)
-                                                if (switched && openDevToolsAfterSwitch) {
-                                                    devToolsOpenRequestedTabId = tab.id
-                                                }
-                                            }
-                                        }) { Text("Switch to WebView") }
-                                    },
-                                    dismissButton = {
-                                        TextButton(onClick = {
-                                            showWebViewSwitchConfirmation = false
-                                            pendingWebViewSwitchTabId = null
-                                            pendingDevToolsSwitchTabId = null
-                                        }) { Text("Cancel") }
                                     }
                                 )
                             }
