@@ -2153,7 +2153,8 @@ class MainActivity : FragmentActivity() {
             var playlistSeedUrl by remember { mutableStateOf<String?>(null) }
             // Generic "background audio for web pages" setting (default off).
             var backgroundAudioEnabled by remember { mutableStateOf(false) }
-            // In-app Home feed is a separate opt-in from background alerts.
+            // In-app Home feed (default ON since the UC-style homepage,
+            // 2026-11-28) is separate from background news alerts.
             var homeNewsFeedEnabled by remember { mutableStateOf(false) }
             fun setHomeNewsFeedEnabled(enabled: Boolean) {
                 homeNewsFeedEnabled = enabled
@@ -3697,7 +3698,7 @@ class MainActivity : FragmentActivity() {
                     webrtcBlocked = prefs[AppSettings.WEBRTC_BLOCKED] == true
                     secureDnsEnabled = prefs[AppSettings.SECURE_DNS_ENABLED] == true
                     backgroundAudioEnabled = prefs[AppSettings.BACKGROUND_AUDIO_ENABLED] == true
-                    // Home feed: opt-in, separate from background notifications.
+                    // Home feed: default ON (UC-style homepage), explicit off respected; separate from background notifications.
                     homeNewsFeedEnabled = com.click.browser.engine.HomeNewsFeedPolicy.isEnabled(
                         prefs[AppSettings.HOME_NEWS_FEED_ENABLED]
                     )

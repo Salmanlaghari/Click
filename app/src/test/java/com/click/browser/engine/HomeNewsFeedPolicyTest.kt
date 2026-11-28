@@ -6,8 +6,10 @@ import org.junit.Test
 
 class HomeNewsFeedPolicyTest {
     @Test
-    fun missingPreferenceKeepsFeedOptedOut() {
-        assertFalse(HomeNewsFeedPolicy.isEnabled(null))
+    fun missingPreferenceDefaultsFeedOn() {
+        // UC-style homepage (2026-11-28): the news feed is the homepage's
+        // main scroll content, so no stored choice means ON.
+        assertTrue(HomeNewsFeedPolicy.isEnabled(null))
     }
 
     @Test
