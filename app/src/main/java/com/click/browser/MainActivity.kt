@@ -2397,7 +2397,6 @@ class MainActivity : FragmentActivity() {
                     loadInstalledAddonPanelItems()
                 }
             }
-            var showWebViewSwitchConfirmation by remember { mutableStateOf(false) }
             val extensionStoreLauncher = rememberLauncherForActivityResult(
                 ActivityResultContracts.StartActivityForResult()
             ) { result ->
@@ -2429,8 +2428,6 @@ class MainActivity : FragmentActivity() {
                     }
                 }
             }
-            var pendingWebViewSwitchTabId by remember { mutableStateOf<String?>(null) }
-            var pendingDevToolsSwitchTabId by remember { mutableStateOf<String?>(null) }
             var showPrivacyPolicy by remember { mutableStateOf(false) }
             var showAboutApp by remember { mutableStateOf(false) }
             var showLicenses by remember { mutableStateOf(false) }
@@ -3781,7 +3778,7 @@ class MainActivity : FragmentActivity() {
                 showQuickTogglesDialog || showFindInPageDialog || showPlaylist || showStreamPlayer ||
                 showClickDiagnostics || showMenuCustomize || showFeatureMenu || showRecentTabs ||
                 showMusicDetails || showVideoDetails || showPdfDetails || showImageDetails ||
-                showWebViewSwitchConfirmation || showPostInstallGeckoSwitchConfirmation ||
+                showPostInstallGeckoSwitchConfirmation ||
                 showPrivacyPolicy || showAboutApp || showLicenses || showV9Shield || showVpn
 
             BackHandler(enabled = isAnyOverlayOpen && exitFullscreenVideo == null) {
@@ -3813,11 +3810,6 @@ class MainActivity : FragmentActivity() {
                     showVideoDetails -> showVideoDetails = false
                     showPdfDetails -> showPdfDetails = false
                     showImageDetails -> showImageDetails = false
-                    showWebViewSwitchConfirmation -> {
-                        showWebViewSwitchConfirmation = false
-                        pendingWebViewSwitchTabId = null
-                        pendingDevToolsSwitchTabId = null
-                    }
                     showPostInstallGeckoSwitchConfirmation -> showPostInstallGeckoSwitchConfirmation = false
                     showPrivacyPolicy -> showPrivacyPolicy = false
                     showAboutApp -> showAboutApp = false
@@ -4719,22 +4711,13 @@ class MainActivity : FragmentActivity() {
                                         }
                                     }
                                 }
-                                if (currentTab.engine == BrowserTabEngine.GECKOVIEW && !currentTab.isIncognito) {
-                                    item {
-                                        DrawerItem(
-                                            label = "Switch this tab to WebView",
-                                            subtitle = "Reload this page without add-on support",
-                                            icon = Icons.Default.Web,
-                                            color = Color(0xFF64748B)
-                                        ) {
-                                            scope.launch {
-                                                drawerState.close()
-                                                pendingWebViewSwitchTabId = currentTab.id
-                                                showWebViewSwitchConfirmation = true
-                                            }
-                                        }
-                                    }
-                                }
+                                // No "Switch this tab to WebView" item anymore
+                                // (removed 2026-11-28, Prince's one-engine
+                                // order): every tab runs GeckoView, DevTools
+                                // inspects Gecko tabs directly through its
+                                // bridge, and no user action can turn a
+                                // browsing tab into a second-class WebView
+                                // tab ever again.
                                 item {
                                     DrawerItem(label = "Bookmarks Manager", icon = Icons.Default.Bookmark, color = Color.LightGray) {
                                         scope.launch { drawerState.close(); showBookmarks = true }
@@ -9075,44 +9058,6 @@ class MainActivity : FragmentActivity() {
                                             pendingGeckoSwitchTabId = null
                                             pendingInstalledExtensionName = null
                                         }) { Text("Keep WebView") }
-                                    }
-                                )
-                            }
-                            if (showWebViewSwitchConfirmation) {
-                                AlertDialog(
-                                    onDismissRequest = {
-                                        showWebViewSwitchConfirmation = false
-                                        pendingWebViewSwitchTabId = null
-                                        pendingDevToolsSwitchTabId = null
-                                    },
-                                    title = { Text("Switch this tab to WebView?") },
-                                    text = {
-                                        Text(
-                                            "The same tab will reload in WebView. Gecko cookies, extension data and back history are not copied, and add-ons will not run in this tab. Private mode is not enabled automatically."
-                                        )
-                                    },
-                                    confirmButton = {
-                                        TextButton(onClick = {
-                                            val tabId = pendingWebViewSwitchTabId
-                                            val openDevToolsAfterSwitch = pendingDevToolsSwitchTabId == tabId
-                                            pendingWebViewSwitchTabId = null
-                                            pendingDevToolsSwitchTabId = null
-                                            showWebViewSwitchConfirmation = false
-                                            val tab = tabs.firstOrNull { it.id == tabId }
-                                            if (tab != null && !tab.isIncognito && tab.engine == BrowserTabEngine.GECKOVIEW) {
-                                                val switched = replaceTabEngine(tab, BrowserTabEngine.WEBVIEW)
-                                                if (switched && openDevToolsAfterSwitch) {
-                                                    devToolsOpenRequestedTabId = tab.id
-                                                }
-                                            }
-                                        }) { Text("Switch to WebView") }
-                                    },
-                                    dismissButton = {
-                                        TextButton(onClick = {
-                                            showWebViewSwitchConfirmation = false
-                                            pendingWebViewSwitchTabId = null
-                                            pendingDevToolsSwitchTabId = null
-                                        }) { Text("Cancel") }
                                     }
                                 )
                             }
