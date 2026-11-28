@@ -45,6 +45,18 @@ class RecentlyClosedTabsTest {
     }
 
     @Test
+    fun closedTabsDefaultToGeckoView() {
+        // One-engine rule (Prince, 2026-11-28): a remembered tab must never
+        // silently come back as a WebView tab — GeckoView is the default.
+        RecentlyClosedTabs.push("Example", "https://example.com", false, BrowserMode.SIMPLE)
+
+        assertEquals(
+            BrowserTabEngine.GECKOVIEW,
+            RecentlyClosedTabs.list(BrowserMode.SIMPLE).single().engine
+        )
+    }
+
+    @Test
     fun duplicateUrlAndUndoRemovalAreScopedToTheOriginatingMode() {
         RecentlyClosedTabs.push("Simple copy", "https://same.example", false, BrowserMode.SIMPLE)
         RecentlyClosedTabs.push("Advanced copy", "https://same.example", false, BrowserMode.ADVANCED)
