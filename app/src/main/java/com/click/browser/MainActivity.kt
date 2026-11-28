@@ -5302,10 +5302,14 @@ class MainActivity : FragmentActivity() {
                                             accumulatedY = 0f
                                         }
                                         accumulatedY += dy
-                                        if (accumulatedY < -140f) {
+                                        // Compose nested-scroll sign: dy > 0 is
+                                        // scrolling DOWN the page (content moving
+                                        // up), dy < 0 is scrolling back UP. Hide
+                                        // after ~140px down, reveal after ~60px up.
+                                        if (accumulatedY > 140f) {
                                             toolbarVisible = false
                                             accumulatedY = 0f
-                                        } else if (accumulatedY > 60f) {
+                                        } else if (accumulatedY < -60f) {
                                             toolbarVisible = true
                                             accumulatedY = 0f
                                         }
