@@ -354,8 +354,9 @@ private fun AddonGridTile(
             )
             .semantics(mergeDescendants = true) {
                 role = Role.Button
-                stateDescription = if (selected) "Selected" else "Not selected"
-                contentDescription = "${addOn.name}, ${addOn.statusLabel}"
+                stateDescription =
+                    "${if (selected) "Selected" else "Not selected"}, ${addOn.statusLabel}"
+                contentDescription = addOn.name
             }
             .clickable(onClick = onClick)
             .padding(vertical = 10.dp, horizontal = 4.dp),
