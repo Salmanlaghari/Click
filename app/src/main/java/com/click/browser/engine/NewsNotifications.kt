@@ -15,7 +15,8 @@ import com.click.browser.R
  *
  * The [NewsNotificationWorker] posts one notification per fresh article
  * (capped per run). Tapping a notification deep-links into [MainActivity]
- * via [EXTRA_OPEN_URL], which opens the article in a new browser tab.
+ * via [EXTRA_OPEN_URL], which opens the article in the current tab —
+ * never a brand-new tab (Prince's one-genuine-app fix round, 2026-11-28).
  *
  * Honest behavior:
  * - Notifications are strictly opt-in ([AppSettings.NEWS_NOTIFICATIONS_ENABLED],
